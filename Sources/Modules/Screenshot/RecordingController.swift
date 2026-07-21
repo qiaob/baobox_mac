@@ -286,7 +286,7 @@ extension RecordingController: SCStreamDelegate {
 /// SCK 视频/系统音频回调与麦克风 AVCapture 回调都派发到该队列，
 /// setPaused/finish 也把工作投递到同队列。
 final class RecordingSink: NSObject, SCStreamOutput, @unchecked Sendable {
-    let queue = DispatchQueue(label: "com.toolsmac.app.recording")
+    let queue = DispatchQueue(label: "com.baobox.app.recording")
 
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput

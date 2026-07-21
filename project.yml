@@ -1,6 +1,6 @@
 name: Baobox
 options:
-  bundleIdPrefix: com.toolsmac
+  bundleIdPrefix: com.baobox
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
@@ -30,7 +30,7 @@ targets:
         com.apple.security.device.audio-input: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.toolsmac.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app
         MARKETING_VERSION: "0.0.1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Automatic

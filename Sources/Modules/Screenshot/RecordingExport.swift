@@ -74,7 +74,7 @@ enum RecordingExport {
     /// 把 reader output 的样本泵进 writer input，直到读尽。
     private static func pump(from output: AVAssetReaderOutput, to input: AVAssetWriterInput,
                              label: String) async {
-        let queue = DispatchQueue(label: "com.toolsmac.app." + label)
+        let queue = DispatchQueue(label: "com.baobox.app." + label)
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             input.requestMediaDataWhenReady(on: queue) {
                 while input.isReadyForMoreMediaData {

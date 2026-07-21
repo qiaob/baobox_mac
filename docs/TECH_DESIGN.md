@@ -428,4 +428,4 @@ enum WindowLayout { case left, right, top, bottom, topLeft, topRight, bottomLeft
 - **overlay 不能挡住自己**：WindowDetector 过滤 `getpid()`；截图前先关 overlay 再延迟捕获。
 - **NSPanel borderless 默认不能成为 key window**——必须子类覆写。
 - **坐标系翻转**是最易错点，一律走 `Geometry`，禁止就地换算。
-- 非沙盒 + Hardened Runtime，无需 entitlements 文件；屏幕录制/辅助功能授权面向 bundle id `com.toolsmac.app`，改 id 会导致重新授权。
+- 非沙盒 + Hardened Runtime，无需 entitlements 文件；屏幕录制/辅助功能授权面向 bundle id `com.baobox.app`，改 id 会导致重新授权。
