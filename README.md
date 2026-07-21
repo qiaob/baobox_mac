@@ -1,5 +1,7 @@
 # Baobox
 
+[![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
+
 A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, color picker, and more — into a single native app with one shortcut system and one settings window.
 
 [English](README.md) · [简体中文](README.zh-CN.md)

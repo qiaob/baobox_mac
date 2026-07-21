@@ -1,5 +1,7 @@
 # Baobox
 
+[![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
+
 菜单栏常驻的 macOS 效率工具集：把截图、剪贴板管理、取色器等日常工具整合进一个原生 App，统一入口、统一快捷键、统一设置。
 
 [English](README.md) · [简体中文](README.zh-CN.md)

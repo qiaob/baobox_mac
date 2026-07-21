@@ -2,6 +2,7 @@
 *.xcodeproj
 *.xcworkspace
 Sources/Info.plist
+Baobox.entitlements
 
 # 构建产物
 build/
