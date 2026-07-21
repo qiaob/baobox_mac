@@ -1,0 +1,35 @@
+name: Baobox
+options:
+  bundleIdPrefix: com.toolsmac
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+targets:
+  Baobox:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Baobox
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.productivity
+        CFBundleIconFile: AppIcon
+        NSHumanReadableCopyright: "© 2026 Baobox"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.toolsmac.app
+        MARKETING_VERSION: "0.1.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        # 固定签名身份：ad-hoc 签名的 cdhash 每次重新编译都会变，macOS TCC 会因此
+        # 判定为"另一个 App"并作废已授予的屏幕录制/辅助功能权限。绑定开发团队后
+        # 签名身份稳定，重新编译不再掉权限。
+        DEVELOPMENT_TEAM: JD2ZQL6YU2
+        ENABLE_HARDENED_RUNTIME: true
+        DEAD_CODE_STRIPPING: true

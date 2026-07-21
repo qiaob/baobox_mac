@@ -1,0 +1,13 @@
+# XcodeGen 生成物（真正的源是 project.yml，改这些文件会被下次 generate 覆盖）
+*.xcodeproj
+*.xcworkspace
+Sources/Info.plist
+
+# 构建产物
+build/
+DerivedData/
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
