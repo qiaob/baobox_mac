@@ -42,6 +42,7 @@ final class ClipboardPanelController: NSObject {
     func show() {
         // 必须在面板抢焦点之前记录，否则拿到的就是 Baobox 自己。
         previousApp = NSWorkspace.shared.frontmostApplication
+        store.pruneExpired()
         viewModel.resetForShow()
 
         let content = ClipboardPanelView(
@@ -49,6 +50,7 @@ final class ClipboardPanelController: NSObject {
             store: store,
             onPaste: { [weak self] item, plain in self?.paste(item, plainText: plain) },
             onTogglePin: { [weak self] item in self?.store.togglePin(item.id) },
+            onDelete: { [weak self] item in self?.delete(item) },
             onClose: { [weak self] in self?.hide() }
         )
         let hosting = NSHostingView(rootView: content)
@@ -128,6 +130,12 @@ final class ClipboardPanelController: NSObject {
                 store.togglePin(item.id)
             }
             return true
+        case 0x33 where event.modifierFlags.contains(.command): // ⌘⌫ 删除选中条目
+            // 用 ⌘⌫ 而非裸 ⌫：搜索框始终持有焦点，裸 ⌫ 要留给它删字。
+            if let item = viewModel.selectedItem {
+                delete(item)
+            }
+            return true
         case 0x35: // Esc
             hide()
             return true
@@ -138,5 +146,10 @@ final class ClipboardPanelController: NSObject {
 
     private func paste(_ item: ClipboardItem, plainText: Bool) {
         PasteService.paste(item, plainText: plainText, store: store, monitor: monitor)
+    }
+
+    private func delete(_ item: ClipboardItem) {
+        store.delete(item.id)
+        viewModel.clampSelection()
     }
 }

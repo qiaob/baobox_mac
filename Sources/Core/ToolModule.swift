@@ -8,7 +8,8 @@ struct HotkeyDefinition {
     let title: String
     /// 设置页里显示的行为说明小字
     let subtitle: String?
-    let defaultCombo: KeyCombo
+    /// nil = 出厂不绑定（易冲突的组合出厂留空，由用户在快捷键页自行设置）。
+    let defaultCombo: KeyCombo?
     let action: @MainActor () -> Void
 }
 

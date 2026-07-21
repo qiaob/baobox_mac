@@ -23,8 +23,11 @@ final class WindowManagerTool: ToolModule {
     /// 恢复槽：单槽记录 (窗口 AXUIElement 强引用, 布局前原 frameCG)。
     private var restoreSlot: (window: AXUIElement, frameCG: CGRect)?
 
-    /// 未授权提示节流，见 `apply(_:)`。
+    /// 未授权提示节流，见 `ensureAccessibility()`。
     private var didPromptAccessibility = false
+
+    /// 布局快照存储。
+    private let snapshotStore = WindowSnapshotStore()
 
     // MARK: - ToolModule
 
@@ -51,6 +54,19 @@ final class WindowManagerTool: ToolModule {
                 })
             }
         }
+
+        // 布局快照：保存的快照直接列出（点击即恢复），末尾是保存入口。
+        items.append(.separator())
+        for snapshot in snapshotStore.snapshots {
+            let item = ClosureMenuItem(title: snapshot.name) { [weak self] in
+                self?.restoreSnapshot(snapshot)
+            }
+            item.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: nil)
+            items.append(item)
+        }
+        items.append(ClosureMenuItem(title: L("windowmanager.snapshot.save")) { [weak self] in
+            self?.saveSnapshotPrompt()
+        })
         return items
     }
 
@@ -60,7 +76,7 @@ final class WindowManagerTool: ToolModule {
                 id: spec.id,
                 title: spec.title,
                 subtitle: spec.subtitle,
-                defaultCombo: spec.combo
+                defaultCombo: nil
             ) { [weak self] in
                 self?.apply(spec.layout)
             }
@@ -68,7 +84,7 @@ final class WindowManagerTool: ToolModule {
     }
 
     func settingsTab() -> AnyView {
-        AnyView(WindowManagerSettingsView())
+        AnyView(WindowManagerSettingsView(snapshots: snapshotStore))
     }
 
     func activate() {
@@ -77,18 +93,21 @@ final class WindowManagerTool: ToolModule {
 
     // MARK: - 动作执行
 
-    private func apply(_ layout: WindowLayout) {
-        // 前置权限检查：未授权则引导并直接返回。
+    /// 前置权限检查：未授权则引导（每次启动仅提示一次）并返回 false。
+    /// 未授权时连按快捷键会反复走到这里，无节流会变成弹窗轰炸。
+    private func ensureAccessibility() -> Bool {
         guard AXIsProcessTrusted() else {
-            // apply() 每次按键都会走到这里。原先无节流地「弹窗 + 拉起系统设置」，
-            // 未授权时连按方向键会变成弹窗轰炸并反复把系统设置拉到前台。
-            // 本次启动只提示一次；菜单里另有常驻的「需要辅助功能权限」入口可随时点。
             if !didPromptAccessibility {
                 didPromptAccessibility = true
                 Permissions.promptAccessibility()
             }
-            return
+            return false
         }
+        return true
+    }
+
+    private func apply(_ layout: WindowLayout) {
+        guard ensureAccessibility() else { return }
 
         guard let window = AXWindow.focusedWindow(),
               let frameCG = AXWindow.frameCG(of: window) else { return }
@@ -158,7 +177,7 @@ final class WindowManagerTool: ToolModule {
         if let target = WindowLayout.targetScreen(forWindowAK: frameAK,
                                                   screens: screens,
                                                   mouseScreen: screenContainingMouse(in: screens)) {
-            let safeAK = Self.clamped(frameAK, into: target.visibleFrame)
+            let safeAK = WindowLayout.clamped(frameAK, into: target.visibleFrame)
             AXWindow.setFrameCG(Geometry.cgRect(fromAppKit: safeAK), on: window)
         } else {
             AXWindow.setFrameCG(slot.frameCG, on: window)
@@ -168,14 +187,42 @@ final class WindowManagerTool: ToolModule {
         restoreSlot = nil
     }
 
-    /// 把 frame 夹进可见区域：尺寸超出时先缩小，再平移回区域内。
-    private static func clamped(_ frameAK: NSRect, into visible: NSRect) -> NSRect {
-        var r = frameAK
-        r.size.width = min(r.width, visible.width)
-        r.size.height = min(r.height, visible.height)
-        r.origin.x = min(max(r.minX, visible.minX), visible.maxX - r.width)
-        r.origin.y = min(max(r.minY, visible.minY), visible.maxY - r.height)
-        return r
+    // MARK: - 布局快照
+
+    private func restoreSnapshot(_ snapshot: WindowSnapshot) {
+        guard ensureAccessibility() else { return }
+        WindowSnapshotStore.restore(snapshot)
+    }
+
+    private func saveSnapshotPrompt() {
+        guard ensureAccessibility() else { return }
+        // 先采集再激活自己：激活会改变前台 App，但采集遍历的是所有 App，顺序无影响，
+        // 唯独要避免把弹窗时序夹进采集中间。
+        let entries = WindowSnapshotStore.captureCurrent()
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard !entries.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = L("windowmanager.snapshot.emptyCapture.title")
+            alert.informativeText = L("windowmanager.snapshot.emptyCapture.message")
+            alert.runModal()
+            return
+        }
+
+        let defaultName = L("windowmanager.snapshot.defaultName \(snapshotStore.snapshots.count + 1)")
+        let alert = NSAlert()
+        alert.messageText = L("windowmanager.snapshot.namePrompt.title")
+        alert.informativeText = L("windowmanager.snapshot.namePrompt.message \(entries.count)")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 230, height: 24))
+        field.stringValue = defaultName
+        alert.accessoryView = field
+        alert.addButton(withTitle: L("common.save"))
+        alert.addButton(withTitle: L("common.cancel"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        snapshotStore.add(name: trimmed.isEmpty ? defaultName : trimmed, entries: entries)
     }
 
     // MARK: - 辅助
@@ -192,44 +239,26 @@ final class WindowManagerTool: ToolModule {
         let title: String
         let subtitle: String?
         let layout: WindowLayout
-        let combo: KeyCombo
     }
 
-    /// ⌃⌥ 组合。
-    private static let ctrlOpt = KeyCombo.control | KeyCombo.option
-    /// ⌃⌥⌘ 组合（跨屏移动）。
-    private static let ctrlOptCmd = KeyCombo.control | KeyCombo.option | KeyCombo.cmd
-
-    // 方向键 kVK：←0x7B →0x7C ↓0x7D ↑0x7E；⏎ 0x24；⌫ 0x33。
+    // 出厂不绑定键位：默认的 ⌃⌥ 系列与 Rectangle 完全同键，同时运行必然打架。
+    // 用户在「快捷键」页按需设置，菜单入口不受影响。
     private static let hotkeySpecs: [HotkeySpec] = [
-        HotkeySpec(id: "windowmanager.left", title: L("windowmanager.layout.left"), subtitle: nil,
-                   layout: .left, combo: KeyCombo(keyCode: 0x7B, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.right", title: L("windowmanager.layout.right"), subtitle: nil,
-                   layout: .right, combo: KeyCombo(keyCode: 0x7C, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.top", title: L("windowmanager.layout.top"), subtitle: nil,
-                   layout: .top, combo: KeyCombo(keyCode: 0x7E, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.bottom", title: L("windowmanager.layout.bottom"), subtitle: nil,
-                   layout: .bottom, combo: KeyCombo(keyCode: 0x7D, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.topLeft", title: L("windowmanager.layout.topLeft"), subtitle: nil,
-                   layout: .topLeft, combo: KeyCombo(keyCode: 0x20, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.topRight", title: L("windowmanager.layout.topRight"), subtitle: nil,
-                   layout: .topRight, combo: KeyCombo(keyCode: 0x22, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.bottomLeft", title: L("windowmanager.layout.bottomLeft"), subtitle: nil,
-                   layout: .bottomLeft, combo: KeyCombo(keyCode: 0x26, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.bottomRight", title: L("windowmanager.layout.bottomRight"), subtitle: nil,
-                   layout: .bottomRight, combo: KeyCombo(keyCode: 0x28, carbonModifiers: WindowManagerTool.ctrlOpt)),
+        HotkeySpec(id: "windowmanager.left", title: L("windowmanager.layout.left"), subtitle: nil, layout: .left),
+        HotkeySpec(id: "windowmanager.right", title: L("windowmanager.layout.right"), subtitle: nil, layout: .right),
+        HotkeySpec(id: "windowmanager.top", title: L("windowmanager.layout.top"), subtitle: nil, layout: .top),
+        HotkeySpec(id: "windowmanager.bottom", title: L("windowmanager.layout.bottom"), subtitle: nil, layout: .bottom),
+        HotkeySpec(id: "windowmanager.topLeft", title: L("windowmanager.layout.topLeft"), subtitle: nil, layout: .topLeft),
+        HotkeySpec(id: "windowmanager.topRight", title: L("windowmanager.layout.topRight"), subtitle: nil, layout: .topRight),
+        HotkeySpec(id: "windowmanager.bottomLeft", title: L("windowmanager.layout.bottomLeft"), subtitle: nil, layout: .bottomLeft),
+        HotkeySpec(id: "windowmanager.bottomRight", title: L("windowmanager.layout.bottomRight"), subtitle: nil, layout: .bottomRight),
         HotkeySpec(id: "windowmanager.maximize", title: L("windowmanager.layout.maximize"),
-                   subtitle: L("windowmanager.layout.maximize.subtitle"),
-                   layout: .maximize, combo: KeyCombo(keyCode: 0x24, carbonModifiers: WindowManagerTool.ctrlOpt)),
+                   subtitle: L("windowmanager.layout.maximize.subtitle"), layout: .maximize),
         HotkeySpec(id: "windowmanager.center", title: L("windowmanager.layout.center"),
-                   subtitle: L("windowmanager.layout.center.subtitle"),
-                   layout: .center, combo: KeyCombo(keyCode: 0x08, carbonModifiers: WindowManagerTool.ctrlOpt)),
-        HotkeySpec(id: "windowmanager.nextDisplay", title: L("windowmanager.layout.nextDisplay"), subtitle: nil,
-                   layout: .nextDisplay, combo: KeyCombo(keyCode: 0x7C, carbonModifiers: WindowManagerTool.ctrlOptCmd)),
-        HotkeySpec(id: "windowmanager.prevDisplay", title: L("windowmanager.layout.prevDisplay"), subtitle: nil,
-                   layout: .prevDisplay, combo: KeyCombo(keyCode: 0x7B, carbonModifiers: WindowManagerTool.ctrlOptCmd)),
-        HotkeySpec(id: "windowmanager.restore", title: L("windowmanager.layout.restore"), subtitle: nil,
-                   layout: .restore, combo: KeyCombo(keyCode: 0x33, carbonModifiers: WindowManagerTool.ctrlOpt))
+                   subtitle: L("windowmanager.layout.center.subtitle"), layout: .center),
+        HotkeySpec(id: "windowmanager.nextDisplay", title: L("windowmanager.layout.nextDisplay"), subtitle: nil, layout: .nextDisplay),
+        HotkeySpec(id: "windowmanager.prevDisplay", title: L("windowmanager.layout.prevDisplay"), subtitle: nil, layout: .prevDisplay),
+        HotkeySpec(id: "windowmanager.restore", title: L("windowmanager.layout.restore"), subtitle: nil, layout: .restore)
     ]
 
     // MARK: - 菜单条目

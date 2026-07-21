@@ -58,6 +58,11 @@ final class ClipboardMonitor {
         let sourceName = frontApp?.localizedName
         let sourceBundle = frontApp?.bundleIdentifier
 
+        // 忽略名单：NSPasteboard 不暴露写入方，以变更那一刻的前台 App 近似判定来源。
+        if let sourceBundle, ClipboardStore.ignoredBundleIDs.contains(sourceBundle) {
+            return
+        }
+
         // 1) 文件 URL
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self],
                                              options: [.urlReadingFileURLsOnly: true]) as? [URL],

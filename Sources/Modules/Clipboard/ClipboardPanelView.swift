@@ -58,9 +58,11 @@ struct ClipboardPanelView: View {
     @ObservedObject var store: ClipboardStore
     var onPaste: (ClipboardItem, Bool) -> Void
     var onTogglePin: (ClipboardItem) -> Void
+    var onDelete: (ClipboardItem) -> Void
     var onClose: () -> Void
 
     @FocusState private var searchFocused: Bool
+    @State private var hoveredItemID: UUID?
 
     private let typeChips: [(String, ClipboardItemType?)] = [
         (L("clipboard.chip.all"), nil), (L("clipboard.chip.text"), .text),
@@ -169,6 +171,17 @@ struct ClipboardPanelView: View {
                     .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
             }
             Spacer(minLength: 0)
+            if hoveredItemID == item.id {
+                Button {
+                    onDelete(item)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 10))
+                        .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("clipboard.row.deleteHelp")
+            }
             if item.isPinned {
                 Image(systemName: "star.fill")
                     .font(.system(size: 10))
@@ -178,6 +191,9 @@ struct ClipboardPanelView: View {
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(selected ? Color.accentColor : Color.clear,
                     in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onHover { inside in
+            hoveredItemID = inside ? item.id : (hoveredItemID == item.id ? nil : hoveredItemID)
+        }
     }
 
     // MARK: 右预览
@@ -263,6 +279,7 @@ struct ClipboardPanelView: View {
             hint("⏎", L("clipboard.footer.paste"))
             hint("⌥⏎", L("clipboard.footer.pastePlain"))
             hint("⌘P", L("clipboard.footer.pin"))
+            hint("⌘⌫", L("clipboard.footer.delete"))
         }
         .font(.system(size: 11.5))
         .foregroundStyle(.secondary)

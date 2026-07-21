@@ -57,7 +57,8 @@ final class ColorPickerTool: ToolModule {
                 id: "colorpicker.pick",
                 title: L("colorpicker.menu.pick"),
                 subtitle: L("colorpicker.hotkey.subtitle"),
-                defaultCombo: KeyCombo(keyCode: 0x08, carbonModifiers: KeyCombo.cmd | KeyCombo.shift) // ⌘⇧C
+                // 出厂不绑定：⌘⇧C 会抢浏览器 DevTools 的"检查元素"，需要的用户自行设置。
+                defaultCombo: nil
             ) { [weak self] in
                 self?.beginPick()
             }

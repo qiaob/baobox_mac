@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 窗口管理设置：窗口间距、辅助功能权限状态、快捷键说明。
+/// 窗口管理设置：窗口间距、布局快照管理、辅助功能权限状态、快捷键说明。
 struct WindowManagerSettingsView: View {
+    @ObservedObject var snapshots: WindowSnapshotStore
     @AppStorage(WindowManagerSettings.gapKey) private var gap = 0.0
     @State private var hasAccess = Permissions.hasAccessibility
 
@@ -17,6 +18,32 @@ struct WindowManagerSettingsView: View {
                 Text("windowmanager.settings.gapHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("windowmanager.settings.snapshotSection") {
+                if snapshots.snapshots.isEmpty {
+                    Text("windowmanager.settings.snapshotEmpty")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(snapshots.snapshots) { snapshot in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: snapshot.name)
+                                Text("windowmanager.settings.snapshotDetail \(snapshot.entries.count) \(dateString(snapshot.createdAt))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                snapshots.delete(snapshot.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
             }
 
             Section("settings.general.permissionSection") {
@@ -51,5 +78,12 @@ struct WindowManagerSettingsView: View {
         .onReceive(timer) { _ in
             hasAccess = Permissions.hasAccessibility
         }
+    }
+
+    private func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        formatter.setLocalizedDateFormatFromTemplate("MdHHmm")
+        return formatter.string(from: date)
     }
 }

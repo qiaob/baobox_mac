@@ -21,6 +21,41 @@ enum AXWindow {
         return (windowRef as! AXUIElement)
     }
 
+    /// 指定进程的全部窗口（布局快照用）。
+    static func windows(pid: pid_t) -> [AXUIElement] {
+        let appElement = AXUIElementCreateApplication(pid)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &ref) == .success,
+              let list = ref as? [AXUIElement] else { return [] }
+        return list
+    }
+
+    static func title(of element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &ref) == .success else {
+            return nil
+        }
+        return ref as? String
+    }
+
+    static func isMinimized(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &ref) == .success else {
+            return false
+        }
+        return (ref as? Bool) ?? false
+    }
+
+    /// 是否标准窗口（排除调色板、浮层等）。部分 App 不提供 subrole，视为标准。
+    static func isStandard(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &ref) == .success,
+              let subrole = ref as? String else {
+            return true
+        }
+        return subrole == kAXStandardWindowSubrole
+    }
+
     /// 读取窗口 frame（CG 全局坐标）。
     static func frameCG(of element: AXUIElement) -> CGRect? {
         var posRef: CFTypeRef?

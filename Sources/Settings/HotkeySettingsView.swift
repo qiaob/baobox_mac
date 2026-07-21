@@ -49,7 +49,7 @@ struct HotkeySettingsView: View {
 private struct HotkeyRow: View {
     let def: HotkeyDefinition
     let conflicted: Bool
-    @State private var combo: KeyCombo
+    @State private var combo: KeyCombo?
 
     init(def: HotkeyDefinition, conflicted: Bool) {
         self.def = def
@@ -96,7 +96,7 @@ private struct HotkeyRow: View {
 // MARK: - KeyRecorder（NSViewRepresentable 包裹 RecorderView）
 
 struct KeyRecorder: NSViewRepresentable {
-    @Binding var combo: KeyCombo
+    @Binding var combo: KeyCombo?
     var onChange: (KeyCombo) -> Void
 
     func makeNSView(context: Context) -> RecorderView {
@@ -116,7 +116,8 @@ struct KeyRecorder: NSViewRepresentable {
 
 @MainActor
 final class RecorderView: NSView {
-    var combo = KeyCombo(keyCode: 0, carbonModifiers: 0) {
+    /// nil = 未绑定键位。
+    var combo: KeyCombo? {
         didSet { needsDisplay = true }
     }
     var onChange: ((KeyCombo) -> Void)?
@@ -184,9 +185,10 @@ final class RecorderView: NSView {
         (recording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.stroke()
 
-        let text = recording ? L("hotkeys.recording") : combo.display
+        let text = recording ? L("hotkeys.recording") : (combo?.display ?? L("hotkeys.none"))
         let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        let color: NSColor = recording ? .controlAccentColor : .labelColor
+        let color: NSColor = recording ? .controlAccentColor
+            : (combo == nil ? .secondaryLabelColor : .labelColor)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let str = NSAttributedString(string: text, attributes: attrs)
         let size = str.size()

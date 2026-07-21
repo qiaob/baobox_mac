@@ -104,6 +104,17 @@ extension WindowLayout {
         }
     }
 
+    /// 把 frame 夹进可见区域：尺寸超出时先缩小，再平移回区域内。
+    /// 恢复类操作（恢复槽、布局快照）都要经此防止窗口落到已不存在的屏幕区域。
+    static func clamped(_ frameAK: NSRect, into visible: NSRect) -> NSRect {
+        var r = frameAK
+        r.size.width = min(r.width, visible.width)
+        r.size.height = min(r.height, visible.height)
+        r.origin.x = min(max(r.minX, visible.minX), visible.maxX - r.width)
+        r.origin.y = min(max(r.minY, visible.minY), visible.maxY - r.height)
+        return r
+    }
+
     /// 跨屏等比映射：把窗口在源屏 visibleFrame 内的相对位置与相对尺寸映射到目标屏 visibleFrame，
     /// 映射后 clamp 确保完全落在目标屏内（不同分辨率 / 缩放比之间不变形溢出）。
     static func mappedFrameAK(window frameAK: NSRect,

@@ -15,11 +15,14 @@ final class ClipboardStore: ObservableObject {
     static var storeFile: URL { baseDir.appendingPathComponent("clipboard.json") }
 
     static let maxItemsKey = "clipboard.maxItems"
+    static let retentionDaysKey = "clipboard.retentionDays"
+    static let ignoredBundleIDsKey = "clipboard.ignoredBundleIDs"
 
     private var saveWorkItem: DispatchWorkItem?
 
     init() {
         load()
+        pruneExpired()
     }
 
     var maxItems: Int {
@@ -27,9 +30,21 @@ final class ClipboardStore: ObservableObject {
         return value == 0 ? 200 : value
     }
 
+    /// 历史保留天数，0 = 永久。
+    var retentionDays: Int {
+        UserDefaults.standard.integer(forKey: Self.retentionDaysKey)
+    }
+
+    /// 忽略名单（bundle id）：命中的来源 App 不记录历史。
+    static var ignoredBundleIDs: [String] {
+        get { UserDefaults.standard.stringArray(forKey: ignoredBundleIDsKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: ignoredBundleIDsKey) }
+    }
+
     // MARK: - 变更
 
     func add(_ item: ClipboardItem) {
+        pruneExpired()
         // 与最近一条内容相同 → 仅刷新时间戳。
         if let latest = items.max(by: { $0.createdAt < $1.createdAt }),
            latest.contentSignature == item.contentSignature {
@@ -69,6 +84,20 @@ final class ClipboardStore: ObservableObject {
     func clearAll() {
         for item in items { deleteImageFile(for: item) }
         items.removeAll()
+        scheduleSave()
+    }
+
+    /// 清理超过保留期的未置顶条目（0 = 永久保留）。启动、新增、打开面板时各触发一次，
+    /// 无需常驻定时器。
+    func pruneExpired() {
+        let days = retentionDays
+        guard days > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let expired = items.filter { !$0.isPinned && $0.createdAt < cutoff }
+        guard !expired.isEmpty else { return }
+        for item in expired { deleteImageFile(for: item) }
+        let expiredIDs = Set(expired.map(\.id))
+        items.removeAll { expiredIDs.contains($0.id) }
         scheduleSave()
     }
 

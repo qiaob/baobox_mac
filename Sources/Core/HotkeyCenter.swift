@@ -15,7 +15,8 @@ final class HotkeyCenter: ObservableObject {
         let def: HotkeyDefinition
         var hotKeyRef: EventHotKeyRef?
         var carbonID: UInt32
-        var combo: KeyCombo
+        /// nil = 未绑定键位（无默认且用户未设置）。
+        var combo: KeyCombo?
     }
 
     private var registrations: [String: Registration] = [:]   // definition.id -> 注册信息
@@ -77,7 +78,13 @@ final class HotkeyCenter: ObservableObject {
 
     func register(_ def: HotkeyDefinition) {
         installHandlerIfNeeded()
-        let combo = effectiveCombo(for: def)
+        guard let combo = effectiveCombo(for: def) else {
+            // 未绑定：登记定义供设置页展示/后续绑定，不注册 Carbon 热键。
+            let carbonID = nextCarbonID
+            nextCarbonID += 1
+            registrations[def.id] = Registration(def: def, hotKeyRef: nil, carbonID: carbonID, combo: nil)
+            return
+        }
         _ = performRegister(def: def, combo: combo)
     }
 
@@ -90,9 +97,21 @@ final class HotkeyCenter: ObservableObject {
 
     func resetToDefault(id: String) {
         guard let existing = registrations[id] else { return }
+        guard let defaultCombo = existing.def.defaultCombo else {
+            // 默认即"未绑定"：注销现有热键并清掉持久化。
+            if let ref = existing.hotKeyRef {
+                UnregisterEventHotKey(ref)
+                idByCarbonID[existing.carbonID] = nil
+            }
+            registrations[id]?.hotKeyRef = nil
+            registrations[id]?.combo = nil
+            conflictedIDs.remove(id)
+            removePersisted(for: id)
+            return
+        }
         // 必须先确认默认组合注册成功再清除持久化：否则注册失败回滚后，用户的自定义
         // 键位本次仍在生效，但持久化已被删掉，重启后会无声变回默认。
-        if reregister(id: id, to: existing.def.defaultCombo, persist: false) {
+        if reregister(id: id, to: defaultCombo, persist: false) {
             removePersisted(for: id)
         }
     }
@@ -120,12 +139,12 @@ final class HotkeyCenter: ObservableObject {
         guard suspended else { return }
         suspended = false
         for (id, reg) in registrations where reg.hotKeyRef == nil {
-            guard !isSystemReserved(reg.combo) else { continue }
+            guard let combo = reg.combo, !isSystemReserved(combo) else { continue }
             let carbonID = nextCarbonID
             nextCarbonID += 1
             var ref: EventHotKeyRef?
             let hkID = EventHotKeyID(signature: signature, id: carbonID)
-            let status = RegisterEventHotKey(reg.combo.keyCode, reg.combo.carbonModifiers, hkID,
+            let status = RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, hkID,
                                              GetApplicationEventTarget(), 0, &ref)
             if status == noErr, let ref {
                 registrations[id]?.hotKeyRef = ref
@@ -171,10 +190,10 @@ final class HotkeyCenter: ObservableObject {
     }
 
     func combo(for id: String) -> KeyCombo? {
-        registrations[id]?.combo
+        registrations[id]?.combo ?? nil
     }
 
-    func effectiveCombo(for def: HotkeyDefinition) -> KeyCombo {
+    func effectiveCombo(for def: HotkeyDefinition) -> KeyCombo? {
         loadPersisted(for: def.id) ?? def.defaultCombo
     }
 
@@ -231,18 +250,22 @@ final class HotkeyCenter: ObservableObject {
             if persist { self.persist(combo, for: id) }
             return true
         } else {
-            // 回滚：重新注册旧组合
-            var oldRef: EventHotKeyRef?
+            // 回滚：重新注册旧组合（原本未绑定则保持未绑定）。
             let oldCarbonID = nextCarbonID
             nextCarbonID += 1
+            guard let oldCombo = existing.combo else {
+                registrations[id] = Registration(def: existing.def, hotKeyRef: nil, carbonID: oldCarbonID, combo: nil)
+                return false
+            }
+            var oldRef: EventHotKeyRef?
             let oldHKID = EventHotKeyID(signature: signature, id: oldCarbonID)
-            let st = RegisterEventHotKey(existing.combo.keyCode, existing.combo.carbonModifiers, oldHKID,
+            let st = RegisterEventHotKey(oldCombo.keyCode, oldCombo.carbonModifiers, oldHKID,
                                          GetApplicationEventTarget(), 0, &oldRef)
             if st == noErr, let oldRef {
-                registrations[id] = Registration(def: existing.def, hotKeyRef: oldRef, carbonID: oldCarbonID, combo: existing.combo)
+                registrations[id] = Registration(def: existing.def, hotKeyRef: oldRef, carbonID: oldCarbonID, combo: oldCombo)
                 idByCarbonID[oldCarbonID] = id
             } else {
-                registrations[id] = Registration(def: existing.def, hotKeyRef: nil, carbonID: oldCarbonID, combo: existing.combo)
+                registrations[id] = Registration(def: existing.def, hotKeyRef: nil, carbonID: oldCarbonID, combo: oldCombo)
                 conflictedIDs.insert(id)
             }
             return false

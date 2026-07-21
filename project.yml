@@ -21,6 +21,13 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         CFBundleIconFile: AppIcon
         NSHumanReadableCopyright: "© 2026 Baobox"
+        NSMicrophoneUsageDescription: "录屏时用于录制你的声音（可选开启）。Used to record your voice during screen recording (optional)."
+    # Hardened Runtime 下访问麦克风必须显式声明 audio-input entitlement，
+    # 只有 Info.plist 的用途描述是不够的。
+    entitlements:
+      path: Baobox.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.toolsmac.app

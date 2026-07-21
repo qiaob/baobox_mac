@@ -1,12 +1,29 @@
 import AppKit
 
+/// 一次 overlay 会话的目的：截图或录屏。选区交互完全一致，仅完成后的链路不同。
+enum CaptureSessionMode {
+    case capture
+    case record
+}
+
 /// 截图会话协调：管理多屏 overlay、汇总完成/取消回调、驱动捕获与结果处理。
 @MainActor
 final class CaptureController {
     private var overlays: [CaptureOverlayWindow] = []
     private var isActive = false
+    private var sessionMode: CaptureSessionMode = .capture
 
     func begin() {
+        begin(.capture)
+    }
+
+    /// 录屏入口：同一套选区交互（框选 / 点选窗口 / ⏎ 全屏）。
+    func beginRecording() {
+        guard !RecordingController.shared.isRecording else { return }
+        begin(.record)
+    }
+
+    private func begin(_ mode: CaptureSessionMode) {
         guard !isActive else { return }
 
         guard Permissions.hasScreenRecording else {
@@ -16,10 +33,12 @@ final class CaptureController {
         }
 
         isActive = true
+        sessionMode = mode
         let mouseAK = NSEvent.mouseLocation
 
         for screen in NSScreen.screens {
-            let overlay = CaptureOverlayWindow(screen: screen, controller: self)
+            let overlay = CaptureOverlayWindow(screen: screen, controller: self,
+                                               recordMode: mode == .record)
             overlays.append(overlay)
             overlay.orderFrontRegardless()
         }
@@ -56,10 +75,27 @@ final class CaptureController {
     }
 
     func finishWindow(_ window: DetectedWindow) {
+        if sessionMode == .record {
+            // 录制不追踪窗口本身，录它当前所在矩形（与所在屏求交）。
+            let rectAK = Geometry.appKitRect(fromCG: window.frameCG)
+            let screens = NSScreen.screens
+            guard let screen = WindowLayout.targetScreen(forWindowAK: rectAK,
+                                                         screens: screens,
+                                                         mouseScreen: nil) else {
+                dismissOverlays()
+                return
+            }
+            startRecording(rectAK.intersection(screen.frame), on: screen)
+            return
+        }
         performCapture(target: .window(window.windowID), mode: .standard)
     }
 
     func finishRect(_ rectAK: NSRect, on screen: NSScreen, mode: ResultMode) {
+        if sessionMode == .record {
+            startRecording(rectAK, on: screen)
+            return
+        }
         guard let displayID = screen.displayID else {
             dismissOverlays()
             return
@@ -68,11 +104,35 @@ final class CaptureController {
     }
 
     func finishFullScreen(on screen: NSScreen) {
+        if sessionMode == .record {
+            startRecording(screen.frame, on: screen)
+            return
+        }
         guard let displayID = screen.displayID else {
             dismissOverlays()
             return
         }
         performCapture(target: .display(displayID), mode: .standard)
+    }
+
+    // MARK: - 录制
+
+    private func startRecording(_ rectAK: NSRect, on screen: NSScreen) {
+        dismissOverlays()
+        Task { @MainActor in
+            // 等 overlay 完全消隐，避免把蒙层录进开头几帧。
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            do {
+                try await RecordingController.shared.start(rectAK: rectAK, on: screen)
+            } catch {
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = L("screenshot.record.error.startFailed")
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+        }
     }
 
     // MARK: - 标注支持
@@ -94,9 +154,10 @@ final class CaptureController {
         ScreenshotResultHandler.handle(image: image, mode: mode)
     }
 
-    /// 贴图：把图像钉在原选区位置的置顶浮窗里。
+    /// 贴图：把图像钉在原选区位置的置顶浮窗里。贴图不走 handle()，需单独记入历史。
     func finishPin(_ image: CGImage, at rectAK: NSRect) {
         dismissOverlays()
+        ScreenshotHistoryStore.shared.record(image: image)
         PinnedImageWindow.pin(image: image, at: rectAK)
     }
 

@@ -20,6 +20,9 @@ final class CaptureOverlayView: NSView {
     private let screenRef: NSScreen
     private weak var controller: CaptureController?
 
+    /// 录制模式：选区交互不变，但不出标注工具条，⏎/双击 = 开始录制。
+    private let recordMode: Bool
+
     private var phase: Phase = .hovering(nil)
 
     // hovering → dragging 的按下点与命中窗口
@@ -36,6 +39,17 @@ final class CaptureOverlayView: NSView {
     private let handleSize: CGFloat = 6
 
     private let accent = NSColor(srgbRed: 0x2B / 255.0, green: 0xC4 / 255.0, blue: 0xB8 / 255.0, alpha: 1)
+
+    /// 录制模式的选区确认工具条（声音开关 / 取消 / 开始录制）。
+    private var recordBar: RecordStartBar?
+
+    // MARK: 像素放大镜
+
+    /// 放大镜底图：overlay 打开时异步冻结的整屏画面（已排除自身窗口）。
+    /// 就绪前放大镜不显示；选区期间屏幕内容基本静止，冻结底图与实况一致。
+    private var loupeImage: CGImage?
+    private var loupeTask: Task<CGImage, Error>?
+    private var lastMouseLocal: NSPoint?
 
     // MARK: 标注状态
 
@@ -61,9 +75,10 @@ final class CaptureOverlayView: NSView {
     private var textEditor: NSTextField?
     private var finishing = false
 
-    init(screen: NSScreen, controller: CaptureController) {
+    init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false) {
         self.screenRef = screen
         self.controller = controller
+        self.recordMode = recordMode
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         // 不使用 layer-backing：draw(_:) 里以 .clear 混合模式在非透明 backing 上"挖洞"，
         // 需要窗口 backing 直接透明，layer-backed 会改变透明合成行为。
@@ -80,6 +95,7 @@ final class CaptureOverlayView: NSView {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
         window?.makeFirstResponder(self)
+        beginLoupeCapture()
         // overlay 弹出时鼠标已经在 tracking area 内部，而 tracking area 未带
         // .assumeInside，AppKit 不会补发 mouseEntered。命中检测只在 mouseMoved 里做的话，
         // phase 会一直停在 .hovering(nil)：屏幕只是变暗、光标还是箭头，此刻直接单击会被
@@ -154,10 +170,17 @@ final class CaptureOverlayView: NSView {
     }
 
     /// 工具条是独立子窗口但几何上叠在 overlay 之内，mouseMoved 仍会派发到这里；
-    /// 指针悬在工具条上时不能把光标改成十字。
+    /// 指针悬在工具条（标注条或录制确认条）上时不能把光标改成十字。
     private var mouseOverToolbar: Bool {
-        guard let toolbar, toolbar.panel.isVisible, toolbar.panel.alphaValue > 0 else { return false }
-        return toolbar.panel.frame.contains(NSEvent.mouseLocation)
+        if let toolbar, toolbar.panel.isVisible, toolbar.panel.alphaValue > 0,
+           toolbar.panel.frame.contains(NSEvent.mouseLocation) {
+            return true
+        }
+        if let recordBar, recordBar.panel.isVisible, recordBar.panel.alphaValue > 0,
+           recordBar.panel.frame.contains(NSEvent.mouseLocation) {
+            return true
+        }
+        return false
     }
 
     // MARK: - 鼠标事件
@@ -175,10 +198,13 @@ final class CaptureOverlayView: NSView {
             window?.makeKey()
             window?.makeFirstResponder(self)
         }
+        lastMouseLocal = localPoint(event)
         if case .hovering = phase {
             let detected = WindowDetector.window(atCG: globalCG(localPoint(event)))
             phase = .hovering(detected)
             needsDisplay = true
+        } else {
+            needsDisplay = true // 放大镜跟随光标
         }
     }
 
@@ -209,6 +235,7 @@ final class CaptureOverlayView: NSView {
                 // 选区外按下 → 重新开始框选
                 phase = .dragging(anchor: p, current: p)
                 toolbar?.setHidden(true)
+                recordBar?.setHidden(true)
                 needsDisplay = true
             }
         case .annotating(let rect):
@@ -247,6 +274,7 @@ final class CaptureOverlayView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let p = localPoint(event)
+        lastMouseLocal = p
         switch phase {
         case .hovering:
             if let down = mouseDownLocal, hypot(p.x - down.x, p.y - down.y) > dragThreshold {
@@ -266,6 +294,7 @@ final class CaptureOverlayView: NSView {
             }
             if case .adjusting(let rect) = phase {
                 toolbar?.position(near: globalAKRect(fromLocal: rect), on: screenRef)
+                recordBar?.position(near: globalAKRect(fromLocal: rect), on: screenRef)
             }
             needsDisplay = true
         case .annotating(let rect):
@@ -299,7 +328,17 @@ final class CaptureOverlayView: NSView {
             // 未超阈值 = 单击：有命中窗口则截取，否则忽略。
             mouseDownLocal = nil
             if let detected {
-                controller?.finishWindow(detected)
+                if recordMode {
+                    // 录制模式：点窗口不直接开录，把窗口区域转成选区让用户确认。
+                    let local = localRect(fromGlobalCG: detected.frameCG).intersection(bounds)
+                    if local.width >= 3, local.height >= 3 {
+                        phase = .adjusting(rect: local)
+                        showRecordBar(for: local)
+                        needsDisplay = true
+                    }
+                } else {
+                    controller?.finishWindow(detected)
+                }
             }
         case .dragging(let anchor, _):
             let rect = normalizedRect(anchor: anchor, current: p)
@@ -307,7 +346,11 @@ final class CaptureOverlayView: NSView {
                 phase = .hovering(nil)
             } else {
                 phase = .adjusting(rect: rect)
-                showToolbar(for: rect)
+                if recordMode {
+                    showRecordBar(for: rect)
+                } else {
+                    showToolbar(for: rect)
+                }
             }
             needsDisplay = true
         case .adjusting:
@@ -358,7 +401,14 @@ final class CaptureOverlayView: NSView {
             controller?.finishRect(globalAKRect(fromLocal: rect), on: screenRef,
                                    mode: saveOnly ? .saveOnly : .standard)
         case .hovering:
-            controller?.finishFullScreen(on: screenRef)
+            if recordMode {
+                // 录制模式：⏎ 先把整屏变成选区，让用户在工具条上确认/调声音。
+                phase = .adjusting(rect: bounds)
+                showRecordBar(for: bounds)
+                needsDisplay = true
+            } else {
+                controller?.finishFullScreen(on: screenRef)
+            }
         }
     }
 
@@ -376,6 +426,7 @@ final class CaptureOverlayView: NSView {
         let moved = clampInside(rect.offsetBy(dx: dx, dy: dy))
         phase = .adjusting(rect: moved)
         toolbar?.position(near: globalAKRect(fromLocal: moved), on: screenRef)
+        recordBar?.position(near: globalAKRect(fromLocal: moved), on: screenRef)
         needsDisplay = true
     }
 
@@ -461,10 +512,17 @@ final class CaptureOverlayView: NSView {
                 let label = "\(detected.appName)\(detected.title.map { " · \($0)" } ?? "") — \(sizeText)"
                 drawBadge(label, origin: NSPoint(x: local.minX, y: local.minY - 26), anchorRight: false)
             }
-            drawHintPill([L("screenshot.overlay.hint.click"),
-                          L("screenshot.overlay.hint.drag"),
-                          L("screenshot.overlay.hint.enter"),
-                          L("screenshot.overlay.hint.esc")])
+            if recordMode {
+                drawHintPill([L("screenshot.record.hint.click"),
+                              L("screenshot.record.hint.drag"),
+                              L("screenshot.record.hint.enter"),
+                              L("screenshot.overlay.hint.esc")])
+            } else {
+                drawHintPill([L("screenshot.overlay.hint.click"),
+                              L("screenshot.overlay.hint.drag"),
+                              L("screenshot.overlay.hint.enter"),
+                              L("screenshot.overlay.hint.esc")])
+            }
 
         case .dragging(let anchor, let current):
             let rect = normalizedRect(anchor: anchor, current: current)
@@ -507,7 +565,113 @@ final class CaptureOverlayView: NSView {
             drawSelectionBorder(rect)
             drawSizeBadge(rect)
         }
-        // TODO(M2): 像素放大镜（loupe）。
+
+        drawLoupeIfNeeded(ctx)
+    }
+
+    // MARK: - 像素放大镜
+
+    private func beginLoupeCapture() {
+        guard loupeTask == nil, let controller else { return }
+        let task = Task { try await controller.freezeRegion(self.screenRef.frame, on: self.screenRef,
+                                                            alsoExcluding: []) }
+        loupeTask = task
+        Task { @MainActor [weak self] in
+            guard let self, let image = try? await task.value else { return }
+            self.loupeImage = image
+            self.needsDisplay = true
+        }
+    }
+
+    /// 悬停 / 框选 / 拉手柄时显示；标注相和指针悬在工具条上时不显示。
+    private func drawLoupeIfNeeded(_ ctx: CGContext) {
+        guard let loupeImage, let p = lastMouseLocal, !mouseOverToolbar else { return }
+        switch phase {
+        case .hovering, .dragging:
+            break
+        case .adjusting:
+            guard activeHandle != nil || movingSelection else { return }
+        case .annotating:
+            return
+        }
+        drawLoupe(ctx, image: loupeImage, at: p)
+    }
+
+    /// 以光标处像素为中心：17×17 物理像素放大到 8pt/px，附坐标与颜色读数。
+    private func drawLoupe(_ ctx: CGContext, image: CGImage, at p: NSPoint) {
+        let scale = screenRef.backingScaleFactor
+        let px = floor(p.x * scale)
+        let py = floor((bounds.height - p.y) * scale) // 图像空间：原点左上、y 向下
+        guard px >= 0, py >= 0, px < CGFloat(image.width), py < CGFloat(image.height) else { return }
+
+        let unit: CGFloat = 8            // 每物理像素放大后的 pt
+        let cells: CGFloat = 17          // 视野边长（像素数，奇数保证有正中心）
+        let body = unit * cells          // 136pt
+        let infoH: CGFloat = 22
+        let total = NSSize(width: body + 8, height: body + infoH + 12)
+
+        // 摆位：光标右下，越界翻转。
+        var origin = NSPoint(x: p.x + 18, y: p.y - 18 - total.height)
+        if origin.x + total.width > bounds.maxX { origin.x = p.x - 18 - total.width }
+        if origin.y < bounds.minY { origin.y = p.y + 18 }
+        let box = NSRect(origin: origin, size: total)
+
+        // 背板
+        let bg = NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8)
+        NSColor(white: 0.11, alpha: 0.95).setFill()
+        bg.fill()
+
+        // 放大区域：直接整幅底图按倍率绘制 + 裁剪，屏幕边缘自然留黑，无需特判。
+        let bodyRect = NSRect(x: box.minX + 4, y: box.maxY - 4 - body, width: body, height: body)
+        ctx.saveGState()
+        NSBezierPath(rect: bodyRect).addClip()
+        ctx.interpolationQuality = .none
+        let drawW = CGFloat(image.width) * unit
+        let drawH = CGFloat(image.height) * unit
+        // 非翻转上下文里图像顶行画在 rect 顶部；把 (px,py) 的像素中心对到视野中心。
+        let originX = bodyRect.midX - (px + 0.5) * unit
+        let originY = bodyRect.midY - (drawH - (py + 0.5) * unit)
+        ctx.draw(image, in: CGRect(x: originX, y: originY, width: drawW, height: drawH))
+        ctx.restoreGState()
+
+        // 十字线 + 中心像素格
+        NSColor(white: 1, alpha: 0.35).setStroke()
+        let cross = NSBezierPath()
+        cross.lineWidth = 1
+        cross.move(to: NSPoint(x: bodyRect.midX, y: bodyRect.minY))
+        cross.line(to: NSPoint(x: bodyRect.midX, y: bodyRect.maxY))
+        cross.move(to: NSPoint(x: bodyRect.minX, y: bodyRect.midY))
+        cross.line(to: NSPoint(x: bodyRect.maxX, y: bodyRect.midY))
+        cross.stroke()
+        let centerCell = NSRect(x: bodyRect.midX - unit / 2, y: bodyRect.midY - unit / 2,
+                                width: unit, height: unit)
+        accent.setStroke()
+        let cellPath = NSBezierPath(rect: centerCell)
+        cellPath.lineWidth = 1.5
+        cellPath.stroke()
+
+        // 信息行：CG 全局坐标 + 中心像素颜色
+        let gcg = Geometry.cgPoint(fromAppKit: NSPoint(x: screenRef.frame.minX + p.x,
+                                                       y: screenRef.frame.minY + p.y))
+        let hex = Self.pixelHex(in: image, x: Int(px), y: Int(py)) ?? "—"
+        let info = "\(Int(gcg.x)), \(Int(gcg.y))   \(hex)"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
+            .foregroundColor: NSColor(white: 0.92, alpha: 1)
+        ]
+        let str = NSAttributedString(string: info, attributes: attrs)
+        str.draw(at: NSPoint(x: bodyRect.minX + 2, y: box.minY + 6))
+    }
+
+    /// 读取单个像素颜色（画进 1×1 RGBA 上下文）。
+    private static func pixelHex(in image: CGImage, x: Int, y: Int) -> String? {
+        guard let cropped = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)) else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        guard let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8,
+                                  bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return String(format: "#%02X%02X%02X", pixel[0], pixel[1], pixel[2])
     }
 
     private func drawDim(_ ctx: CGContext) {
@@ -595,12 +759,29 @@ final class CaptureOverlayView: NSView {
         toolbar?.position(near: globalAKRect(fromLocal: rect), on: screenRef)
     }
 
+    /// 录制模式的选区确认工具条：开始 = 走 ⏎ 同一条完成链路；取消 = 结束整个会话。
+    private func showRecordBar(for rect: NSRect) {
+        if recordBar == nil {
+            let created = RecordStartBar(
+                onStart: { [weak self] in self?.handleReturn(saveOnly: false) },
+                onCancel: { [weak self] in self?.controller?.cancel() }
+            )
+            recordBar = created
+            if let window { created.show(attachedTo: window) }
+        }
+        recordBar?.setHidden(false)
+        recordBar?.position(near: globalAKRect(fromLocal: rect), on: screenRef)
+    }
+
     /// 会话结束（完成 / 取消 / 整体消隐）时的收尾。
     func teardown() {
         commitTextEditor(cancel: true)
         toolbar?.close()
         toolbar = nil
+        recordBar?.close()
+        recordBar = nil
         freezeTask?.cancel()
+        loupeTask?.cancel()
     }
 
     // MARK: - 标注：冻结底图
