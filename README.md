@@ -1,62 +1,86 @@
 # Baobox
 
-菜单栏常驻的 macOS 效率工具集：一个 App 内置多个工具，统一入口、统一快捷键管理、统一设置。当前内置**截图**（标注 / 贴图 / 录屏）、**剪贴板**、**取色器**、**防休眠**、**窗口管理**（含布局快照）与**二维码生成**。
+A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, color picker, and more — into a single native app with one shortcut system and one settings window.
 
-- 技术栈：Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14 (Sonoma)+ · **零第三方依赖**
-- 架构：框架不认识具体工具，菜单栏 / 快捷键 / 设置页全部由注册的 `ToolModule` 驱动，新增工具 = 新增一个模块目录 + `AppDelegate` 一行注册。
-- 所有数据仅保存在本机，不上传。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-## 功能列表
+## Overview
 
-**框架**
-- 菜单栏常驻（无 Dock 图标 / `LSUIElement`），菜单为纯工具列表：每个工具一行（图标 + 名称 + 主快捷键），悬停展开二级菜单；通用项（设置 / 检查更新 / 退出）沉底。
-- 全局快捷键中心（Carbon）：注册、冲突检测、自定义、持久化。
-- 统一设置窗口：通用 / 快捷键 / 每个工具一个 Tab / 关于。
-- 首次启动权限引导，授权状态实时刷新。
-- 开机自启（`SMAppService`）。
+Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for color picking — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
 
-**截图（默认 ⌘⇧2）**
-- 智能截图，单一快捷键自动检测意图：悬停高亮窗口并标注 App 名与尺寸，单击截取该窗口；按下拖拽（超过 4pt）切换为区域截图，支持八向手柄微调与方向键逐像素移动（⇧ ×10）；⏎ 全屏；Esc 取消。
-- 多显示器，每屏独立 overlay。
-- 基于 ScreenCaptureKit；结果复制到剪贴板，并可按设置保存到指定目录（文件名模板可配置）。
-- 标注编辑器：截取后原地标注——矩形 / 椭圆 / 箭头 / 画笔 / 荧光笔 / 马赛克 / 文字 / 橡皮，撤销重做（⌘Z / ⇧⌘Z），三档粗细 + 七色色板。
-- 贴图（Pin）：把截图钉在屏幕最上层，滚轮缩放（0.2×–5×）、⌥+滚轮调透明度，支持从剪贴板贴图。
-- 像素放大镜：悬停 / 框选 / 拉手柄时跟随光标，17×17 物理像素 ×8 放大，附全局坐标与颜色 Hex。
-- 截图历史：自动存档（保留张数可调，默认 20），菜单缩略图列表支持复制 / 贴到屏幕 / 另存 / 删除。
-- 屏幕录制：复用截图选区交互（框选 / 点选窗口 / 全屏），输出 MP4 或 GIF；可录系统声音 + 麦克风（双轨默认自动混为单轨），录制中红框圈出范围，右下角控制条支持暂停 / 继续 / 停止。
+- **Native, not Electron** — Swift 5.9, SwiftUI + AppKit, zero third-party dependencies. Resident memory stays under ~50 MB.
+- **Modular by design** — the app shell has no knowledge of individual tools; each one implements a common `ToolModule` protocol and self-registers its menu entry, shortcuts, and settings tab.
+- **Local-first** — all data (clipboard history, screenshots, color history, window layouts) stays on disk, on your Mac. Nothing is uploaded.
+- **macOS 14 (Sonoma) or later**, built against ScreenCaptureKit and other modern system frameworks.
 
-**剪贴板（默认 ⌘⇧V）**
-- 后台轮询监听，记录文本 / 链接 / 图片 / 文件；标记为隐私（`org.nspasteboard.ConcealedType` / `TransientType`）的内容不入库。
-- 浮层历史面板：即输即搜、类型过滤、↑↓ 选择、⏎ 粘贴、⌥⏎ 纯文本粘贴、⌘P 置顶。
-- 选中后经辅助功能 + CGEvent 合成 ⌘V 自动回填粘贴；无辅助功能权限时降级为仅复制。
-- 历史条数上限可配置，超限淘汰；重启保留。
-- 按 App 忽略名单、过期自动清理（永久 / 1 / 7 / 30 / 90 天）、单条删除（⌘⌫ 或悬停删除按钮）；全局 ⌘⌥V 纯文本粘贴最近一条。
+## Features
 
-**取色器（出厂不绑定快捷键）**
-- 基于系统原生 `NSColorSampler` 放大镜取色，**无需任何权限**。
-- 取色结果按所选格式（Hex / RGB / SwiftUI `Color`）复制到剪贴板，并存入历史（上限 50 条）。
-- 二级菜单展示最近 5 个颜色（带圆角色块预览），点击即按当前格式复制。
-- 设置页可切换输出格式、Hex 大小写、取色后是否自动复制。
+### Core
+- Menu-bar resident, no Dock icon (`LSUIElement`); the menu is a flat list of tools — one row per tool (icon, name, primary shortcut), with a submenu on hover for actions, history, and per-tool settings.
+- Centralized global hotkey manager (Carbon) with conflict detection, per-tool customization, and persistence.
+- One settings window: General / Shortcuts / one tab per tool / About.
+- Guided permission onboarding with live status.
+- Optional launch at login (`SMAppService`).
 
-**防休眠（纯菜单操作）**
-- 基于 IOKit 电源管理断言（`IOPMAssertionCreateWithName`）阻止系统进入空闲休眠。
-- 二级菜单可开启 15 分钟 / 1 小时 / 2 小时 / 无限期，定时到期自动关闭；状态行实时显示剩余时间。
-- 可选「同时防止显示器休眠」，变更即时作用于当前生效的断言；App 退出时自动释放断言。
+### Screenshot (default ⌘⇧2)
+- Single shortcut, intent detected automatically: hover to highlight and capture a window with one click; click-drag (past a ~4pt threshold) for a region capture with eight-way resize handles, arrow-key nudging (⇧ for ×10), and a pixel loupe; ⏎ for a full-screen capture; Esc to cancel.
+- Multi-display support, one overlay per screen.
+- Built on ScreenCaptureKit. Results copy to the clipboard and, optionally, save to a configurable folder with a customizable filename template.
+- In-place annotation editor: rectangle, ellipse, arrow, pen, highlighter, mosaic/blur, text, eraser, undo/redo (⌘Z / ⇧⌘Z), three stroke widths, a seven-color palette.
+- Pin: keep a capture floating on top of every window, draggable, scroll-to-zoom (0.2×–5×), ⌥+scroll for opacity; pin directly from the clipboard.
+- Pixel loupe for precise selection: an 8×-magnified 17×17 grid follows the cursor while hovering, dragging, or resizing a handle, with live coordinates and a hex color readout.
+- Screenshot history: every capture is archived automatically (configurable retention, default 20), with a thumbnail menu for copy / re-pin / save-as / delete.
+- Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
 
-**窗口管理（出厂不绑定键位）**
-- 基于辅助功能权限移动 / 缩放前台窗口：半屏、四分屏、最大化（非全屏）、居中、跨显示器移动、恢复原始位置，共 13 条可自定义快捷键（出厂不绑定——常用的 ⌃⌥ 系列与 Rectangle 完全同键，请在设置 → 快捷键中自行设置；菜单入口始终可用）。
-- 布局快照：「保存当前布局…」记录所有常规窗口的位置尺寸，菜单一键恢复；多显示器按屏幕 UUID + 屏内相对位置精确还原，原屏拔掉时自动夹回现有屏幕可见区域。
-- **多显示器兼容**：目标屏取与窗口交集面积最大者（游离窗口回退鼠标所在屏），布局基准一律用各屏的可见区域（`visibleFrame`，自动避开菜单栏与 Dock）；跨屏移动按相对位置与尺寸等比映射并 clamp，不同分辨率 / 缩放比之间不变形溢出；屏幕按坐标排序保证 next/prev 循环稳定；单屏时跨屏动作静默无效。
-- 与 AX（左上原点）/ AppKit（左下原点）的坐标换算统一走 `Geometry`；未授权辅助功能时二级菜单首项提示前往开启。
+### Clipboard (default ⌘⇧V)
+- Background monitoring with history for text, rich text, images, file paths, and links; content marked `org.nspasteboard.ConcealedType` / `TransientType` is never stored.
+- Floating history panel: type-to-search, filter by type, arrow-key navigation, ⏎ to paste, ⌥⏎ for a plain-text paste, ⌘P to pin.
+- Selecting an entry auto-pastes into the frontmost app via a simulated ⌘V (requires Accessibility); without that permission, it falls back to copy-only.
+- Configurable history limit with automatic eviction; persists across restarts.
+- Per-app ignore list, automatic expiry (never / 1 / 7 / 30 / 90 days), and per-item delete (⌘⌫ or an inline button); a global ⌘⌥V shortcut pastes the most recent item as plain text.
 
-**二维码生成（默认 ⌃⇧Q）**
-- 唤起浮层自动带入剪贴板文字，可编辑实时重绘（纠错 M、含静区）；支持复制图片 / 保存 PNG / 钉在屏幕上。纯本地 `CIQRCodeGenerator`，无需权限。
+### Color Picker (unbound by default)
+- System-native magnifier sampling via `NSColorSampler` — no permissions required.
+- Copies the sampled color in your preferred format (Hex / RGB / SwiftUI `Color`) and keeps a history (up to 50 entries).
+- The submenu shows the five most recent colors as swatches for one-click re-copy.
+- Settings let you choose the output format, hex letter case, and whether to auto-copy after sampling.
 
-> Sparkle 自动更新待接入（分发渠道确定后），「检查更新」菜单暂为置灰占位。
+### Caffeinate — Sleep Prevention (menu-only)
+- Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).
+- Enable for 15 minutes / 1 hour / 2 hours / indefinitely from the submenu; the assertion clears automatically on expiry, with a live countdown shown in the menu.
+- Optional "also prevent display sleep"; the assertion is released automatically on quit.
 
-## 构建
+### Window Manager (unbound by default)
+- Move and resize the frontmost window via Accessibility: halves, quarters, maximize (non-fullscreen), center, move between displays, and restore to its original position — 13 fully customizable shortcuts (unbound out of the box, since the conventional ⌃⌥ bindings collide with Rectangle; set your own under Settings → Shortcuts).
+- **Layout snapshots**: "Save current layout…" records the position and size of every regular, non-minimized window; restoring re-applies them with title-first matching and an ordering fallback, skipping apps that aren't running.
+- **Multi-display aware** throughout: the target display is whichever one has the largest intersection with the window; layouts are computed against each display's visible frame (avoiding the menu bar and Dock); moving a window between displays scales its relative position and size to fit, clamped to stay on-screen; snapshots store a stable per-display UUID plus a relative position, so restoring works correctly even if resolution or display arrangement changed since the snapshot was taken.
 
-需要 Xcode 15+（macOS 14 SDK）。工程由 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 生成：
+### QR Code Generator (default ⌃⇧Q)
+- Opens a floating panel pre-filled with the current clipboard text; edits regenerate the code live (error-correction level M, quiet zone included).
+- Copy as an image, save as PNG, or pin it on screen.
+- Fully local (`CIQRCodeGenerator`), no permissions required.
+
+> Sparkle-based auto-update is not yet wired up (pending a hosting decision); the "Check for Updates" menu item is currently a disabled placeholder.
+
+## Requirements
+
+- macOS 14 (Sonoma) or later
+
+## Installation
+
+### Download a release
+
+Grab the latest `.zip` from [Releases](https://github.com/qiaob/baobox_mac/releases), unzip, and drag `Baobox.app` into `/Applications`.
+
+Pre-notarization builds are blocked by Gatekeeper on first launch — right-click the app and choose **Open**, or run:
+
+```bash
+xattr -cr /Applications/Baobox.app
+```
+
+### Build from source
+
+The Xcode project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen) and is not checked into git.
 
 ```bash
 brew install xcodegen
@@ -64,18 +88,25 @@ xcodegen generate
 open Baobox.xcodeproj
 ```
 
-在 Xcode 中选择 `Baobox` scheme 运行即可；或直接 `make install` 编译 Release 并安装到 /Applications。
+Select the `Baobox` scheme and run, or use the bundled Makefile:
 
-## 首次运行需授权的权限
+```bash
+make dev      # Debug build, run without touching /Applications
+make install  # Release build, installed to /Applications and relaunched
+```
 
-首次启动会弹出权限引导，涉及两项系统权限（系统设置 → 隐私与安全性）：
+## Permissions
 
-1. **屏幕录制**：用于截取屏幕内容。未授权时无法使用截图工具。
-2. **辅助功能**：用于选中剪贴板历史后自动模拟 ⌘V 粘贴到当前 App（窗口管理同样依赖此权限）。未授权时剪贴板降级为「仅复制」，不自动粘贴。
-3. **麦克风**（可选）：仅在录屏勾选「麦克风」时请求；拒绝后自动降级为不录麦继续录屏。
+Baobox requests permissions on first launch (System Settings → Privacy & Security):
 
-权限均面向 bundle id `com.baobox.app`；修改 bundle id 会导致系统要求重新授权。授权后无需重启，界面徽章会实时变绿。
+| Permission | Used for | If denied |
+|---|---|---|
+| Screen Recording | Capturing screen content | The screenshot tool is unavailable |
+| Accessibility | Simulating ⌘V to auto-paste clipboard history; moving/resizing windows | Clipboard falls back to copy-only; Window Manager is unavailable |
+| Microphone | Recording your voice during screen recording (optional, requested only when enabled) | Recording continues without a mic track |
 
-## 许可
+All permissions are tied to the bundle identifier `com.baobox.app`; changing it requires re-granting access. Granted permissions take effect immediately — no restart required.
 
-本项目仅供个人学习与非商业用途使用，**禁止任何形式的商业使用**（包括但不限于售卖、集成进商业产品或服务、商业性分发）。如需商业授权，请先联系作者。
+## License
+
+Baobox is provided for personal, non-commercial use only. Commercial use in any form — including resale, bundling into a commercial product or service, or commercial redistribution — is prohibited without prior written permission from the author. Contact the author to discuss commercial licensing.
