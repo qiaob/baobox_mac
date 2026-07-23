@@ -78,6 +78,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Maintenance**: shows `~/.codex/sessions` disk usage and file count, cleans up rollout JSONL older than 30/60/90 days (with confirmation), reports `codex --version`, checks the latest `@openai/codex` on npm, and copies the upgrade command.
 - **MCP (read-only)**: lists `[mcp_servers.*]` from `config.toml` and opens the file for editing.
 
+### Network Capture (unbound by default)
+- A native HTTP(S) man-in-the-middle proxy built on Network.framework — no third-party runtime, no SwiftNIO. A single toggle starts a local proxy (default port 9090) and, optionally, points the Mac system proxy at it; turning it off fully stops the listener, restores the system proxy, and frees all buffers (zero cost when off).
+- **HTTPS decryption**: a local root CA (issued via the system's `openssl`) signs per-host leaf certificates on demand; TLS is terminated through an internal loopback listener so plaintext requests/responses are captured. Any MITM failure — untrusted cert, handshake failure, pinning, HTTP/2-only — falls back to a blind TCP tunnel so the proxied device keeps working; those flows are marked "not decrypted".
+- **Phone-friendly**: the window shows every LAN IPv4 + port (one-click copy) and a QR code to a magic domain (`http://baobox.proxy/`) that serves the CA for download; one-click Mac trust install/remove (admin), and one-click ADB proxy set/clear + cert push for Android.
+- **Proxyman-style UI**: a searchable flow list with method/status color coding, a detail pane (Overview / Request / Response / Raw) with JSON pretty-print, gzip/deflate decompression, and inline image preview; method/status filter chips; HAR / cURL / Markdown export.
+- **Local MCP for AI** (separate switch): starts a loopback Streamable-HTTP MCP server exposing `list_flows` / `get_flow` / `search_flows` / `latest_flows` / `clear_flows`, one-click registered into Claude Code / Codex config (auth headers redacted by default); plus "Send to Claude Code" for any flow. Captured content stays in memory only and is never uploaded.
+
 > Sparkle-based auto-update is not yet wired up (pending a hosting decision); the "Check for Updates" menu item is currently a disabled placeholder.
 
 ## Requirements

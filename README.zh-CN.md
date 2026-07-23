@@ -78,6 +78,13 @@
 - **维护**：展示 `~/.codex/sessions` 磁盘占用与文件数，清理早于 30/60/90 天的 rollout JSONL（二次确认），显示 `codex --version`，检查 npm 上 `@openai/codex` 最新版，并复制升级命令。
 - **MCP（只读）**：列出 `config.toml` 中的 `[mcp_servers.*]`，并可打开配置文件编辑。
 
+### 网络抓包（出厂不绑定快捷键）
+- 基于 Network.framework 自研的原生 HTTP(S) 中间人代理——不打包第三方运行时、不用 SwiftNIO。一键开关启动本地代理（默认端口 9090），可选自动把 Mac 系统代理指向它；关闭即彻底停监听、还原系统代理、释放全部缓冲（关闭态零开销）。
+- **HTTPS 解密**：本地根证书（借系统自带 `openssl` 签发）按 host 懒加载签发叶子证书，经内部回环 TLS listener 终止握手得到明文并捕获请求/响应。任何 MITM 失败——未信任、握手失败、证书固定、仅 HTTP/2——都退化为盲隧道透传，保证被代理设备照常上网，这类 flow 标注「未解密」。
+- **手机友好**：窗口展示全部局域网 IPv4 + 端口（一键复制）与二维码（指向 magic 域名 `http://baobox.proxy/`，供设备下载 CA）；Mac 一键安装/移除信任（需管理员）；Android 一键 ADB 设/清代理 + 推送证书。
+- **Proxyman 式 UI**：可搜索的 flow 列表（方法/状态码配色），详情分「概览 / 请求 / 响应 / 原始」四页，JSON 美化、gzip/deflate 自动解压、图片内联预览；方法/状态码过滤 chips；支持 HAR / cURL / Markdown 导出。
+- **结合 AI 的本地 MCP**（独立开关）：启动本地 Streamable-HTTP MCP 服务，暴露 `list_flows` / `get_flow` / `search_flows` / `latest_flows` / `clear_flows`，可一键注册进 Claude Code / Codex 配置（默认脱敏鉴权头）；并支持把任一 flow「发送到 Claude Code」。抓包内容默认仅内存、绝不上传。
+
 > Sparkle 自动更新尚未接入（待确定托管方案），「检查更新」菜单项目前为置灰占位。
 
 ## 系统要求
