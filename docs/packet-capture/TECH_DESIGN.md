@@ -297,3 +297,55 @@ segmented / DisclosureGroup 分节：
 6. P1：ADB、本地 MCP、发送到 Claude Code。
 
 每步都是可用增量；HTTPS（步骤 4）是核心难点，前置步骤先把非 TLS 链路和 UI 跑通。
+
+## 16. v1.1 增量：MCP 抓包控制 + 扫码自动配置代理
+
+> 设计者：Fable（2026-07-23 追加）。对应用户诉求：MCP 也能开始/结束抓包并与 UI 互相驱动；代理配置也能扫码自动完成。
+
+### 16.1 MCP 抓包控制工具（新增 3 个）
+
+`CaptureMCPServer` 的 `toolSchemas` 与 `MCPTools.call` 新增：
+
+- `start_capture()` —— 开始抓包（等价 UI 主开关开）。返回 `"starting on 0.0.0.0:<port>, LAN <ip>:<port>"`。
+- `stop_capture()` —— 停止抓包。返回 `"stopped"`。
+- `capture_status()` —— 返回当前状态：`running <ip>:<port> · <flowCount> flows` / `stopped` / `starting` / `failed`。
+
+已有 `list_flows`（含 host/method/status/limit 过滤）、`get_flow(id)`、`search_flows`、`latest_flows`、`clear_flows` 不变。
+
+**与 UI 互相驱动（关键）**：`ProxyServer.shared` 是**唯一事实源**（`@MainActor`、`@Published var state`），UI 菜单与窗口工具条都观察它。故：
+
+- **MCP → UI**：MCP 工具处理在连接后台队列，`start_capture`/`stop_capture` 必须 `DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.start(port:) / .stop() } }`；因 UI 观察同一 `state`，菜单/窗口即时反映。**MCP 不得自持抓包状态**，只转发调用。
+- **UI → MCP**：`capture_status` 每次调用**实时读** `ProxyServer.shared.state`（用 `DispatchQueue.main.sync` 从连接队列取一次快照——主线程不会反向等待该队列，无死锁），故 UI 手动开关的结果对 AI 立即可见。
+- 维护一个线程安全的运行态镜像（仿 `FlowSnapshotStore`：`ProxyStateSnapshot.shared`，主线程在 `ProxyServer.state` 变化时写、MCP 连接队列读），避免 `main.sync` 亦可，二选一；`main.sync` 更简单且够用。
+- **注意**：`start_capture` 要求本机 MCP 服务已开（MCP 开关是另一路）；AI 经 MCP 开抓包 → 代理起 → 若 `autoSystemProxy` 开则同时设 Mac 系统代理。窗口/菜单的开关与 MCP 的开关是两个独立 toggle，但**抓包这一动作**经同一个 `ProxyServer` 单例，天然同步。
+- flow 列表/详情已支持过滤（§10 既有）；`get_flow` 保持鉴权头脱敏（默认开）。
+
+### 16.2 扫码自动配置代理（iOS 描述文件；Android 保持 ADB/手动）
+
+**事实约束**：相机扫普通二维码**无法**在 iOS/Android 上设置 HTTP 代理（Wi-Fi 二维码标准 `WIFI:S:...;P:...;;` 只含 SSID/密码，无代理字段）。因此「扫码自动配代理」只能经**平台配置机制**：
+
+- **iOS —— 配置描述文件（`.mobileconfig`）**：二维码指向 `http://baobox.proxy/profile`，代理本地生成并返回一个**未签名** plist 描述文件（`Content-Type: application/x-apple-aspen-config`），内含两个 payload：
+  1. **CA 证书**（`PayloadType = com.apple.security.root`，DER base64）——安装即导入根证书（iOS 仍需用户到「设置 › 通用 › 关于本机 › 证书信任设置」手动开启完全信任，描述文件无法免除这一步，UI 文案要说明）。
+  2. **Wi-Fi**（`PayloadType = com.apple.wifi.managed`）：`SSID_STR` = 当前 Wi-Fi 名（Mac 侧 `networksetup -getairportnetwork <iface>` 读取，假定手机同网），`ProxyType = Manual`、`ProxyServer = <Mac LAN IP>`、`ProxyServerPort = <port>`。安装后该 SSID 自动走代理。
+     - 若拿不到 SSID → 降级为**仅 CA** 的描述文件（仍比裸 `.crt` 方便）；代理仍需手动填（窗口显示 IP:端口）。
+     - **系统级全局代理**（`com.apple.proxy.http.global`）仅**监督（supervised/MDM）**设备生效，普通手机不用；故用「按 SSID 的 Wi-Fi payload」。
+  - 生成：纯字符串拼 plist（UUID 用固定命名空间派生或随机；`PayloadIdentifier` 用 `com.baobox.netcapture.*`）。无需签名即可安装（显示「未验证」属正常）。
+- **Android —— 无描述文件机制**：代理只能经**系统设置手动**或**ADB 一键**（§9 已实现）。二维码对 Android 仅用于**下证书**（`/cert`）。Android 侧 UI 引导：扫码装证书 + 手动填代理，或用 ADB 一键。
+
+**UI**：证书二维码面板（`NetCaptureCertQR`）与窗口的二维码区改为**分平台两个页签/两个二维码**：
+- 「iOS：扫码装证书 + 设代理」→ 二维码编码 `http://baobox.proxy/profile`（含上述 caveat 文案：装后去信任设置开启）。
+- 「Android / 其它：扫码下证书」→ 二维码编码 `http://baobox.proxy/cert`（现状），下方附代理 `IP:端口`（可复制）与「用 ADB 一键设置」入口。
+
+**magic 域名新增路由**（`ProxyConnection` 本地应答，明文可拦到）：
+- `GET /profile` → 生成并返回 iOS `.mobileconfig`（`application/x-apple-aspen-config`，`Content-Disposition: attachment; filename="baobox.mobileconfig"`）。
+- `/` 引导页加两个链接：`/profile`（iOS）与 `/cert`（证书原始文件）。
+- 新增 `MobileConfigBuilder.swift`（~120 行）：读 `baobox-ca.pem` → DER base64、读当前 SSID、拼 plist。SSID 读取失败或非 Wi-Fi → 只出 CA payload。
+
+**本地化**：新增 `netcapture.qr.ios.*` / `netcapture.qr.android.*` / `netcapture.profile.*`（含 iOS 信任开启提示、Android 手动/ADB 提示）与 3 个 MCP 工具无用户可见文案（工具 description 为英文，面向 AI，不入 catalog）。
+
+### 16.3 验收增量
+
+1. AI 经 MCP 调 `start_capture` → 菜单主开关与窗口即时变「停止抓包」、状态行显示运行；`stop_capture` 反之；`capture_status` 与 UI 手动开关结果一致（双向驱动）。
+2. `list_flows`/`get_flow` 经 MCP 返回带过滤的列表与单包详情，鉴权头脱敏。
+3. iOS 手机扫「iOS」二维码 → Safari 下描述文件 → 安装后 CA 导入且该 Wi-Fi 代理自动指向 Mac（信任开启按文案手动一步）；拿不到 SSID 时降级为仅 CA 且不报错。
+4. Android 扫码仅下证书；代理经 ADB 一键或手动，UI 文案清晰。
