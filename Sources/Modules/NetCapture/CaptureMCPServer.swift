@@ -293,6 +293,21 @@ private final class MCPHTTPSession: @unchecked Sendable {
             "description": "Clear all captured flows. Returns how many were cleared.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
+        [
+            "name": "start_capture",
+            "description": "Start capturing HTTP(S) traffic (equivalent to the UI start switch). Returns the listening and LAN proxy address.",
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
+        [
+            "name": "stop_capture",
+            "description": "Stop capturing traffic and restore the system proxy.",
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
+        [
+            "name": "capture_status",
+            "description": "Report whether capture is running, its proxy address, and the number of captured flows.",
+            "inputSchema": ["type": "object", "properties": [:]],
+        ],
     ]
 }
 
@@ -340,6 +355,40 @@ private enum MCPTools {
             let count = flows.count
             DispatchQueue.main.async { MainActor.assumeIsolated { FlowStore.shared.clear() } }
             return "cleared \(count) flows"
+
+        // MARK: 抓包控制（§16.1）—— 与 UI 互相驱动
+        //
+        // `ProxyServer.shared` 是唯一事实源（@MainActor、@Published var state），UI 菜单/窗口都观察它。
+        // 本处**不自持任何抓包状态**，只转发对该单例的调用/读取，故：
+        //   MCP → UI：写操作 hop 到主线程改单例，UI 因观察同一 state 立即反映；
+        //   UI → MCP：capture_status 每次实时读单例 state，UI 手动开关结果对 AI 立即可见。
+        case "start_capture":
+            let port = NetCaptureEnv.port
+            // 写：hop 主线程调单例（MCP → UI 即时同步）。
+            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.start(port: port) } }
+            let ip = NetworkInterfaces.primaryIP()
+            return "starting on 0.0.0.0:\(port), LAN \(ip):\(port)"
+        case "stop_capture":
+            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.stop() } }
+            return "stopped"
+        case "capture_status":
+            // 读：实时取单例 state。用 main.sync 从 MCP 连接队列取一次快照——
+            // 主线程从不反向同步等待该连接队列（只向它 async 派发），故 main.sync 不会死锁。
+            let snapshot: (label: String, port: UInt16) = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { () -> (label: String, port: UInt16) in
+                    switch ProxyServer.shared.state {
+                    case .running(let p): return ("running", p)
+                    case .starting: return ("starting", 0)
+                    case .failed: return ("failed", 0)
+                    case .stopped: return ("stopped", 0)
+                    }
+                }
+            }
+            if snapshot.label == "running" {
+                let ip = NetworkInterfaces.primaryIP()
+                return "running \(ip):\(snapshot.port) · \(flows.count) flows"
+            }
+            return snapshot.label
         default:
             return "unknown tool: \(name)"
         }

@@ -49,6 +49,9 @@ enum NetworkInterfaces {
         lanIPv4().first?.ip ?? "127.0.0.1"
     }
 
-    /// 证书下载 URL（供二维码 / 展示）。
+    /// 证书下载 URL（供二维码 / 展示）——Android / 其它平台扫码下载 CA 文件。
     static var certDownloadURL: String { "http://\(magicHost)/cert" }
+
+    /// iOS 描述文件下载 URL（供二维码 / 展示）——扫码装证书 + 自动配代理（§16.2）。
+    static var profileDownloadURL: String { "http://\(magicHost)/profile" }
 }

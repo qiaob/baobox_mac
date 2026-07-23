@@ -291,10 +291,27 @@ final class ProxyConnection: @unchecked Sendable {
         upstream.start(queue: queue)
     }
 
-    /// magic 域名本地应答：`/cert`（或 `/baobox-ca.pem`）返回 CA PEM；其余返回引导页。
+    /// magic 域名本地应答：`/profile` 返回 iOS 描述文件；`/cert`（或 `.pem`/`.crt`）返回 CA PEM；其余引导页。
     private func serveMagicDomain(path: String) {
         let response: Data
-        if path.contains("cert") || path.contains(".pem") || path.contains(".crt") {
+        if path.contains("profile") || path.contains(".mobileconfig") {
+            // iOS 扫码自动配置（§16.2）：未签名 .mobileconfig，含 CA + 可选 Wi-Fi 代理 payload。
+            // IP 取首个局域网 IP，端口取当前配置端口（即监听端口）。SSID 读取失败则降级为仅 CA。
+            let ip = NetworkInterfaces.primaryIP()
+            if let profile = MobileConfigBuilder.build(proxyIP: ip, proxyPort: NetCaptureEnv.port),
+               let data = profile.data(using: .utf8) {
+                var head = "HTTP/1.1 200 OK\r\n"
+                head += "Content-Type: application/x-apple-aspen-config\r\n"
+                head += "Content-Disposition: attachment; filename=\"baobox.mobileconfig\"\r\n"
+                head += "Content-Length: \(data.count)\r\n"
+                head += "Connection: close\r\n\r\n"
+                response = Data(head.utf8) + data
+            } else {
+                let body = "CA not generated yet."
+                response = simpleHTTP(status: "503 Service Unavailable",
+                                      contentType: "text/plain; charset=utf-8", body: Data(body.utf8))
+            }
+        } else if path.contains("cert") || path.contains(".pem") || path.contains(".crt") {
             if let pem = ca.caCertPEM() {
                 var head = "HTTP/1.1 200 OK\r\n"
                 head += "Content-Type: application/x-x509-ca-cert\r\n"
@@ -333,11 +350,11 @@ final class ProxyConnection: @unchecked Sendable {
         <title>Baobox Proxy</title></head>
         <body style="font-family:-apple-system,sans-serif;max-width:520px;margin:40px auto;padding:0 16px;line-height:1.6">
         <h2>Baobox 抓包证书 / Capture Certificate</h2>
-        <p><a href="/cert" style="display:inline-block;padding:10px 18px;background:#17A398;color:#fff;border-radius:8px;text-decoration:none">下载证书 / Download CA</a></p>
+        <p><a href="/profile" style="display:inline-block;padding:10px 18px;background:#17A398;color:#fff;border-radius:8px;text-decoration:none">iOS：装描述文件（证书+代理）/ iOS: Install Profile (CA + Proxy)</a></p>
+        <p><a href="/cert" style="display:inline-block;padding:10px 18px;background:#8E8E93;color:#fff;border-radius:8px;text-decoration:none">下载证书文件 / Download CA file</a></p>
         <ol>
-        <li>下载并安装上面的证书 / Download & install the certificate above.</li>
-        <li>iOS：设置 → 通用 → 关于本机 → 证书信任设置里开启完全信任。<br>iOS: Settings → General → About → Certificate Trust Settings, enable full trust.</li>
-        <li>Android：设置 → 安全 → 安装证书（CA）。<br>Android: Settings → Security → Install a certificate (CA).</li>
+        <li>iOS：点上面「装描述文件」，安装后到 设置 → 通用 → VPN与设备管理 完成安装，再到 关于本机 → 证书信任设置 开启完全信任。<br>iOS: tap "Install Profile", finish in Settings → General → VPN &amp; Device Management, then enable full trust in About → Certificate Trust Settings.</li>
+        <li>Android / 其它：点「下载证书文件」安装（设置 → 安全 → 安装证书 CA），代理需手动填或用 ADB 一键。<br>Android / other: tap "Download CA file" to install (Settings → Security → Install a CA certificate); set the proxy manually or via ADB.</li>
         </ol>
         <p style="color:#888;font-size:13px">仅用于本机调试，请勿抓取他人隐私。For local debugging only.</p>
         </body></html>

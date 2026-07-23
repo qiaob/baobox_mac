@@ -201,21 +201,13 @@ enum NetCaptureCertQR {
         holder.panel?.orderOut(nil)
         let view = VStack(spacing: 12) {
             Text("netcapture.qr.title").font(.headline)
-            Text(verbatim: NetworkInterfaces.certDownloadURL)
-                .font(.callout.monospaced()).foregroundStyle(.secondary)
-            if let cg = QRCodeGenerator.image(for: NetworkInterfaces.certDownloadURL, minPixels: 300) {
-                Image(decorative: cg, scale: 1).resizable().interpolation(.none)
-                    .frame(width: 240, height: 240)
-            }
-            Text("netcapture.qr.hint").font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 280)
+            NetCaptureQRPanel()
         }
         .padding(24)
-        .frame(width: 320)
-        .background(Color.white)
+        .frame(width: 340)
 
         let hosting = NSHostingView(rootView: view)
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 360),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 420),
                             styleMask: [.titled, .closable],
                             backing: .buffered, defer: false)
         panel.title = L("netcapture.qr.title")

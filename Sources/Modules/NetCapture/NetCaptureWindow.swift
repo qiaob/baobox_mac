@@ -314,19 +314,7 @@ struct NetCaptureRootView: View {
     private var qrSheet: some View {
         VStack(spacing: 16) {
             Text("netcapture.qr.title").font(.headline)
-            Text(verbatim: NetworkInterfaces.certDownloadURL)
-                .font(.callout.monospaced())
-                .foregroundStyle(.secondary)
-            if let cg = QRCodeGenerator.image(for: NetworkInterfaces.certDownloadURL, minPixels: 320) {
-                Image(decorative: cg, scale: 1)
-                    .resizable().interpolation(.none)
-                    .frame(width: 260, height: 260)
-                    .background(Color.white)
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-            }
-            Text("netcapture.qr.hint").font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 300)
+            NetCaptureQRPanel()
             Button("common.ok") { showQR = false }
         }
         .padding(28)
@@ -570,5 +558,86 @@ private struct FlowDetailView: View {
             lines.append(String(text.prefix(20000)))
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - 分平台配置二维码面板（§16.2）
+
+/// iOS / Android·其它 两个页签的配置二维码：
+/// - iOS：编码 `/profile`（描述文件，装证书 + 自动配代理）；
+/// - Android·其它：编码 `/cert`（下证书文件），下方附代理 IP:端口（可复制）与 ADB 提示。
+///
+/// 复用于窗口 QR sheet、设置页 QR sheet、菜单证书二维码浮层。
+struct NetCaptureQRPanel: View {
+    enum Platform: String, CaseIterable, Identifiable {
+        case iOS, android
+        var id: String { rawValue }
+        var label: LocalizedStringKey {
+            switch self {
+            case .iOS: return "netcapture.qr.ios.tab"
+            case .android: return "netcapture.qr.android.tab"
+            }
+        }
+    }
+
+    @State private var platform: Platform = .iOS
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Picker("", selection: $platform) {
+                ForEach(Platform.allCases) { p in Text(p.label).tag(p) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 300)
+
+            switch platform {
+            case .iOS: iosContent
+            case .android: androidContent
+            }
+        }
+    }
+
+    private var iosContent: some View {
+        VStack(spacing: 8) {
+            Text("netcapture.qr.ios.title").font(.subheadline.weight(.medium))
+            Text(verbatim: NetworkInterfaces.profileDownloadURL)
+                .font(.caption.monospaced()).foregroundStyle(.secondary)
+            qrImage(NetworkInterfaces.profileDownloadURL)
+            Text("netcapture.qr.ios.hint").font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 300)
+        }
+    }
+
+    private var androidContent: some View {
+        VStack(spacing: 8) {
+            Text("netcapture.qr.android.title").font(.subheadline.weight(.medium))
+            Text(verbatim: NetworkInterfaces.certDownloadURL)
+                .font(.caption.monospaced()).foregroundStyle(.secondary)
+            qrImage(NetworkInterfaces.certDownloadURL)
+            HStack(spacing: 6) {
+                Text("netcapture.qr.android.proxy \(proxyAddr)").font(.caption)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(proxyAddr, forType: .string)
+                } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.borderless)
+                    .help(Text("netcapture.window.copyAddr"))
+            }
+            Text("netcapture.qr.android.hint").font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 300)
+        }
+    }
+
+    private var proxyAddr: String { "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.port)" }
+
+    @ViewBuilder
+    private func qrImage(_ text: String) -> some View {
+        if let cg = QRCodeGenerator.image(for: text, minPixels: 300) {
+            Image(decorative: cg, scale: 1).resizable().interpolation(.none)
+                .frame(width: 240, height: 240)
+                .background(Color.white).padding(6)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
+        }
     }
 }

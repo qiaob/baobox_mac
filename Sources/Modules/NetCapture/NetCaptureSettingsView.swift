@@ -94,12 +94,7 @@ private struct NetCaptureCertSection: View {
         .sheet(isPresented: $showQR) {
             VStack(spacing: 14) {
                 Text("netcapture.qr.title").font(.headline)
-                Text(verbatim: NetworkInterfaces.certDownloadURL).font(.callout.monospaced()).foregroundStyle(.secondary)
-                if let cg = QRCodeGenerator.image(for: NetworkInterfaces.certDownloadURL, minPixels: 300) {
-                    Image(decorative: cg, scale: 1).resizable().interpolation(.none)
-                        .frame(width: 240, height: 240).background(Color.white).padding(6)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-                }
+                NetCaptureQRPanel()
                 Button("common.ok") { showQR = false }
             }.padding(24)
         }
