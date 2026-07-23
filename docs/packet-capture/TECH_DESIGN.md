@@ -324,28 +324,33 @@ segmented / DisclosureGroup 分节：
 
 **事实约束**：相机扫普通二维码**无法**在 iOS/Android 上设置 HTTP 代理（Wi-Fi 二维码标准 `WIFI:S:...;P:...;;` 只含 SSID/密码，无代理字段）。因此「扫码自动配代理」只能经**平台配置机制**：
 
-- **iOS —— 配置描述文件（`.mobileconfig`）**：二维码指向 `http://baobox.proxy/profile`，代理本地生成并返回一个**未签名** plist 描述文件（`Content-Type: application/x-apple-aspen-config`），内含两个 payload：
-  1. **CA 证书**（`PayloadType = com.apple.security.root`，DER base64）——安装即导入根证书（iOS 仍需用户到「设置 › 通用 › 关于本机 › 证书信任设置」手动开启完全信任，描述文件无法免除这一步，UI 文案要说明）。
-  2. **Wi-Fi**（`PayloadType = com.apple.wifi.managed`）：`SSID_STR` = 当前 Wi-Fi 名（Mac 侧 `networksetup -getairportnetwork <iface>` 读取，假定手机同网），`ProxyType = Manual`、`ProxyServer = <Mac LAN IP>`、`ProxyServerPort = <port>`。安装后该 SSID 自动走代理。
-     - 若拿不到 SSID → 降级为**仅 CA** 的描述文件（仍比裸 `.crt` 方便）；代理仍需手动填（窗口显示 IP:端口）。
-     - **系统级全局代理**（`com.apple.proxy.http.global`）仅**监督（supervised/MDM）**设备生效，普通手机不用；故用「按 SSID 的 Wi-Fi payload」。
-  - 生成：纯字符串拼 plist（UUID 用固定命名空间派生或随机；`PayloadIdentifier` 用 `com.baobox.netcapture.*`）。无需签名即可安装（显示「未验证」属正常）。
-- **Android —— 无描述文件机制**：代理只能经**系统设置手动**或**ADB 一键**（§9 已实现）。二维码对 Android 仅用于**下证书**（`/cert`）。Android 侧 UI 引导：扫码装证书 + 手动填代理，或用 ADB 一键。
+**两个二维码分职责（已评审：下证书与配代理必须是两个不同二维码，各司其职，不合并）**：
 
-**UI**：证书二维码面板（`NetCaptureCertQR`）与窗口的二维码区改为**分平台两个页签/两个二维码**：
-- 「iOS：扫码装证书 + 设代理」→ 二维码编码 `http://baobox.proxy/profile`（含上述 caveat 文案：装后去信任设置开启）。
-- 「Android / 其它：扫码下证书」→ 二维码编码 `http://baobox.proxy/cert`（现状），下方附代理 `IP:端口`（可复制）与「用 ADB 一键设置」入口。
+- **二维码 A —— 下载 / 安装证书**（`GET /cert`）：只负责装 CA。
+  - iOS：返回**仅含 CA payload** 的未签名描述文件（`com.apple.security.root`，DER base64；`Content-Type: application/x-apple-aspen-config`）——比裸 `.crt` 更顺滑；装后仍需用户到「设置 › 通用 › VPN与设备管理」安装、再到「关于本机 › 证书信任设置」开启完全信任（描述文件无法免除，UI 文案要说明）。
+  - Android / 其它：返回原始 `.crt`（`application/x-x509-ca-cert`），触发系统证书安装。
+- **二维码 B —— 配置代理**（`GET /proxy`）：只负责设代理，**不含 CA**。
+  - iOS：返回**仅含 Wi-Fi payload** 的未签名描述文件（`com.apple.wifi.managed`）：`SSID_STR` = Mac 当前 Wi-Fi 名（`networksetup -getairportnetwork <iface>` 读取，假定手机同网），`ProxyType = Manual`、`ProxyServer = <Mac LAN IP>`、`ProxyServerPort = <port>`。装后该 SSID 自动走代理。拿不到 SSID / 非 Wi-Fi → 该路由返回一个说明页（提示手动填 `IP:端口`），不报错。
+    - **系统级全局代理**（`com.apple.proxy.http.global`）仅监督（MDM）设备生效，普通手机不用；故用按 SSID 的 Wi-Fi payload。
+  - Android / 其它：**无法经二维码设代理**（无描述文件机制）。二维码 B 仅对 iOS 有效；Android 侧改用 **ADB 一键**（§9）或手动填——UI 在二维码 B 处对非 iOS 明示「Android 请用 ADB 一键或手动」，并给出 `IP:端口` 与 ADB 入口。
+  - 描述文件为纯字符串拼 plist（`PayloadIdentifier` = `com.baobox.netcapture.ca` / `.proxy`；`PayloadUUID` 随机 UUID）；无需签名即可安装（显示「未验证」属正常）。
 
-**magic 域名新增路由**（`ProxyConnection` 本地应答，明文可拦到）：
-- `GET /profile` → 生成并返回 iOS `.mobileconfig`（`application/x-apple-aspen-config`，`Content-Disposition: attachment; filename="baobox.mobileconfig"`）。
-- `/` 引导页加两个链接：`/profile`（iOS）与 `/cert`（证书原始文件）。
-- 新增 `MobileConfigBuilder.swift`（~120 行）：读 `baobox-ca.pem` → DER base64、读当前 SSID、拼 plist。SSID 读取失败或非 Wi-Fi → 只出 CA payload。
+**UI**：证书/代理二维码面板（`NetCaptureCertQR`）与窗口的二维码区呈现**两个并排二维码**（各带标题与说明），而非一个：
+- 「① 装证书」→ 编码 `http://baobox.proxy/cert`。
+- 「② 配代理」→ 编码 `http://baobox.proxy/proxy`；下方附 `IP:端口`（可复制）+「ADB 一键（Android）」入口 + iOS/Android 差异提示。
 
-**本地化**：新增 `netcapture.qr.ios.*` / `netcapture.qr.android.*` / `netcapture.profile.*`（含 iOS 信任开启提示、Android 手动/ADB 提示）与 3 个 MCP 工具无用户可见文案（工具 description 为英文，面向 AI，不入 catalog）。
+**magic 域名路由**（`ProxyConnection` 本地应答，明文可拦到）：
+- `GET /cert` → CA（iOS：CA-only mobileconfig；其它：原始 .crt。可按 User-Agent 含 `iPhone`/`iPad`/`Mac` 判定返回哪种，判不出默认原始 .crt）。
+- `GET /proxy` → iOS Wi-Fi 代理描述文件（仅代理 payload）；非 iOS UA 或无 SSID → 返回简短说明页。
+- `/` 引导页列两个链接：`/cert`（装证书）与 `/proxy`（配代理），各一句用途说明。
+- 新增 `MobileConfigBuilder.swift`（~150 行）：`caProfile()`（仅 CA）、`proxyProfile(ssid:ip:port:)`（仅 Wi-Fi 代理）两个独立构建器；读 `baobox-ca.pem` → DER base64、读当前 SSID。二者永不合并进同一文件。
+
+**本地化**：新增 `netcapture.qr.cert.*`（标题/说明/iOS 信任开启提示）、`netcapture.qr.proxy.*`（标题/说明/Android 用 ADB 提示）；3 个 MCP 工具 description 为英文、面向 AI，不入 catalog。
 
 ### 16.3 验收增量
 
 1. AI 经 MCP 调 `start_capture` → 菜单主开关与窗口即时变「停止抓包」、状态行显示运行；`stop_capture` 反之；`capture_status` 与 UI 手动开关结果一致（双向驱动）。
 2. `list_flows`/`get_flow` 经 MCP 返回带过滤的列表与单包详情，鉴权头脱敏。
-3. iOS 手机扫「iOS」二维码 → Safari 下描述文件 → 安装后 CA 导入且该 Wi-Fi 代理自动指向 Mac（信任开启按文案手动一步）；拿不到 SSID 时降级为仅 CA 且不报错。
-4. Android 扫码仅下证书；代理经 ADB 一键或手动，UI 文案清晰。
+3. UI 呈现**两个独立二维码**：「① 装证书」(`/cert`) 与「② 配代理」(`/proxy`)，各自可单独扫。
+4. iOS 扫①→装 CA 描述文件（再手动开信任）；扫②→装仅 Wi-Fi 代理描述文件，该 SSID 自动指向 Mac；拿不到 SSID 时②返回说明页不报错。
+5. Android 扫①下证书；②处明示改用 ADB 一键或手动填 `IP:端口`。两个二维码内容互不重叠。
