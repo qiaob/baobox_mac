@@ -1,6 +1,6 @@
 import Foundation
 
-/// Cursor / Codex 助手 —— Codex 会话 rollout jsonl 的快扫与索引。
+/// Codex 助手 —— Codex 会话 rollout jsonl 的快扫与索引。
 ///
 /// 数据源：`~/.codex/sessions/YYYY/MM/DD/rollout-<时间戳>-<uuid>.jsonl`（DESIGN 第 0 节）。
 /// 首块含 SessionMeta（id / cwd），随后是逐行事件；标题取首条用户输入。所有解析都必须容错：

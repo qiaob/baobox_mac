@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-/// Cursor / Codex 助手 —— Codex 完成通知：notify 程序生成 + 事件文件监听 + 系统通知。
+/// Codex 助手 —— Codex 完成通知：notify 程序生成 + 事件文件监听 + 系统通知。
 ///
 /// 机制（DESIGN 第 2 节）：把 `codex-notify.sh` 写进支持目录并 chmod 0755，再把其路径装进
 /// `~/.codex/config.toml` 的 `notify` 键。Codex 每个回合结束会调用该程序，并把事件 JSON
@@ -19,10 +19,16 @@ import UserNotifications
 
 enum AIToolsNotifierSettings {
     static let soundKey = "aitools.notificationSound"
+    static let budgetAlertKey = "aitools.budgetAlertEnabled"
 
     /// 提示音（默认开）。
     static var soundEnabled: Bool {
         UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
+    }
+
+    /// 额度 80% 提醒（默认开；仅在设置了预算时生效）。
+    static var budgetAlertEnabled: Bool {
+        UserDefaults.standard.object(forKey: budgetAlertKey) as? Bool ?? true
     }
 }
 
@@ -248,6 +254,16 @@ final class CodexNotify: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// 额度 80% 提醒（5h 或周）。与 Claude 同机制，防重由 `CodexUsageStore` 负责。
+    func notifyBudget(percent: Int, weekly: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = weekly ? L("aitools.notify.weeklyBudget.title") : L("aitools.notify.budget.title")
+        content.body = L("aitools.notify.budget.body \(percent)")
+        if AIToolsNotifierSettings.soundEnabled { content.sound = .default }
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
+
     /// 处理一行事件 JSON。notify=false 用于初始回放。
     private func apply(line: String, notify: Bool) {
         guard notify,
@@ -263,6 +279,8 @@ final class CodexNotify: ObservableObject {
         let cwd = CodexJSONLParsing.extractMeta(from: object).cwd
         let project = cwd.flatMap { $0.isEmpty ? nil : CodexSessionIndex.projectName(fromPath: $0) }
         postTurnComplete(project: project, summary: message)
+        // 回合完成 → 节流刷新用量（≥60s 才真正刷），使菜单/用量页近实时。
+        CodexUsageStore.shared.refreshThrottledFromEvent()
     }
 
     /// 从事件对象里取 last-assistant-message（兼容连字符 / 下划线 / payload 嵌套）。
