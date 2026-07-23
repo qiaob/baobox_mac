@@ -62,6 +62,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - Copy as an image, save as PNG, or pin it on screen.
 - Fully local (`CIQRCodeGenerator`), no permissions required.
 
+### Claude Code Assistant (unbound by default)
+- A menu-bar dashboard for the local Claude Code CLI, built entirely from `~/.claude` files — no AI API, no login: live session status (running / awaiting confirmation), the five most recent sessions for one-click terminal resume, the current 5-hour usage window (tokens, estimated cost, reset countdown) and today's estimated spend.
+- **Center window** (Sessions / Usage / Audit): searchable session history with resume, copy-command, Markdown export and delete; a usage report by day / project / model plus an invocation breakdown (skills & slash commands, MCP servers › tools, built-in tools); and a per-day file-change audit that reveals edited files in Finder.
+- **Background helpers** (opt-in): Baobox hooks post a system notification when a task finishes or Claude awaits confirmation, warn at 80% of a token budget, and a dangerous-command guard blocks `rm -rf`, `git push --force`, `git reset --hard`, `DROP TABLE` and friends before they run — feeding the reason back to Claude.
+- **Visualized configuration**: pickers for permission mode / default model / session retention, permission-preset checkboxes, privacy env toggles, Co-Authored-By, CLAUDE.md management, a statusline generator with live preview, an MCP server panel, and disk cleanup / version check — every edit writes the user's JSON safely (unknown keys preserved, `.baobox.bak` backup).
+- Costs are estimates from public pricing and are labelled as such throughout.
+
 > Sparkle-based auto-update is not yet wired up (pending a hosting decision); the "Check for Updates" menu item is currently a disabled placeholder.
 
 ## Requirements
