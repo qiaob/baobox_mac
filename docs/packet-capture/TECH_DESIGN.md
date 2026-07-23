@@ -324,28 +324,29 @@ segmented / DisclosureGroup 分节：
 
 **事实约束**：相机扫普通二维码**无法**在 iOS/Android 上设置 HTTP 代理（Wi-Fi 二维码标准 `WIFI:S:...;P:...;;` 只含 SSID/密码，无代理字段）。因此「扫码自动配代理」只能经**平台配置机制**：
 
-**两个二维码分职责（已评审：下证书与配代理必须是两个不同二维码，各司其职，不合并）**：
+**单一配置网页（已评审定稿，取代早先的「两个二维码」方案）**：一个二维码 → 手机浏览器打开 `http://baobox.proxy/` 的**自适应配置页**，页内有三个动作按钮：**① 装证书 ② 配代理 ③ 关代理**。页面按 User-Agent 区分 iOS / Android 呈现对应操作。
 
-- **二维码 A —— 下载 / 安装证书**（`GET /cert`）：只负责装 CA。
-  - iOS：返回**仅含 CA payload** 的未签名描述文件（`com.apple.security.root`，DER base64；`Content-Type: application/x-apple-aspen-config`）——比裸 `.crt` 更顺滑；装后仍需用户到「设置 › 通用 › VPN与设备管理」安装、再到「关于本机 › 证书信任设置」开启完全信任（描述文件无法免除，UI 文案要说明）。
-  - Android / 其它：返回原始 `.crt`（`application/x-x509-ca-cert`），触发系统证书安装。
-- **二维码 B —— 配置代理**（`GET /proxy`）：只负责设代理，**不含 CA**。
-  - iOS：返回**仅含 Wi-Fi payload** 的未签名描述文件（`com.apple.wifi.managed`）：`SSID_STR` = Mac 当前 Wi-Fi 名（`networksetup -getairportnetwork <iface>` 读取，假定手机同网），`ProxyType = Manual`、`ProxyServer = <Mac LAN IP>`、`ProxyServerPort = <port>`。装后该 SSID 自动走代理。拿不到 SSID / 非 Wi-Fi → 该路由返回一个说明页（提示手动填 `IP:端口`），不报错。
-    - **系统级全局代理**（`com.apple.proxy.http.global`）仅监督（MDM）设备生效，普通手机不用；故用按 SSID 的 Wi-Fi payload。
-  - Android / 其它：**无法经二维码设代理**（无描述文件机制）。二维码 B 仅对 iOS 有效；Android 侧改用 **ADB 一键**（§9）或手动填——UI 在二维码 B 处对非 iOS 明示「Android 请用 ADB 一键或手动」，并给出 `IP:端口` 与 ADB 入口。
-  - 描述文件为纯字符串拼 plist（`PayloadIdentifier` = `com.baobox.netcapture.ca` / `.proxy`；`PayloadUUID` 随机 UUID）；无需签名即可安装（显示「未验证」属正常）。
+**平台能力真相（必须据实呈现，不可过度承诺）**：
 
-**UI**：证书/代理二维码面板（`NetCaptureCertQR`）与窗口的二维码区呈现**两个并排二维码**（各带标题与说明），而非一个：
-- 「① 装证书」→ 编码 `http://baobox.proxy/cert`。
-- 「② 配代理」→ 编码 `http://baobox.proxy/proxy`；下方附 `IP:端口`（可复制）+「ADB 一键（Android）」入口 + iOS/Android 差异提示。
+| 页面动作 | iOS | Android |
+|---|---|---|
+| ① 装证书 | 点按 → 下 CA 描述文件（装后到 设置 开启信任） | 点按 → 下 `.crt` 触发系统证书安装 |
+| ② 配代理 | 点按 → 下 Wi-Fi 代理描述文件（按当前 SSID 自动设 Manual 代理） | **网页无法设代理**（Android 无描述文件/URL 机制）→ 页面大字显示 `IP:端口` + 「复制」按钮 + 手动步骤；电脑侧可用 ADB 一键 |
+| ③ 关代理 | 点按 → 下「代理=None」描述文件覆盖，或提示到 设置 删除 Baobox 描述文件 | 手动把 Wi-Fi 代理改回「无」（页面给步骤）；或 ADB 清除 |
 
-**magic 域名路由**（`ProxyConnection` 本地应答，明文可拦到）：
-- `GET /cert` → CA（iOS：CA-only mobileconfig；其它：原始 .crt。可按 User-Agent 含 `iPhone`/`iPad`/`Mac` 判定返回哪种，判不出默认原始 .crt）。
-- `GET /proxy` → iOS Wi-Fi 代理描述文件（仅代理 payload）；非 iOS UA 或无 SSID → 返回简短说明页。
-- `/` 引导页列两个链接：`/cert`（装证书）与 `/proxy`（配代理），各一句用途说明。
-- 新增 `MobileConfigBuilder.swift`（~150 行）：`caProfile()`（仅 CA）、`proxyProfile(ssid:ip:port:)`（仅 Wi-Fi 代理）两个独立构建器；读 `baobox-ca.pem` → DER base64、读当前 SSID。二者永不合并进同一文件。
+> Android 的代理设置/清除**只能手动或经 ADB**——这是 Android 系统限制，非本工具可绕过；页面对 Android 明确说明，并把 `IP:端口` 做成一键复制，尽量降低手动成本。证书两端都能从网页装。
 
-**本地化**：新增 `netcapture.qr.cert.*`（标题/说明/iOS 信任开启提示）、`netcapture.qr.proxy.*`（标题/说明/Android 用 ADB 提示）；3 个 MCP 工具 description 为英文、面向 AI，不入 catalog。
+**页面（`ProxyConnection` 本地生成并应答，明文可拦到）**：
+
+- `GET /` → **自包含 HTML**（内联 CSS，无外链），响应式、深浅色适配、accent 用品牌色 `#17A398`。内容：标题 + 当前代理 `IP:端口`（大字）+ 三块操作卡（装证书 / 配代理 / 关代理），按 UA 显示 iOS 按钮或 Android 步骤。页面文案**中英双语并排**（或按 `Accept-Language` 切换）。**该页是给手机浏览器的 HTTP 响应内容，不是 App UI，不走 `L()`/xcstrings**——直接在 Swift 里拼字符串常量（bilingual 内联）。
+- `GET /cert` → iOS UA 返回 CA-only 描述文件（`com.apple.security.root`，DER base64，`application/x-apple-aspen-config`）；其它 UA 返回原始 `.crt`（`application/x-x509-ca-cert`）。
+- `GET /proxy` → iOS 返回仅 Wi-Fi payload 描述文件（`com.apple.wifi.managed`：`SSID_STR`=Mac 当前 Wi-Fi 名、`ProxyType=Manual`、`ProxyServer`=Mac LAN IP、`ProxyServerPort`=port）；非 iOS 或无 SSID → 重定向回 `/`（页面已含 Android 手动指引）。
+- `GET /proxy-off` → iOS 返回 Wi-Fi payload 且 `ProxyType=None`（关代理）；非 iOS → 回 `/`。
+- 描述文件纯字符串拼 plist（`PayloadIdentifier` = `com.baobox.netcapture.ca` / `.proxy`，同标识可被新描述文件覆盖；`PayloadUUID` 随机）；未签名可装（显示「未验证」属正常）。系统级全局代理仅监督设备生效，故用按 SSID 的 Wi-Fi payload。
+
+**新增 `MobileConfigBuilder.swift`（~160 行）**：`caProfile()`、`proxyProfile(ssid:ip:port:)`、`proxyOffProfile(ssid:)` 三个独立构建器 + `landingPageHTML(ip:port:ssid:userAgent:)` 生成配置页 HTML；读 `baobox-ca.pem` → DER base64、读当前 SSID（`networksetup -getairportnetwork <iface>`）。
+
+**Mac 端 UI**：`NetCaptureCertQR` 与窗口二维码区改为**一个二维码**（编码 `http://baobox.proxy/`）+ 标题「扫码打开配置页（装证书 / 设代理 / 关代理）」+ 下方 `IP:端口`（可复制）+「ADB 一键（Android）」入口。App 端这些标签仍走 `L()`（`netcapture.qr.page.*`）；被扫开的网页内容不入 catalog。
 
 ### 16.3 验收增量
 
