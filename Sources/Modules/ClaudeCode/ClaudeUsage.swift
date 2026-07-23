@@ -93,6 +93,24 @@ struct ClaudeUsageReport {
     var byModel: [UsageBucket] = []
 }
 
+/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
+struct ClaudeMCPServerStat: Sendable {
+    let server: String
+    let total: Int
+    /// 工具名 → 次数。
+    let tools: [String: Int]
+}
+
+/// 调用统计三类计数（排序留给 UI）。值类型、Sendable，便于后台构建后跨线程回调。
+struct ClaudeInvocationStats: Sendable {
+    /// Skill（tool_use name=="Skill" 的 input.skill）与斜杠命令（user 文本 <command-name>）合并计数：名称 → 次数。
+    var skills: [String: Int] = [:]
+    /// MCP：服务器名 → 该服务器统计。
+    var mcp: [String: ClaudeMCPServerStat] = [:]
+    /// 内置工具：工具名 → 次数。
+    var builtin: [String: Int] = [:]
+}
+
 // MARK: - 一条已解析的用量条目（后台内部使用）
 
 /// 去重后参与聚合的一条 assistant 用量。
@@ -185,6 +203,17 @@ final class ClaudeUsageStore: ObservableObject {
             let report = Self.buildReport(from: entries)
             DispatchQueue.main.async {
                 completion(report)
+            }
+        }
+    }
+
+    /// 调用统计：Skill/斜杠命令、MCP（服务器›工具两级）、内置工具三类计数。
+    /// 后台遍历近 `days` 天 mtime 的会话文件，主线程回调。
+    func invocationStats(days: Int, completion: @escaping (ClaudeInvocationStats) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let stats = Self.computeInvocationStats(days: days)
+            DispatchQueue.main.async {
+                completion(stats)
             }
         }
     }
@@ -372,6 +401,113 @@ extension ClaudeUsageStore {
         }.sorted { $0.totals.costUSD > $1.totals.costUSD }
 
         return report
+    }
+
+    /// 调用统计：遍历近 `days` 天 mtime 的会话文件，聚合 Skill/斜杠命令、MCP、内置工具三类计数。
+    nonisolated fileprivate static func computeInvocationStats(days: Int) -> ClaudeInvocationStats {
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        // 斜杠命令标记解析（<command-name>/foo</command-name>）；编译失败则跳过该路统计。
+        let commandRegex = try? NSRegularExpression(pattern: "<command-name>([^<]*)</command-name>", options: [])
+
+        var skills: [String: Int] = [:]
+        var builtin: [String: Int] = [:]
+        // server → (总次数, [tool: 次数])
+        var mcp: [String: (total: Int, tools: [String: Int])] = [:]
+
+        guard let projectDirs = try? fm.contentsOfDirectory(
+            at: ClaudeEnv.projectsDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return ClaudeInvocationStats() }
+
+        for projectDir in projectDirs {
+            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDir else { continue }
+            guard let files = try? fm.contentsOfDirectory(
+                at: projectDir,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for file in files where file.pathExtension == "jsonl" {
+                let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                if let mtime, mtime < cutoff { continue }
+                guard let data = try? Data(contentsOf: file) else { continue }
+
+                for lineData in data.split(separator: 0x0A) {
+                    guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)),
+                          let type = object["type"] as? String,
+                          let message = object["message"] as? [String: Any] else { continue }
+
+                    if type == "user" {
+                        // 斜杠命令标记 → 并入 skills。
+                        guard let regex = commandRegex else { continue }
+                        let text = allText(fromContent: message["content"])
+                        guard !text.isEmpty else { continue }
+                        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                        for match in regex.matches(in: text, options: [], range: range) {
+                            guard match.numberOfRanges >= 2,
+                                  let r = Range(match.range(at: 1), in: text) else { continue }
+                            var name = text[r].trimmingCharacters(in: .whitespacesAndNewlines)
+                            if name.hasPrefix("/") { name.removeFirst() }
+                            guard !name.isEmpty else { continue }
+                            skills[name, default: 0] += 1
+                        }
+                        continue
+                    }
+
+                    guard type == "assistant",
+                          let content = message["content"] as? [[String: Any]] else { continue }
+
+                    for block in content where (block["type"] as? String) == "tool_use" {
+                        guard let name = block["name"] as? String, !name.isEmpty else { continue }
+
+                        if name == "Skill" {
+                            // input.skill 为技能名，取不到则跳过（不计入）。
+                            if let input = block["input"] as? [String: Any],
+                               let skill = input["skill"] as? String, !skill.isEmpty {
+                                skills[skill, default: 0] += 1
+                            }
+                        } else if name.hasPrefix("mcp__") {
+                            // mcp__<server>__<tool>：拆出 server 与 tool；拆不出整名归到 server 名下。
+                            let rest = String(name.dropFirst("mcp__".count))
+                            let parts = rest.components(separatedBy: "__")
+                            let server = parts.first.flatMap { $0.isEmpty ? nil : $0 } ?? rest
+                            let tool = parts.count >= 2 ? parts[1...].joined(separator: "__") : nil
+                            var entry = mcp[server] ?? (total: 0, tools: [:])
+                            entry.total += 1
+                            if let tool, !tool.isEmpty {
+                                entry.tools[tool, default: 0] += 1
+                            }
+                            mcp[server] = entry
+                        } else {
+                            builtin[name, default: 0] += 1
+                        }
+                    }
+                }
+            }
+        }
+
+        var stats = ClaudeInvocationStats()
+        stats.skills = skills
+        stats.builtin = builtin
+        stats.mcp = Dictionary(uniqueKeysWithValues: mcp.map { key, value in
+            (key, ClaudeMCPServerStat(server: key, total: value.total, tools: value.tools))
+        })
+        return stats
+    }
+
+    /// 拼接 message.content 中的全部文本（字符串或 text 块数组）。
+    nonisolated fileprivate static func allText(fromContent content: Any?) -> String {
+        guard let content else { return "" }
+        if let s = content as? String { return s }
+        if let blocks = content as? [[String: Any]] {
+            return blocks.compactMap { block in
+                (block["type"] as? String) == "text" ? block["text"] as? String : nil
+            }.joined(separator: "\n")
+        }
+        return ""
     }
 
     // MARK: - 私有辅助

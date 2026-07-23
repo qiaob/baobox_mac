@@ -79,6 +79,8 @@
 - `struct UsageWindow` —— `start, end(=start+5h), totals`；`secondsUntilReset`。
 - `struct UsageBucket: Identifiable` —— `id, label, totals, date?`（报表一行）。
 - `struct ClaudeUsageReport` —— `byDay, byProject, byModel: [UsageBucket]`。
+- `struct ClaudeMCPServerStat: Sendable` —— `server, total: Int, tools: [String: Int]`（MCP 两级统计的值）。
+- `struct ClaudeInvocationStats: Sendable` —— 三字段:`skills: [String: Int]`(Skill+斜杠命令合并) / `mcp: [String: ClaudeMCPServerStat]`(服务器›工具) / `builtin: [String: Int]`(其余工具);排序留给 UI。
 
 ### `@MainActor final class ClaudeUsageStore: ObservableObject`（`.shared`）
 | 成员 | 说明 |
@@ -91,6 +93,7 @@
 | `func refresh()` | 后台解析近 24h 文件，算窗口+今日，末尾做 80% 额度提醒 |
 | `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新（≥60s） |
 | `func report(days:completion: @escaping (ClaudeUsageReport) -> Void)` | 三维度报表 |
+| `func invocationStats(days:completion: @escaping (ClaudeInvocationStats) -> Void)` | 调用统计(Skill/斜杠命令、MCP 两级、内置工具);后台算主线程回调，同 report 线程约定。**无新 L() key**(名称均为数据) |
 
 ---
 
