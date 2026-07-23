@@ -24,7 +24,13 @@
 | `static func permissionRules(_:) -> [String]` | 读 settings.json permissions.allow/deny（后台） |
 | `static func setPermissionRules(_:kind:) throws` / `addPermissionRule(_:kind:) throws` / `removePermissionRule(_:kind:) throws` | 权限增删改（后台） |
 | `static func includeCoAuthoredBy() -> Bool` / `setIncludeCoAuthoredBy(_:) throws` | Co-Authored-By 读/写（后台） |
+| `static func defaultMode() -> String?` / `setDefaultMode(_:) throws` / `removeDefaultMode() throws` | permissions.defaultMode 读/写/移除（移除后 permissions 空则删键） |
+| `static func model() -> String?` / `setModel(_:) throws` / `removeModel() throws` | 顶层 model 读/写/移除 |
+| `static func cleanupPeriodDays() -> Int?` / `setCleanupPeriodDays(_:) throws` / `removeCleanupPeriodDays() throws` | cleanupPeriodDays 读(容错取整)/写/移除 |
+| `static func envValue(_ key:) -> String?` / `setEnvFlag(_ key:) throws` / `removeEnvKey(_ key:) throws` | env 字典单键读 / 设为 "1" / 移除；只动指定键，env 空则删 env 键 |
 | `static func shellSingleQuote(_:) -> String` | 单引号 shell 转义 |
+
+> 以上标量键接口供「配置」节可视化控件（Picker 单选 / 隐私多选勾选）使用，全部走 `ClaudeSettingsFile`、只动自己的键、后台调用。
 
 ### `enum ClaudeJSONFile` / `enum ClaudeSettingsFile`
 - `ClaudeJSONFile.load(_ url:) -> [String: Any]` / `write(_:to:) throws` / `mutate(_ url:_ transform:) throws` —— 通用 JSON 读-改-写，写前备份 `<name>.baobox.bak`，只动自己的键。
@@ -111,19 +117,25 @@
 
 ## 5. ClaudeHooks.swift —— hooks 安装 / 卫士规则
 
-- `enum ClaudeHookScripts` —— 脚本内容与常量：`reporterScript`、`guardScript`、`defaultGuardPatterns`、`markerFragment("/Baobox/ClaudeCode/")`、`reporterEvents`、`guardEvent`。
+- `struct ClaudeGuardPreset: Identifiable, Equatable` —— `id, descriptionKey(L() key), pattern(ERE)`。预置危险命令规则模型。
+- `enum ClaudeHookScripts` —— 脚本内容与常量：`reporterScript`、`guardScript`、`guardPresets: [ClaudeGuardPreset]`、`presetPatternSet: Set<String>`、`defaultGuardPatterns`(=全部预置)、`markerFragment("/Baobox/ClaudeCode/")`、`reporterEvents`、`guardEvent`。
 
 ### `@MainActor final class ClaudeHooksManager: ObservableObject`（`.shared`）
 | 成员 | 说明 |
 |---|---|
 | `@Published private(set) var isReporterInstalled / isGuardInstalled: Bool` | |
-| `@Published private(set) var guardPatterns: [String]` | 卫士规则 |
+| `@Published private(set) var guardPatterns: [String]` | 卫士规则（预置+自定义混合数组） |
 | `func refreshState()` | 后台读 settings.json 判定安装态 + 读规则，发布 |
 | `func installReporter(completion:)` / `removeReporter(completion:)` | 事件上报 hooks 装/卸（回调 Bool） |
 | `func installGuard(completion:)` / `removeGuard(completion:)` | 危险命令卫士装/卸 |
 | `func loadGuardPatterns()` / `saveGuardPatterns(_:)` / `resetGuardPatterns()` | 规则读/写/恢复默认 |
+| `var guardPresets: [ClaudeGuardPreset]` | 预置规则表（内置常量，供 UI 勾选列表） |
+| `func isPresetEnabled(_:) -> Bool` | 某预置是否启用（=其 pattern 是否在 guardPatterns，不另存状态） |
+| `func setPreset(_:enabled:)` | 启用/禁用一条预置（增删其 pattern 后落盘） |
+| `func customPatterns() -> [String]` | 非预置的自定义规则（「高级」折叠增删） |
 
 安装 = 生成脚本(chmod 755) + 合并进 settings.json（识别标志 `/Baobox/ClaudeCode/`，幂等追加/移除）。
+guard-patterns.txt 只写入「已启用的预置规则 + 自定义规则」；启用态由 pattern 是否在文件中反推。
 
 ---
 
@@ -145,8 +157,9 @@
 
 ---
 
-## 7. 本地化 key 清单（共 10 个，待 UI 阶段并入 Localizable.xcstrings）
+## 7. 本地化 key 清单（共 19 个，待 UI 阶段并入 Localizable.xcstrings）
 
+### 状态 / 通知（10 个）
 | key | zh-Hans | en |
 |---|---|---|
 | `claudecode.session.untitled` | (无标题会话) | (untitled session) |
@@ -159,6 +172,19 @@
 | `claudecode.notify.budget.body %lld` | 本额度窗口已用 %lld%% 预算 | You've used %lld%% of this window's budget |
 | `claudecode.notify.budgetRestored.title` | 额度已恢复 | Budget window reset |
 | `claudecode.notify.budgetRestored.body` | 新的 5 小时额度窗口已开始 | A new 5-hour usage window has started |
+
+### 预置卫士规则描述（9 个，`ClaudeGuardPreset.descriptionKey`）
+| key | zh-Hans | en |
+|---|---|---|
+| `claudecode.guard.preset.rmRfRoot` | 递归删除根目录（rm -rf /） | Recursively delete root (rm -rf /) |
+| `claudecode.guard.preset.rmRfHome` | 递归删除主目录（rm -rf ~） | Recursively delete home (rm -rf ~) |
+| `claudecode.guard.preset.sudoRm` | 以管理员删除（sudo rm） | Delete as root (sudo rm) |
+| `claudecode.guard.preset.gitPushForce` | 强制推送（git push --force） | Force push (git push --force) |
+| `claudecode.guard.preset.gitResetHard` | 硬重置（git reset --hard） | Hard reset (git reset --hard) |
+| `claudecode.guard.preset.gitCleanForce` | 强制清理（git clean -fd） | Force clean (git clean -fd) |
+| `claudecode.guard.preset.dropTable` | 删除数据表（DROP TABLE） | Drop database table (DROP TABLE) |
+| `claudecode.guard.preset.mkfs` | 格式化文件系统（mkfs） | Format filesystem (mkfs) |
+| `claudecode.guard.preset.chmod777` | 递归开放全部权限（chmod -R 777） | Recursively grant all permissions (chmod -R 777) |
 
 > 卫士脚本 stderr 里那条「Baobox 卫士已拦截…」是喂给 Claude 的固定串，不走 L()。
 

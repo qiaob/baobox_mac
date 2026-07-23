@@ -205,6 +205,106 @@ enum ClaudeEnv {
         }
     }
 
+    // MARK: - 简单标量键（配置节可视化控件用；全部走 settings.json，后台调用）
+
+    /// permissions.defaultMode（default / acceptEdits / plan / bypassPermissions）。未设为 nil。
+    static func defaultMode() -> String? {
+        let settings = ClaudeSettingsFile.load()
+        return (settings["permissions"] as? [String: Any])?["defaultMode"] as? String
+    }
+
+    static func setDefaultMode(_ mode: String) throws {
+        try ClaudeSettingsFile.mutate { settings in
+            var permissions = settings["permissions"] as? [String: Any] ?? [:]
+            permissions["defaultMode"] = mode
+            settings["permissions"] = permissions
+        }
+    }
+
+    static func removeDefaultMode() throws {
+        try ClaudeSettingsFile.mutate { settings in
+            guard var permissions = settings["permissions"] as? [String: Any] else { return }
+            permissions.removeValue(forKey: "defaultMode")
+            if permissions.isEmpty {
+                settings.removeValue(forKey: "permissions")
+            } else {
+                settings["permissions"] = permissions
+            }
+        }
+    }
+
+    /// model（模型别名字符串，如 "opus"/"sonnet"/"haiku"）。未设为 nil（跟随默认）。
+    static func model() -> String? {
+        ClaudeSettingsFile.load()["model"] as? String
+    }
+
+    static func setModel(_ model: String) throws {
+        try ClaudeSettingsFile.mutate { settings in
+            settings["model"] = model
+        }
+    }
+
+    static func removeModel() throws {
+        try ClaudeSettingsFile.mutate { settings in
+            settings.removeValue(forKey: "model")
+        }
+    }
+
+    /// cleanupPeriodDays（会话保留天数）。未设为 nil。容错取整（可能存成 Double/NSNumber）。
+    static func cleanupPeriodDays() -> Int? {
+        let value = ClaudeSettingsFile.load()["cleanupPeriodDays"]
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        if let d = value as? Double { return Int(d) }
+        return nil
+    }
+
+    static func setCleanupPeriodDays(_ days: Int) throws {
+        try ClaudeSettingsFile.mutate { settings in
+            settings["cleanupPeriodDays"] = days
+        }
+    }
+
+    static func removeCleanupPeriodDays() throws {
+        try ClaudeSettingsFile.mutate { settings in
+            settings.removeValue(forKey: "cleanupPeriodDays")
+        }
+    }
+
+    // MARK: - env 字典单键（隐私开关映射；只动指定键，不碰用户自设的其他 env）
+
+    /// 读取 env 下某键的字符串值；不存在为 nil。
+    static func envValue(_ key: String) -> String? {
+        let settings = ClaudeSettingsFile.load()
+        guard let env = settings["env"] as? [String: Any] else { return nil }
+        if let s = env[key] as? String { return s }
+        // 容错：值可能被存成数字/布尔，统一转字符串展示。
+        if let n = env[key] as? NSNumber { return n.stringValue }
+        return nil
+    }
+
+    /// 设置 env 下某键为固定字符串 "1"（隐私开关的开启态）。保留其他 env 键。
+    static func setEnvFlag(_ key: String) throws {
+        try ClaudeSettingsFile.mutate { settings in
+            var env = settings["env"] as? [String: Any] ?? [:]
+            env[key] = "1"
+            settings["env"] = env
+        }
+    }
+
+    /// 移除 env 下某键；env 变空字典则删除 env 键。保留其他 env 键。
+    static func removeEnvKey(_ key: String) throws {
+        try ClaudeSettingsFile.mutate { settings in
+            guard var env = settings["env"] as? [String: Any] else { return }
+            env.removeValue(forKey: key)
+            if env.isEmpty {
+                settings.removeValue(forKey: "env")
+            } else {
+                settings["env"] = env
+            }
+        }
+    }
+
     // MARK: - Shell 转义
 
     /// 用单引号安全包裹一个字符串，供 shell 命令拼接。内部单引号按 `'\''` 转义。

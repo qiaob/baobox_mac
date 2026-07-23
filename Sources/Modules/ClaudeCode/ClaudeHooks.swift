@@ -6,7 +6,22 @@ import Foundation
 /// 识别自家条目的标志是 command 路径含 `/Baobox/ClaudeCode/`。卸载只移除自家条目，其余原样保留。
 /// 脚本纯 POSIX sh，不依赖 jq/python。重 IO 后台，`@Published` 主线程写。
 ///
-/// 用户可见文案：本文件不含 L() 文案（脚本内的 stderr 提示是喂给 Claude 的固定串，不走本地化）。
+/// 用户可见文案：脚本内 stderr 提示是喂给 Claude 的固定串，不走 L()。预置规则的人话描述以
+/// L() key 形式声明在 `guardPresets`（由 UI 渲染），key 与建议中英文案见 CORE_API.md 第 7 节，
+/// 命名空间 `claudecode.guard.preset.*`（rmRfRoot/rmRfHome/sudoRm/gitPushForce/gitResetHard/
+/// gitCleanForce/dropTable/mkfs/chmod777 共 9 条）。
+
+// MARK: - 预置卫士规则模型
+
+/// 一条预置危险命令规则。启用状态不落额外文件：以其 `pattern` 是否出现在 guard-patterns.txt 反推。
+struct ClaudeGuardPreset: Identifiable, Equatable {
+    /// 稳定标识（供 UI ForEach / 勾选状态）。
+    let id: String
+    /// 人话描述的 L() key（中英文案见 CORE_API.md）。
+    let descriptionKey: String
+    /// ERE 正则，匹配整行 tool_input JSON。
+    let pattern: String
+}
 
 // MARK: - 脚本与规则常量
 
@@ -45,18 +60,25 @@ enum ClaudeHookScripts {
     exit 0
     """
 
-    /// 预置危险命令规则（ERE，匹配整行 tool_input JSON）。
-    static let defaultGuardPatterns: [String] = [
-        "rm -rf /",
-        "rm -rf ~",
-        "sudo rm",
-        "git push[^\\n]*--force",
-        "git reset --hard",
-        "git clean -fd",
-        "DROP TABLE",
-        "mkfs",
-        "chmod -R 777"
+    /// 预置危险命令规则表（内置常量，暴露给 UI 做勾选列表）。
+    /// 启用状态不另存：由「该 pattern 是否在 guard-patterns.txt 中」反推。
+    static let guardPresets: [ClaudeGuardPreset] = [
+        ClaudeGuardPreset(id: "rmRfRoot", descriptionKey: "claudecode.guard.preset.rmRfRoot", pattern: "rm -rf /"),
+        ClaudeGuardPreset(id: "rmRfHome", descriptionKey: "claudecode.guard.preset.rmRfHome", pattern: "rm -rf ~"),
+        ClaudeGuardPreset(id: "sudoRm", descriptionKey: "claudecode.guard.preset.sudoRm", pattern: "sudo rm"),
+        ClaudeGuardPreset(id: "gitPushForce", descriptionKey: "claudecode.guard.preset.gitPushForce", pattern: "git push[^\\n]*--force"),
+        ClaudeGuardPreset(id: "gitResetHard", descriptionKey: "claudecode.guard.preset.gitResetHard", pattern: "git reset --hard"),
+        ClaudeGuardPreset(id: "gitCleanForce", descriptionKey: "claudecode.guard.preset.gitCleanForce", pattern: "git clean -fd"),
+        ClaudeGuardPreset(id: "dropTable", descriptionKey: "claudecode.guard.preset.dropTable", pattern: "DROP TABLE"),
+        ClaudeGuardPreset(id: "mkfs", descriptionKey: "claudecode.guard.preset.mkfs", pattern: "mkfs"),
+        ClaudeGuardPreset(id: "chmod777", descriptionKey: "claudecode.guard.preset.chmod777", pattern: "chmod -R 777")
     ]
+
+    /// 预置规则的 pattern 集合（快速判定某条自定义规则是否其实是预置）。
+    static let presetPatternSet: Set<String> = Set(guardPresets.map { $0.pattern })
+
+    /// 默认规则集（全新安装时全部预置启用）。
+    static let defaultGuardPatterns: [String] = guardPresets.map { $0.pattern }
 
     /// 上报类事件（reporter 挂这四个）。
     static let reporterEvents = ["Stop", "Notification", "SessionStart", "UserPromptSubmit"]
@@ -225,6 +247,33 @@ final class ClaudeHooksManager: ObservableObject {
     /// 恢复默认规则。
     func resetGuardPatterns() {
         saveGuardPatterns(ClaudeHookScripts.defaultGuardPatterns)
+    }
+
+    // MARK: - 预置规则勾选（启用状态由 pattern 是否在 guardPatterns 反推）
+
+    /// 全部预置规则（内置常量，供 UI 勾选列表）。
+    var guardPresets: [ClaudeGuardPreset] { ClaudeHookScripts.guardPresets }
+
+    /// 某预置规则当前是否启用（其 pattern 是否在规则文件中）。
+    func isPresetEnabled(_ preset: ClaudeGuardPreset) -> Bool {
+        guardPatterns.contains(preset.pattern)
+    }
+
+    /// 启用 / 禁用一条预置规则（增删其 pattern 后落盘）。
+    func setPreset(_ preset: ClaudeGuardPreset, enabled: Bool) {
+        var patterns = guardPatterns
+        if enabled {
+            guard !patterns.contains(preset.pattern) else { return }
+            patterns.append(preset.pattern)
+        } else {
+            patterns.removeAll { $0 == preset.pattern }
+        }
+        saveGuardPatterns(patterns)
+    }
+
+    /// 自定义规则 = 规则文件中不属于任何预置的条目（「高级」折叠里增删的兜底规则）。
+    func customPatterns() -> [String] {
+        guardPatterns.filter { !ClaudeHookScripts.presetPatternSet.contains($0) }
     }
 }
 
