@@ -9,6 +9,12 @@ struct CaffeinateSettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Text("caffeinate.settings.intro")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("caffeinate.settings.durationSection") {
                 Picker("caffeinate.settings.durationPicker", selection: $defaultDuration) {
                     Text("caffeinate.settings.15m").tag(Double(15 * 60))

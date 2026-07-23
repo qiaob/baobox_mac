@@ -76,7 +76,7 @@ final class WindowManagerTool: ToolModule {
                 id: spec.id,
                 title: spec.title,
                 subtitle: spec.subtitle,
-                defaultCombo: nil
+                defaultCombo: spec.defaultCombo
             ) { [weak self] in
                 self?.apply(spec.layout)
             }
@@ -239,26 +239,45 @@ final class WindowManagerTool: ToolModule {
         let title: String
         let subtitle: String?
         let layout: WindowLayout
+        let defaultCombo: KeyCombo?
     }
 
-    // 出厂不绑定键位：默认的 ⌃⌥ 系列与 Rectangle 完全同键，同时运行必然打架。
-    // 用户在「快捷键」页按需设置，菜单入口不受影响。
+    /// ⌃⌥ 修饰层（Rectangle 惯例）。
+    private static let ctrlOpt = KeyCombo.control | KeyCombo.option
+    /// ⌃⌥⌘ 修饰层（跨显示器动作）。
+    private static let ctrlOptCmd = KeyCombo.control | KeyCombo.option | KeyCombo.cmd
+
+    // 默认键位完整对齐 Rectangle 惯例（⌃⌥ + 方向/字母）。若与 Rectangle/Magnet
+    // 同时运行会撞键——以 Baobox 为准使用时无碍，冲突可在「快捷键」页改绑或清除。
     private static let hotkeySpecs: [HotkeySpec] = [
-        HotkeySpec(id: "windowmanager.left", title: L("windowmanager.layout.left"), subtitle: nil, layout: .left),
-        HotkeySpec(id: "windowmanager.right", title: L("windowmanager.layout.right"), subtitle: nil, layout: .right),
-        HotkeySpec(id: "windowmanager.top", title: L("windowmanager.layout.top"), subtitle: nil, layout: .top),
-        HotkeySpec(id: "windowmanager.bottom", title: L("windowmanager.layout.bottom"), subtitle: nil, layout: .bottom),
-        HotkeySpec(id: "windowmanager.topLeft", title: L("windowmanager.layout.topLeft"), subtitle: nil, layout: .topLeft),
-        HotkeySpec(id: "windowmanager.topRight", title: L("windowmanager.layout.topRight"), subtitle: nil, layout: .topRight),
-        HotkeySpec(id: "windowmanager.bottomLeft", title: L("windowmanager.layout.bottomLeft"), subtitle: nil, layout: .bottomLeft),
-        HotkeySpec(id: "windowmanager.bottomRight", title: L("windowmanager.layout.bottomRight"), subtitle: nil, layout: .bottomRight),
+        HotkeySpec(id: "windowmanager.left", title: L("windowmanager.layout.left"), subtitle: nil, layout: .left,
+                   defaultCombo: KeyCombo(keyCode: 0x7B, carbonModifiers: ctrlOpt)),   // ⌃⌥←
+        HotkeySpec(id: "windowmanager.right", title: L("windowmanager.layout.right"), subtitle: nil, layout: .right,
+                   defaultCombo: KeyCombo(keyCode: 0x7C, carbonModifiers: ctrlOpt)),   // ⌃⌥→
+        HotkeySpec(id: "windowmanager.top", title: L("windowmanager.layout.top"), subtitle: nil, layout: .top,
+                   defaultCombo: KeyCombo(keyCode: 0x7E, carbonModifiers: ctrlOpt)),   // ⌃⌥↑
+        HotkeySpec(id: "windowmanager.bottom", title: L("windowmanager.layout.bottom"), subtitle: nil, layout: .bottom,
+                   defaultCombo: KeyCombo(keyCode: 0x7D, carbonModifiers: ctrlOpt)),   // ⌃⌥↓
+        HotkeySpec(id: "windowmanager.topLeft", title: L("windowmanager.layout.topLeft"), subtitle: nil, layout: .topLeft,
+                   defaultCombo: KeyCombo(keyCode: 0x20, carbonModifiers: ctrlOpt)),   // ⌃⌥U
+        HotkeySpec(id: "windowmanager.topRight", title: L("windowmanager.layout.topRight"), subtitle: nil, layout: .topRight,
+                   defaultCombo: KeyCombo(keyCode: 0x22, carbonModifiers: ctrlOpt)),   // ⌃⌥I
+        HotkeySpec(id: "windowmanager.bottomLeft", title: L("windowmanager.layout.bottomLeft"), subtitle: nil, layout: .bottomLeft,
+                   defaultCombo: KeyCombo(keyCode: 0x26, carbonModifiers: ctrlOpt)),   // ⌃⌥J
+        HotkeySpec(id: "windowmanager.bottomRight", title: L("windowmanager.layout.bottomRight"), subtitle: nil, layout: .bottomRight,
+                   defaultCombo: KeyCombo(keyCode: 0x28, carbonModifiers: ctrlOpt)),   // ⌃⌥K
         HotkeySpec(id: "windowmanager.maximize", title: L("windowmanager.layout.maximize"),
-                   subtitle: L("windowmanager.layout.maximize.subtitle"), layout: .maximize),
+                   subtitle: L("windowmanager.layout.maximize.subtitle"), layout: .maximize,
+                   defaultCombo: KeyCombo(keyCode: 0x24, carbonModifiers: ctrlOpt)),   // ⌃⌥Return
         HotkeySpec(id: "windowmanager.center", title: L("windowmanager.layout.center"),
-                   subtitle: L("windowmanager.layout.center.subtitle"), layout: .center),
-        HotkeySpec(id: "windowmanager.nextDisplay", title: L("windowmanager.layout.nextDisplay"), subtitle: nil, layout: .nextDisplay),
-        HotkeySpec(id: "windowmanager.prevDisplay", title: L("windowmanager.layout.prevDisplay"), subtitle: nil, layout: .prevDisplay),
-        HotkeySpec(id: "windowmanager.restore", title: L("windowmanager.layout.restore"), subtitle: nil, layout: .restore)
+                   subtitle: L("windowmanager.layout.center.subtitle"), layout: .center,
+                   defaultCombo: KeyCombo(keyCode: 0x08, carbonModifiers: ctrlOpt)),   // ⌃⌥C
+        HotkeySpec(id: "windowmanager.nextDisplay", title: L("windowmanager.layout.nextDisplay"), subtitle: nil, layout: .nextDisplay,
+                   defaultCombo: KeyCombo(keyCode: 0x7C, carbonModifiers: ctrlOptCmd)), // ⌃⌥⌘→
+        HotkeySpec(id: "windowmanager.prevDisplay", title: L("windowmanager.layout.prevDisplay"), subtitle: nil, layout: .prevDisplay,
+                   defaultCombo: KeyCombo(keyCode: 0x7B, carbonModifiers: ctrlOptCmd)), // ⌃⌥⌘←
+        HotkeySpec(id: "windowmanager.restore", title: L("windowmanager.layout.restore"), subtitle: nil, layout: .restore,
+                   defaultCombo: KeyCombo(keyCode: 0x33, carbonModifiers: ctrlOpt))    // ⌃⌥⌫
     ]
 
     // MARK: - 菜单条目
