@@ -196,9 +196,9 @@ final class ClaudeLiveStatus: ObservableObject {
 
     /// 6h 无事件的会话视为失效。
     private static let staleInterval: TimeInterval = 6 * 3_600
-    /// events.jsonl 超过此大小则截断保尾。
-    private static let maxEventBytes = 5 * 1_024 * 1_024
-    private static let keepTailLines = 1_000
+    /// events.jsonl 超过此大小则截断保尾。后台 nonisolated 方法读取，显式 nonisolated。
+    nonisolated private static let maxEventBytes = 5 * 1_024 * 1_024
+    nonisolated private static let keepTailLines = 1_000
 
     private init() {}
 
@@ -349,7 +349,7 @@ final class ClaudeLiveStatus: ObservableObject {
     // MARK: - 事件文件维护（nonisolated static）
 
     /// 确保文件存在；超限则截断保留尾部若干行。
-    nonisolated static funcensureEventFile(url: URL) {
+    nonisolated static func ensureEventFile(url: URL) {
         ClaudeEnv.ensureSupportDir()
         let fm = FileManager.default
         if !fm.fileExists(atPath: url.path) {
@@ -370,7 +370,7 @@ final class ClaudeLiveStatus: ObservableObject {
     }
 
     /// 读入全部行与当前大小（供初始建状态 + 设定监听偏移）。
-    nonisolated static funcreadAll(url: URL) -> (lines: [String], size: UInt64) {
+    nonisolated static func readAll(url: URL) -> (lines: [String], size: UInt64) {
         guard let data = try? Data(contentsOf: url) else { return ([], 0) }
         let text = String(data: data, encoding: .utf8) ?? ""
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)

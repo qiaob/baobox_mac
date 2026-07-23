@@ -233,7 +233,7 @@ final class ClaudeHooksManager: ObservableObject {
 extension ClaudeHooksManager {
 
     /// 写脚本内容并 chmod 755。返回是否成功。
-    nonisolated static funcwriteScript(_ content: String, to url: URL) -> Bool {
+    nonisolated static func writeScript(_ content: String, to url: URL) -> Bool {
         ClaudeEnv.ensureSupportDir()
         guard let data = content.data(using: .utf8) else { return false }
         do {
@@ -246,12 +246,12 @@ extension ClaudeHooksManager {
     }
 
     /// 把脚本路径包成 settings.json 里安全的 command 串（路径含空格，整体加双引号）。
-    nonisolated static funcquotedCommand(_ path: String) -> String {
+    nonisolated static func quotedCommand(_ path: String) -> String {
         "\"" + path + "\""
     }
 
     /// 判断某 hook 条目是否属于 Baobox（任一 command 含标志路径）。
-    nonisolated static funcisBaoboxEntry(_ entry: [String: Any]) -> Bool {
+    nonisolated static func isBaoboxEntry(_ entry: [String: Any]) -> Bool {
         guard let hooks = entry["hooks"] as? [[String: Any]] else { return false }
         return hooks.contains { hook in
             (hook["command"] as? String)?.contains(ClaudeHookScripts.markerFragment) ?? false
@@ -259,7 +259,7 @@ extension ClaudeHooksManager {
     }
 
     /// 指定事件里是否已存在 Baobox 条目。
-    nonisolated static funchasBaoboxEntry(in settings: [String: Any], events: [String]) -> Bool {
+    nonisolated static func hasBaoboxEntry(in settings: [String: Any], events: [String]) -> Bool {
         guard let hooks = settings["hooks"] as? [String: Any] else { return false }
         for event in events {
             guard let entries = hooks[event] as? [[String: Any]] else { continue }
@@ -269,7 +269,7 @@ extension ClaudeHooksManager {
     }
 
     /// 追加一个 Baobox 条目（先移除同事件下旧的 Baobox 条目，保证幂等）。
-    nonisolated static funcappendBaoboxHook(into settings: inout [String: Any], event: String, matcher: String?, command: String) {
+    nonisolated static func appendBaoboxHook(into settings: inout [String: Any], event: String, matcher: String?, command: String) {
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         var entries = (hooks[event] as? [[String: Any]]) ?? []
         entries.removeAll { isBaoboxEntry($0) }
@@ -281,7 +281,7 @@ extension ClaudeHooksManager {
     }
 
     /// 移除某事件下全部 Baobox 条目；数组空则删事件键，hooks 空则删 hooks 键。
-    nonisolated static funcremoveBaoboxHooks(from settings: inout [String: Any], event: String) {
+    nonisolated static func removeBaoboxHooks(from settings: inout [String: Any], event: String) {
         guard var hooks = settings["hooks"] as? [String: Any] else { return }
         guard var entries = hooks[event] as? [[String: Any]] else { return }
         entries.removeAll { isBaoboxEntry($0) }
@@ -300,7 +300,7 @@ extension ClaudeHooksManager {
     // MARK: - 规则文件
 
     /// 读规则文件为数组（去注释与空行）。
-    nonisolated static funcreadPatterns(url: URL) -> [String] {
+    nonisolated static func readPatterns(url: URL) -> [String] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -308,7 +308,7 @@ extension ClaudeHooksManager {
     }
 
     /// 覆盖写规则文件（每行一条）。
-    nonisolated static funcwritePatterns(_ patterns: [String], url: URL) {
+    nonisolated static func writePatterns(_ patterns: [String], url: URL) {
         ClaudeEnv.ensureSupportDir()
         let body = patterns.joined(separator: "\n") + "\n"
         try? body.data(using: .utf8)?.write(to: url)

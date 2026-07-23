@@ -96,7 +96,7 @@ struct ClaudeUsageReport {
 // MARK: - 一条已解析的用量条目（后台内部使用）
 
 /// 去重后参与聚合的一条 assistant 用量。
-private struct UsageEntry {
+fileprivate struct UsageEntry {
     let timestamp: Date
     let modelID: String
     let projectPath: String
@@ -218,7 +218,7 @@ final class ClaudeUsageStore: ObservableObject {
 extension ClaudeUsageStore {
 
     /// 收集近 N 小时内 mtime 文件的去重用量条目。
-    nonisolated fileprivate static funccollectEntries(sinceHoursAgo hours: Int) -> [UsageEntry] {
+    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [UsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
         var entries: [UsageEntry] = []
@@ -286,7 +286,7 @@ extension ClaudeUsageStore {
 
     /// 5h 窗口算法（对齐 ccusage）：升序，blockStart 向下取整到小时；超 5h 开新块。
     /// 若 `now <= 末块.start + 5h` 则末块为活跃窗口，否则无活跃窗口。
-    nonisolated fileprivate static funcactiveWindow(from entries: [UsageEntry]) -> UsageWindow? {
+    nonisolated fileprivate static func activeWindow(from entries: [UsageEntry]) -> UsageWindow? {
         guard !entries.isEmpty else { return nil }
         let sorted = entries.sorted { $0.timestamp < $1.timestamp }
         let fiveHours: TimeInterval = 5 * 3_600
@@ -317,7 +317,7 @@ extension ClaudeUsageStore {
     }
 
     /// 今日（本地时区）累计。
-    nonisolated fileprivate static functodayTotals(from entries: [UsageEntry]) -> UsageTotals? {
+    nonisolated fileprivate static func todayTotals(from entries: [UsageEntry]) -> UsageTotals? {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: Date())
         guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
@@ -331,7 +331,7 @@ extension ClaudeUsageStore {
     }
 
     /// 三维度报表构建。
-    nonisolated fileprivate static funcbuildReport(from entries: [UsageEntry]) -> ClaudeUsageReport {
+    nonisolated fileprivate static func buildReport(from entries: [UsageEntry]) -> ClaudeUsageReport {
         var report = ClaudeUsageReport()
         let calendar = Calendar.current
 
@@ -377,14 +377,14 @@ extension ClaudeUsageStore {
     // MARK: - 私有辅助
 
     /// 时间戳向下取整到整点（对齐 UTC 小时，稳定不随时区漂移）。
-    nonisolated fileprivate static funcfloorToHour(_ date: Date) -> Date {
+    nonisolated fileprivate static func floorToHour(_ date: Date) -> Date {
         let seconds = date.timeIntervalSinceReferenceDate
         let floored = (seconds / 3_600).rounded(.down) * 3_600
         return Date(timeIntervalSinceReferenceDate: floored)
     }
 
     /// 容错取整数（可能是 Int / Double / NSNumber / 字符串）。
-    nonisolated fileprivate static funcintValue(_ any: Any?) -> Int {
+    nonisolated fileprivate static func intValue(_ any: Any?) -> Int {
         if let i = any as? Int { return i }
         if let d = any as? Double { return Int(d) }
         if let n = any as? NSNumber { return n.intValue }

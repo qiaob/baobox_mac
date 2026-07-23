@@ -29,19 +29,19 @@ enum ClaudeJSONLParsing {
     }()
 
     /// 解析 ISO8601 时间戳，先试带毫秒再退无毫秒。失败返回 nil。
-    nonisolated static funcparseDate(_ string: String) -> Date? {
+    nonisolated static func parseDate(_ string: String) -> Date? {
         if let date = iso8601Fractional.date(from: string) { return date }
         return iso8601Plain.date(from: string)
     }
 
     /// 把一行 JSON 数据解析为字典；失败返回 nil。
-    nonisolated static funcparseObject(_ data: Data) -> [String: Any]? {
+    nonisolated static func parseObject(_ data: Data) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     /// 从 message.content 提取首个可读文本。
     /// content 可能是纯字符串，或 `[{type:text,text:...}, {type:tool_use,...}]` 数组。
-    nonisolated static funcextractText(fromContent content: Any) -> String? {
+    nonisolated static func extractText(fromContent content: Any) -> String? {
         if let text = content as? String {
             return text
         }
@@ -115,8 +115,8 @@ final class ClaudeSessionIndex: ObservableObject {
     private var refreshing = false
     private var saveWorkItem: DispatchWorkItem?
 
-    /// 参与审计的编辑类工具。
-    static let editToolNames: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+    /// 参与审计的编辑类工具。后台 nonisolated 静态方法要读它，故显式 nonisolated（不可变 Sendable）。
+    nonisolated static let editToolNames: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
 
     private var cacheFileURL: URL {
         ClaudeEnv.supportDir.appendingPathComponent("index-cache.json")
@@ -293,7 +293,7 @@ extension ClaudeSessionIndex {
 extension ClaudeSessionIndex {
 
     /// 遍历 projects 下全部 jsonl；mtime+size 未变的复用缓存，否则快扫。
-    nonisolated static funcscanAll(previousCache: [String: CacheRecord]) -> ([ClaudeSessionSummary], [String: CacheRecord]) {
+    nonisolated static func scanAll(previousCache: [String: CacheRecord]) -> ([ClaudeSessionSummary], [String: CacheRecord]) {
         let fm = FileManager.default
         var summaries: [ClaudeSessionSummary] = []
         var newCache: [String: CacheRecord] = [:]
@@ -342,7 +342,7 @@ extension ClaudeSessionIndex {
     }
 
     /// 快扫单个文件：读头 64KB + 尾 8KB。头取 summary/首条 user/cwd，尾取末次时间戳与末次 cwd。
-    nonisolated static funcscanFile(_ url: URL, mtime: Date, size: Int64, mungedDir: String) -> (summary: ClaudeSessionSummary, record: CacheRecord)? {
+    nonisolated static func scanFile(_ url: URL, mtime: Date, size: Int64, mungedDir: String) -> (summary: ClaudeSessionSummary, record: CacheRecord)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
@@ -419,7 +419,7 @@ extension ClaudeSessionIndex {
     }
 
     /// 某日改动审计。全量逐文件逐行流式处理。
-    nonisolated static funccomputeAudit(on day: Date) -> [ClaudeAuditProject] {
+    nonisolated static func computeAudit(on day: Date) -> [ClaudeAuditProject] {
         let fm = FileManager.default
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: day)
@@ -494,7 +494,7 @@ extension ClaudeSessionIndex {
     }
 
     /// 磁盘占用分布。
-    nonisolated static funccomputeDiskStats() -> ClaudeDiskStats {
+    nonisolated static func computeDiskStats() -> ClaudeDiskStats {
         var stats = ClaudeDiskStats()
         let claudeDir = ClaudeEnv.claudeDir
         let total = directorySize(claudeDir)
@@ -510,7 +510,7 @@ extension ClaudeSessionIndex {
     }
 
     /// 删除早于 N 天的会话 jsonl。返回 (数量, 字节数)。
-    nonisolated static funcperformCleanup(olderThanDays days: Int) -> (Int, Int64) {
+    nonisolated static func performCleanup(olderThanDays days: Int) -> (Int, Int64) {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         var count = 0
@@ -536,7 +536,7 @@ extension ClaudeSessionIndex {
     }
 
     /// 逐行解析成 Markdown（## User / ## Assistant）。
-    nonisolated static funcbuildMarkdown(fileURL: URL, title: String) -> String? {
+    nonisolated static func buildMarkdown(fileURL: URL, title: String) -> String? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         var lines: [String] = ["# \(title)", ""]
         for lineData in data.split(separator: 0x0A) {
@@ -571,18 +571,18 @@ extension ClaudeSessionIndex {
     // MARK: - 私有辅助
 
     /// munged 目录名反推展示路径（仅展示用，lossy）。munge 把 `/` 与 `.` 都换成了 `-`。
-    nonisolated static funcdemungeDirName(_ dir: String) -> String {
+    nonisolated static func demungeDirName(_ dir: String) -> String {
         dir.replacingOccurrences(of: "-", with: "/")
     }
 
     /// 从路径取展示名（末段）。
-    nonisolated static funcprojectName(fromPath path: String) -> String {
+    nonisolated static func projectName(fromPath path: String) -> String {
         let name = URL(fileURLWithPath: path).lastPathComponent
         return name.isEmpty ? path : name
     }
 
     /// 目录递归总字节数（enumerator 遍历，容错）。
-    nonisolated static funcdirectorySize(_ url: URL) -> Int64 {
+    nonisolated static func directorySize(_ url: URL) -> Int64 {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path),
               let enumerator = fm.enumerator(
@@ -601,7 +601,7 @@ extension ClaudeSessionIndex {
     }
 
     /// projects 目录字节数与 jsonl 文件计数。
-    nonisolated static funcprojectsSizeAndCount() -> (Int64, Int) {
+    nonisolated static func projectsSizeAndCount() -> (Int64, Int) {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: ClaudeEnv.projectsDir,

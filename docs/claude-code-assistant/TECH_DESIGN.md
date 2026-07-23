@@ -112,6 +112,11 @@ settings.json `statusLine.command` 指向可执行脚本;每次刷新 Claude Cod
 - 二进制探测顺序:`~/.claude/local/claude`、`/opt/homebrew/bin/claude`、`/usr/local/bin/claude`、`~/.local/bin/claude`、`/usr/bin/claude`;都不在则回退字符串 `"claude"`(终端里 PATH 通常有)。
 - `ClaudeSettingsFile`:`load() -> [String: Any]`、`mutate(_ transform: (inout [String: Any]) -> Void) throws`。mutate 内:读原文(不存在则 `[:]`)→ 备份 `settings.json.baobox.bak` → 变换 → `JSONSerialization` 写回(`[.prettyPrinted,.sortedKeys,.withoutEscapingSlashes]`)。`.claude.json` 用同一套工具函数(独立备份名)。**该文件可能几 MB,读写放后台线程,完成回主线程刷 UI。**
 - `TerminalLauncher.run(command:in:)`:把 `#!/bin/zsh\ncd '<dir>'\n<command>\n` 写入 `supportDir/launch/<uuid>.command`,`chmod 755`,`NSWorkspace.shared.open`(.command 默认由终端接管);目录里超过 20 个旧文件时顺手清理。cwd 与 sessionId 拼进命令前用单引号包裹并转义内部单引号。
+- 配置节可视化控件所需的简单键读写接口(全部走 `ClaudeSettingsFile`/对应工具函数,UI 不直接碰文件):
+  - `permissions.defaultMode`(字符串)读/写/移除;`model`(字符串)读/写/移除;`cleanupPeriodDays`(整数)读/写/移除;
+  - `env` 字典单键读/设("1")/移除,不动用户自设的其他 env 键;
+  - `permissions.allow/deny` 字符串数组整体读/写;`includeCoAuthoredBy` 读/切换;
+  - ~/.claude.json 顶层 `mcpServers` 读为 `[(name, [String: Any])]`、增删写回。
 
 ### 3.2 ClaudeSessionIndex(ObservableObject,单例 shared)
 
@@ -237,9 +242,23 @@ printf '%s\n' "$out"
 MCP(列表+表单)交互形态不同,保持独立节。共 5 节:
 
 1. **通知**:总开关、提示音开关、额度预算(TextField,k tokens)、80% 提醒开关、恢复提醒开关。
-2. **配置**(DisclosureGroup ×4,默认展开第一个):
-   - *权限规则*:allow/deny 两个可编辑列表 + 预设菜单(前端 npm/pnpm/yarn/eslint、Python pip/pytest、Git 常用只读)。
-   - *危险命令卫士*:开关(装/卸 hook)、规则列表(增删,TextField 校验非空)、恢复默认规则按钮。
+2. **配置**(设计原则:凡取值有限的配置一律做成勾选/单选控件,裸文本编辑只出现在"高级"折叠里;
+   每个控件旁配一句人话说明。DisclosureGroup 分组,默认展开第一个):
+   - *行为*(可视化单选/选择器):
+     - 默认权限模式(`permissions.defaultMode`,Picker 单选):default / acceptEdits / plan / bypassPermissions,
+       bypass 项附红色警示说明;未设置时选中 default。
+     - 默认模型(`model`,Picker 单选):跟随默认(移除键)/ opus / sonnet / haiku(写入别名字符串)。
+     - 会话保留天数(`cleanupPeriodDays`,Picker):跟随默认(移除键)/ 7 / 30 / 90 / 365。
+   - *权限规则*:预设矩阵**多选勾选**,按组呈现——包管理(npm/pnpm/yarn)、构建与测试(make/eslint/pytest…)、
+     Git 只读(status/log/diff)、Git 写(add/commit/push)、文件读取;每个勾选映射一组固定 allow 规则
+     (映射表内置常量,勾选状态由"该组规则是否全部在 allow 中"反推,避免另存状态)。
+     「高级」折叠:allow/deny 裸列表增删(兜底自定义)。
+   - *危险命令卫士*:总开关(装/卸 hook)+ 预置规则**勾选列表**,每条带人话描述
+     (如「强制推送 git push --force」「递归删除 rm -rf」——勾选状态写入 guard-patterns.txt);
+     「高级」折叠:自定义正则增删。
+   - *隐私*(多选勾选,映射 settings.json `env` 字典):关闭遥测(DISABLE_TELEMETRY=1)、
+     关闭错误上报(DISABLE_ERROR_REPORTING=1)、禁用非必要网络请求
+     (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1);取消勾选 = 从 env 移除该键,不覆盖用户自设的其他 env。
    - *提交署名*:Co-Authored-By Toggle(直写 settings.json),说明文字注明仅影响以后提交、不改写历史。
    - *CLAUDE.md*:全局行 + 项目行列表(存在→打开,缺失→从模板创建);模板内容内置常量(简短的项目说明骨架)。
 3. **Statusline**:5 个段开关 + 分隔符输入 + 预览行 + 「应用到 Claude Code」/「移除」按钮;检测到非 Baobox statusLine 时黄条提示将覆盖。
