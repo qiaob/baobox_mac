@@ -68,6 +68,10 @@ struct ClaudeSessionSummary: Identifiable, Equatable {
     let title: String
     let lastActivity: Date
     let fileSize: Int64
+    /// 末次 assistant 消息的 model id;快扫窗口内没有 assistant 行则为 nil。
+    var model: String?
+    /// 末次请求的上下文规模(input + cache_read + cache_creation tokens);同上可为 nil。
+    var contextTokens: Int?
 }
 
 /// 审计：某文件被改动的次数与末次时间。
@@ -118,8 +122,9 @@ final class ClaudeSessionIndex: ObservableObject {
     /// 参与审计的编辑类工具。后台 nonisolated 静态方法要读它，故显式 nonisolated（不可变 Sendable）。
     nonisolated static let editToolNames: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
 
+    /// v2:新增 model / contextTokens 字段,换文件名让旧缓存整体失效重扫一次。
     private var cacheFileURL: URL {
-        ClaudeEnv.supportDir.appendingPathComponent("index-cache.json")
+        ClaudeEnv.supportDir.appendingPathComponent("index-cache-v2.json")
     }
 
     private init() {
@@ -264,7 +269,7 @@ final class ClaudeSessionIndex: ObservableObject {
 // MARK: - 缓存记录
 
 extension ClaudeSessionIndex {
-    /// index-cache.json 的一条记录。可 Codable 持久化。
+    /// index-cache-v2.json 的一条记录。可 Codable 持久化。
     struct CacheRecord: Codable {
         let modified: Double       // mtime.timeIntervalSince1970
         let size: Int64
@@ -273,6 +278,8 @@ extension ClaudeSessionIndex {
         let projectName: String
         let title: String
         let lastActivity: Double   // timeIntervalSince1970
+        var model: String?
+        var contextTokens: Int?
 
         func toSummary(fileURL: URL) -> ClaudeSessionSummary {
             ClaudeSessionSummary(
@@ -282,7 +289,9 @@ extension ClaudeSessionIndex {
                 projectName: projectName,
                 title: title,
                 lastActivity: Date(timeIntervalSince1970: lastActivity),
-                fileSize: size
+                fileSize: size,
+                model: model,
+                contextTokens: contextTokens
             )
         }
     }
@@ -361,10 +370,11 @@ extension ClaudeSessionIndex {
             return nil
         }
 
-        // —— 头块：标题与 cwd ——
+        // —— 头块：标题与 cwd；model 先取头块首个 assistant 作兜底 ——
         var summaryTitle: String?
         var firstUserText: String?
         var cwd: String?
+        var model: String?
         for lineData in headData.split(separator: 0x0A) {
             guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)) else { continue }
             let type = object["type"] as? String
@@ -373,6 +383,9 @@ extension ClaudeSessionIndex {
             }
             if let dirValue = object["cwd"] as? String, !dirValue.isEmpty {
                 cwd = dirValue   // 保留头块中最后一次
+            }
+            if model == nil, type == "assistant", let m = assistantModel(object) {
+                model = m
             }
             if firstUserText == nil, type == "user",
                let message = object["message"] as? [String: Any],
@@ -386,8 +399,9 @@ extension ClaudeSessionIndex {
             }
         }
 
-        // —— 尾块：末次时间戳与末次 cwd ——
+        // —— 尾块：末次时间戳 / cwd / model / 上下文规模(末次 assistant usage) ——
         var lastActivity: Date?
+        var contextTokens: Int?
         for lineData in tailData.split(separator: 0x0A) {
             guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)) else { continue }
             if let dirValue = object["cwd"] as? String, !dirValue.isEmpty {
@@ -395,6 +409,16 @@ extension ClaudeSessionIndex {
             }
             if let ts = object["timestamp"] as? String, let date = ClaudeJSONLParsing.parseDate(ts) {
                 lastActivity = date
+            }
+            if (object["type"] as? String) == "assistant" {
+                if let m = assistantModel(object) { model = m }   // 末次覆盖
+                if let usage = (object["message"] as? [String: Any])?["usage"] as? [String: Any] {
+                    let input = (usage["input_tokens"] as? Int) ?? 0
+                    let cacheRead = (usage["cache_read_input_tokens"] as? Int) ?? 0
+                    let cacheWrite = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+                    let total = input + cacheRead + cacheWrite
+                    if total > 0 { contextTokens = total }
+                }
             }
         }
 
@@ -413,9 +437,18 @@ extension ClaudeSessionIndex {
             projectPath: resolvedPath,
             projectName: projectName,
             title: title,
-            lastActivity: activity.timeIntervalSince1970
+            lastActivity: activity.timeIntervalSince1970,
+            model: model,
+            contextTokens: contextTokens
         )
         return (record.toSummary(fileURL: url), record)
+    }
+
+    /// 从 assistant 行取 message.model,过滤 `<synthetic>` 等占位值。
+    nonisolated private static func assistantModel(_ object: [String: Any]) -> String? {
+        guard let m = (object["message"] as? [String: Any])?["model"] as? String,
+              !m.isEmpty, !m.hasPrefix("<") else { return nil }
+        return m
     }
 
     /// 某日改动审计。全量逐文件逐行流式处理。

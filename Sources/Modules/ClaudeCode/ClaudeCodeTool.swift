@@ -13,11 +13,6 @@ final class ClaudeCodeTool: ToolModule {
     let name = L("claudecode.name")
     let symbolName = "terminal"
 
-    /// 最近会话在菜单里最多展示的条数。
-    private static let recentLimit = 5
-    /// 会话标题在菜单里的截断长度。
-    private static let titleClip = 30
-
     private var live: ClaudeLiveStatus { ClaudeLiveStatus.shared }
     private var index: ClaudeSessionIndex { ClaudeSessionIndex.shared }
     private var usage: ClaudeUsageStore { ClaudeUsageStore.shared }
@@ -54,41 +49,34 @@ final class ClaudeCodeTool: ToolModule {
         items.append(disabled(statusText()))
         items.append(.separator())
 
-        // —— 最近会话 ——
-        let recent = index.recentSessions(limit: Self.recentLimit)
-        if recent.isEmpty {
-            items.append(disabled(L("claudecode.menu.noSessions")))
-        } else {
-            for session in recent {
-                let clipped = String(session.title.prefix(Self.titleClip))
-                let item = ClosureMenuItem(title: "\(session.projectName) — \(clipped)") {
-                    TerminalLauncher.resume(sessionID: session.id, in: session.projectPath)
-                }
-                item.image = symbolImage("clock.arrow.circlepath")
-                items.append(item)
-            }
-        }
+        // —— 会话入口:快速续接面板 + 中心窗口(菜单不再平铺最近会话)——
+        items.append(ClosureMenuItem(title: L("claudecode.menu.quickSwitch"),
+                                     hotkeyID: "claudecode.quickswitch") {
+            ClaudeQuickSwitchController.shared.toggle()
+        })
         items.append(ClosureMenuItem(title: L("claudecode.menu.browseSessions"),
                                      hotkeyID: "claudecode.center") {
             ClaudeCodeCenterController.shared.show(tab: .sessions)
         })
         items.append(.separator())
 
-        // —— 额度行（置灰）——
-        items.append(disabled(quotaText()))
-        items.append(ClosureMenuItem(title: L("claudecode.menu.usageReport")) {
+        // —— 用量:报表入口带额度副标题(替代原独立置灰额度行,减一行)——
+        let usageItem = ClosureMenuItem(title: L("claudecode.menu.usageReport")) {
             ClaudeCodeCenterController.shared.show(tab: .usage)
-        })
+        }
+        usageItem.attributedTitle = Self.twoLineTitle(L("claudecode.menu.usageReport"), subtitle: quotaText())
+        items.append(usageItem)
         items.append(ClosureMenuItem(title: L("claudecode.menu.todayChanges")) {
             ClaudeCodeCenterController.shared.show(tab: .audit)
         })
         items.append(.separator())
 
-        // —— 通知开关 ——
-        let notify = ClosureMenuItem(title: L("claudecode.menu.notifications")) { [weak self] in
-            self?.toggleNotifications()
-        }
-        notify.state = ClaudeNotifierSettings.enabled ? .on : .off
+        // —— 通知开关(右侧 switch 样式,点击不收起菜单)——
+        let notify = NSMenuItem()
+        let hosting = NSHostingView(rootView: NotifyToggleMenuRow())
+        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 30)
+        hosting.autoresizingMask = [.width]
+        notify.view = hosting
         items.append(notify)
 
         return items
@@ -104,25 +92,21 @@ final class ClaudeCodeTool: ToolModule {
                 defaultCombo: nil
             ) {
                 ClaudeCodeCenterController.shared.show(tab: .sessions)
+            },
+            HotkeyDefinition(
+                id: "claudecode.quickswitch",
+                title: L("claudecode.hotkey.quickswitch"),
+                subtitle: L("claudecode.hotkey.quickswitch.subtitle"),
+                // ⌃⇧Space:Spotlight 语义,系统默认未占用;可在快捷键页改绑。
+                defaultCombo: KeyCombo(keyCode: 0x31, carbonModifiers: KeyCombo.control | KeyCombo.shift)
+            ) {
+                ClaudeQuickSwitchController.shared.toggle()
             }
         ]
     }
 
     func settingsTab() -> AnyView {
         AnyView(ClaudeCodeSettingsView())
-    }
-
-    // MARK: - 动作
-
-    /// 切换完成 / 等待通知总开关。开启时申请授权，并在缺 hooks 时自动装事件上报。
-    private func toggleNotifications() {
-        let newValue = !ClaudeNotifierSettings.enabled
-        UserDefaults.standard.set(newValue, forKey: ClaudeNotifierSettings.enabledKey)
-        guard newValue else { return }
-        ClaudeNotifier.shared.requestAuthorizationIfNeeded()
-        if !hooks.isReporterInstalled {
-            hooks.installReporter { _ in }
-        }
     }
 
     // MARK: - 展示（纯内存，无磁盘 IO）
@@ -157,9 +141,57 @@ final class ClaudeCodeTool: ToolModule {
         NSMenuItem(title: title, action: nil, keyEquivalent: "")
     }
 
-    private func symbolImage(_ name: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-        image?.isTemplate = true
-        return image
+    /// 两行菜单项:标题正常字号,副标题小号次要色。副标题为空则退化为单行。
+    private static func twoLineTitle(_ title: String, subtitle: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: title,
+            attributes: [.font: NSFont.menuFont(ofSize: NSFont.systemFontSize)]
+        )
+        guard !subtitle.isEmpty else { return result }
+        result.append(NSAttributedString(
+            string: "\n" + subtitle,
+            attributes: [
+                .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        ))
+        return result
+    }
+
+}
+
+// MARK: - 通知开关菜单行
+
+/// 「完成 / 等待通知」菜单行:左标题右 switch(替代原对号)。custom view 菜单项
+/// 点击开关不收起菜单。开启时申请通知授权并自动安装缺失的 hooks 上报。
+struct NotifyToggleMenuRow: View {
+    @AppStorage(ClaudeNotifierSettings.enabledKey) private var enabled = false
+
+    var body: some View {
+        HStack {
+            Text("claudecode.menu.notifications")
+            Spacer()
+            Toggle("", isOn: $enabled)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                // 菜单里的 NSHostingView 不继承 App 强调色,需显式指定,否则开态灰白。
+                .tint(Color(nsColor: .controlAccentColor))
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        // 菜单窗口永远不是 key window,SwiftUI 会按「非激活」把开关渲染成灰色;
+        // 菜单弹出即用户焦点所在,强制按激活态渲染才能显出强调色。
+        .environment(\.controlActiveState, .key)
+        .onChange(of: enabled) { _, newValue in
+            guard newValue else { return }
+            ClaudeNotifier.shared.requestAuthorizationIfNeeded()
+            let hooks = ClaudeHooksManager.shared
+            if !hooks.isReporterInstalled {
+                hooks.installReporter { _ in }
+            }
+        }
     }
 }
