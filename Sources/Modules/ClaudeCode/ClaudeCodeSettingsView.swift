@@ -12,15 +12,16 @@ import SwiftUI
 
 struct ClaudeCodeSettingsView: View {
 
-    /// 5 个分节。
+    /// 6 个分节。
     enum Section: String, CaseIterable, Identifiable {
-        case notifications, config, statusline, mcp, maintenance
+        case notifications, config, statusline, menu, mcp, maintenance
         var id: String { rawValue }
         var titleKey: LocalizedStringKey {
             switch self {
             case .notifications: return "claudecode.settings.section.notifications"
             case .config: return "claudecode.settings.section.config"
             case .statusline: return "claudecode.settings.section.statusline"
+            case .menu: return "claudecode.settings.section.menu"
             case .mcp: return "claudecode.settings.section.mcp"
             case .maintenance: return "claudecode.settings.section.maintenance"
             }
@@ -72,6 +73,7 @@ struct ClaudeCodeSettingsView: View {
         case .notifications: ClaudeNotificationsSection()
         case .config: ClaudeConfigSection()
         case .statusline: ClaudeStatuslineSection()
+        case .menu: ClaudeMenuRowSection()
         case .mcp: ClaudeMCPSection()
         case .maintenance: ClaudeMaintenanceSection(localVersion: cliVersion)
         }
@@ -121,7 +123,10 @@ struct ClaudeCodeSettingsView: View {
 struct ClaudeNotificationsSection: View {
     @ObservedObject private var hooks = ClaudeHooksManager.shared
     @AppStorage(ClaudeNotifierSettings.enabledKey) private var enabled = false
-    @AppStorage(ClaudeNotifierSettings.soundKey) private var sound = true
+    // 初值取迁移后的当前方式(读旧布尔键),写入走新键。
+    @AppStorage(ClaudeNotifierSettings.alertStyleKey) private var alertStyle = ClaudeNotifierSettings.alertStyle.rawValue
+    @AppStorage(ClaudeNotifierSettings.soundNameKey) private var soundName = ""
+    @AppStorage(ClaudeNotifierSettings.speechTextKey) private var speechText = ""
     @AppStorage(ClaudeNotifierSettings.budgetAlertKey) private var budgetAlert = true
     @AppStorage(ClaudeNotifierSettings.budgetRestoreKey) private var budgetRestore = false
     @AppStorage(ClaudeUsageStore.budgetKey) private var tokenBudget = 0
@@ -140,7 +145,42 @@ struct ClaudeNotificationsSection: View {
                     }
                 Text("claudecode.settings.notify.enabledHelp")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("claudecode.settings.notify.sound", isOn: $sound)
+                // 提醒方式三选一:提示音与朗读同时响会互相干扰,故互斥。
+                Picker("claudecode.settings.notify.alertStyle", selection: $alertStyle) {
+                    Text("claudecode.settings.notify.style.none")
+                        .tag(ClaudeNotifierSettings.AlertStyle.none.rawValue)
+                    Text("claudecode.settings.notify.style.sound")
+                        .tag(ClaudeNotifierSettings.AlertStyle.sound.rawValue)
+                    Text("claudecode.settings.notify.style.speech")
+                        .tag(ClaudeNotifierSettings.AlertStyle.speech.rawValue)
+                }
+                .pickerStyle(.segmented)
+
+                if alertStyle == ClaudeNotifierSettings.AlertStyle.sound.rawValue {
+                    Picker("claudecode.settings.notify.soundPicker", selection: $soundName) {
+                        Text("claudecode.settings.notify.soundDefault").tag("")
+                        ForEach(ClaudeNotifierSettings.systemSounds, id: \.self) { name in
+                            Text(verbatim: name).tag(name)
+                        }
+                    }
+                    .onChange(of: soundName) { _, newValue in
+                        // 选择即试听,便于挑选。
+                        if !newValue.isEmpty { NSSound(named: newValue)?.play() }
+                    }
+                }
+
+                if alertStyle == ClaudeNotifierSettings.AlertStyle.speech.rawValue {
+                    TextField("claudecode.settings.notify.speechText", text: $speechText,
+                              prompt: Text("claudecode.settings.notify.speechPlaceholder"))
+                    Text("claudecode.settings.notify.speechHelp")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("claudecode.settings.notify.preview") {
+                            ClaudeNotifier.shared.preview()
+                        }
+                    }
+                }
             }
 
             SwiftUI.Section("claudecode.settings.notify.budgetSection") {
@@ -153,7 +193,9 @@ struct ClaudeNotificationsSection: View {
                 }
                 Text("claudecode.settings.notify.budgetHelp")
                     .font(.caption).foregroundStyle(.secondary)
+                // 80% 提醒依赖预算基准,预算为 0 时置灰以显式表达这一依赖。
                 Toggle("claudecode.settings.notify.budgetAlert", isOn: $budgetAlert)
+                    .disabled(tokenBudget == 0)
                 Toggle("claudecode.settings.notify.budgetRestore", isOn: $budgetRestore)
             }
 
@@ -189,7 +231,6 @@ struct ClaudeConfigSection: View {
     @State private var newAllow = ""
     @State private var newDeny = ""
     @State private var newGuard = ""
-    @State private var behaviorExpanded = true
 
     var body: some View {
         Form {
@@ -215,7 +256,7 @@ struct ClaudeConfigSection: View {
 
     private var behaviorGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup(isExpanded: $behaviorExpanded) {
+            TappableDisclosure(initiallyExpanded: true) {
                 Picker("claudecode.settings.config.defaultMode",
                        selection: Binding(get: { model.defaultMode }, set: { model.setDefaultMode($0) })) {
                     Text("claudecode.settings.config.mode.default").tag("default")
@@ -260,7 +301,7 @@ struct ClaudeConfigSection: View {
 
     private var permissionsGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup {
+            TappableDisclosure {
                 ForEach(ClaudeConfigModel.permPresets.indices, id: \.self) { i in
                     let preset = ClaudeConfigModel.permPresets[i]
                     Toggle(preset.titleKey, isOn: Binding(
@@ -271,7 +312,7 @@ struct ClaudeConfigSection: View {
                 Text("claudecode.settings.config.presetsHelp")
                     .font(.caption).foregroundStyle(.secondary)
 
-                DisclosureGroup {
+                TappableDisclosure {
                     ruleEditor(title: "claudecode.settings.config.allowList",
                                rules: model.allow,
                                newRule: $newAllow,
@@ -327,7 +368,7 @@ struct ClaudeConfigSection: View {
 
     private var guardGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup {
+            TappableDisclosure {
                 Toggle("claudecode.settings.config.guardEnabled", isOn: Binding(
                     get: { hooks.isGuardInstalled },
                     set: { newValue in
@@ -347,7 +388,7 @@ struct ClaudeConfigSection: View {
                     }
                 }
 
-                DisclosureGroup {
+                TappableDisclosure {
                     let custom = hooks.customPatterns()
                     if custom.isEmpty {
                         Text("claudecode.settings.config.noRules").font(.caption).foregroundStyle(.secondary)
@@ -391,7 +432,7 @@ struct ClaudeConfigSection: View {
 
     private var privacyGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup {
+            TappableDisclosure {
                 Toggle("claudecode.settings.config.privacy.telemetry", isOn: Binding(
                     get: { model.telemetry },
                     set: { model.setPrivacy(ClaudeConfigModel.envTelemetry, on: $0) }
@@ -416,7 +457,7 @@ struct ClaudeConfigSection: View {
 
     private var commitGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup {
+            TappableDisclosure {
                 Toggle("claudecode.settings.config.coauthored", isOn: Binding(
                     get: { model.coAuthored },
                     set: { model.setCoAuthored($0) }
@@ -433,7 +474,7 @@ struct ClaudeConfigSection: View {
 
     private var claudeMdGroup: some View {
         SwiftUI.Section {
-            DisclosureGroup {
+            TappableDisclosure {
                 ForEach(model.claudeMdEntries) { entry in
                     HStack {
                         Image(systemName: entry.exists ? "doc.text" : "doc.badge.plus")
@@ -704,22 +745,28 @@ struct ClaudeStatuslineSection: View {
             }
 
             SwiftUI.Section("claudecode.settings.statusline.segmentsSection") {
-                Toggle("claudecode.settings.statusline.model", isOn: $manager.config.model)
-                Toggle("claudecode.settings.statusline.dir", isOn: $manager.config.dir)
-                Toggle("claudecode.settings.statusline.gitBranch", isOn: $manager.config.gitBranch)
-                Toggle("claudecode.settings.statusline.cost", isOn: $manager.config.cost)
-                Toggle("claudecode.settings.statusline.time", isOn: $manager.config.time)
-                HStack {
-                    Text("claudecode.settings.statusline.separator")
-                    TextField("", text: $manager.config.separator)
-                        .frame(width: 100)
+                Picker("claudecode.settings.statusline.scheme", selection: $manager.selectedID) {
+                    ForEach(manager.allSchemes) { scheme in
+                        Text(verbatim: manager.displayName(of: scheme)).tag(scheme.id)
+                    }
                 }
-            }
-
-            SwiftUI.Section("claudecode.settings.statusline.previewSection") {
                 Text(verbatim: manager.previewLine())
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+            }
+
+            if manager.isBuiltin(manager.selectedID) {
+                SwiftUI.Section {
+                    HStack {
+                        Text("claudecode.settings.rowformat.builtinHint")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("claudecode.settings.rowformat.newScheme") { manager.addScheme() }
+                    }
+                }
+            } else if let scheme = manager.scheme(with: manager.selectedID) {
+                editor(for: scheme)
             }
 
             SwiftUI.Section {
@@ -740,8 +787,104 @@ struct ClaudeStatuslineSection: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: manager.config) { _, _ in manager.saveConfig() }
         .onAppear { manager.refreshState() }
+    }
+
+    @ViewBuilder
+    private func editor(for scheme: StatuslineScheme) -> some View {
+        SwiftUI.Section("claudecode.settings.rowformat.editSection") {
+            TextField("claudecode.settings.rowformat.name", text: nameBinding(scheme.id))
+            HStack {
+                Text("claudecode.settings.statusline.separator")
+                Spacer()
+                TextField("", text: separatorBinding(scheme.id))
+                    .frame(width: 100)
+                    .multilineTextAlignment(.trailing)
+            }
+            ForEach(Array(scheme.segments.enumerated()), id: \.element.segment) { index, config in
+                segmentRow(schemeID: scheme.id, index: index, config: config, count: scheme.segments.count)
+            }
+        }
+        SwiftUI.Section {
+            HStack {
+                Button("claudecode.settings.rowformat.newScheme") { manager.addScheme() }
+                Spacer()
+                Button(role: .destructive) {
+                    manager.deleteScheme(scheme.id)
+                } label: {
+                    Text("claudecode.settings.rowformat.deleteScheme")
+                }
+            }
+        }
+    }
+
+    private func segmentRow(schemeID: UUID, index: Int, config: StatuslineScheme.SegmentConfig, count: Int) -> some View {
+        HStack {
+            Toggle(isOn: enabledBinding(schemeID, index: index)) {
+                Text(verbatim: config.segment.displayName)
+            }
+            Spacer()
+            Button {
+                move(schemeID, from: index, offset: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            Button {
+                move(schemeID, from: index, offset: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == count - 1)
+        }
+    }
+
+    // MARK: 绑定与操作(统一回读 manager,避免闭包捕获过期方案快照)
+
+    private func nameBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { manager.scheme(with: id)?.name ?? "" },
+            set: { newValue in
+                guard var scheme = manager.scheme(with: id) else { return }
+                scheme.name = newValue
+                manager.updateScheme(scheme)
+            }
+        )
+    }
+
+    private func separatorBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { manager.scheme(with: id)?.separator ?? " | " },
+            set: { newValue in
+                guard var scheme = manager.scheme(with: id) else { return }
+                scheme.separator = newValue
+                manager.updateScheme(scheme)
+            }
+        )
+    }
+
+    private func enabledBinding(_ id: UUID, index: Int) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let scheme = manager.scheme(with: id), scheme.segments.indices.contains(index) else { return false }
+                return scheme.segments[index].enabled
+            },
+            set: { newValue in
+                guard var scheme = manager.scheme(with: id), scheme.segments.indices.contains(index) else { return }
+                scheme.segments[index].enabled = newValue
+                manager.updateScheme(scheme)
+            }
+        )
+    }
+
+    private func move(_ id: UUID, from index: Int, offset: Int) {
+        guard var scheme = manager.scheme(with: id) else { return }
+        let target = index + offset
+        guard scheme.segments.indices.contains(index), scheme.segments.indices.contains(target) else { return }
+        scheme.segments.swapAt(index, target)
+        manager.updateScheme(scheme)
     }
 
     private func apply() {
@@ -1068,5 +1211,152 @@ struct ClaudeMaintenanceSection: View {
                 }
             }
         }.resume()
+    }
+}
+
+// MARK: - 会话(续接终端 + 会话行格式)
+
+/// 「会话」分节:续接所用终端 + 快速续接面板的会话行格式(方案选择、实时预览;
+/// 自定义方案支持字段开关、上下排序、命名与增删,内置方案只读)。
+struct ClaudeMenuRowSection: View {
+    @ObservedObject private var store = SessionRowFormatStore.shared
+    @State private var terminalApp = TerminalAppChoice.current
+
+    var body: some View {
+        Form {
+            SwiftUI.Section("settings.general.terminal.section") {
+                Picker("settings.general.terminal.picker", selection: $terminalApp) {
+                    ForEach(TerminalAppChoice.allCases) { choice in
+                        Text(verbatim: choice.pickerLabel).tag(choice)
+                    }
+                }
+                .onChange(of: terminalApp) { _, newValue in
+                    TerminalAppChoice.current = newValue
+                }
+                Text("settings.general.terminal.desc")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            SwiftUI.Section("claudecode.settings.rowformat.section") {
+                Picker("claudecode.settings.rowformat.picker", selection: $store.selectedID) {
+                    ForEach(store.allSchemes) { scheme in
+                        Text(verbatim: store.displayName(of: scheme)).tag(scheme.id)
+                    }
+                }
+                LabeledContent("claudecode.settings.rowformat.preview") {
+                    previewRow
+                }
+            }
+
+            if store.isBuiltin(store.selectedID) {
+                SwiftUI.Section {
+                    HStack {
+                        Text("claudecode.settings.rowformat.builtinHint")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("claudecode.settings.rowformat.newScheme") { store.addScheme() }
+                    }
+                }
+            } else if let scheme = store.scheme(with: store.selectedID) {
+                editor(for: scheme)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// 预览:按当前方案模拟菜单两行样式。
+    private var previewRow: some View {
+        let sample = SessionRowFormatStore.previewSummary
+        let meta = store.activeScheme.metadataLine(for: sample)
+        return VStack(alignment: .trailing, spacing: 2) {
+            Text(verbatim: sample.title)
+            if !meta.isEmpty {
+                Text(verbatim: meta)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func editor(for scheme: SessionRowScheme) -> some View {
+        SwiftUI.Section("claudecode.settings.rowformat.editSection") {
+            TextField("claudecode.settings.rowformat.name", text: nameBinding(scheme.id))
+            ForEach(Array(scheme.fields.enumerated()), id: \.element.field) { index, config in
+                fieldRow(schemeID: scheme.id, index: index, config: config, count: scheme.fields.count)
+            }
+        }
+        SwiftUI.Section {
+            HStack {
+                Button("claudecode.settings.rowformat.newScheme") { store.addScheme() }
+                Spacer()
+                Button(role: .destructive) {
+                    store.deleteScheme(scheme.id)
+                } label: {
+                    Text("claudecode.settings.rowformat.deleteScheme")
+                }
+            }
+        }
+    }
+
+    /// 一行字段:启用开关 + 上移 / 下移。顺序即菜单里的展示顺序。
+    private func fieldRow(schemeID: UUID, index: Int, config: SessionRowScheme.FieldConfig, count: Int) -> some View {
+        HStack {
+            Toggle(isOn: enabledBinding(schemeID, index: index)) {
+                Text(verbatim: config.field.displayName)
+            }
+            Spacer()
+            Button {
+                move(schemeID, from: index, offset: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            Button {
+                move(schemeID, from: index, offset: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == count - 1)
+        }
+    }
+
+    // MARK: 绑定与操作(统一回读 store,避免闭包捕获过期方案快照)
+
+    private func nameBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { store.scheme(with: id)?.name ?? "" },
+            set: { newValue in
+                guard var scheme = store.scheme(with: id) else { return }
+                scheme.name = newValue
+                store.updateScheme(scheme)
+            }
+        )
+    }
+
+    private func enabledBinding(_ id: UUID, index: Int) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let scheme = store.scheme(with: id), scheme.fields.indices.contains(index) else { return false }
+                return scheme.fields[index].enabled
+            },
+            set: { newValue in
+                guard var scheme = store.scheme(with: id), scheme.fields.indices.contains(index) else { return }
+                scheme.fields[index].enabled = newValue
+                store.updateScheme(scheme)
+            }
+        )
+    }
+
+    private func move(_ id: UUID, from index: Int, offset: Int) {
+        guard var scheme = store.scheme(with: id) else { return }
+        let target = index + offset
+        guard scheme.fields.indices.contains(index), scheme.fields.indices.contains(target) else { return }
+        scheme.fields.swapAt(index, target)
+        store.updateScheme(scheme)
     }
 }

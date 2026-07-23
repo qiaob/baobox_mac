@@ -20,10 +20,19 @@ struct ModelPricing {
     static let zero = ModelPricing(inputPerM: 0, outputPerM: 0, cacheWritePerM: 0, cacheReadPerM: 0)
 
     /// 按 model id 关键字匹配定价；未知返回全 0 并标记 unpriced。
+    /// 缓存写 = 输入 ×1.25(5 分钟 TTL 口径),缓存读 = 输入 ×0.1,与官方定价页一致。
     static func pricing(for modelID: String) -> (pricing: ModelPricing, unpriced: Bool) {
         let id = modelID.lowercased()
+        if id.contains("fable") || id.contains("mythos") {
+            return (ModelPricing(inputPerM: 10, outputPerM: 50, cacheWritePerM: 12.5, cacheReadPerM: 1.0), false)
+        }
         if id.contains("opus") {
-            return (ModelPricing(inputPerM: 15, outputPerM: 75, cacheWritePerM: 18.75, cacheReadPerM: 1.5), false)
+            // Opus 4.1 / 4.0 / Claude 3 Opus 为 $15/$75;Opus 4.5 起降为 $5/$25。
+            if id.contains("opus-4-1") || id.contains("opus-4-0")
+                || id.contains("opus-4-2025") || id.contains("3-opus") {
+                return (ModelPricing(inputPerM: 15, outputPerM: 75, cacheWritePerM: 18.75, cacheReadPerM: 1.5), false)
+            }
+            return (ModelPricing(inputPerM: 5, outputPerM: 25, cacheWritePerM: 6.25, cacheReadPerM: 0.5), false)
         }
         if id.contains("sonnet") {
             return (ModelPricing(inputPerM: 3, outputPerM: 15, cacheWritePerM: 3.75, cacheReadPerM: 0.3), false)

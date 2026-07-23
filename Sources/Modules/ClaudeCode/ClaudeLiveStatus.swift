@@ -1,3 +1,5 @@
+import AppKit
+import AVFoundation
 import Foundation
 import UserNotifications
 
@@ -44,16 +46,51 @@ struct ClaudeLiveSession {
 enum ClaudeNotifierSettings {
     static let enabledKey = "claudecode.notificationsEnabled"
     static let soundKey = "claudecode.notificationSound"
+    static let soundNameKey = "claudecode.notificationSoundName"
+    static let speechEnabledKey = "claudecode.speechEnabled"
+    static let speechTextKey = "claudecode.speechText"
     static let budgetAlertKey = "claudecode.budgetAlertEnabled"
     static let budgetRestoreKey = "claudecode.budgetRestoreEnabled"
+
+    /// 可选系统提示音(/System/Library/Sounds,NSSound(named:) 可加载)。
+    static let systemSounds = [
+        "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
+        "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink",
+    ]
+
+    /// 提醒方式:三选一互斥(同时响提示音和朗读会互相干扰)。
+    enum AlertStyle: String, CaseIterable {
+        case none, sound, speech
+    }
+    static let alertStyleKey = "claudecode.alertStyle"
 
     /// 完成/等待通知总开关（默认关，opt-in）。
     static var enabled: Bool {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false
     }
-    /// 提示音（默认开）。
-    static var soundEnabled: Bool {
+    /// 当前提醒方式。新键缺失时按旧的两个布尔键迁移(语音是更明确的后设意图,优先)。
+    static var alertStyle: AlertStyle {
+        if let raw = UserDefaults.standard.string(forKey: alertStyleKey),
+           let style = AlertStyle(rawValue: raw) {
+            return style
+        }
+        if legacySpeechEnabled { return .speech }
+        return legacySoundEnabled ? .sound : .none
+    }
+    /// 提示音名;空串 = 系统默认通知音。
+    static var soundName: String {
+        UserDefaults.standard.string(forKey: soundNameKey) ?? ""
+    }
+    /// 旧版独立开关,仅用于向 alertStyle 迁移。
+    private static var legacySoundEnabled: Bool {
         UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
+    }
+    private static var legacySpeechEnabled: Bool {
+        UserDefaults.standard.object(forKey: speechEnabledKey) as? Bool ?? false
+    }
+    /// 自定义朗读文案;空串 = 朗读通知标题。支持 {project} 占位符。
+    static var speechText: String {
+        UserDefaults.standard.string(forKey: speechTextKey) ?? ""
     }
     /// 额度 80% 提醒（默认开）。
     static var budgetAlertEnabled: Bool {
@@ -73,6 +110,11 @@ final class ClaudeNotifier {
     static let shared = ClaudeNotifier()
     private init() {}
 
+    /// AVSpeechSynthesizer 必须常驻持有,朗读中途释放会静音。
+    private let speechSynthesizer = AVSpeechSynthesizer()
+    /// 自定义提示音播放中也需持有引用。
+    private var currentSound: NSSound?
+
     /// 首次开启通知开关时调用。
     func requestAuthorizationIfNeeded() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
@@ -83,13 +125,13 @@ final class ClaudeNotifier {
     /// 任务完成通知（受总开关控制）。
     func notifyStop(project: String) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.stop.title \(project)"), body: "")
+        post(title: L("claudecode.notify.stop.title \(project)"), body: "", speakProject: project)
     }
 
     /// 等待确认通知（受总开关控制），正文带 Claude 的 message。
     func notifyWaiting(project: String, message: String) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.waiting.title \(project)"), body: message)
+        post(title: L("claudecode.notify.waiting.title \(project)"), body: message, speakProject: project)
     }
 
     /// 额度 80% 提醒。
@@ -102,13 +144,67 @@ final class ClaudeNotifier {
         post(title: L("claudecode.notify.budgetRestored.title"), body: L("claudecode.notify.budgetRestored.body"))
     }
 
-    private func post(title: String, body: String) {
+    /// 设置页「试听」:按当前提醒方式演示一次。
+    func preview() {
+        let project = L("claudecode.notify.previewProject")
+        switch ClaudeNotifierSettings.alertStyle {
+        case .sound:
+            playSound()
+        case .speech:
+            speak(title: L("claudecode.notify.stop.title \(project)"), project: project)
+        case .none:
+            break
+        }
+    }
+
+    /// speakProject 非 nil 时,该通知参与语音朗读(完成 / 等待类)。
+    private func post(title: String, body: String, speakProject: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = title
         if !body.isEmpty { content.body = body }
-        if ClaudeNotifierSettings.soundEnabled { content.sound = .default }
+        // 提醒方式互斥:sound 响提示音(自定义音走 NSSound 自播,默认音挂通知);
+        // speech 只朗读;none 静默投递。
+        switch ClaudeNotifierSettings.alertStyle {
+        case .sound:
+            if ClaudeNotifierSettings.soundName.isEmpty {
+                content.sound = .default
+            } else {
+                playSound()
+            }
+        case .speech, .none:
+            break
+        }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { _ in }
+
+        if let speakProject, ClaudeNotifierSettings.alertStyle == .speech {
+            speak(title: title, project: speakProject)
+        }
+    }
+
+    private func playSound() {
+        let name = ClaudeNotifierSettings.soundName
+        guard !name.isEmpty, let sound = NSSound(named: name) else {
+            NSSound(named: "Glass")?.play()
+            return
+        }
+        currentSound = sound
+        sound.play()
+    }
+
+    /// 系统语音朗读:自定义文案({project} 占位符),留空读通知标题。
+    private func speak(title: String, project: String) {
+        var text = ClaudeNotifierSettings.speechText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            text = title
+        } else {
+            text = text.replacingOccurrences(of: "{project}", with: project)
+        }
+        guard !text.isEmpty else { return }
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: nil)   // 跟随系统默认语音
+        speechSynthesizer.speak(utterance)
     }
 }
 
