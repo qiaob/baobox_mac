@@ -69,6 +69,13 @@
 - **可视化配置**：权限模式 / 默认模型 / 会话保留天数选择器、权限预设勾选、隐私环境开关、Co-Authored-By、CLAUDE.md 管理、带实时预览的 statusline 生成器、MCP 服务器面板，以及磁盘清理与版本检查——所有写入都安全处理用户 JSON（保留未知字段，写前备份 `.baobox.bak`）。
 - 费用为按公开定价的估算值，界面处处标注「估算」。
 
+### Cursor / Codex 助手（纯菜单操作）
+- 为本地 Codex CLI 与 Cursor 编辑器打造的助手，数据全部来自 `~/.codex` 与 `~/.cursor` 下的本地文件——不调用任何 AI API、无需登录。菜单列出最近的 Codex 会话（项目名 + 首条输入），一键在终端续接（`codex resume <id>`）；轻量窗口可搜索、续接、复制命令与删除。
+- **Codex 配置可视化**：`approval_policy`、`sandbox_mode`（danger 档红字警示）与默认 `model` 以选择器编辑，对 `config.toml` 做行级读写，保全注释与未知键；遇到无法安全编辑的值会自动识别并置灰对应控件。每次写入前备份 `config.toml.baobox.bak`。
+- **完成通知**（按需开启）：把 `notify` 钩子写入 `config.toml`；Codex 回合结束时 Baobox 发送系统通知（含最后回复摘要），移除后 config.toml 无残留。
+- **Cursor Rules 管理**：维护项目文件夹列表，列出各项目 `.cursor/rules/*.mdc`（并检测旧式 `.cursorrules`），一键打开文件，或写入内置的通用 / 前端 / Python 规则模板（同名文件绝不覆盖）。
+- **Cursor MCP 面板**：查看、新增、删除 `~/.cursor/mcp.json` 中的服务器（保留未知字段，写前备份 `.baobox.bak`）。
+
 > Sparkle 自动更新尚未接入（待确定托管方案），「检查更新」菜单项目前为置灰占位。
 
 ## 系统要求

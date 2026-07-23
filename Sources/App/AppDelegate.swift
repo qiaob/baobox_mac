@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(CaffeinateTool())
         registry.register(WindowManagerTool())
         registry.register(ClaudeCodeTool())
+        registry.register(AIToolsTool())
         registry.activateAll()
 
         statusItemController = StatusItemController(registry: registry)

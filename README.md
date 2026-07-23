@@ -69,6 +69,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Visualized configuration**: pickers for permission mode / default model / session retention, permission-preset checkboxes, privacy env toggles, Co-Authored-By, CLAUDE.md management, a statusline generator with live preview, an MCP server panel, and disk cleanup / version check — every edit writes the user's JSON safely (unknown keys preserved, `.baobox.bak` backup).
 - Costs are estimates from public pricing and are labelled as such throughout.
 
+### Cursor / Codex Assistant (menu-only)
+- A local-only companion for the Codex CLI and the Cursor editor, built entirely from files under `~/.codex` and `~/.cursor` — no AI API, no login. The menu lists your most recent Codex sessions (project + first prompt) for one-click terminal resume (`codex resume <id>`), with a lightweight window to search, resume, copy the command, or delete.
+- **Codex configuration**: visualized pickers for `approval_policy`, `sandbox_mode` (danger tier shown in red) and default `model`, edited line-by-line in `config.toml` so comments and unknown keys survive; values it can't safely edit are detected and the controls disable themselves. Backs up `config.toml.baobox.bak` before every write.
+- **Turn-complete notifications** (opt-in): installs a `notify` hook into `config.toml`; when a Codex turn finishes Baobox posts a system notification with the last-assistant-message summary, and removing it leaves no residue.
+- **Cursor Rules**: track project folders, list their `.cursor/rules/*.mdc` files (with legacy `.cursorrules` detection), open any file, and write built-in General / Frontend / Python rule templates (existing files are never overwritten).
+- **Cursor MCP panel**: view, add and remove servers in `~/.cursor/mcp.json` (unknown keys preserved, `.baobox.bak` backup).
+
 > Sparkle-based auto-update is not yet wired up (pending a hosting decision); the "Check for Updates" menu item is currently a disabled placeholder.
 
 ## Requirements

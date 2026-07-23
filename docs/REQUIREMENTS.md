@@ -88,6 +88,7 @@
 ### M2 后追加实现
 - ✅ **二维码生成**（独立模块）：⌃⇧Q 唤起浮层，自动带入剪贴板文字、可编辑实时重绘（纠错 M、含静区），支持复制图片/保存 PNG/钉在屏幕上；纯本地 CIQRCodeGenerator，无需权限
 - ✅ **窗口布局快照**（并入窗口管理）：菜单「保存当前布局…」记录所有常规 App 非最小化窗口的位置尺寸，菜单点击一键恢复（标题优先匹配、顺序兜底；未运行的 App 跳过），设置页可删除。**多显示器**：每条记录存所在显示器 UUID + 屏内相对位置，恢复时原屏还在则按相对位置精确还原（分辨率/排列变化不影响），原屏拔掉则夹回现有屏幕可见区域
+- ✅ **Cursor / Codex 助手**（详见 `docs/cursor-codex-assistant/`）：把本地 Codex CLI 与 Cursor 编辑器的状态与配置收进菜单栏——最近 Codex 会话浏览与一键终端续接（`codex resume`）+ 轻量会话窗口（搜索/续接/复制命令/删除）；Codex 配置可视化（approval_policy / sandbox_mode / model 单选，对 config.toml 做保注释的行级读写，不可编辑值自动置灰）；可选把 Baobox 通知程序写入 config.toml `notify`，回合结束发系统通知；Cursor Rules 项目管理（枚举 `.cursor/rules/*.mdc`、旧式 `.cursorrules` 检测、内置通用/前端/Python 模板一键写入）；Cursor 全局 MCP（`~/.cursor/mcp.json`）面板增删。纯本地文件解析，不调用任何 AI API、无需登录，写用户文件保留未知内容并备份 `.baobox.bak`
 - ✅ **Claude Code 助手**（详见 `docs/claude-code-assistant/`）：把本地 Claude Code CLI 的状态与配置收进菜单栏——会话状态/续接、5 小时额度窗口与今日估算花费；中心窗口含按天/项目/模型用量报表、调用统计（Skill/斜杠命令、MCP 两级、内置工具）与当日改动审计；可选安装事件通知与危险命令卫士 hooks；配置节以可视化控件编辑 settings.json（权限模式/模型/保留天数/权限预设/隐私开关/Co-Authored-By/CLAUDE.md）、statusline 生成器、MCP 面板、磁盘清理与版本检查。纯本地文件解析，不调用任何 AI API、无需登录，写用户 JSON 保留未知字段并备份 `.baobox.bak`
 
 ### M3 候选
