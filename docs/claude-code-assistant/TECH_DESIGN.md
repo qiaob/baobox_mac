@@ -231,15 +231,20 @@ printf '%s\n' "$out"
 
 ### 3.9 设置 Tab(ClaudeCodeSettingsView)
 
-顶部状态卡(claude 版本 / hooks 状态 / 会话总数)+ segmented Picker 分节:
+顶部状态卡(claude 版本 / hooks 状态 / 会话总数)+ segmented Picker 分节。
+「编辑 Claude Code 配置」类的功能(权限/卫士/Co-Authored-By/CLAUDE.md)**合并为一个「配置」节**,
+用 DisclosureGroup 折叠分组呈现,一屏总览所有已做的定制;Statusline(带预览的生成器)与
+MCP(列表+表单)交互形态不同,保持独立节。共 5 节:
 
 1. **通知**:总开关、提示音开关、额度预算(TextField,k tokens)、80% 提醒开关、恢复提醒开关。
-2. **卫士**:开关(装/卸 hook)、规则列表(增删,TextField 校验非空)、恢复默认规则按钮。
+2. **配置**(DisclosureGroup ×4,默认展开第一个):
+   - *权限规则*:allow/deny 两个可编辑列表 + 预设菜单(前端 npm/pnpm/yarn/eslint、Python pip/pytest、Git 常用只读)。
+   - *危险命令卫士*:开关(装/卸 hook)、规则列表(增删,TextField 校验非空)、恢复默认规则按钮。
+   - *提交署名*:Co-Authored-By Toggle(直写 settings.json),说明文字注明仅影响以后提交、不改写历史。
+   - *CLAUDE.md*:全局行 + 项目行列表(存在→打开,缺失→从模板创建);模板内容内置常量(简短的项目说明骨架)。
 3. **Statusline**:5 个段开关 + 分隔符输入 + 预览行 + 「应用到 Claude Code」/「移除」按钮;检测到非 Baobox statusLine 时黄条提示将覆盖。
-4. **权限**:allow/deny 两个可编辑列表 + 预设菜单(前端 npm/pnpm/yarn/eslint、Python pip/pytest、Git 常用只读)。
-5. **MCP**:用户级服务器 List(名称/type/命令或 URL)+ 删除;添加 sheet:name、type(stdio/http)、command+args 或 url、env(k=v 每行一条)。
-6. **CLAUDE.md**:全局行 + 项目行列表(存在→打开,缺失→从模板创建);模板内容内置常量(简短的项目说明骨架)。
-7. **维护**:Co-Authored-By Toggle(直写 settings.json,含说明文字)、磁盘统计 + 清理(Picker 30/60/90 天 + 按钮)、版本行 + 检查按钮(URLSession GET `https://registry.npmjs.org/@anthropic-ai/claude-code/latest` 取 `version` 字段,10s 超时)+「复制升级命令」(`npm install -g @anthropic-ai/claude-code`)。
+4. **MCP**:用户级服务器 List(名称/type/命令或 URL)+ 删除;添加 sheet:name、type(stdio/http)、command+args 或 url、env(k=v 每行一条)。
+5. **维护**:磁盘统计 + 清理(Picker 30/60/90 天 + 按钮)、版本行 + 检查按钮(URLSession GET `https://registry.npmjs.org/@anthropic-ai/claude-code/latest` 取 `version` 字段,10s 超时)+「复制升级命令」(`npm install -g @anthropic-ai/claude-code`)。
 
 ## 4. 本地化
 

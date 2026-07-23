@@ -31,6 +31,10 @@
 
 ### P2 — 配置中心(每周/按需)
 
+> 设置页归组(已评审):权限 Allowlist、危险命令卫士规则、Co-Authored-By 开关、CLAUDE.md 管理
+> 同属"编辑 Claude Code 配置",在设置页合并为一个「配置」节(折叠分组);
+> Statusline(生成器带预览)与 MCP(列表+表单)交互形态不同,保持独立节。
+
 | # | 功能 | 说明 | 验收标准 |
 |---|---|---|---|
 | 8 | Statusline 定制 | 勾选段(模型、目录、git 分支、会话花费、时间)与分隔符,生成 shell 脚本写入 `~/.claude/baobox-statusline.sh` 并配置 settings.json 的 `statusLine`;可一键移除还原 | 新会话状态栏按所选段显示;移除后 settings.json 无残留 |
