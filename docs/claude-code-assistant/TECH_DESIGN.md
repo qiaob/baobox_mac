@@ -154,6 +154,10 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
     @Published var todayTotals: UsageTotals?
     func refresh()                                // 后台解析近 24h 内 mtime 的文件
     func report(days: Int, completion: @escaping (ClaudeUsageReport) -> Void)  // 按天/项目/模型三组
+    // 调用统计:遍历 tool_use 块(与审计同一套解析)聚合三类计数——
+    // skills(tool_use name=="Skill" 的 input.skill,合并 user 消息中 <command-name> 标记的斜杠命令)、
+    // MCP(name 匹配 mcp__<server>__<tool>,按 server 与 tool 两级)、内置工具(其余 name)。
+    func invocationStats(days: Int, completion: @escaping (ClaudeInvocationStats) -> Void)
 }
 ```
 
@@ -232,6 +236,7 @@ printf '%s\n' "$out"
 - SwiftUI 根视图:`TabView`(或顶部 segmented Picker)三页:
   - **会话**:搜索框(标题/项目名包含匹配)+ List(标题、项目、相对时间、大小);行按钮:续接(终端图标)、复制 resume 命令、导出 Markdown(NSSavePanel;导出=逐行解析该 jsonl,user/assistant 文本块拼 `## User / ## Assistant`)、删除。
   - **用量**:顶部窗口卡片(进度条对预算,无预算则只显示量)+ 三个小节表(按天 30 行/按项目/按模型):列 = 名称、输入、输出、缓存写、缓存读、估算费用;费用列头标"估算"。刷新按钮。
+    末尾追加「调用统计」小节(近 7/30 天 Picker):Skill/斜杠命令、MCP(服务器 › 工具两级)、内置工具三张计数表,数据来自 `invocationStats(days:)`。
   - **审计**:DatePicker(默认今天)+ 按项目分组的 List(文件路径、次数、末次时间;点击 → `NSWorkspace.shared.activateFileViewerSelecting`)。加载中转圈,后台计算。
 
 ### 3.9 设置 Tab(ClaudeCodeSettingsView)
