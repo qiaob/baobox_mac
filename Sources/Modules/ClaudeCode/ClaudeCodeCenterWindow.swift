@@ -40,6 +40,15 @@ enum ClaudeFormat {
         return "\(minutes)m"
     }
 
+    /// 长倒计时（跨度可到「天」，供周窗口用）：≥24h 显示本地化的「N 天 M 小时」，<24h 沿用 `countdown`。
+    static func countdownLong(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        let days = total / 86_400
+        guard days > 0 else { return countdown(seconds) }
+        let hours = (total % 86_400) / 3600
+        return L("claudecode.usage.countdown.dayHour \(days) \(hours)")
+    }
+
     /// 字节数人性化展示。
     static func bytes(_ value: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
@@ -324,6 +333,10 @@ struct ClaudeUsageTab: View {
     @State private var report = ClaudeUsageReport()
     @State private var loadedReport = false
     @State private var dimension = UsageDimension.day
+    // 周窗口口径与锚点(驱动周卡片标注与脚注即时刷新)。
+    @AppStorage(ClaudeUsageStore.weeklyFixedKey) private var weeklyFixed = false
+    @AppStorage(ClaudeUsageStore.weeklyWeekdayKey) private var weeklyWeekday = 2
+    @AppStorage(ClaudeUsageStore.weeklyHourKey) private var weeklyHour = 0
 
     /// 明细表维度（按天 / 按项目 / 按模型），单表切换代替三张长表堆叠。
     private enum UsageDimension: String, CaseIterable, Identifiable {
@@ -351,7 +364,13 @@ struct ClaudeUsageTab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 windowCard
+                weeklyWindowCard
                 detailCard
+                if !weeklyFixed, let week = usage.weeklyWindow {
+                    Text("claudecode.usage.weekFootnote \(ClaudeFormat.tokens(week.totals.totalTokens)) \(ClaudeFormat.cost(week.totals.costUSD))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 ClaudeInvocationSection()
                     .centerCard()
             }
@@ -414,6 +433,59 @@ struct ClaudeUsageTab: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    // MARK: 本周窗口卡片
+
+    private var weeklyWindowCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("claudecode.usage.weekCard.title").font(.headline)
+                Spacer()
+                // 右上角标注当前口径：滚动 7 天 or 固定重置（周几 hh:00）。
+                if weeklyFixed {
+                    Text("claudecode.usage.weekCard.fixed \(weekAnchorDescription)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("claudecode.usage.weekCard.rolling")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let window = usage.weeklyWindow {
+                HStack(alignment: .firstTextBaseline, spacing: 32) {
+                    metric(value: ClaudeFormat.tokens(window.totals.totalTokens),
+                           label: "claudecode.usage.metric.used")
+                    metric(value: ClaudeFormat.cost(window.totals.costUSD),
+                           label: "claudecode.usage.metric.cost")
+                    metric(value: ClaudeFormat.countdownLong(window.secondsUntilReset),
+                           label: "claudecode.usage.metric.reset")
+                }
+                let budget = UserDefaults.standard.integer(forKey: ClaudeUsageStore.weeklyBudgetKey)
+                if budget > 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: min(1, Double(window.totals.totalTokens) / Double(budget)))
+                        Text("claudecode.usage.budgetUsed \(ClaudeFormat.tokens(window.totals.totalTokens)) \(ClaudeFormat.tokens(budget))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Text("claudecode.menu.noWeekWindow").foregroundStyle(.secondary)
+            }
+        }
+        .centerCard()
+    }
+
+    /// 固定锚点描述，如「周三 09:00」（本地化 standalone 星期名 + hh:00）。
+    private var weekAnchorDescription: String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        let symbols = formatter.standaloneWeekdaySymbols ?? []
+        let index = weeklyWeekday - 1
+        let name = symbols.indices.contains(index) ? symbols[index] : "\(weeklyWeekday)"
+        return String(format: "%@ %02d:00", name, weeklyHour)
     }
 
     // MARK: 明细表（维度切换）

@@ -130,10 +130,28 @@ struct ClaudeNotificationsSection: View {
     @AppStorage(ClaudeNotifierSettings.budgetAlertKey) private var budgetAlert = true
     @AppStorage(ClaudeNotifierSettings.budgetRestoreKey) private var budgetRestore = false
     @AppStorage(ClaudeUsageStore.budgetKey) private var tokenBudget = 0
+    @AppStorage(ClaudeUsageStore.weeklyBudgetKey) private var weeklyBudget = 0
+    @AppStorage(ClaudeUsageStore.weeklyFixedKey) private var weeklyFixed = false
+    @AppStorage(ClaudeUsageStore.weeklyWeekdayKey) private var weeklyWeekday = 2
+    @AppStorage(ClaudeUsageStore.weeklyHourKey) private var weeklyHour = 0
 
     /// 预算以千 token 为单位输入。
     private var budgetK: Binding<Int> {
         Binding(get: { tokenBudget / 1000 }, set: { tokenBudget = max(0, $0) * 1000 })
+    }
+
+    /// 周预算以千 token 为单位输入。
+    private var weeklyBudgetK: Binding<Int> {
+        Binding(get: { weeklyBudget / 1000 }, set: { weeklyBudget = max(0, $0) * 1000 })
+    }
+
+    /// 本地化 standalone 星期名（Calendar 口径：1=周日…7=周六）。
+    private static func weekdayName(_ weekday: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        let symbols = formatter.standaloneWeekdaySymbols ?? []
+        let index = weekday - 1
+        return symbols.indices.contains(index) ? symbols[index] : "\(weekday)"
     }
 
     var body: some View {
@@ -197,6 +215,33 @@ struct ClaudeNotificationsSection: View {
                 Toggle("claudecode.settings.notify.budgetAlert", isOn: $budgetAlert)
                     .disabled(tokenBudget == 0)
                 Toggle("claudecode.settings.notify.budgetRestore", isOn: $budgetRestore)
+
+                // —— 周额度 ——
+                HStack {
+                    Text("claudecode.settings.notify.weeklyBudget")
+                    Spacer()
+                    TextField("", value: weeklyBudgetK, format: .number)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                }
+                Toggle("claudecode.settings.notify.weeklyFixed", isOn: $weeklyFixed)
+                    .onChange(of: weeklyFixed) { _, _ in ClaudeUsageStore.shared.refresh() }
+                if weeklyFixed {
+                    Picker("claudecode.settings.notify.weeklyWeekday", selection: $weeklyWeekday) {
+                        ForEach(1...7, id: \.self) { weekday in
+                            Text(verbatim: Self.weekdayName(weekday)).tag(weekday)
+                        }
+                    }
+                    .onChange(of: weeklyWeekday) { _, _ in ClaudeUsageStore.shared.refresh() }
+                    Picker("claudecode.settings.notify.weeklyHour", selection: $weeklyHour) {
+                        ForEach(0...23, id: \.self) { hour in
+                            Text(verbatim: String(format: "%02d:00", hour)).tag(hour)
+                        }
+                    }
+                    .onChange(of: weeklyHour) { _, _ in ClaudeUsageStore.shared.refresh() }
+                }
+                Text("claudecode.settings.notify.weeklyHint")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             SwiftUI.Section("claudecode.settings.notify.hooksSection") {

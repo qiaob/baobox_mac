@@ -144,6 +144,16 @@ final class ClaudeNotifier {
         post(title: L("claudecode.notify.budgetRestored.title"), body: L("claudecode.notify.budgetRestored.body"))
     }
 
+    /// 周额度 80% 提醒。
+    func notifyWeeklyBudget(percent: Int, windowEnd: Date) {
+        post(title: L("claudecode.notify.weeklyBudget.title"), body: L("claudecode.notify.weeklyBudget.body \(percent)"))
+    }
+
+    /// 周额度窗口重置提醒。
+    func notifyWeeklyBudgetRestored() {
+        post(title: L("claudecode.notify.weeklyBudgetRestored.title"), body: L("claudecode.notify.weeklyBudgetRestored.body"))
+    }
+
     /// 设置页「试听」:按当前提醒方式演示一次。
     func preview() {
         let project = L("claudecode.notify.previewProject")

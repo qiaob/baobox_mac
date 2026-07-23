@@ -86,6 +86,16 @@ struct UsageWindow {
     var secondsUntilReset: TimeInterval { max(0, end.timeIntervalSinceNow) }
 }
 
+/// 周窗口锚点配置（主线程读 UserDefaults 构造，值类型跨线程安全传入后台计算）。
+struct WeeklyAnchor: Sendable {
+    /// false = 近 7 天滚动 168h 块；true = 固定锚点（星期 + 小时）。
+    let fixed: Bool
+    /// 1...7（Calendar.current 口径，1=周日）。
+    let weekday: Int
+    /// 0...23。
+    let hour: Int
+}
+
 /// 报表一行（按天 / 按项目 / 按模型通用）。
 struct UsageBucket: Identifiable {
     let id: String
@@ -142,13 +152,25 @@ final class ClaudeUsageStore: ObservableObject {
 
     /// nil = 无活跃窗口。
     @Published private(set) var currentWindow: UsageWindow?
+    /// nil = 近 7 天无用量（滚动块口径）；固定锚点口径下始终有值。end 依口径而定。
+    @Published private(set) var weeklyWindow: UsageWindow?
     @Published private(set) var todayTotals: UsageTotals?
     @Published private(set) var isRefreshing = false
 
-    /// 每额度窗口 token 预算（0 = 未设）。
+    /// 每（5 小时）额度窗口 token 预算（0 = 未设）。
     static let budgetKey = "claudecode.tokenBudget"
+    /// 每周额度 token 预算（0 = 未设）。
+    static let weeklyBudgetKey = "claudecode.weeklyTokenBudget"
+    /// 周窗口按固定重置时间对齐（默认 false = 近 7 天滚动块）。
+    static let weeklyFixedKey = "claudecode.weeklyResetFixed"
+    /// 固定锚点：重置星期（1...7，Calendar 口径，1=周日）。默认 2（周一）。
+    static let weeklyWeekdayKey = "claudecode.weeklyResetWeekday"
+    /// 固定锚点：重置小时（0...23）。默认 0。
+    static let weeklyHourKey = "claudecode.weeklyResetHour"
     /// 已提醒过 80% 的窗口起点集合（防重复轰炸）。仅主线程访问。
     private var remindedWindowStarts: Set<Date> = []
+    /// 已提醒过 80% 的周窗口起点集合（与 5h 独立防重）。仅主线程访问。
+    private var remindedWeekStarts: Set<Date> = []
     private var refreshing = false
     private var lastHookRefresh: Date = .distantPast
     private var timer: Timer?
@@ -184,25 +206,43 @@ final class ClaudeUsageStore: ObservableObject {
 
     // MARK: - 刷新
 
-    /// 后台解析近 24h 内 mtime 的文件，算当前窗口与今日累计。
+    /// 后台解析近 180h 内 mtime 的文件，一次扫描算出 5h 窗口、今日累计与周窗口。
+    /// 5h / 今日只关心近 24h，是这批条目的天然子集；周窗口需近 7 天故采集窗口取 180h（168h + 余量）。
     func refresh() {
         guard !refreshing else { return }
         refreshing = true
         isRefreshing = true
+        let anchor = Self.weeklyAnchorConfig()   // 主线程读 UserDefaults 后传入后台。
         DispatchQueue.global(qos: .utility).async {
-            let entries = Self.collectEntries(sinceHoursAgo: 24)
+            let entries = Self.collectEntries(sinceHoursAgo: 180)
             let window = Self.activeWindow(from: entries)
             let today = Self.todayTotals(from: entries)
+            let weekly = Self.weeklyWindow(from: entries, anchor: anchor)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.currentWindow = window
                     self.todayTotals = today
+                    self.weeklyWindow = weekly
                     self.refreshing = false
                     self.isRefreshing = false
                     self.checkBudgetReminder(window: window)
+                    self.checkWeeklyBudgetReminder(window: weekly)
                 }
             }
         }
+    }
+
+    /// 主线程读取周窗口锚点配置（值类型，可安全传入后台）。
+    static func weeklyAnchorConfig() -> WeeklyAnchor {
+        let defaults = UserDefaults.standard
+        let fixed = defaults.object(forKey: weeklyFixedKey) as? Bool ?? false
+        let weekday = defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2   // 默认周一。
+        let hour = defaults.object(forKey: weeklyHourKey) as? Int ?? 0
+        return WeeklyAnchor(
+            fixed: fixed,
+            weekday: min(7, max(1, weekday)),
+            hour: min(23, max(0, hour))
+        )
     }
 
     /// 三维度报表：解析近 `days` 天文件。后台计算，回主线程。
@@ -246,6 +286,27 @@ final class ClaudeUsageStore: ObservableObject {
             remindedWindowStarts.insert(window.start)
             if ClaudeNotifierSettings.budgetAlertEnabled {
                 ClaudeNotifier.shared.notifyBudget(percent: Int((ratio * 100).rounded()), windowEnd: window.end)
+            }
+        }
+    }
+
+    /// 周预算提醒：与 `checkBudgetReminder` 同构，独立 key 与独立防重集合。
+    private func checkWeeklyBudgetReminder(window: UsageWindow?) {
+        guard let window else { return }
+        let budget = UserDefaults.standard.integer(forKey: Self.weeklyBudgetKey)
+        guard budget > 0 else { return }
+        // 清掉非当前周窗口的旧记录，顺带处理「周窗口切换」。
+        if !remindedWeekStarts.contains(window.start), remindedWeekStarts.contains(where: { $0 != window.start }) {
+            if ClaudeNotifierSettings.budgetRestoreEnabled {
+                ClaudeNotifier.shared.notifyWeeklyBudgetRestored()
+            }
+            remindedWeekStarts = []
+        }
+        let ratio = Double(window.totals.totalTokens) / Double(budget)
+        if ratio >= 0.8, !remindedWeekStarts.contains(window.start) {
+            remindedWeekStarts.insert(window.start)
+            if ClaudeNotifierSettings.budgetAlertEnabled {
+                ClaudeNotifier.shared.notifyWeeklyBudget(percent: Int((ratio * 100).rounded()), windowEnd: window.end)
             }
         }
     }
@@ -324,10 +385,17 @@ extension ClaudeUsageStore {
 
     /// 5h 窗口算法（对齐 ccusage）：升序，blockStart 向下取整到小时；超 5h 开新块。
     /// 若 `now <= 末块.start + 5h` 则末块为活跃窗口，否则无活跃窗口。
+    /// 实现委托给参数化的 `lastActiveBlock(from:span:)`，与周窗口共用同一分块逻辑。
     nonisolated fileprivate static func activeWindow(from entries: [UsageEntry]) -> UsageWindow? {
+        lastActiveBlock(from: entries, span: 5 * 3_600)
+    }
+
+    /// 通用「末个活跃分块」算法（跨度参数化）：升序，blockStart 向下取整到小时；
+    /// 条目时间 > `blockStart + span` 时开新块。末块满足 `now <= blockStart + span` 即为活跃窗口，否则返回 nil。
+    /// span=5h 为 5 小时窗口，span=168h 为周窗口（滚动块口径），两者行为一致。
+    nonisolated fileprivate static func lastActiveBlock(from entries: [UsageEntry], span: TimeInterval) -> UsageWindow? {
         guard !entries.isEmpty else { return nil }
         let sorted = entries.sorted { $0.timestamp < $1.timestamp }
-        let fiveHours: TimeInterval = 5 * 3_600
 
         var blocks: [UsageWindow] = []
         var start: Date?
@@ -335,8 +403,8 @@ extension ClaudeUsageStore {
 
         for entry in sorted {
             if let currentStart = start {
-                if entry.timestamp > currentStart.addingTimeInterval(fiveHours) {
-                    blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(fiveHours), totals: totals))
+                if entry.timestamp > currentStart.addingTimeInterval(span) {
+                    blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
                     start = floorToHour(entry.timestamp)
                     totals = .zero
                 }
@@ -347,11 +415,46 @@ extension ClaudeUsageStore {
             totals.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
         }
         if let currentStart = start {
-            blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(fiveHours), totals: totals))
+            blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
         }
 
         guard let last = blocks.last, Date() <= last.end else { return nil }
         return last
+    }
+
+    /// 周窗口：滚动块（默认）复用分块算法、跨度换 168h；固定锚点聚合 [anchorStart, anchorStart+7d) 内条目。
+    /// 滚动块无条目返回 nil；固定锚点即使 totals 为 0 也返回一个 window（有明确起止与倒计时可展示）。
+    nonisolated fileprivate static func weeklyWindow(from entries: [UsageEntry], anchor: WeeklyAnchor) -> UsageWindow? {
+        guard !entries.isEmpty else { return nil }
+        let weekSpan: TimeInterval = 168 * 3_600
+        if !anchor.fixed {
+            return lastActiveBlock(from: entries, span: weekSpan)
+        }
+        // 固定锚点：取不到锚点则回退滚动块口径。
+        guard let start = weekAnchorStart(before: Date(), weekday: anchor.weekday, hour: anchor.hour) else {
+            return lastActiveBlock(from: entries, span: weekSpan)
+        }
+        let end = start.addingTimeInterval(weekSpan)
+        var totals = UsageTotals.zero
+        for entry in entries where entry.timestamp >= start && entry.timestamp < end {
+            totals.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
+        }
+        return UsageWindow(start: start, end: end, totals: totals)
+    }
+
+    /// `date` 之前最近一个「指定星期几的指定小时:00:00」。取不到返回 nil（调用方回退滚动块）。
+    nonisolated fileprivate static func weekAnchorStart(before date: Date, weekday: Int, hour: Int) -> Date? {
+        var components = DateComponents()
+        components.weekday = weekday
+        components.hour = hour
+        components.minute = 0
+        components.second = 0
+        return Calendar.current.nextDate(
+            after: date,
+            matching: components,
+            matchingPolicy: .nextTime,
+            direction: .backward
+        )
     }
 
     /// 今日（本地时区）累计。
