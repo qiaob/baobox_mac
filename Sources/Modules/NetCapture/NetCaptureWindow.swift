@@ -561,62 +561,22 @@ private struct FlowDetailView: View {
     }
 }
 
-// MARK: - 分平台配置二维码面板（§16.2）
+// MARK: - 单一配置网页二维码面板（§16.2）
 
-/// iOS / Android·其它 两个页签的配置二维码：
-/// - iOS：编码 `/profile`（描述文件，装证书 + 自动配代理）；
-/// - Android·其它：编码 `/cert`（下证书文件），下方附代理 IP:端口（可复制）与 ADB 提示。
+/// 一个二维码，编码 `http://baobox.proxy/`——手机扫码打开自适应配置页（装证书 / 配代理 / 关代理）。
+/// 下方展示代理 `IP:端口`（可复制）与「ADB 一键（Android）」入口（打开抓包窗口，ADB 操作在设置里）。
 ///
 /// 复用于窗口 QR sheet、设置页 QR sheet、菜单证书二维码浮层。
 struct NetCaptureQRPanel: View {
-    enum Platform: String, CaseIterable, Identifiable {
-        case iOS, android
-        var id: String { rawValue }
-        var label: LocalizedStringKey {
-            switch self {
-            case .iOS: return "netcapture.qr.ios.tab"
-            case .android: return "netcapture.qr.android.tab"
-            }
-        }
-    }
-
-    @State private var platform: Platform = .iOS
-
     var body: some View {
-        VStack(spacing: 12) {
-            Picker("", selection: $platform) {
-                ForEach(Platform.allCases) { p in Text(p.label).tag(p) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 300)
-
-            switch platform {
-            case .iOS: iosContent
-            case .android: androidContent
-            }
-        }
-    }
-
-    private var iosContent: some View {
-        VStack(spacing: 8) {
-            Text("netcapture.qr.ios.title").font(.subheadline.weight(.medium))
-            Text(verbatim: NetworkInterfaces.profileDownloadURL)
-                .font(.caption.monospaced()).foregroundStyle(.secondary)
-            qrImage(NetworkInterfaces.profileDownloadURL)
-            Text("netcapture.qr.ios.hint").font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            Text("netcapture.qr.page.title").font(.subheadline.weight(.medium))
                 .multilineTextAlignment(.center).frame(maxWidth: 300)
-        }
-    }
-
-    private var androidContent: some View {
-        VStack(spacing: 8) {
-            Text("netcapture.qr.android.title").font(.subheadline.weight(.medium))
-            Text(verbatim: NetworkInterfaces.certDownloadURL)
+            Text(verbatim: NetworkInterfaces.landingPageURL)
                 .font(.caption.monospaced()).foregroundStyle(.secondary)
-            qrImage(NetworkInterfaces.certDownloadURL)
+            qrImage(NetworkInterfaces.landingPageURL)
             HStack(spacing: 6) {
-                Text("netcapture.qr.android.proxy \(proxyAddr)").font(.caption)
+                Text(verbatim: proxyAddr).font(.caption.monospaced())
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(proxyAddr, forType: .string)
@@ -624,8 +584,12 @@ struct NetCaptureQRPanel: View {
                     .buttonStyle(.borderless)
                     .help(Text("netcapture.window.copyAddr"))
             }
-            Text("netcapture.qr.android.hint").font(.caption).foregroundStyle(.secondary)
+            Text("netcapture.qr.page.hint").font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 300)
+            Button("netcapture.menu.cert.adbPush") {
+                NetCaptureWindowController.shared.show()
+            }
+            .buttonStyle(.link)
         }
     }
 

@@ -267,9 +267,9 @@ final class ProxyConnection: @unchecked Sendable {
         }
         let port = comps.port ?? 80
 
-        // magic 域名：本地应答证书下载页，不走上游。
+        // magic 域名：本地应答配置页 / 描述文件 / 证书，不走上游。
         if host.lowercased() == NetworkInterfaces.magicHost {
-            serveMagicDomain(path: comps.path)
+            serveMagicDomain(path: comps.path, userAgent: userAgent(fromRequestHead: initialData))
             return
         }
 
@@ -291,47 +291,87 @@ final class ProxyConnection: @unchecked Sendable {
         upstream.start(queue: queue)
     }
 
-    /// magic 域名本地应答：`/profile` 返回 iOS 描述文件；`/cert`（或 `.pem`/`.crt`）返回 CA PEM；其余引导页。
-    private func serveMagicDomain(path: String) {
+    /// magic 域名本地应答（§16.2 单一配置网页）：
+    /// - `/`         → 自适应配置页（`landingPageHTML`，按 UA 区分 iOS / Android）。
+    /// - `/cert`     → iOS 返回 CA-only 描述文件；其它 UA 返回原始 `.crt`。
+    /// - `/proxy`    → iOS + 有 SSID 返回仅 Wi-Fi 手动代理描述文件；否则 302 回 `/`。
+    /// - `/proxy-off`→ iOS 返回 `ProxyType=None` 描述文件；否则 302 回 `/`。
+    private func serveMagicDomain(path: String, userAgent: String) {
+        let isIOS = userAgent.contains("iPhone") || userAgent.contains("iPad") || userAgent.contains("iPod")
         let response: Data
-        if path.contains("profile") || path.contains(".mobileconfig") {
-            // iOS 扫码自动配置（§16.2）：未签名 .mobileconfig，含 CA + 可选 Wi-Fi 代理 payload。
-            // IP 取首个局域网 IP，端口取当前配置端口（即监听端口）。SSID 读取失败则降级为仅 CA。
-            let ip = NetworkInterfaces.primaryIP()
-            if let profile = MobileConfigBuilder.build(proxyIP: ip, proxyPort: NetCaptureEnv.port),
-               let data = profile.data(using: .utf8) {
-                var head = "HTTP/1.1 200 OK\r\n"
-                head += "Content-Type: application/x-apple-aspen-config\r\n"
-                head += "Content-Disposition: attachment; filename=\"baobox.mobileconfig\"\r\n"
-                head += "Content-Length: \(data.count)\r\n"
-                head += "Connection: close\r\n\r\n"
-                response = Data(head.utf8) + data
+
+        if path == "/proxy-off" {
+            if isIOS, let ssid = MobileConfigBuilder.currentSSID(), !ssid.isEmpty {
+                response = profileResponse(MobileConfigBuilder.proxyOffProfile(ssid: ssid),
+                                           filename: "baobox-proxy-off.mobileconfig")
             } else {
-                let body = "CA not generated yet."
-                response = simpleHTTP(status: "503 Service Unavailable",
-                                      contentType: "text/plain; charset=utf-8", body: Data(body.utf8))
+                response = redirectToIndex()
+            }
+        } else if path == "/proxy" {
+            let ip = NetworkInterfaces.primaryIP()
+            if isIOS, let ssid = MobileConfigBuilder.currentSSID(), !ssid.isEmpty {
+                let profile = MobileConfigBuilder.proxyProfile(ssid: ssid, ip: ip, port: NetCaptureEnv.port)
+                response = profileResponse(profile, filename: "baobox-proxy.mobileconfig")
+            } else {
+                // 非 iOS 或拿不到 SSID → 回配置页（其中含 Android 手动指引 / iOS 手动说明）。
+                response = redirectToIndex()
             }
         } else if path.contains("cert") || path.contains(".pem") || path.contains(".crt") {
-            if let pem = ca.caCertPEM() {
+            if isIOS {
+                // iOS：CA-only 描述文件，点开即进「安装描述文件」流程。
+                if let profile = MobileConfigBuilder.caProfile() {
+                    response = profileResponse(profile, filename: "baobox-ca.mobileconfig")
+                } else {
+                    response = simpleHTTP(status: "503 Service Unavailable",
+                                          contentType: "text/plain; charset=utf-8",
+                                          body: Data("CA not generated yet.".utf8))
+                }
+            } else if let pem = ca.caCertPEM() {
+                // 其它平台：原始证书文件（保留原有行为）。
                 var head = "HTTP/1.1 200 OK\r\n"
                 head += "Content-Type: application/x-x509-ca-cert\r\n"
-                head += "Content-Disposition: attachment; filename=\"baobox-ca.pem\"\r\n"
+                head += "Content-Disposition: attachment; filename=\"baobox-ca.crt\"\r\n"
                 head += "Content-Length: \(pem.count)\r\n"
                 head += "Connection: close\r\n\r\n"
                 response = Data(head.utf8) + pem
             } else {
-                let body = "CA not generated yet."
                 response = simpleHTTP(status: "503 Service Unavailable",
-                                      contentType: "text/plain; charset=utf-8", body: Data(body.utf8))
+                                      contentType: "text/plain; charset=utf-8",
+                                      body: Data("CA not generated yet.".utf8))
             }
         } else {
-            let html = magicIndexHTML()
+            // 配置页 `/`（及任何未知路径的降级）。
+            let ip = NetworkInterfaces.primaryIP()
+            let ssid = MobileConfigBuilder.currentSSID()
+            let html = MobileConfigBuilder.landingPageHTML(ip: ip, port: NetCaptureEnv.port,
+                                                           ssid: ssid, userAgent: userAgent)
             response = simpleHTTP(status: "200 OK",
                                   contentType: "text/html; charset=utf-8", body: Data(html.utf8))
         }
+
         client.send(content: response, completion: .contentProcessed { [weak self] _ in
             self?.finish()
         })
+    }
+
+    /// 描述文件（`.mobileconfig`）HTTP 响应。
+    private func profileResponse(_ profile: String, filename: String) -> Data {
+        let data = Data(profile.utf8)
+        var head = "HTTP/1.1 200 OK\r\n"
+        head += "Content-Type: application/x-apple-aspen-config\r\n"
+        head += "Content-Disposition: attachment; filename=\"\(filename)\"\r\n"
+        head += "Content-Length: \(data.count)\r\n"
+        head += "Connection: close\r\n\r\n"
+        return Data(head.utf8) + data
+    }
+
+    /// 302 回配置页 `/`。
+    private func redirectToIndex() -> Data {
+        var head = "HTTP/1.1 302 Found\r\n"
+        head += "Location: /\r\n"
+        head += "Content-Length: 0\r\n"
+        head += "Connection: close\r\n\r\n"
+        return Data(head.utf8)
     }
 
     private func simpleHTTP(status: String, contentType: String, body: Data) -> Data {
@@ -342,23 +382,19 @@ final class ProxyConnection: @unchecked Sendable {
         return Data(head.utf8) + body
     }
 
-    /// 证书下载引导页（极简、双语标签由文案层无法作用于内嵌 HTML，此处内嵌固定双语文本）。
-    private func magicIndexHTML() -> String {
-        """
-        <!doctype html><html><head><meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Baobox Proxy</title></head>
-        <body style="font-family:-apple-system,sans-serif;max-width:520px;margin:40px auto;padding:0 16px;line-height:1.6">
-        <h2>Baobox 抓包证书 / Capture Certificate</h2>
-        <p><a href="/profile" style="display:inline-block;padding:10px 18px;background:#17A398;color:#fff;border-radius:8px;text-decoration:none">iOS：装描述文件（证书+代理）/ iOS: Install Profile (CA + Proxy)</a></p>
-        <p><a href="/cert" style="display:inline-block;padding:10px 18px;background:#8E8E93;color:#fff;border-radius:8px;text-decoration:none">下载证书文件 / Download CA file</a></p>
-        <ol>
-        <li>iOS：点上面「装描述文件」，安装后到 设置 → 通用 → VPN与设备管理 完成安装，再到 关于本机 → 证书信任设置 开启完全信任。<br>iOS: tap "Install Profile", finish in Settings → General → VPN &amp; Device Management, then enable full trust in About → Certificate Trust Settings.</li>
-        <li>Android / 其它：点「下载证书文件」安装（设置 → 安全 → 安装证书 CA），代理需手动填或用 ADB 一键。<br>Android / other: tap "Download CA file" to install (Settings → Security → Install a CA certificate); set the proxy manually or via ADB.</li>
-        </ol>
-        <p style="color:#888;font-size:13px">仅用于本机调试，请勿抓取他人隐私。For local debugging only.</p>
-        </body></html>
-        """
+    /// 从原始请求头字节里解析 `User-Agent`（大小写不敏感）。取不到返回空串。
+    private func userAgent(fromRequestHead data: Data) -> String {
+        guard let headerEnd = data.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) else { return "" }
+        let headText = String(data: data.subdata(in: data.startIndex..<headerEnd.lowerBound),
+                              encoding: .isoLatin1) ?? ""
+        for line in headText.components(separatedBy: "\r\n") {
+            let lower = line.lowercased()
+            if lower.hasPrefix("user-agent:") {
+                let idx = line.index(line.startIndex, offsetBy: "user-agent:".count)
+                return String(line[idx...]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return ""
     }
 
     // MARK: - 中继引擎（明文侧 ↔ 上游，tee 解析产出 Flow）
