@@ -27,6 +27,10 @@ final class ProxyConnection: @unchecked Sendable {
     private var tunnelDownBytes = 0
     private var tunnelFlow: Flow?
 
+    /// 源设备 LAN IP（客户端连到代理的 remote 端）。只在本连接串行队列写/读。
+    /// 多设备区分（§17）：`appendFlow` 一处统一给所有 flow 打标。
+    private var clientIP: String?
+
     init(client: NWConnection,
          queue: DispatchQueue,
          ca: MITMCertAuthority,
@@ -42,6 +46,8 @@ final class ProxyConnection: @unchecked Sendable {
     func start() {
         client.stateUpdateHandler = { [weak self] state in
             switch state {
+            case .ready:
+                self?.captureClientIP()
             case .failed, .cancelled:
                 self?.finish()
             default:
@@ -50,6 +56,30 @@ final class ProxyConnection: @unchecked Sendable {
         }
         client.start(queue: queue)
         readFirstRequest()
+    }
+
+    /// 从客户端连接的 remote 端提取源设备 IP（与 `remoteIP(of:)` 同法，但归一化）。幂等，只在队列上调。
+    private func captureClientIP() {
+        guard clientIP == nil else { return }
+        guard let endpoint = client.currentPath?.remoteEndpoint else { return }
+        if case let .hostPort(host, _) = endpoint {
+            let raw: String
+            switch host {
+            case .ipv4(let addr): raw = "\(addr)"
+            case .ipv6(let addr): raw = "\(addr)"
+            case .name(let name, _): raw = name
+            @unknown default: return
+            }
+            clientIP = Self.normalizeIP(raw)
+        }
+    }
+
+    /// 归一化源 IP：去 IPv6 作用域后缀 `%en0`、去 IPv4-mapped 前缀 `::ffff:`。
+    private static func normalizeIP(_ s: String) -> String {
+        var out = s
+        if let pct = out.firstIndex(of: "%") { out = String(out[out.startIndex..<pct]) }
+        if out.lowercased().hasPrefix("::ffff:") { out = String(out.dropFirst("::ffff:".count)) }
+        return out
     }
 
     func cancel() {
@@ -91,6 +121,8 @@ final class ProxyConnection: @unchecked Sendable {
                 if isComplete { self.finish() }
                 return
             }
+            // 兜底：首段数据到达时 path 必已就绪，若 .ready 回调早于 handler 设定则在此补取。
+            self.captureClientIP()
             self.routeFirstRequest(data)
         }
     }
@@ -522,11 +554,14 @@ final class ProxyConnection: @unchecked Sendable {
         return (target, defaultPort)
     }
 
-    /// 回主线程追加 flow。
+    /// 回主线程追加 flow。一处统一给所有 flow 打上源设备 IP（§17）：RelayEngine 产出、
+    /// 盲隧道 tunnelFlow、magic 域名本地应答的 flow 都经此，故设备标记不遗漏。
     private func appendFlow(_ flow: Flow) {
+        var f = flow
+        f.clientIP = clientIP
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                FlowStore.shared.append(flow)
+                FlowStore.shared.append(f)
             }
         }
     }

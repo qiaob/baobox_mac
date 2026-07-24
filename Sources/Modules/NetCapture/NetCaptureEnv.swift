@@ -53,9 +53,14 @@ enum NetCaptureEnv {
         static let mcpPort = "netcapture.mcpPort"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
+        /// 设备别名字典（ip → 用户自定义别名），供多设备 Tab 展示（§17）。
+        static let deviceAliases = "netcapture.deviceAliases"
         /// 崩溃兜底：开启系统代理前保存的原状态（JSON 编码），停止或下次启动还原。
         static let savedProxyState = "netcapture.savedProxyState"
     }
+
+    /// 未知来源设备的占位标识（clientIP 为 nil 时归入此桶）。
+    static let unknownDeviceKey = "?"
 
     /// 一次性注册出厂默认值（在 `activate()` 调）。`register(defaults:)` 不覆盖用户已设值。
     static func registerDefaults() {
@@ -108,6 +113,25 @@ enum NetCaptureEnv {
 
     static var mcpRedactAuth: Bool {
         UserDefaults.standard.object(forKey: Keys.mcpRedactAuth) as? Bool ?? true
+    }
+
+    // MARK: - 设备别名（§17，ip → 别名，UserDefaults 持久化）
+
+    /// 读取某设备别名（去空白后非空才返回）。
+    static func deviceAlias(for ip: String) -> String? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: Keys.deviceAliases) as? [String: String] else {
+            return nil
+        }
+        let alias = dict[ip]?.trimmingCharacters(in: .whitespaces)
+        return (alias?.isEmpty == false) ? alias : nil
+    }
+
+    /// 设置/清除某设备别名；传 nil 或空串即清除该键。
+    static func setDeviceAlias(_ alias: String?, for ip: String) {
+        var dict = (UserDefaults.standard.dictionary(forKey: Keys.deviceAliases) as? [String: String]) ?? [:]
+        let trimmed = (alias ?? "").trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { dict.removeValue(forKey: ip) } else { dict[ip] = trimmed }
+        UserDefaults.standard.set(dict, forKey: Keys.deviceAliases)
     }
 
     // MARK: - 解密范围判定

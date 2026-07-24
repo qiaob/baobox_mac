@@ -96,8 +96,14 @@ struct NetCaptureRootView: View {
     @State private var selection: Flow.ID?
     @State private var showQR = false
 
+    // 多设备区分（§17）
+    @State private var deviceFilter: String? = nil     // nil = 全部
+    @State private var showRename = false
+    @State private var renameIP: String? = nil
+    @State private var renameText = ""
+
     private var filtered: [Flow] {
-        store.filtered(query: query, methods: methodFilter, statusClasses: statusFilter)
+        store.filtered(query: query, methods: methodFilter, statusClasses: statusFilter, device: deviceFilter)
     }
 
     var body: some View {
@@ -107,6 +113,8 @@ struct NetCaptureRootView: View {
             if store.flows.isEmpty {
                 emptyState
             } else {
+                deviceTabStrip
+                Divider()
                 HSplitView {
                     flowList
                         .frame(minWidth: 360, idealWidth: 420, maxWidth: 620)
@@ -119,6 +127,84 @@ struct NetCaptureRootView: View {
         }
         .frame(minWidth: 860, minHeight: 520)
         .sheet(isPresented: $showQR) { qrSheet }
+    }
+
+    // MARK: 设备 Tab 条（§17）
+
+    /// 首个「全部 (N)」+ 每设备一个 Tab（label + 计数），超出可横向滚动。选中用 accent 底。
+    private var deviceTabStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                deviceTab(title: L("netcapture.device.all"), count: store.flows.count,
+                          selected: deviceFilter == nil, ip: nil)
+                ForEach(store.devices) { device in
+                    deviceTab(title: device.label, count: device.flowCount,
+                              selected: deviceFilter == device.ip, ip: device.ip)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .sheet(isPresented: $showRename) { renameSheet }
+    }
+
+    private func deviceTab(title: String, count: Int, selected: Bool, ip: String?) -> some View {
+        Button {
+            deviceFilter = ip
+            selection = nil
+        } label: {
+            HStack(spacing: 5) {
+                Text(verbatim: title).font(.callout.weight(selected ? .semibold : .regular))
+                Text(verbatim: "\(count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(selected ? NetCaptureColors.accent : Color(nsColor: .controlBackgroundColor),
+                        in: Capsule())
+            .foregroundStyle(selected ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if let ip { deviceTabMenu(ip: ip) }
+        }
+    }
+
+    @ViewBuilder
+    private func deviceTabMenu(ip: String) -> some View {
+        Button {
+            deviceFilter = ip
+            selection = nil
+        } label: { Label("netcapture.device.only", systemImage: "line.3.horizontal.decrease.circle") }
+        Button {
+            renameIP = ip
+            renameText = store.alias(ip: ip) ?? ""
+            showRename = true
+        } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+        Button(role: .destructive) {
+            store.clearDevice(ip: ip)
+            if deviceFilter == ip { deviceFilter = nil }
+            selection = nil
+        } label: { Label("netcapture.device.clear", systemImage: "trash") }
+    }
+
+    private var renameSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("netcapture.device.renameTitle").font(.headline)
+            TextField("netcapture.device.renamePlaceholder", text: $renameText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+            HStack {
+                Spacer()
+                Button("common.cancel") { showRename = false }
+                Button("common.ok") {
+                    if let ip = renameIP { store.setAlias(ip: ip, renameText) }
+                    showRename = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
     }
 
     // MARK: 工具条
@@ -222,10 +308,22 @@ struct NetCaptureRootView: View {
 
     private var flowList: some View {
         List(Array(filtered.reversed()), selection: $selection) { flow in
-            FlowRow(flow: flow).tag(flow.id)
+            FlowRow(flow: flow, deviceLabel: deviceBadge(for: flow)).tag(flow.id)
         }
         .listStyle(.inset)
         .alternatingRowBackgrounds(.enabled)
+    }
+
+    /// 「全部」视图下给行加设备徽标；选中单设备时返回 nil（冗余不显示）。IP 型标签取末两段缩短。
+    private func deviceBadge(for flow: Flow) -> String? {
+        guard deviceFilter == nil else { return nil }
+        let ip = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+        guard let device = store.devices.first(where: { $0.ip == ip }) else { return nil }
+        if device.label == device.ip, device.ip.contains(".") {
+            let parts = device.ip.split(separator: ".")
+            if parts.count == 4 { return "…" + parts.suffix(2).joined(separator: ".") }
+        }
+        return device.label
     }
 
     // MARK: 详情
@@ -284,6 +382,8 @@ struct NetCaptureRootView: View {
         HStack(spacing: 12) {
             Text("netcapture.status.counts \(filtered.count) \(store.flows.count)")
             Divider().frame(height: 12)
+            Text("netcapture.status.devices \(store.devices.count) \(store.flows.count) \(filtered.count)")
+            Divider().frame(height: 12)
             Text(serverStatusText)
             Divider().frame(height: 12)
             Text(mcp.isRunning ? "netcapture.mcp.running" : "netcapture.mcp.stopped")
@@ -340,6 +440,8 @@ struct NetCaptureRootView: View {
 
 private struct FlowRow: View {
     let flow: Flow
+    /// 「全部」视图下的来源设备徽标；nil 不显示。
+    var deviceLabel: String? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -354,6 +456,15 @@ private struct FlowRow: View {
                 .font(.caption.monospacedDigit().weight(.medium))
                 .foregroundStyle(NetCaptureColors.status(flow.statusCode))
                 .frame(width: 30, alignment: .leading)
+
+            if let deviceLabel {
+                Text(verbatim: deviceLabel)
+                    .font(.caption2)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(verbatim: flow.host).font(.callout).lineLimit(1)

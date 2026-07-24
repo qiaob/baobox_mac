@@ -261,27 +261,34 @@ private final class MCPHTTPSession: @unchecked Sendable {
     static let toolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP flows (summaries). Optional filters: limit, host, method, status.",
+            "description": "List recent captured HTTP flows (summaries). Optional filters: limit, host, method, status, device. device = client LAN IP (source device), get it from list_devices. Each summary ends with @<clientIP>.",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
                 "method": ["type": "string"],
                 "status": ["type": "integer"],
+                "device": ["type": "string"],
             ]],
         ],
         [
             "name": "get_flow",
-            "description": "Get one flow's full detail (headers + body text) by id.",
+            "description": "Get one flow's full detail (headers + body text) by id, including its source device.",
             "inputSchema": ["type": "object",
                             "properties": ["id": ["type": "string"]],
                             "required": ["id"]],
         ],
         [
             "name": "search_flows",
-            "description": "Search flows whose URL or body contains the query.",
+            "description": "Search flows whose URL or body contains the query. Optional device = client LAN IP (from list_devices) to restrict to one device.",
             "inputSchema": ["type": "object",
-                            "properties": ["query": ["type": "string"], "limit": ["type": "integer"]],
+                            "properties": ["query": ["type": "string"], "limit": ["type": "integer"],
+                                           "device": ["type": "string"]],
                             "required": ["query"]],
+        ],
+        [
+            "name": "list_devices",
+            "description": "List capturing source devices (each phone / this Mac) keyed by client LAN IP, with flow count and last activity. Use a device's ip as the `device` argument to list_flows / search_flows.",
+            "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
             "name": "latest_flows",
@@ -330,6 +337,9 @@ private enum MCPTools {
             if let status = arguments["status"] as? Int {
                 filtered = filtered.filter { $0.statusCode == status || $0.statusClass == status }
             }
+            if let device = arguments["device"] as? String, !device.isEmpty {
+                filtered = filtered.filter { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == device }
+            }
             let limit = arguments["limit"] as? Int ?? 50
             return summaries(Array(filtered.suffix(limit)))
         case "latest_flows":
@@ -338,7 +348,10 @@ private enum MCPTools {
         case "search_flows":
             let query = (arguments["query"] as? String ?? "").lowercased()
             let limit = arguments["limit"] as? Int ?? 50
+            let device = arguments["device"] as? String
             let matched = flows.filter { flow in
+                if let device, !device.isEmpty,
+                   (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
                 if flow.url.lowercased().contains(query) { return true }
                 if let b = flow.responseBody, let t = String(data: b, encoding: .utf8),
                    t.lowercased().contains(query) { return true }
@@ -355,6 +368,8 @@ private enum MCPTools {
             let count = flows.count
             DispatchQueue.main.async { MainActor.assumeIsolated { FlowStore.shared.clear() } }
             return "cleared \(count) flows"
+        case "list_devices":
+            return devices(flows)
 
         // MARK: 抓包控制（§16.1）—— 与 UI 互相驱动
         //
@@ -400,13 +415,41 @@ private enum MCPTools {
             let status = flow.statusCode.map(String.init) ?? "-"
             let dur = flow.durationMs.map { "\($0)ms" } ?? "-"
             let dec = flow.decrypted ? "" : " [passthrough]"
-            return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec)"
+            let dev = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec) @\(dev)"
         }.joined(separator: "\n")
+    }
+
+    /// 按 clientIP 聚合设备列表（读快照 + UserDefaults 别名），供 `list_devices`。
+    private static func devices(_ flows: [Flow]) -> String {
+        var buckets: [String: (count: Int, last: Date)] = [:]
+        for flow in flows {
+            let ip = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            var bucket = buckets[ip] ?? (0, Date.distantPast)
+            bucket.count += 1
+            if flow.startedAt > bucket.last { bucket.last = flow.startedAt }
+            buckets[ip] = bucket
+        }
+        if buckets.isEmpty { return "(no devices)" }
+        let iso = ISO8601DateFormatter()
+        let sorted = buckets.sorted { $0.value.last > $1.value.last }
+        return sorted.map { ip, bucket in
+            "\(ip) \(deviceLabel(ip)) · \(bucket.count) flows · \(iso.string(from: bucket.last))"
+        }.joined(separator: "\n")
+    }
+
+    /// MCP 侧设备名（英文，AI 面向）：别名 → This Mac（回环）→ IP。
+    private static func deviceLabel(_ ip: String) -> String {
+        if ip == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
+        if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
+        if ip == "127.0.0.1" || ip == "::1" { return "This Mac" }
+        return ip
     }
 
     private static func detail(_ flow: Flow) -> String {
         var lines: [String] = ["\(flow.method) \(flow.url)"]
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
+        lines.append("Device: \(flow.clientIP ?? NetCaptureEnv.unknownDeviceKey)")
         lines.append("-- Request headers --")
         for h in flow.requestHeaders { lines.append("\(h.name): \(redact(name: h.name, value: h.value))") }
         if let body = flow.requestBody, let text = String(data: body, encoding: .utf8) {

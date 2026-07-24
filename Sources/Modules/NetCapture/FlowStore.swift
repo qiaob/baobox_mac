@@ -42,6 +42,9 @@ struct Flow: Identifiable, Sendable {
     var responseBytes: Int
 
     var remoteIP: String?
+    /// 源设备局域网 IP（客户端连到代理的 remote 端）。`127.0.0.1`/`::1` → 本机；nil 未知。
+    /// 用于多设备区分（§17）：一处在 `ProxyConnection.appendFlow` 统一打标。
+    var clientIP: String?
     /// false = 透传未解密（仅记录 CONNECT 元数据，无明文）。
     var decrypted: Bool
     /// 附注：如「brotli 未解压」「h2 透传」「TLS 握手失败透传」「已截断」。
@@ -65,6 +68,7 @@ struct Flow: Identifiable, Sendable {
          requestBytes: Int = 0,
          responseBytes: Int = 0,
          remoteIP: String? = nil,
+         clientIP: String? = nil,
          decrypted: Bool = true,
          note: String? = nil) {
         self.id = id
@@ -85,6 +89,7 @@ struct Flow: Identifiable, Sendable {
         self.requestBytes = requestBytes
         self.responseBytes = responseBytes
         self.remoteIP = remoteIP
+        self.clientIP = clientIP
         self.decrypted = decrypted
         self.note = note
     }
@@ -112,6 +117,17 @@ struct Flow: Identifiable, Sendable {
     }
 }
 
+// MARK: - 设备（多设备区分，§17）
+
+/// 一个抓包来源设备。身份 = 客户端源 LAN IP（手机 / 本机）。
+struct DeviceInfo: Identifiable, Sendable {
+    let id: String            // = ip（未知源用 NetCaptureEnv.unknownDeviceKey）
+    let ip: String
+    let label: String         // 别名 ?? 本机 ?? IP
+    let flowCount: Int
+    let lastActivity: Date
+}
+
 // MARK: - 跨线程快照
 
 /// flow 的线程安全快照（`Flow` 为 Sendable）。独立于 @MainActor 的 `FlowStore`，供 MCP 连接队列
@@ -136,6 +152,9 @@ final class FlowStore: ObservableObject {
     /// 追加序（旧 → 新）；UI 倒序展示。
     @Published private(set) var flows: [Flow] = []
 
+    /// 当前所有来源设备（按末次活动降序，本机固定最前）；`append`/`clear` 后重算。
+    @Published private(set) var devices: [DeviceInfo] = []
+
     private init() {}
 
     var maxFlows: Int { NetCaptureEnv.maxFlows }
@@ -146,13 +165,68 @@ final class FlowStore: ObservableObject {
         if flows.count > maxFlows {
             flows.removeFirst(flows.count - maxFlows)
         }
+        recomputeDevices()
         FlowSnapshotStore.shared.set(flows)
     }
 
     /// 清空并释放所有 body Data。
     func clear() {
         flows.removeAll(keepingCapacity: false)
+        recomputeDevices()
         FlowSnapshotStore.shared.set(flows)
+    }
+
+    /// 移除某设备（clientIP）的全部 flow；用于设备 Tab 右键「清空此设备的包」。
+    func clearDevice(ip: String) {
+        flows.removeAll { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == ip }
+        recomputeDevices()
+        FlowSnapshotStore.shared.set(flows)
+    }
+
+    // MARK: - 设备聚合与别名（§17）
+
+    /// 判定回环（本机）源 IP。
+    static func isLoopback(_ ip: String) -> Bool {
+        ip == "127.0.0.1" || ip == "::1" || ip.lowercased() == "localhost"
+    }
+
+    /// 设备显示名：别名优先 → 本机 → 原始 IP（反查主机名从简省略，见 §17.6 取舍）。
+    static func label(for ip: String) -> String {
+        if ip == NetCaptureEnv.unknownDeviceKey { return L("netcapture.device.unknown") }
+        if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
+        if isLoopback(ip) { return L("netcapture.device.thisMac") }
+        return ip
+    }
+
+    /// 读取某设备别名（无则 nil）。
+    func alias(ip: String) -> String? { NetCaptureEnv.deviceAlias(for: ip) }
+
+    /// 设置/清除某设备别名，并刷新设备标签。空串清除。
+    func setAlias(ip: String, _ alias: String?) {
+        NetCaptureEnv.setDeviceAlias(alias, for: ip)
+        recomputeDevices()
+    }
+
+    /// 从 `flows` 重算设备列表：按 clientIP 分桶计数 + 末次时间；本机排最前，其余按末次活动降序。
+    private func recomputeDevices() {
+        var buckets: [String: (count: Int, last: Date)] = [:]
+        for flow in flows {
+            let key = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            var bucket = buckets[key] ?? (0, Date.distantPast)
+            bucket.count += 1
+            if flow.startedAt > bucket.last { bucket.last = flow.startedAt }
+            buckets[key] = bucket
+        }
+        var result = buckets.map { key, bucket in
+            DeviceInfo(id: key, ip: key, label: Self.label(for: key),
+                       flowCount: bucket.count, lastActivity: bucket.last)
+        }
+        result.sort { lhs, rhs in
+            let lLoop = Self.isLoopback(lhs.ip), rLoop = Self.isLoopback(rhs.ip)
+            if lLoop != rLoop { return lLoop }         // 本机固定最前
+            return lhs.lastActivity > rhs.lastActivity  // 其余按末次活动降序
+        }
+        devices = result
     }
 
     /// 估算内存占用（仅 body 字节，粗略）。
@@ -162,10 +236,12 @@ final class FlowStore: ObservableObject {
 
     // MARK: - 过滤 / 搜索
 
-    /// 过滤：关键字（URL / body 文本）、方法集合、状态码分类集合。空条件即全通过。
-    func filtered(query: String, methods: Set<String>, statusClasses: Set<Int>) -> [Flow] {
+    /// 过滤：设备（clientIP，nil=全部）、关键字（URL / body 文本）、方法集合、状态码分类集合。空条件即全通过。
+    func filtered(query: String, methods: Set<String>, statusClasses: Set<Int>,
+                  device: String? = nil) -> [Flow] {
         let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
         return flows.filter { flow in
+            if let device, (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
             if !methods.isEmpty && !methods.contains(flow.method.uppercased()) { return false }
             if !statusClasses.isEmpty && !statusClasses.contains(flow.statusClass) { return false }
             guard !trimmed.isEmpty else { return true }
