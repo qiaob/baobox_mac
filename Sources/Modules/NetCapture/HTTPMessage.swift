@@ -226,10 +226,39 @@ final class HTTPParser {
 /// 依据 Content-Encoding 把 body 解码为可展示字节。仅用于「展示」，不改变转发的原始字节。
 enum HTTPBodyCodec {
 
+    /// body 解压展示附注。用具名枚举而非裸英文串：原生 UI 走 `localizedText`（本地化），
+    /// 导出 / MCP 等面向 AI 的文本走 `englishText`（稳定英文）。
+    enum DecodeNote: Sendable {
+        case gzipFailed
+        case deflateFailed
+        case brotliNotDecompressed
+        case otherEncodingNotDecompressed(String)
+
+        /// 稳定英文，供 Markdown 导出 / MCP（面向 AI）。
+        var englishText: String {
+            switch self {
+            case .gzipFailed: return "gzip decode failed"
+            case .deflateFailed: return "deflate decode failed"
+            case .brotliNotDecompressed: return "brotli not decompressed"
+            case .otherEncodingNotDecompressed(let e): return "encoding \(e) not decompressed"
+            }
+        }
+
+        /// 本地化文案，供原生 SwiftUI 详情视图。
+        var localizedText: String {
+            switch self {
+            case .gzipFailed: return L("netcapture.body.gzipFailed")
+            case .deflateFailed: return L("netcapture.body.deflateFailed")
+            case .brotliNotDecompressed: return L("netcapture.body.brotli")
+            case .otherEncodingNotDecompressed(let e): return L("netcapture.body.otherEncoding \(e)")
+            }
+        }
+    }
+
     struct DecodedBody {
         let data: Data
-        /// 展示附注（如「brotli 未解压」）。
-        let note: String?
+        /// 展示附注（如「brotli 未解压」）；nil = 无需说明。
+        let note: DecodeNote?
     }
 
     /// 依据头里的 Content-Encoding 解压 body。无法解压（brotli 等）时原样返回并附注。
@@ -239,17 +268,17 @@ enum HTTPBodyCodec {
         switch encoding {
         case "gzip", "x-gzip":
             if let out = gunzip(body) { return DecodedBody(data: out, note: nil) }
-            return DecodedBody(data: body, note: "gzip decode failed")
+            return DecodedBody(data: body, note: .gzipFailed)
         case "deflate":
             if let out = inflateDeflate(body) { return DecodedBody(data: out, note: nil) }
-            return DecodedBody(data: body, note: "deflate decode failed")
+            return DecodedBody(data: body, note: .deflateFailed)
         case "br":
             // 系统 Compression 框架无 brotli 解码器，原样展示大小并注明。
-            return DecodedBody(data: body, note: "brotli not decompressed")
+            return DecodedBody(data: body, note: .brotliNotDecompressed)
         case "", "identity":
             return DecodedBody(data: body, note: nil)
         default:
-            return DecodedBody(data: body, note: "encoding \(encoding) not decompressed")
+            return DecodedBody(data: body, note: .otherEncodingNotDecompressed(encoding))
         }
     }
 

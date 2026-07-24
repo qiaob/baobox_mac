@@ -352,7 +352,7 @@ final class FlowStore: ObservableObject {
         if let body = flow.responseBody {
             let display = HTTPBodyCodec.decodedForDisplay(body: body, headers: flow.responseHeaders)
             if let text = String(data: display.data, encoding: .utf8), !text.isEmpty {
-                lines.append("**Response body**\(display.note.map { " (\($0))" } ?? "")")
+                lines.append("**Response body**\(display.note.map { " (\($0.englishText))" } ?? "")")
                 lines.append("```")
                 lines.append(String(text.prefix(8000)))
                 lines.append("```")

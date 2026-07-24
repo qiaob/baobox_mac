@@ -629,7 +629,7 @@ private struct FlowDetailView: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
             if let note = decoded.note {
-                Text(verbatim: note).font(.caption2).foregroundStyle(.secondary)
+                Text(verbatim: note.localizedText).font(.caption2).foregroundStyle(.secondary)
             }
         } else {
             Text("netcapture.detail.binary \(decoded.data.count)").font(.caption).foregroundStyle(.secondary)
