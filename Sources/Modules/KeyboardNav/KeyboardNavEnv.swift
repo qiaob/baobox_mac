@@ -9,4 +9,11 @@ enum KeyboardNavEnv {
     static let maxDepth = 40
     static let maxElements = 500
     static let scanTimeout: TimeInterval = 0.35
+
+    /// 标签显示范围："current"（仅当前屏，前台 App 焦点窗口所在屏）| "all"（所有屏）。
+    /// 默认「当前屏」——多显示器时减少干扰。
+    static let labelScopeKey = "keyboardnav.labelScope"
+    static var labelScope: String {
+        UserDefaults.standard.string(forKey: labelScopeKey) ?? "current"
+    }
 }

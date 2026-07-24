@@ -16,6 +16,8 @@ final class KeyboardNavController {
     private var hints: [Hint] = []
     private var input = ""
     private var active = false
+    /// 触发时前台 App 焦点窗口所在屏（"当前屏"模式用）。
+    private var currentScreen: NSScreen?
 
     private init() {}
 
@@ -28,6 +30,7 @@ final class KeyboardNavController {
         }
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let pid = app.processIdentifier
+        currentScreen = Self.focusedScreen(pid: pid)
         active = true
         // AX 遍历可阻塞 → 后台扫描，回主线程显示。
         DispatchQueue.global(qos: .userInitiated).async {
@@ -52,8 +55,15 @@ final class KeyboardNavController {
         hints = zip(labels, sorted).map { Hint(label: $0.0, element: $0.1.element, rectCG: $0.1.frameCG) }
         input = ""
 
+        // 按「标签显示范围」设置决定用哪些屏：当前屏 / 所有屏。
+        let screens: [NSScreen]
+        if KeyboardNavEnv.labelScope == "current", let cur = currentScreen {
+            screens = [cur]
+        } else {
+            screens = NSScreen.screens
+        }
         // 每屏一个 overlay：把落在该屏的标签转成 view 本地 AppKit 坐标。
-        for screen in NSScreen.screens {
+        for screen in screens {
             let targets: [HintTarget] = hints.compactMap { h in
                 let globalAK = Geometry.appKitRect(fromCG: h.rectCG)
                 guard screen.frame.intersects(globalAK) else { return nil }
@@ -111,5 +121,37 @@ final class KeyboardNavController {
         hints.removeAll()
         input = ""
         active = false
+    }
+
+    // MARK: - 当前屏判定
+
+    /// 前台 App 焦点窗口所在屏；取不到则回退鼠标所在屏 / 主屏。
+    private static func focusedScreen(pid: pid_t) -> NSScreen? {
+        let appEl = AXUIElementCreateApplication(pid)
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appEl, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let win = winRef, CFGetTypeID(win) == AXUIElementGetTypeID() else {
+            return screenContainingMouse()
+        }
+        let winEl = win as! AXUIElement  // 类型已用 CFGetTypeID 校验
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(winEl, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(winEl, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let posV = posRef, let sizeV = sizeRef,
+              CFGetTypeID(posV) == AXValueGetTypeID(), CFGetTypeID(sizeV) == AXValueGetTypeID() else {
+            return screenContainingMouse()
+        }
+        var pos = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(posV as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(sizeV as! AXValue, .cgSize, &size)
+        let winAK = Geometry.appKitRect(fromCG: CGRect(origin: pos, size: size))
+        let center = CGPoint(x: winAK.midX, y: winAK.midY)
+        return NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) } ?? screenContainingMouse()
+    }
+
+    private static func screenContainingMouse() -> NSScreen? {
+        let m = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main
     }
 }
