@@ -1,10 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # 只手动触发（GitHub Actions 页 “Run workflow”）——不再随 push main / PR 自动跑。
+  workflow_dispatch:
 
 jobs:
   build:
