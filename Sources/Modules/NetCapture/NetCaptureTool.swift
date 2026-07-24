@@ -13,7 +13,6 @@ final class NetCaptureTool: ToolModule {
     let symbolName = "network"
 
     private var server: ProxyServer { ProxyServer.shared }
-    private var store: FlowStore { FlowStore.shared }
     private var mcp: CaptureMCPServer { CaptureMCPServer.shared }
 
     // MARK: - 生命周期
@@ -32,47 +31,54 @@ final class NetCaptureTool: ToolModule {
         mcp.stop()
     }
 
-    // MARK: - 菜单（§4.1）
+    // MARK: - 菜单（§4.1，用户草图 7 块）
 
     func submenuItems() -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
-        // —— 状态行（置灰）——
-        items.append(disabled(statusText()))
-        items.append(.separator())
-
-        // —— 主开关：开始 / 停止抓包 ——
-        let toggleTitle = server.isRunning ? L("netcapture.menu.stop") : L("netcapture.menu.start")
-        items.append(ClosureMenuItem(title: toggleTitle, hotkeyID: "netcapture.toggle") { [weak self] in
-            self?.toggleCapture()
-        })
-        items.append(ClosureMenuItem(title: L("netcapture.menu.openWindow"), hotkeyID: "netcapture.window") {
-            NetCaptureWindowController.shared.show()
-        })
-        items.append(.separator())
-
-        // —— 代理地址（置灰信息行，点击复制）——
+        // ① 代理（监听网络）开关 + 代理地址（点击复制）
+        items.append(hostingRow(NetCaptureProxyToggleRow()))
         let addr = "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.port)"
-        let addrItem = ClosureMenuItem(title: L("netcapture.menu.proxyAddr \(addr)")) {
+        items.append(ClosureMenuItem(title: L("netcapture.menu.proxyAddr \(addr)")) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(addr, forType: .string)
-        }
-        items.append(addrItem)
+        })
+        items.append(.separator())
 
-        // —— 证书子菜单 ——
+        // ② iOS 扫码自动配置 + 内嵌二维码
+        items.append(disabled(L("netcapture.menu.scanConfig")))
+        items.append(hostingRow(NetCaptureMenuQR(), height: 152))
+        items.append(.separator())
+
+        // ③ 证书安装（子菜单：装到 Mac / 二维码 / ADB）
         let certItem = NSMenuItem(title: L("netcapture.menu.cert"), action: nil, keyEquivalent: "")
         certItem.submenu = certSubmenu()
         items.append(certItem)
         items.append(.separator())
 
-        // —— 本地 MCP 开关（custom view switch 行）——
-        let mcpItem = NSMenuItem()
-        let hosting = NSHostingView(rootView: NetCaptureMCPToggleRow())
-        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 30)
-        hosting.autoresizingMask = [.width]
-        mcpItem.view = hosting
-        items.append(mcpItem)
+        // ④ 本机网络走代理（系统代理开关，仅代理运行时可用）
+        items.append(hostingRow(NetCaptureLocalProxyToggleRow()))
+        items.append(.separator())
 
+        // ⑤ 打开抓包窗口
+        items.append(ClosureMenuItem(title: L("netcapture.menu.openWindow"), hotkeyID: "netcapture.window") {
+            NetCaptureWindowController.shared.show()
+        })
+        items.append(.separator())
+
+        // ⑥ 本地 MCP 开关 + 一键安装到 Claude Code / Codex / Cursor
+        items.append(hostingRow(NetCaptureMCPToggleRow()))
+        items.append(ClosureMenuItem(title: L("netcapture.menu.mcp.installClaude")) {
+            NetCaptureTool.installMCP { try CaptureMCPServer.registerInClaude() }
+        })
+        items.append(ClosureMenuItem(title: L("netcapture.menu.mcp.installCodex")) {
+            NetCaptureTool.installMCP { try CaptureMCPServer.registerInCodex() }
+        })
+        items.append(ClosureMenuItem(title: L("netcapture.menu.mcp.installCursor")) {
+            NetCaptureTool.installMCP { try CaptureMCPServer.registerInCursor() }
+        })
+
+        // ⑦ 抓包设置：由框架在 submenu 末尾自动追加「网络抓包设置」，此处不重复。
         return items
     }
 
@@ -136,17 +142,32 @@ final class NetCaptureTool: ToolModule {
         else { server.start(port: NetCaptureEnv.port) }
     }
 
-    /// 状态行：抓包中 · 127.0.0.1:9090 · N 条；停止时「未开启」。
-    private func statusText() -> String {
-        switch server.state {
-        case .running(let port):
-            return L("netcapture.menu.status \("127.0.0.1:\(port)") \(store.flows.count)")
-        case .starting:
-            return L("netcapture.status.starting")
-        case .failed:
-            return L("netcapture.status.failed")
-        case .stopped:
-            return L("netcapture.menu.off")
+    /// 把一个 SwiftUI 视图包成菜单项（自定义 view 行）。
+    private func hostingRow<V: View>(_ view: V, height: CGFloat = 30) -> NSMenuItem {
+        let item = NSMenuItem()
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: height)
+        hosting.autoresizingMask = [.width]
+        item.view = hosting
+        return item
+    }
+
+    /// 一键安装 MCP：后台执行注册（写配置文件），失败弹提示。
+    fileprivate static func installMCP(_ work: @escaping () throws -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try work()
+            } catch {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        let alert = NSAlert()
+                        alert.messageText = L("netcapture.mcp.installFailed")
+                        alert.informativeText = error.localizedDescription
+                        alert.addButton(withTitle: L("common.ok"))
+                        alert.runModal()
+                    }
+                }
+            }
         }
     }
 
@@ -155,7 +176,75 @@ final class NetCaptureTool: ToolModule {
     }
 }
 
-// MARK: - MCP 开关菜单行
+// MARK: - 代理（监听网络）开关行
+
+/// 「代理（监听网络）」菜单行：左标题右 switch，绑 `ProxyServer` 启停。
+struct NetCaptureProxyToggleRow: View {
+    @ObservedObject private var server = ProxyServer.shared
+
+    var body: some View {
+        HStack {
+            Text("netcapture.menu.proxyToggle")
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { server.isRunning },
+                set: { $0 ? server.start(port: NetCaptureEnv.port) : server.stop() }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+            .tint(Color(nsColor: .controlAccentColor))
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        .environment(\.controlActiveState, .key)
+    }
+}
+
+// MARK: - 本机网络走代理 开关行
+
+/// 「本机网络走代理」菜单行：控制系统代理指向本机（`SystemProxyController`）。仅代理运行时可用，
+/// 避免把系统代理指向未监听的端口导致本机断网。
+struct NetCaptureLocalProxyToggleRow: View {
+    @ObservedObject private var server = ProxyServer.shared
+    @State private var isOn = SystemProxyController.isEnabled
+
+    var body: some View {
+        HStack {
+            Text("netcapture.menu.localProxy")
+                .foregroundStyle(server.isRunning ? .primary : .secondary)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .tint(Color(nsColor: .controlAccentColor))
+                .disabled(!server.isRunning)
+                .onChange(of: isOn) { _, on in
+                    let port = NetCaptureEnv.port
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        if on {
+                            // 开启前刷新信任缓存：本机未信任证书时会透传本机 HTTPS，避免断网。
+                            MITMCertAuthority.shared.refreshTrustCache()
+                            SystemProxyController.enable(port: port)
+                        } else {
+                            SystemProxyController.restore()
+                        }
+                    }
+                }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        .environment(\.controlActiveState, .key)
+        .onAppear { isOn = SystemProxyController.isEnabled }
+    }
+}
+
+// MARK: - 本地 MCP 开关行
 
 /// 「本地 MCP」菜单行：左标题右 switch（仿 `NotifyToggleMenuRow`）。开时副标题显示 endpoint。
 struct NetCaptureMCPToggleRow: View {
@@ -186,6 +275,29 @@ struct NetCaptureMCPToggleRow: View {
         .frame(height: 30)
         .contentShape(Rectangle())
         .environment(\.controlActiveState, .key)
+    }
+}
+
+// MARK: - 菜单内嵌二维码
+
+/// 「iOS 扫码自动配置」用的菜单内嵌二维码：编码 `http://baobox.proxy/` 配置页。
+/// 内容固定（不含变动 IP），故用静态缓存一次生成，避免每次 `menuNeedsUpdate` 重算。
+struct NetCaptureMenuQR: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            // 每次构建按当前局域网 IP 现生成（换网络后地址随之更新）；QR 生成是纯 CPU、开销很小。
+            if let cg = QRCodeGenerator.image(for: NetworkInterfaces.landingPageURL, minPixels: 160) {
+                Image(nsImage: NSImage(cgImage: cg, size: NSSize(width: 132, height: 132)))
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 132, height: 132)
+            } else {
+                Text("netcapture.qr.unavailable")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 }
 

@@ -38,8 +38,12 @@ final class ProxyServer: ObservableObject {
 
     private func beginStart(port: UInt16) {
         state = .starting
-        // 预生成 CA（后台），保证首个 HTTPS 连接不必等冷启。
-        queue.async { MITMCertAuthority.shared.ensureCA() }
+        // 预生成 CA（后台），保证首个 HTTPS 连接不必等冷启；同时评估并缓存本机信任状态，
+        // 供「本机走代理」时决定是否解密（未信任则透传，不断网）。
+        queue.async {
+            MITMCertAuthority.shared.ensureCA()
+            MITMCertAuthority.shared.refreshTrustCache()
+        }
 
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
