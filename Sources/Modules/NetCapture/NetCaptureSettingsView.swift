@@ -22,7 +22,7 @@ struct NetCaptureSettingsView: View {
 
 private struct NetCaptureProxySection: View {
     @AppStorage(NetCaptureEnv.Keys.port) private var port = 9090
-    @AppStorage(NetCaptureEnv.Keys.autoSystemProxy) private var autoProxy = true
+    @AppStorage(NetCaptureEnv.Keys.autoSystemProxy) private var autoProxy = false
     @AppStorage(NetCaptureEnv.Keys.serviceName) private var serviceName = ""
     @AppStorage(NetCaptureEnv.Keys.maxFlows) private var maxFlows = 1000
     @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
@@ -153,6 +153,7 @@ private struct NetCaptureScopeSection: View {
     @AppStorage(NetCaptureEnv.Keys.decryptScope) private var scope = "all"
     @AppStorage(NetCaptureEnv.Keys.allowDomains) private var allowDomains = ""
     @AppStorage(NetCaptureEnv.Keys.denyDomains) private var denyDomains = ""
+    @AppStorage(NetCaptureEnv.Keys.decryptRemote) private var decryptRemote = false
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.scope") {
@@ -167,6 +168,9 @@ private struct NetCaptureScopeSection: View {
                 domainEditor("netcapture.settings.denyDomains", text: $denyDomains)
             }
             Text("netcapture.settings.scopeHint").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Toggle("netcapture.settings.decryptRemote", isOn: $decryptRemote)
+            Text("netcapture.settings.decryptRemoteHint").font(.caption).foregroundStyle(.secondary)
         }
     }
 

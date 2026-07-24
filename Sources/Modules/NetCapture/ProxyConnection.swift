@@ -31,6 +31,12 @@ final class ProxyConnection: @unchecked Sendable {
     /// 多设备区分（§17）：`appendFlow` 一处统一给所有 flow 打标。
     private var clientIP: String?
 
+    /// 是否本机（回环）客户端。未知源（clientIP 尚未取到）保守视为远程 → 只透传不断网。
+    private var isLocalClient: Bool {
+        guard let ip = clientIP else { return false }
+        return ip == "127.0.0.1" || ip == "::1" || ip.lowercased() == "localhost"
+    }
+
     init(client: NWConnection,
          queue: DispatchQueue,
          ca: MITMCertAuthority,
@@ -179,8 +185,13 @@ final class ProxyConnection: @unchecked Sendable {
             if error != nil { self.finish(); return }
             // magic 域名很少走 CONNECT（证书页是明文），这里只处理常规 HTTPS。
             // 判定是否尝试 MITM：解密范围内 + 能拿到证书。否则直接盲隧道（不消费后续字节前决定）。
-            guard NetCaptureEnv.shouldDecrypt(host: host), self.ca.identity(forHost: host) != nil else {
-                // —— 故障透传路径 1：不在解密范围或无证书 → 盲隧道 ——
+            // 本机：仅当 CA 已被本机信任才 MITM，否则透传——避免「本机网络走代理」打开却没装/没信任
+            // 证书时本机 HTTPS 断网。远程设备由 shouldDecrypt 的 decryptRemote 控制。
+            let localTrustOK = !self.isLocalClient || self.ca.isTrustedCached
+            guard NetCaptureEnv.shouldDecrypt(host: host, isLocalClient: self.isLocalClient),
+                  localTrustOK,
+                  self.ca.identity(forHost: host) != nil else {
+                // —— 故障透传路径 1：不在解密范围 / 本机未信任 / 无证书 → 盲隧道 ——
                 self.startBlindTunnel(host: host, port: port, note: L("netcapture.note.passthrough"))
                 return
             }
@@ -293,14 +304,16 @@ final class ProxyConnection: @unchecked Sendable {
         guard parts.count >= 2 else { finish(); return }
         let target = String(parts[1])
         guard let comps = URLComponents(string: target), let host = comps.host else {
-            // 非绝对形式的明文请求（非代理语义）→ 关闭。
-            finish()
+            // 非绝对形式（有人直接访问代理端口，如手机未设代理时扫码 http://<Mac-IP>:<port>/）→
+            // 当作配置页请求本地应答（装证书 / 配代理），使扫码无需先设代理即可打开，破解「先有鸡还是先有蛋」。
+            serveMagicDomain(path: target, userAgent: userAgent(fromRequestHead: initialData))
             return
         }
         let port = comps.port ?? 80
 
-        // magic 域名：本地应答配置页 / 描述文件 / 证书，不走上游。
-        if host.lowercased() == NetworkInterfaces.magicHost {
+        // magic 域名 或 直连本机代理端口（已设代理后访问自身 IP:port）→ 本地应答配置页，不走上游。
+        let isSelfDirect = (host == NetworkInterfaces.primaryIP() && port == Int(NetCaptureEnv.port))
+        if host.lowercased() == NetworkInterfaces.magicHost || isSelfDirect {
             serveMagicDomain(path: comps.path, userAgent: userAgent(fromRequestHead: initialData))
             return
         }

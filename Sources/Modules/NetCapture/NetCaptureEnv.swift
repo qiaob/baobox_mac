@@ -50,6 +50,9 @@ enum NetCaptureEnv {
         static let decryptScope = "netcapture.decryptScope"       // "all" | "allowlist"
         static let allowDomains = "netcapture.allowDomains"        // 换行分隔
         static let denyDomains = "netcapture.denyDomains"          // 换行分隔
+        /// 是否解密远程设备（手机等非本机）的 HTTPS。默认关：未装/未信任证书的设备被 MITM 会
+        /// TLS 握手失败且无法回退→表现为断网，故远程默认透传，用户装好证书后再显式开启。
+        static let decryptRemote = "netcapture.decryptRemote"
         static let mcpPort = "netcapture.mcpPort"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
@@ -66,11 +69,12 @@ enum NetCaptureEnv {
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             Keys.port: 9090,
-            Keys.autoSystemProxy: true,
+            Keys.autoSystemProxy: false,
             Keys.serviceName: "",
             Keys.maxFlows: 1000,
             Keys.bodyCap: 5 * 1024 * 1024,
             Keys.decryptScope: "all",
+            Keys.decryptRemote: false,
             Keys.allowDomains: "",
             Keys.denyDomains: "",
             Keys.mcpPort: 9191,
@@ -104,7 +108,12 @@ enum NetCaptureEnv {
     }
 
     static var autoSystemProxy: Bool {
-        UserDefaults.standard.object(forKey: Keys.autoSystemProxy) as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.autoSystemProxy) as? Bool ?? false
+    }
+
+    /// 是否解密远程设备（手机等非本机）的 HTTPS。默认关（远程透传，避免未信任证书断网）。
+    static var decryptRemote: Bool {
+        UserDefaults.standard.object(forKey: Keys.decryptRemote) as? Bool ?? false
     }
 
     static var clearOnStop: Bool {
@@ -136,11 +145,15 @@ enum NetCaptureEnv {
 
     // MARK: - 解密范围判定
 
-    /// 依据「解密范围」设置判断某 host 是否应尝试 MITM 解密。
+    /// 依据「解密范围」+「是否解密远程设备」判断某 host 是否应尝试 MITM 解密。
+    /// - 远程设备（手机等，非本机）：仅当用户显式开启 `decryptRemote` 才可能解密，否则一律透传。
+    ///   这是「设了代理就断网」的根治点——未装/未信任 CA 的设备被 MITM 会 TLS 握手失败且无法回退。
     /// - 全部模式（默认）：deny 列表命中则透传，其余解密。
     /// - 白名单模式：仅 allow 列表命中才解密，其余透传。
     /// 任何情况下判定为「不解密」都走盲隧道透传，绝不中断连接。
-    static func shouldDecrypt(host: String) -> Bool {
+    static func shouldDecrypt(host: String, isLocalClient: Bool) -> Bool {
+        // 远程设备默认透传：避免未信任证书导致 MITM 握手失败→断网。
+        if !isLocalClient && !decryptRemote { return false }
         let scope = UserDefaults.standard.string(forKey: Keys.decryptScope) ?? "all"
         let deny = domainList(Keys.denyDomains)
         if scope == "allowlist" {
