@@ -103,6 +103,58 @@ final class CaptureMCPServer: ObservableObject {
         try writeCodex(removeCodexBlock(text), to: url)
     }
 
+    // MARK: - 注册进 Cursor（`~/.cursor/mcp.json` 顶层 mcpServers，JSON 安全读改写）
+
+    /// Cursor 全局 MCP 配置文件。
+    nonisolated static var cursorConfigFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cursor/mcp.json")
+    }
+
+    /// 是否已注册到 Cursor。后台线程调用（读文件）。
+    nonisolated static func isRegisteredInCursor() -> Bool {
+        guard let data = try? Data(contentsOf: cursorConfigFile),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = root["mcpServers"] as? [String: Any] else { return false }
+        return servers[serverName] != nil
+    }
+
+    /// 注册进 Cursor：写 `mcpServers.baobox-netcapture`（http 型 url）。保留其余键，写前备份。后台线程调用。
+    nonisolated static func registerInCursor() throws {
+        let url = cursorConfigFile
+        var root: [String: Any] = [:]
+        if let data = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            root = obj
+        }
+        var servers = (root["mcpServers"] as? [String: Any]) ?? [:]
+        servers[serverName] = ["url": "http://127.0.0.1:\(NetCaptureEnv.mcpPort)/mcp"]
+        root["mcpServers"] = servers
+        try writeCursor(root, to: url)
+    }
+
+    nonisolated static func unregisterFromCursor() throws {
+        let url = cursorConfigFile
+        guard let data = try? Data(contentsOf: url),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var servers = root["mcpServers"] as? [String: Any] else { return }
+        servers.removeValue(forKey: serverName)
+        root["mcpServers"] = servers
+        try writeCursor(root, to: url)
+    }
+
+    nonisolated private static func writeCursor(_ root: [String: Any], to url: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            let backup = url.appendingPathExtension("baobox.bak")
+            try? fm.removeItem(at: backup)
+            try? fm.copyItem(at: url, to: backup)
+        }
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: root,
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try data.write(to: url)
+    }
+
     /// 移除 `[mcp_servers.baobox-netcapture]` 段（从段头到下一段头/文件尾）。保全其余内容。
     nonisolated private static func removeCodexBlock(_ text: String) -> String {
         let lines = text.components(separatedBy: "\n")

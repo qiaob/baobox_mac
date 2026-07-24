@@ -23,6 +23,8 @@ final class MITMCertAuthority: @unchecked Sendable {
     private var identityCache: [String: sec_identity_t] = [:]
     /// CA 是否已就绪（内存标记，避免每次查磁盘）。
     private var caReady = false
+    /// 缓存的「CA 是否被本机系统信任」（供连接队列 0 开销读；由 refreshTrustCache 更新）。
+    private var trustedCache = false
 
     private init() {}
 
@@ -208,6 +210,19 @@ final class MITMCertAuthority: @unchecked Sendable {
         return SecTrustEvaluateWithError(trust, &error)
     }
 
+    /// 缓存的信任状态（连接队列可 0 开销同步读）。
+    var isTrustedCached: Bool {
+        lock.lock(); defer { lock.unlock() }; return trustedCache
+    }
+
+    /// 重新评估并缓存 Mac 信任状态。**后台线程调用**（SecTrust 评估有 IO）。
+    @discardableResult
+    func refreshTrustCache() -> Bool {
+        let t = isTrusted()
+        lock.lock(); trustedCache = t; lock.unlock()
+        return t
+    }
+
     /// 从 PEM 数据构造 SecCertificate（剥离 PEM 头尾取 DER）。
     private func certificate(fromPEM pem: Data) -> SecCertificate? {
         guard let text = String(data: pem, encoding: .utf8) else { return nil }
@@ -229,6 +244,7 @@ final class MITMCertAuthority: @unchecked Sendable {
             + "-k /Library/Keychains/System.keychain \(NetCaptureEnv.shellSingleQuote(caPath))"
         let script = "do shell script \"\(escapeForAppleScript(shell))\" with administrator privileges"
         let result = NetCaptureEnv.run("/usr/bin/osascript", ["-e", script])
+        if result.ok { refreshTrustCache() }
         return (result.ok, result.ok ? "" : result.stderrString)
     }
 
@@ -239,6 +255,7 @@ final class MITMCertAuthority: @unchecked Sendable {
         let shell = "security remove-trusted-cert -d \(NetCaptureEnv.shellSingleQuote(caPath))"
         let script = "do shell script \"\(escapeForAppleScript(shell))\" with administrator privileges"
         let result = NetCaptureEnv.run("/usr/bin/osascript", ["-e", script])
+        if result.ok { refreshTrustCache() }
         return (result.ok, result.ok ? "" : result.stderrString)
     }
 

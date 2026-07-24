@@ -19,6 +19,12 @@ enum SystemProxyController {
 
     private static let networksetup = "/usr/sbin/networksetup"
 
+    /// 当前是否已把系统代理指向本机（存在开启前保存的原状态即表示「本机正走代理」）。
+    /// 供菜单「本机网络走代理」开关读初始态。
+    static var isEnabled: Bool {
+        UserDefaults.standard.data(forKey: NetCaptureEnv.Keys.savedProxyState) != nil
+    }
+
     // MARK: - 网络服务解析
 
     /// 取当前活跃网络服务名。优先设置里手动指定；否则取第一个「已启用且有 IP」的服务（通常 Wi-Fi）。
