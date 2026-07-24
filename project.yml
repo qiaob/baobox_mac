@@ -23,6 +23,7 @@ targets:
         NSHumanReadableCopyright: "© 2026 Baobox"
         NSMicrophoneUsageDescription: "录屏时用于录制你的声音（可选开启）。Used to record your voice during screen recording (optional)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
+        NSLocalNetworkUsageDescription: "网络抓包代理需要绑定局域网接口，供同网手机连接调试。The packet-capture proxy binds local-network interfaces so phones on the same network can connect for debugging."
     # Hardened Runtime 下访问麦克风必须显式声明 audio-input entitlement，
     # 只有 Info.plist 的用途描述是不够的。
     # 同理,向 iTerm2 / Terminal 发送 AppleScript(按 tty 选中会话标签页)

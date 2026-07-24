@@ -69,12 +69,21 @@
 - **可视化配置**：权限模式 / 默认模型 / 会话保留天数选择器、权限预设勾选、隐私环境开关、Co-Authored-By、CLAUDE.md 管理、带实时预览的 statusline 生成器、MCP 服务器面板，以及磁盘清理与版本检查——所有写入都安全处理用户 JSON（保留未知字段，写前备份 `.baobox.bak`）。
 - 费用为按公开定价的估算值，界面处处标注「估算」。
 
-### Cursor / Codex 助手（纯菜单操作）
-- 为本地 Codex CLI 与 Cursor 编辑器打造的助手，数据全部来自 `~/.codex` 与 `~/.cursor` 下的本地文件——不调用任何 AI API、无需登录。菜单列出最近的 Codex 会话（项目名 + 首条输入），一键在终端续接（`codex resume <id>`）；轻量窗口可搜索、续接、复制命令与删除。
+### Codex 助手（纯菜单操作）
+- 为本地 Codex CLI 打造的助手，数据全部来自 `~/.codex` 下的本地文件——不调用任何 AI API、无需登录。菜单顶部为状态行（会话数 + 今日估算花费），下方列出最近的 Codex 会话供一键在终端续接（`codex resume <id>`），并有「浏览会话 / 用量…」入口打开带 Tab 的中心窗口。
+- **用量与额度**：把 rollout JSONL 里的 Codex `token_count` 事件聚合为滚动 5 小时窗口与周窗口（默认近 168 小时滚动，或按固定星期/小时重置对齐），并统计今日累计。「用量报表…」菜单项带两行副标题（5 小时 + 本周：已用 ≈ 估算花费 · 距重置倒计时）。增量型（`last_token_usage`）与累计型（`total_token_usage`）两种记账都能正确处理，避免双计。
+- **中心窗口**：**会话** Tab（搜索、续接、复制命令、删除）与**用量** Tab（5 小时 / 本周窗口卡片，可选预算进度条；按天 / 按项目 / 按模型三维报表；内置工具 / MCP 调用统计）。费用来自内置定价表，均标「估算」。
 - **Codex 配置可视化**：`approval_policy`、`sandbox_mode`（danger 档红字警示）与默认 `model` 以选择器编辑，对 `config.toml` 做行级读写，保全注释与未知键；遇到无法安全编辑的值会自动识别并置灰对应控件。每次写入前备份 `config.toml.baobox.bak`。
 - **完成通知**（按需开启）：把 `notify` 钩子写入 `config.toml`；Codex 回合结束时 Baobox 发送系统通知（含最后回复摘要），移除后 config.toml 无残留。
-- **Cursor Rules 管理**：维护项目文件夹列表，列出各项目 `.cursor/rules/*.mdc`（并检测旧式 `.cursorrules`），一键打开文件，或写入内置的通用 / 前端 / Python 规则模板（同名文件绝不覆盖）。
-- **Cursor MCP 面板**：查看、新增、删除 `~/.cursor/mcp.json` 中的服务器（保留未知字段，写前备份 `.baobox.bak`）。
+- **维护**：展示 `~/.codex/sessions` 磁盘占用与文件数，清理早于 30/60/90 天的 rollout JSONL（二次确认），显示 `codex --version`，检查 npm 上 `@openai/codex` 最新版，并复制升级命令。
+- **MCP（只读）**：列出 `config.toml` 中的 `[mcp_servers.*]`，并可打开配置文件编辑。
+
+### 网络抓包（出厂不绑定快捷键）
+- 基于 Network.framework 自研的原生 HTTP(S) 中间人代理——不打包第三方运行时、不用 SwiftNIO。一键开关启动本地代理（默认端口 9090），可选自动把 Mac 系统代理指向它；关闭即彻底停监听、还原系统代理、释放全部缓冲（关闭态零开销）。
+- **HTTPS 解密**：本地根证书（借系统自带 `openssl` 签发）按 host 懒加载签发叶子证书，经内部回环 TLS listener 终止握手得到明文并捕获请求/响应。任何 MITM 失败——未信任、握手失败、证书固定、仅 HTTP/2——都退化为盲隧道透传，保证被代理设备照常上网，这类 flow 标注「未解密」。
+- **手机友好**：窗口展示全部局域网 IPv4 + 端口（一键复制）与二维码（指向 magic 域名 `http://baobox.proxy/`，供设备下载 CA）；Mac 一键安装/移除信任（需管理员）；Android 一键 ADB 设/清代理 + 推送证书。
+- **Proxyman 式 UI**：可搜索的 flow 列表（方法/状态码配色），详情分「概览 / 请求 / 响应 / 原始」四页，JSON 美化、gzip/deflate 自动解压、图片内联预览；方法/状态码过滤 chips；支持 HAR / cURL / Markdown 导出。
+- **结合 AI 的本地 MCP**（独立开关）：启动本地 Streamable-HTTP MCP 服务，暴露 `list_flows` / `get_flow` / `search_flows` / `latest_flows` / `clear_flows`，可一键注册进 Claude Code / Codex 配置（默认脱敏鉴权头）；并支持把任一 flow「发送到 Claude Code」。抓包内容默认仅内存、绝不上传。
 
 > Sparkle 自动更新尚未接入（待确定托管方案），「检查更新」菜单项目前为置灰占位。
 

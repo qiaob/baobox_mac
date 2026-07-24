@@ -1,6 +1,6 @@
 import Foundation
 
-/// Cursor / Codex 助手 —— Codex 环境与本地文件基础层。
+/// Codex 助手 —— Codex 环境与本地文件基础层。
 ///
 /// 本文件是 Codex 侧的「底座」：`~/.codex` 路径常量、`codex` 二进制探测，以及
 /// `~/.codex/config.toml` 的**行级**读-改-写。UI 层只调这里暴露的 typed 方法，绝不自己碰文件。
@@ -119,6 +119,225 @@ enum CodexEnv {
     static func notify() -> ArrayValue { CodexTOML.readArray(configFile, key: "notify") }
     static func setNotify(_ programs: [String]) throws { try CodexTOML.setArray(configFile, key: "notify", values: programs) }
     static func removeNotify() throws { try CodexTOML.removeKey(configFile, key: "notify") }
+
+    // MARK: - CLI 版本
+
+    /// 运行 `codex --version` 取版本串。**必须在后台线程调用**（内部同步等待子进程）。失败返回 nil。
+    static func cliVersion() -> String? {
+        let binary = findCodexBinary()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // 走登录 shell，保证 PATH 完整（binary 可能只是 "codex"）。
+        process.arguments = ["-lc", "\(shellQuote(binary)) --version"]
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        // 先读干管道再等退出，避免管道写满导致子进程阻塞。
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let raw = String(data: data, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - 磁盘统计 / 清理（~/.codex/sessions）
+
+    /// 统计 `~/.codex/sessions` 占用字节数与 rollout 文件数。后台线程调用。
+    static func sessionsDiskStats() -> (bytes: Int64, fileCount: Int) {
+        let fm = FileManager.default
+        var bytes: Int64 = 0
+        var count = 0
+        guard let enumerator = fm.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return (0, 0) }
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            bytes += Int64(values?.fileSize ?? 0)
+            count += 1
+        }
+        return (bytes, count)
+    }
+
+    /// 删除早于 N 天（按 mtime）的 rollout jsonl。返回 (删除文件数, 释放字节数)。后台线程调用。
+    static func cleanupSessions(olderThanDays days: Int) -> (Int, Int64) {
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        var count = 0
+        var bytes: Int64 = 0
+        guard let enumerator = fm.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return (0, 0) }
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let mtime = values?.contentModificationDate ?? Date()
+            guard mtime < cutoff else { continue }
+            let size = Int64(values?.fileSize ?? 0)
+            if (try? fm.removeItem(at: url)) != nil {
+                count += 1
+                bytes += size
+            }
+        }
+        return (count, bytes)
+    }
+
+    // MARK: - MCP 服务器（config.toml [mcp_servers.*]，只读列出）
+
+    /// 一个 `[mcp_servers.<name>]` 段的只读摘要。
+    struct MCPServerInfo: Identifiable {
+        let id: String       // 服务器名
+        let name: String
+        let command: String  // command 值（取不到为空）
+        let args: [String]   // args 数组（取不到为空）
+    }
+
+    /// 只读扫描 config.toml 里的 `[mcp_servers.<name>]` 段（正则扫段头 + 段内 command / args）。
+    /// 不做写入（块级增删见 DESIGN §5.1 P1）。后台线程调用。
+    static func mcpServers() -> [MCPServerInfo] {
+        guard let text = try? String(contentsOf: configFile, encoding: .utf8) else { return [] }
+        let lines = text.components(separatedBy: "\n")
+        var result: [MCPServerInfo] = []
+
+        var currentName: String?
+        var currentCommand = ""
+        var currentArgs: [String] = []
+
+        func flush() {
+            if let name = currentName {
+                result.append(MCPServerInfo(id: name, name: name, command: currentCommand, args: currentArgs))
+            }
+            currentName = nil
+            currentCommand = ""
+            currentArgs = []
+        }
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                flush()
+                // 段头形如 [mcp_servers.<name>] 或 [mcp_servers."<name>"]。
+                if let name = mcpServerName(fromHeader: trimmed) {
+                    currentName = name
+                }
+                continue
+            }
+            guard currentName != nil else { continue }
+            if let rhs = rhsAfterKey(trimmed, key: "command"), let value = CodexTOML.parseString(rhs) {
+                currentCommand = value
+            } else if let rhs = rhsAfterKey(trimmed, key: "args"), let arr = CodexTOML.parseStringArray(rhs) {
+                currentArgs = arr
+            }
+        }
+        flush()
+        return result.sorted { $0.name < $1.name }
+    }
+
+    /// 从段头 `[mcp_servers.<name>]` 解析服务器名；非该前缀返回 nil。
+    private static func mcpServerName(fromHeader header: String) -> String? {
+        guard header.hasPrefix("["), header.hasSuffix("]") else { return nil }
+        let inner = String(header.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        let prefix = "mcp_servers."
+        guard inner.hasPrefix(prefix) else { return nil }
+        var name = String(inner.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        // 去掉可能的引号包裹。
+        if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
+            name = String(name.dropFirst().dropLast())
+        }
+        return name.isEmpty ? nil : name
+    }
+
+    /// 若某行形如 `key = ...` 则返回等号右侧原文，否则 nil。
+    private static func rhsAfterKey(_ line: String, key: String) -> String? {
+        var s = Substring(line)
+        while let f = s.first, f == " " || f == "\t" { s = s.dropFirst() }
+        guard s.hasPrefix(key) else { return nil }
+        s = s.dropFirst(key.count)
+        while let f = s.first, f == " " || f == "\t" { s = s.dropFirst() }
+        guard s.first == "=" else { return nil }
+        return String(s.dropFirst())
+    }
+
+    // MARK: - config.toml [mcp_servers.*] 段级增删（stdio）
+
+    /// 写入/更新一个 stdio 型 `[mcp_servers.<name>]` 段（command/args/env）。
+    /// 幂等：先删同名段再在文件末尾追加。写前备份 `.baobox.bak`。后台线程调用。
+    static func setMCPServer(name: String, command: String, args: [String], env: [String: String]) throws {
+        var text = (try? String(contentsOf: configFile, encoding: .utf8)) ?? ""
+        text = removeMCPBlock(text, name: name)
+        var block = "\n[mcp_servers.\(tomlSectionKey(name))]\n"
+        block += "command = \(CodexTOML.encodeString(command))\n"
+        if !args.isEmpty {
+            block += "args = \(CodexTOML.encodeStringArray(args))\n"
+        }
+        if !env.isEmpty {
+            let pairs = env.keys.sorted().map {
+                "\(CodexTOML.encodeString($0)) = \(CodexTOML.encodeString(env[$0] ?? ""))"
+            }
+            block += "env = { " + pairs.joined(separator: ", ") + " }\n"
+        }
+        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+        text += block
+        try writeConfig(text)
+    }
+
+    /// 删除 `[mcp_servers.<name>]` 段。写前备份。后台线程调用。
+    static func removeMCPServer(name: String) throws {
+        guard let text = try? String(contentsOf: configFile, encoding: .utf8) else { return }
+        try writeConfig(removeMCPBlock(text, name: name))
+    }
+
+    /// 移除指定 `[mcp_servers.<name>]` 段（从段头到下一段头/文件尾）。保全其余内容。
+    private static func removeMCPBlock(_ text: String, name: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var out: [String] = []
+        var skipping = false
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                // 到达任意段头：目标段→开始跳过；其它段→停止跳过并保留。
+                if mcpServerName(fromHeader: trimmed) == name {
+                    skipping = true
+                    continue
+                }
+                skipping = false
+                out.append(line)
+                continue
+            }
+            if skipping { continue }
+            out.append(line)
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// TOML 段名：bare key 安全（A-Za-z0-9_-）则原样，否则加引号。
+    private static func tomlSectionKey(_ name: String) -> String {
+        let bare = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        if !name.isEmpty && name.allSatisfy({ bare.contains($0) }) { return name }
+        return "\"\(name.replacingOccurrences(of: "\"", with: "\\\""))\""
+    }
+
+    /// 备份后写 config.toml。
+    private static func writeConfig(_ text: String) throws {
+        let url = configFile
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            let bak = url.appendingPathExtension("baobox.bak")
+            try? fm.removeItem(at: bak)
+            try? fm.copyItem(at: url, to: bak)
+        }
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = text.data(using: .utf8) else { throw CodexTOML.EditError.uneditable }
+        try data.write(to: url)
+    }
 }
 
 // MARK: - TOML 行级编辑器

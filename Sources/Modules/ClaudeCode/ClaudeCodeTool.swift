@@ -64,7 +64,7 @@ final class ClaudeCodeTool: ToolModule {
         let usageItem = ClosureMenuItem(title: L("claudecode.menu.usageReport")) {
             ClaudeCodeCenterController.shared.show(tab: .usage)
         }
-        usageItem.attributedTitle = Self.twoLineTitle(L("claudecode.menu.usageReport"), subtitle: quotaText())
+        usageItem.attributedTitle = Self.multiLineTitle(L("claudecode.menu.usageReport"), subtitles: quotaSubtitles())
         items.append(usageItem)
         items.append(ClosureMenuItem(title: L("claudecode.menu.todayChanges")) {
             ClaudeCodeCenterController.shared.show(tab: .audit)
@@ -123,15 +123,26 @@ final class ClaudeCodeTool: ToolModule {
         return parts.isEmpty ? L("claudecode.menu.noActivity") : parts.joined(separator: " · ")
     }
 
-    /// 额度行：当前 5 小时窗口的用量 / 估算花费 / 倒计时；无窗口时降级文案。
-    private func quotaText() -> String {
-        guard let window = usage.currentWindow else {
-            return L("claudecode.menu.noWindow")
+    /// 额度副标题：两行——5 小时窗口 + 本周窗口，各含用量 / 估算花费 / 倒计时；无对应窗口时各自降级文案。
+    private func quotaSubtitles() -> [String] {
+        var lines: [String] = []
+        if let window = usage.currentWindow {
+            let tokens = ClaudeFormat.tokens(window.totals.totalTokens)
+            let cost = ClaudeFormat.cost(window.totals.costUSD)
+            let countdown = ClaudeFormat.countdown(window.secondsUntilReset)
+            lines.append(L("claudecode.menu.quota \(tokens) \(cost) \(countdown)"))
+        } else {
+            lines.append(L("claudecode.menu.noWindow"))
         }
-        let tokens = ClaudeFormat.tokens(window.totals.totalTokens)
-        let cost = ClaudeFormat.cost(window.totals.costUSD)
-        let countdown = ClaudeFormat.countdown(window.secondsUntilReset)
-        return L("claudecode.menu.quota \(tokens) \(cost) \(countdown)")
+        if let week = usage.weeklyWindow {
+            let tokens = ClaudeFormat.tokens(week.totals.totalTokens)
+            let cost = ClaudeFormat.cost(week.totals.costUSD)
+            let countdown = ClaudeFormat.countdownLong(week.secondsUntilReset)
+            lines.append(L("claudecode.menu.quotaWeek \(tokens) \(cost) \(countdown)"))
+        } else {
+            lines.append(L("claudecode.menu.noWeekWindow"))
+        }
+        return lines
     }
 
     // MARK: - 辅助
@@ -141,20 +152,21 @@ final class ClaudeCodeTool: ToolModule {
         NSMenuItem(title: title, action: nil, keyEquivalent: "")
     }
 
-    /// 两行菜单项:标题正常字号,副标题小号次要色。副标题为空则退化为单行。
-    private static func twoLineTitle(_ title: String, subtitle: String) -> NSAttributedString {
+    /// 多行菜单项:标题正常字号,每条副标题小号次要色,以 `\n` 逐行拼接。无副标题则退化为单行。
+    private static func multiLineTitle(_ title: String, subtitles: [String]) -> NSAttributedString {
         let result = NSMutableAttributedString(
             string: title,
             attributes: [.font: NSFont.menuFont(ofSize: NSFont.systemFontSize)]
         )
-        guard !subtitle.isEmpty else { return result }
-        result.append(NSAttributedString(
-            string: "\n" + subtitle,
-            attributes: [
-                .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]
-        ))
+        for subtitle in subtitles where !subtitle.isEmpty {
+            result.append(NSAttributedString(
+                string: "\n" + subtitle,
+                attributes: [
+                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]
+            ))
+        }
         return result
     }
 

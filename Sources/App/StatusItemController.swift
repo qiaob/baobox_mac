@@ -36,6 +36,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         rebuild()
     }
 
+    /// 菜单打开期间启用 CGEventTap 补捉全局热键：NSMenu tracking 独占事件循环，Carbon 全局热键
+    /// 此时收不到（「菜单开着按快捷键无反应」）。tap 在 HID 层捕获，命中即收起菜单并触发。
+    func menuWillOpen(_ menu: NSMenu) {
+        HotkeyCenter.shared.beginMenuTrackingCapture()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        HotkeyCenter.shared.endMenuTrackingCapture()
+    }
+
+    /// 收起可能正打开的状态栏菜单。供全局热键触发前调用（见 `HotkeyCenter.onWillFireAction`），
+    /// 避免菜单与动作弹出的窗口（如截图选区浮层）同时在场。未在 tracking 时为 no-op。
+    func dismissMenu() {
+        menu.cancelTrackingWithoutAnimation()
+    }
+
     // MARK: - 构建
 
     private func rebuild() {

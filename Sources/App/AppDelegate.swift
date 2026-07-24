@@ -16,9 +16,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(WindowManagerTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
+        registry.register(NetCaptureTool())
         registry.activateAll()
 
         statusItemController = StatusItemController(registry: registry)
+        // 全局热键触发前先收起状态栏菜单：修复「菜单打开时按快捷键，动作被推迟/与菜单并存」。
+        HotkeyCenter.shared.onWillFireAction = { [weak self] in
+            self?.statusItemController?.dismissMenu()
+        }
+        // 菜单打开期（经 CGEventTap）触发时，收起菜单**之前**先抓「含菜单整屏」快照，供截图冻结模式用
+        // ——这样菜单打开时按截图快捷键，能截到菜单本身。
+        HotkeyCenter.shared.onBeforeFire = {
+            ScreenMenuSnapshot.captureAllScreens()
+        }
 
         OnboardingController.shared.showIfNeeded()
     }

@@ -1,53 +1,113 @@
 import AppKit
 import SwiftUI
 
-/// Cursor / Codex 助手 —— 设置 Tab。segmented 两节：Codex / Cursor（DESIGN 第 1 节）。
+/// Codex 助手 —— 设置 Tab。顶部状态卡 + segmented Picker 分节（DESIGN §5）：
+/// 配置 / 通知 / 用量 / MCP / 维护。Cursor 已移除。
 ///
-/// - Codex：approval_policy / sandbox_mode / model 可视化单选（danger 档红字警示）+ 完成通知开关。
-///   config.toml 对应键不可编辑（多行 / 非字符串数组）时控件置灰并给说明。
-/// - Cursor：项目列表增删、每项目 Rules 状态与模板写入、全局 MCP 列表 + 添加 sheet + 删除。
-/// 所有写配置操作在后台线程执行、完成回主线程刷新，失败以红字或 NSAlert 提示。
+/// - 配置：approval_policy / sandbox_mode / model 可视化单选（danger 档红字），config.toml 行级读写保注释。
+/// - 通知：完成通知开关 + 提示音 + 额度预算与 80% 提醒。
+/// - 用量：周窗口口径开关（固定重置对齐）+ 星期 / 小时选择器。
+/// - MCP：只读列出 config.toml 的 [mcp_servers.*] + 打开配置文件（DESIGN §5.1 MVP）。
+/// - 维护：磁盘占用 + 清理旧 rollout + codex 版本 / 检查最新版 / 复制升级命令。
+/// 所有写配置在后台线程执行、完成回主线程刷新，失败以红字或 NSAlert 提示。
 
 // MARK: - 顶层容器
 
 struct AIToolsSettingsView: View {
 
     enum Section: String, CaseIterable, Identifiable {
-        case codex, cursor
+        case config, notify, usage, mcp, maintenance
         var id: String { rawValue }
         var titleKey: LocalizedStringKey {
             switch self {
-            case .codex: return "aitools.settings.section.codex"
-            case .cursor: return "aitools.settings.section.cursor"
+            case .config: return "aitools.settings.section.config"
+            case .notify: return "aitools.settings.section.notify"
+            case .usage: return "aitools.settings.section.usage"
+            case .mcp: return "aitools.settings.section.mcp"
+            case .maintenance: return "aitools.settings.section.maintenance"
             }
         }
     }
 
-    @State private var section: Section = .codex
+    @ObservedObject private var index = CodexSessionIndex.shared
+    @State private var section: Section = .config
+    @State private var cliVersion: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $section) {
-                ForEach(Section.allCases) { s in
-                    Text(s.titleKey).tag(s)
+            statusCard
+                .padding([.horizontal, .top], 16)
+                .padding(.bottom, 8)
+
+            if CodexEnv.isInstalled {
+                Picker("", selection: $section) {
+                    ForEach(Section.allCases) { s in
+                        Text(s.titleKey).tag(s)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+
+                Divider()
+                sectionBody
+            } else {
+                Spacer()
+                Text("aitools.settings.codex.notInstalled")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .padding(32)
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding([.horizontal, .top], 16)
-            .padding(.bottom, 8)
+        }
+        .onAppear { loadVersion() }
+    }
 
-            Divider()
+    @ViewBuilder
+    private var sectionBody: some View {
+        switch section {
+        case .config: AIToolsConfigSection()
+        case .notify: AIToolsNotifySection()
+        case .usage: AIToolsUsageSettingsSection()
+        case .mcp: AIToolsMCPSection()
+        case .maintenance: AIToolsMaintenanceSection(localVersion: cliVersion)
+        }
+    }
 
-            switch section {
-            case .codex: AIToolsCodexSection()
-            case .cursor: AIToolsCursorSection()
+    private var statusCard: some View {
+        HStack(spacing: 16) {
+            Label {
+                if let cliVersion {
+                    Text("aitools.maint.version \(cliVersion)")
+                } else {
+                    Text("aitools.settings.status.versionUnknown")
+                }
+            } icon: {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+            }
+            Label {
+                Text("aitools.settings.status.sessions \(index.sessions.count)")
+            } icon: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            Spacer()
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+
+    private func loadVersion() {
+        DispatchQueue.global(qos: .utility).async {
+            let version = CodexEnv.cliVersion()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { cliVersion = version }
             }
         }
     }
 }
 
-// MARK: - Codex 节视图模型
+// MARK: - 配置节视图模型
 
 /// Codex 配置节的状态与后台读写。`@Published` 只在主线程写；核心层 throws 接口 do/catch。
 @MainActor
@@ -60,7 +120,7 @@ final class CodexConfigModel: ObservableObject {
     @Published var modelUneditable = false
     @Published var errorMessage: String?
 
-    /// 常用 model 值（外加「跟随默认」与自定义输入）。
+    /// 常用 model 值。
     static let commonModels = ["gpt-5-codex", "gpt-5", "o3"]
 
     func load() {
@@ -123,12 +183,10 @@ final class CodexConfigModel: ObservableObject {
     }
 }
 
-// MARK: - Codex 节
+// MARK: - 配置节
 
-struct AIToolsCodexSection: View {
+struct AIToolsConfigSection: View {
     @StateObject private var model = CodexConfigModel()
-    @ObservedObject private var notify = CodexNotify.shared
-    @AppStorage(AIToolsNotifierSettings.soundKey) private var sound = true
     @State private var customModel = ""
 
     private var configUneditable: Bool {
@@ -137,10 +195,6 @@ struct AIToolsCodexSection: View {
 
     var body: some View {
         Form {
-            if !CodexEnv.isInstalled {
-                Text("aitools.settings.codex.notInstalled")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             if let error = model.errorMessage {
                 Text(verbatim: error).foregroundStyle(.red).font(.caption)
             }
@@ -152,13 +206,10 @@ struct AIToolsCodexSection: View {
             approvalSection
             sandboxSection
             modelSection
-            notifySection
         }
         .formStyle(.grouped)
-        .onAppear { model.load(); notify.refreshState() }
+        .onAppear { model.load() }
     }
-
-    // MARK: approval_policy
 
     private var approvalSection: some View {
         SwiftUI.Section("aitools.settings.codex.approval") {
@@ -176,8 +227,6 @@ struct AIToolsCodexSection: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
-
-    // MARK: sandbox_mode
 
     private var sandboxSection: some View {
         SwiftUI.Section("aitools.settings.codex.sandbox") {
@@ -200,8 +249,6 @@ struct AIToolsCodexSection: View {
         }
     }
 
-    // MARK: model
-
     private var modelSection: some View {
         SwiftUI.Section("aitools.settings.codex.model") {
             Picker("aitools.settings.codex.model.label", selection: Binding(
@@ -212,7 +259,6 @@ struct AIToolsCodexSection: View {
                 ForEach(CodexConfigModel.commonModels, id: \.self) { name in
                     Text(verbatim: name).tag(name)
                 }
-                // 当前值为自定义（非常用项且非空）时，补一个动态标签让 Picker 正确回显。
                 if !model.model.isEmpty, !CodexConfigModel.commonModels.contains(model.model) {
                     Text(verbatim: model.model).tag(model.model)
                 }
@@ -232,276 +278,233 @@ struct AIToolsCodexSection: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
-
-    // MARK: 完成通知
-
-    private var notifySection: some View {
-        SwiftUI.Section("aitools.settings.codex.notify") {
-            Toggle("aitools.settings.codex.notify.enabled", isOn: Binding(
-                get: { notify.isInstalled },
-                set: { newValue in
-                    if newValue {
-                        notify.requestAuthorizationIfNeeded()
-                        notify.install { _ in }
-                    } else {
-                        notify.remove { _ in }
-                    }
-                }
-            ))
-            .disabled(notify.isUneditable || !CodexEnv.isInstalled)
-            if notify.isUneditable {
-                Text("aitools.settings.codex.notify.uneditable")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            Toggle("aitools.settings.codex.notify.sound", isOn: $sound)
-            Text("aitools.settings.codex.notify.help")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
 }
 
-// MARK: - Cursor 节
+// MARK: - 通知节
 
-struct AIToolsCursorSection: View {
-    @ObservedObject private var index = CursorProjectIndex.shared
-    @State private var showAddMCP = false
+struct AIToolsNotifySection: View {
+    @ObservedObject private var notify = CodexNotify.shared
+    @AppStorage(AIToolsNotifierSettings.soundKey) private var sound = true
+    @AppStorage(AIToolsNotifierSettings.budgetAlertKey) private var budgetAlert = true
+    @AppStorage(CodexUsageStore.budgetKey) private var tokenBudget = 0
+    @AppStorage(CodexUsageStore.weeklyBudgetKey) private var weeklyBudget = 0
+
+    /// 预算以千 token 为单位输入。
+    private var budgetK: Binding<Int> {
+        Binding(get: { tokenBudget / 1000 }, set: { tokenBudget = max(0, $0) * 1000 })
+    }
+    private var weeklyBudgetK: Binding<Int> {
+        Binding(get: { weeklyBudget / 1000 }, set: { weeklyBudget = max(0, $0) * 1000 })
+    }
 
     var body: some View {
         Form {
-            projectsSection
-            mcpSection
+            SwiftUI.Section("aitools.settings.codex.notify") {
+                Toggle("aitools.settings.codex.notify.enabled", isOn: Binding(
+                    get: { notify.isInstalled },
+                    set: { newValue in
+                        if newValue {
+                            notify.requestAuthorizationIfNeeded()
+                            notify.install { _ in }
+                        } else {
+                            notify.remove { _ in }
+                        }
+                    }
+                ))
+                .disabled(notify.isUneditable || !CodexEnv.isInstalled)
+                if notify.isUneditable {
+                    Text("aitools.settings.codex.notify.uneditable")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Toggle("aitools.settings.codex.notify.sound", isOn: $sound)
+                Text("aitools.settings.codex.notify.help")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            SwiftUI.Section("aitools.notify.budgetSection") {
+                HStack {
+                    Text("aitools.notify.budget")
+                    Spacer()
+                    TextField("", value: budgetK, format: .number)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("aitools.notify.weeklyBudget")
+                    Spacer()
+                    TextField("", value: weeklyBudgetK, format: .number)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                }
+                // 80% 提醒依赖预算基准，预算为 0 时置灰以显式表达这一依赖。
+                Toggle("aitools.notify.budgetAlert", isOn: $budgetAlert)
+                    .disabled(tokenBudget == 0 && weeklyBudget == 0)
+                Text("aitools.notify.budgetHelp")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .onAppear { index.refresh() }
-        .sheet(isPresented: $showAddMCP) {
-            AIToolsMCPAddSheet()
-        }
-    }
-
-    // MARK: 项目列表
-
-    private var projectsSection: some View {
-        SwiftUI.Section("aitools.settings.cursor.projects") {
-            if index.projects.isEmpty {
-                Text("aitools.settings.cursor.noProjects")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(index.projects) { project in
-                    AIToolsProjectRow(project: project)
-                }
-            }
-            Button("aitools.settings.cursor.addProject") { addProject() }
-            Text("aitools.settings.cursor.projectsHelp")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private func addProject() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = L("aitools.settings.cursor.addProject")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        index.addProject(url.path)
-    }
-
-    // MARK: MCP
-
-    private var mcpSection: some View {
-        AIToolsMCPListView(showAdd: $showAddMCP)
+        .onAppear { notify.refreshState() }
     }
 }
 
-/// 单个项目行：Rules 状态 + 模板写入 + 移除。
-private struct AIToolsProjectRow: View {
-    let project: CursorProject
-    @ObservedObject private var index = CursorProjectIndex.shared
+// MARK: - 用量节（周窗口口径）
+
+struct AIToolsUsageSettingsSection: View {
+    @AppStorage(CodexUsageStore.weeklyFixedKey) private var weeklyFixed = false
+    @AppStorage(CodexUsageStore.weeklyWeekdayKey) private var weeklyWeekday = 2
+    @AppStorage(CodexUsageStore.weeklyHourKey) private var weeklyHour = 0
+
+    private static func weekdayName(_ weekday: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        let symbols = formatter.standaloneWeekdaySymbols ?? []
+        let index = weekday - 1
+        return symbols.indices.contains(index) ? symbols[index] : "\(weekday)"
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(verbatim: project.name).bold()
-                Spacer()
-                Button(role: .destructive) {
-                    index.removeProject(project.path)
-                } label: {
-                    Image(systemName: "minus.circle")
-                }
-                .buttonStyle(.borderless)
-            }
-            Text(verbatim: project.path)
-                .font(.caption2).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-
-            if project.ruleFileNames.isEmpty {
-                Text("aitools.settings.cursor.noRules")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(project.ruleFileURLs, id: \.self) { url in
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text").foregroundStyle(.secondary)
-                        Text(verbatim: url.lastPathComponent).font(.caption).lineLimit(1)
-                        Spacer()
-                        Button("aitools.settings.cursor.open") {
-                            NSWorkspace.shared.open(url)
+        Form {
+            SwiftUI.Section("aitools.settings.section.usage") {
+                Toggle("aitools.settings.usage.weeklyFixed", isOn: $weeklyFixed)
+                    .onChange(of: weeklyFixed) { _, _ in CodexUsageStore.shared.refresh() }
+                if weeklyFixed {
+                    Picker("aitools.settings.usage.weeklyWeekday", selection: $weeklyWeekday) {
+                        ForEach(1...7, id: \.self) { weekday in
+                            Text(verbatim: Self.weekdayName(weekday)).tag(weekday)
                         }
-                        .buttonStyle(.borderless).controlSize(.small)
                     }
+                    .onChange(of: weeklyWeekday) { _, _ in CodexUsageStore.shared.refresh() }
+                    Picker("aitools.settings.usage.weeklyHour", selection: $weeklyHour) {
+                        ForEach(0...23, id: \.self) { hour in
+                            Text(verbatim: String(format: "%02d:00", hour)).tag(hour)
+                        }
+                    }
+                    .onChange(of: weeklyHour) { _, _ in CodexUsageStore.shared.refresh() }
                 }
-            }
-            if project.hasLegacyCursorrules {
-                Text("aitools.settings.cursor.legacy")
+                Text("aitools.settings.usage.weeklyHint")
                     .font(.caption).foregroundStyle(.secondary)
             }
-
-            HStack(spacing: 8) {
-                ForEach(CursorRuleTemplate.all) { template in
-                    Button(template.localizedTitle) {
-                        writeTemplate(template)
-                    }
-                    .controlSize(.small)
-                }
-            }
-            .padding(.top, 2)
         }
-        .padding(.vertical, 4)
-    }
-
-    private func writeTemplate(_ template: CursorRuleTemplate) {
-        index.writeTemplate(template, toProject: project.path) { result in
-            guard case .failure(let error) = result else { return }
-            let alert = NSAlert()
-            if case CursorEnv.TemplateError.alreadyExists = error {
-                alert.messageText = L("aitools.cursor.template.existsTitle")
-                alert.informativeText = L("aitools.cursor.template.existsMessage")
-            } else {
-                alert.messageText = L("aitools.common.writeFailed")
-            }
-            alert.addButton(withTitle: L("common.ok"))
-            alert.runModal()
-        }
+        .formStyle(.grouped)
     }
 }
 
-// MARK: - MCP 列表 + 添加 sheet
+// MARK: - MCP 节（列出 + 增删 [mcp_servers.*]，stdio）
 
-struct AIToolsMCPListView: View {
-    @Binding var showAdd: Bool
-    @State private var rows: [MCPRow] = []
+struct AIToolsMCPSection: View {
+    @State private var servers: [CodexEnv.MCPServerInfo] = []
     @State private var loading = false
+    @State private var showAdd = false
 
     var body: some View {
-        SwiftUI.Section("aitools.settings.cursor.mcp") {
-            if loading {
-                ProgressView().controlSize(.small)
-            } else if rows.isEmpty {
-                Text("aitools.settings.cursor.mcp.empty")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(rows) { row in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: row.name)
-                            Text(verbatim: "\(row.type) · \(row.detail)")
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Form {
+            SwiftUI.Section("aitools.settings.section.mcp") {
+                if loading {
+                    ProgressView().controlSize(.small)
+                } else if servers.isEmpty {
+                    Text("aitools.settings.mcp.empty")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(servers) { server in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: server.name)
+                                let detail = server.args.isEmpty
+                                    ? server.command
+                                    : "\(server.command) \(server.args.joined(separator: " "))"
+                                if !detail.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    Text(verbatim: detail)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                confirmDelete(server)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
                         }
-                        Spacer()
-                        Button(role: .destructive) {
-                            confirmDelete(row)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
                     }
                 }
+                HStack {
+                    Button("aitools.settings.mcp.add") { showAdd = true }
+                    Button("aitools.settings.mcp.openConfig") {
+                        NSWorkspace.shared.open(CodexEnv.configFile)
+                    }
+                }
+                Text("aitools.settings.mcp.help")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Button("aitools.settings.cursor.mcp.add") { showAdd = true }
-            Text("aitools.settings.cursor.mcp.help")
-                .font(.caption).foregroundStyle(.secondary)
         }
+        .formStyle(.grouped)
         .onAppear { reload() }
-        .onChange(of: showAdd) { _, isShowing in
-            if !isShowing { reload() }
+        .sheet(isPresented: $showAdd) {
+            AIToolsMCPAddSheet { reload() }
+        }
+    }
+
+    private func confirmDelete(_ server: CodexEnv.MCPServerInfo) {
+        let alert = NSAlert()
+        alert.messageText = L("aitools.settings.mcp.deleteConfirm.title \(server.name)")
+        alert.informativeText = L("aitools.settings.mcp.deleteConfirm.message")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("aitools.common.remove"))
+        alert.addButton(withTitle: L("common.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = server.name
+        DispatchQueue.global(qos: .utility).async {
+            try? CodexEnv.removeMCPServer(name: name)
+            DispatchQueue.main.async { MainActor.assumeIsolated { reload() } }
         }
     }
 
     private func reload() {
         loading = true
         DispatchQueue.global(qos: .utility).async {
-            let servers = CursorEnv.mcpServers()
-            let mapped: [MCPRow] = servers.map { entry in
-                let config = entry.config
-                let type = (config["type"] as? String) ?? (config["command"] != nil ? "stdio" : "http")
-                let detail: String
-                if let command = config["command"] as? String {
-                    detail = command
-                } else if let url = config["url"] as? String {
-                    detail = url
-                } else {
-                    detail = ""
-                }
-                return MCPRow(id: entry.name, name: entry.name, type: type, detail: detail)
-            }
+            let result = CodexEnv.mcpServers()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    rows = mapped
+                    servers = result
                     loading = false
                 }
             }
         }
     }
-
-    private func confirmDelete(_ row: MCPRow) {
-        let alert = NSAlert()
-        alert.messageText = L("aitools.settings.cursor.mcp.deleteConfirm.title \(row.name)")
-        alert.informativeText = L("aitools.settings.cursor.mcp.deleteConfirm.message")
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: L("aitools.common.remove"))
-        alert.addButton(withTitle: L("common.cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CursorEnv.removeMCPServer(name: row.name)
-            DispatchQueue.main.async { MainActor.assumeIsolated { reload() } }
-        }
-    }
-
-    struct MCPRow: Identifiable {
-        let id: String
-        let name: String
-        let type: String
-        let detail: String
-    }
 }
 
-/// 添加 MCP 服务器 sheet（结构同 Claude MCP，写 ~/.cursor/mcp.json）。
-private struct AIToolsMCPAddSheet: View {
+// MARK: - MCP 添加 sheet（stdio：command/args/env）
+
+struct AIToolsMCPAddSheet: View {
+    var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
-    @State private var type = "stdio"
     @State private var command = ""
-    @State private var args = ""
-    @State private var url = ""
-    @State private var env = ""
+    @State private var argsText = ""
+    @State private var envText = ""
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !command.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("aitools.settings.cursor.mcp.addTitle").font(.headline)
+            Text("aitools.settings.mcp.addTitle").font(.headline)
             Form {
-                TextField("aitools.settings.cursor.mcp.name", text: $name)
-                Picker("aitools.settings.cursor.mcp.type", selection: $type) {
-                    Text("aitools.settings.cursor.mcp.type.stdio").tag("stdio")
-                    Text("aitools.settings.cursor.mcp.type.http").tag("http")
+                TextField("aitools.settings.mcp.name", text: $name)
+                TextField("aitools.settings.mcp.command", text: $command)
+                TextField("aitools.settings.mcp.args", text: $argsText)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("aitools.settings.mcp.env").font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $envText)
+                        .font(.caption.monospaced())
+                        .frame(height: 60)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.1)))
                 }
-                if type == "stdio" {
-                    TextField("aitools.settings.cursor.mcp.command", text: $command)
-                    TextField("aitools.settings.cursor.mcp.args", text: $args)
-                } else {
-                    TextField("aitools.settings.cursor.mcp.url", text: $url)
-                }
-                TextField("aitools.settings.cursor.mcp.env", text: $env, axis: .vertical)
-                    .lineLimit(2...5)
             }
             .formStyle(.grouped)
             HStack {
@@ -516,46 +519,159 @@ private struct AIToolsMCPAddSheet: View {
         .frame(width: 420)
     }
 
-    private var canSave: Bool {
-        let hasName = !name.trimmingCharacters(in: .whitespaces).isEmpty
-        let hasTarget = type == "stdio"
-            ? !command.trimmingCharacters(in: .whitespaces).isEmpty
-            : !url.trimmingCharacters(in: .whitespaces).isEmpty
-        return hasName && hasTarget
-    }
-
     private func save() {
         let serverName = name.trimmingCharacters(in: .whitespaces)
-        var config: [String: Any] = [:]
-        if type == "stdio" {
-            config["command"] = command.trimmingCharacters(in: .whitespaces)
-            let argList = args.split(separator: " ").map(String.init)
-            if !argList.isEmpty { config["args"] = argList }
-        } else {
-            config["type"] = "http"
-            config["url"] = url.trimmingCharacters(in: .whitespaces)
+        let cmd = command.trimmingCharacters(in: .whitespaces)
+        let args = argsText.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
+        var env: [String: String] = [:]
+        for line in envText.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, !parts[0].isEmpty { env[parts[0]] = parts[1] }
         }
-        let envDict = Self.parseEnv(env)
-        if !envDict.isEmpty { config["env"] = envDict }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CursorEnv.setMCPServer(name: serverName, config: config)
+        DispatchQueue.global(qos: .utility).async {
+            try? CodexEnv.setMCPServer(name: serverName, command: cmd, args: args, env: env)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { dismiss() }
+                MainActor.assumeIsolated {
+                    onSaved()
+                    dismiss()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 维护节
+
+struct AIToolsMaintenanceSection: View {
+    let localVersion: String?
+
+    @State private var diskBytes: Int64 = 0
+    @State private var fileCount = 0
+    @State private var diskLoaded = false
+    @State private var cleanupDays = 30
+    @State private var latestVersion: String?
+    @State private var checking = false
+    @State private var checkFailed = false
+    @State private var copied = false
+
+    private static let upgradeCommand = "npm install -g @openai/codex"
+
+    var body: some View {
+        Form {
+            SwiftUI.Section("aitools.maint.diskSection") {
+                if diskLoaded {
+                    Text("aitools.maint.disk \(AIToolsFormat.bytes(diskBytes)) \(fileCount)")
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+                HStack {
+                    Picker("aitools.maint.cleanupOlderThan", selection: $cleanupDays) {
+                        Text("aitools.maint.cleanupDays \(30)").tag(30)
+                        Text("aitools.maint.cleanupDays \(60)").tag(60)
+                        Text("aitools.maint.cleanupDays \(90)").tag(90)
+                    }
+                    Button("aitools.maint.cleanup \(cleanupDays)", role: .destructive) { confirmCleanup() }
+                }
+            }
+
+            SwiftUI.Section("aitools.maint.versionSection") {
+                if let localVersion {
+                    Text("aitools.maint.version \(localVersion)")
+                } else {
+                    Text("aitools.settings.status.versionUnknown").foregroundStyle(.secondary)
+                }
+                if checking {
+                    Text("aitools.maint.checking").font(.caption).foregroundStyle(.secondary)
+                } else if checkFailed {
+                    Text("aitools.maint.checkFailed").font(.caption).foregroundStyle(.red)
+                } else if let latestVersion {
+                    Text("aitools.maint.latestVersion \(latestVersion)").font(.caption)
+                }
+                HStack {
+                    Button("aitools.maint.checkUpdate") { checkUpdate() }
+                        .disabled(checking)
+                    Button("aitools.maint.copyUpgrade") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Self.upgradeCommand, forType: .string)
+                        copied = true
+                    }
+                    if copied {
+                        Text("aitools.common.copied").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { reloadDisk() }
+    }
+
+    private func reloadDisk() {
+        DispatchQueue.global(qos: .utility).async {
+            let (bytes, count) = CodexEnv.sessionsDiskStats()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    diskBytes = bytes
+                    fileCount = count
+                    diskLoaded = true
+                }
             }
         }
     }
 
-    private static func parseEnv(_ text: String) -> [String: String] {
-        var result: [String: String] = [:]
-        for line in text.split(separator: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.count == 2 else { continue }
-            let key = parts[0].trimmingCharacters(in: .whitespaces)
-            let value = parts[1].trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
-            result[key] = value
+    private func confirmCleanup() {
+        let alert = NSAlert()
+        alert.messageText = L("aitools.maint.cleanupConfirm.title")
+        alert.informativeText = L("aitools.maint.cleanupConfirm.message \(cleanupDays)")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("aitools.maint.cleanup \(cleanupDays)"))
+        alert.addButton(withTitle: L("common.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let (count, bytes) = CodexEnv.cleanupSessions(olderThanDays: cleanupDays)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    reloadDisk()
+                    CodexSessionIndex.shared.refresh()
+                    let done = NSAlert()
+                    done.messageText = L("aitools.maint.cleanupResult \(count) \(AIToolsFormat.bytes(bytes))")
+                    done.addButton(withTitle: L("common.ok"))
+                    done.runModal()
+                }
+            }
         }
-        return result
+    }
+
+    private func checkUpdate() {
+        checking = true
+        checkFailed = false
+        latestVersion = nil
+        guard let url = URL(string: "https://registry.npmjs.org/@openai/codex/latest") else {
+            checking = false
+            checkFailed = true
+            return
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            let version: String?
+            if let data,
+               let raw = try? JSONSerialization.jsonObject(with: data),
+               let object = raw as? [String: Any],
+               let v = object["version"] as? String {
+                version = v
+            } else {
+                version = nil
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    checking = false
+                    if let version {
+                        latestVersion = version
+                    } else {
+                        checkFailed = true
+                    }
+                }
+            }
+        }.resume()
     }
 }
