@@ -425,13 +425,16 @@ extension ClaudeUsageStore {
     /// 周窗口：滚动块（默认）复用分块算法、跨度换 168h；固定锚点聚合 [anchorStart, anchorStart+7d) 内条目。
     /// 滚动块无条目返回 nil；固定锚点即使 totals 为 0 也返回一个 window（有明确起止与倒计时可展示）。
     nonisolated fileprivate static func weeklyWindow(from entries: [UsageEntry], anchor: WeeklyAnchor) -> UsageWindow? {
-        guard !entries.isEmpty else { return nil }
         let weekSpan: TimeInterval = 168 * 3_600
         if !anchor.fixed {
+            // 滚动块：无条目返回 nil。
+            guard !entries.isEmpty else { return nil }
             return lastActiveBlock(from: entries, span: weekSpan)
         }
-        // 固定锚点：取不到锚点则回退滚动块口径。
+        // 固定锚点：即使无任何用量也返回一个 window（有明确起止与倒计时可展示，符合本属性契约）；
+        // 取不到锚点则回退滚动块口径（此时无条目才返回 nil）。
         guard let start = weekAnchorStart(before: Date(), weekday: anchor.weekday, hour: anchor.hour) else {
+            guard !entries.isEmpty else { return nil }
             return lastActiveBlock(from: entries, span: weekSpan)
         }
         let end = start.addingTimeInterval(weekSpan)

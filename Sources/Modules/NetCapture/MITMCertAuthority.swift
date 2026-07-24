@@ -173,6 +173,9 @@ final class MITMCertAuthority: @unchecked Sendable {
               let array = items as? [[String: Any]],
               let first = array.first,
               let identityAny = first[kSecImportItemIdentity as String] else { return nil }
+        // 运行时类型校验后再桥接为 SecIdentity：避免 CLAUDE.md 约定禁止的无保护 force-cast 崩溃；
+        // 类型不符（理论上不会发生）则返回 nil，调用方据此对该 host 走透传兜底。
+        guard CFGetTypeID(identityAny as CFTypeRef) == SecIdentityGetTypeID() else { return nil }
         let secIdentity = identityAny as! SecIdentity
         return sec_identity_create(secIdentity)
     }
