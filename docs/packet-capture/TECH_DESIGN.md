@@ -406,3 +406,42 @@ HTTP 代理下，每个客户端（手机 / 本机）以自己的**局域网源 
 2. 「全部」视图每行带设备徽标；右键设备 Tab 可重命名，别名持久化、重启仍在。
 3. MCP `list_devices` 返回设备列表；`list_flows(device:)` 只回该设备的包，摘要带 `@IP`。
 4. 单设备流量不影响其它设备 Tab 的存在与计数（除非触发全局上限淘汰，属已知取舍）。
+
+## 18. 实现状态（as-built，2026-07-24 复核）
+
+> 实现见 commits `47b6761`（模块）、`0925773`（MCP 控制 + iOS profile）、`44103a2`（单一配置网页）、`097f10d`（多设备）。据代码复核补记。14 个源文件全部落地；`NetCaptureTool` 注册于 `AppDelegate.swift:19`（AITools 之后）。设置 6 节、菜单结构与 §12/§4.1 一致。
+
+### 18.1 确切清单（补记 doc 未写明处）
+
+- **MCP 工具共 9 个**（`CaptureMCPServer.toolSchemas`）：`list_flows`(limit/host/method/status/**device**)、`get_flow`(id)、`search_flows`(query/limit/**device**)、`list_devices`、`latest_flows`(n)、`clear_flows`、`start_capture`、`stop_capture`、`capture_status`。传输为**一问一答式** HTTP/JSON-RPC（`MCPHTTPSession` 每连接读一个请求、按 `Content-Length` 组帧、回一次后 `Connection: close` 断开；id-less 通知回 `202`）——**非**持久 SSE 流，"Streamable HTTP" 名义如此但无流式。仅绑 `127.0.0.1`（`requiredLocalEndpoint`）、**无鉴权**（本机任意进程可读/清 flow，属既定本机威胁模型）。鉴权头脱敏仅在 `get_flow` 详情生效（摘要不含头）。
+- **magic 域名路由**为 `path.contains(...)` **子串匹配**（非精确路由），优先级：`/proxy-off` → `/proxy` → 含 `cert`/`.pem`/`.crt` → 其余一律落 `landingPageHTML`（含 `/` 与任意未知路径，等于软 404 回首页）。iOS 判定按 UA 含 iPhone/iPad/iPod。
+- **magic 域名请求不记录为 Flow**（`serveMagicDomain` 直接 `client.send` 后 `finish()`，从不调 `appendFlow`）——装证书/开配置页的请求不进列表。
+- **UserDefaults 键（确切）**：`netcapture.port` `.autoSystemProxy` `.serviceName` `.maxFlows` `.bodyCap` `.decryptScope` `.allowDomains` `.denyDomains` `.mcpPort` `.mcpRedactAuth` `.clearOnStop` `.deviceAliases`（`[ip:alias]` 字典）`.savedProxyState`（JSON 编码的原系统代理状态，用于崩溃恢复）。nil-clientIP 的哨兵值 `NetCaptureEnv.unknownDeviceKey = "?"`。
+- **崩溃恢复**：`savedProxyState` 在每次启用代理时保存一次（有值则不覆盖）、`restore()` 成功后清除；`NetCaptureTool.activate()` 调 `restoreIfLeftover()` + `willTerminate()` 调 `server.stop()` 两条路径，无运行中周期性心跳。
+- **跨线程**：`FlowSnapshotStore`（`NSLock` 保护、每次 `append`/`clear`/`clearDevice` 全量复制 flow 数组）是桥接 `@MainActor FlowStore` → MCP 连接队列读的实际机制。
+- **本地化**：实际 `netcapture.*` 词条 **131 条**（§13 估「约 70」偏低，随三次增量增长）。
+
+### 18.2 与设计的主要差异（重要）
+
+1. **TLS MITM 架构**：实现用**每个 CONNECT 会话临时起一个回环 TLS `NWListener`（单一静态 identity，接受一个连接即自毁）**，而非 §4.3 首选的「一个共享 listener + SNI 动态选证书」。代码内注明：Network.framework **无公开的服务端按连接 SNI 回调选 identity 的 API**，故采用文档中的**兜底路径**作为唯一路径。功能等价，架构为每会话。
+2. **信任状态查询**简化为对 CA 证书跑 `SecTrustEvaluateWithError`（`SecPolicyCreateBasicX509`），非 §4.4 的 `SecTrustSettingsCopyCertificates` 枚举。
+3. **Codex MCP 注册**：`CaptureMCPServer` 自带一套行级 `[mcp_servers.baobox-netcapture]` 追加/删除 + `.baobox.bak` 备份，**未**复用 `CodexTOML` 块级编辑器（仅用 `CodexEnv.mcpServers()`/`configFile` 做只读检测）。Claude 侧则复用 `ClaudeEnv.setMCPServer/removeMCPServer` 写 `~/.claude.json`（`{"type":"http","url":".../mcp"}`）。
+4. **反查设备主机名**（§17.3 的可选 best-effort）**未实现**，设备标签一律 IP 兜底（符合 §17.6 的 MVP 兜底）。
+5. **配置网页**始终中英并排（非 `Accept-Language` 切换）；页面 accent 深浅色都用 `#17A398`（未在深色切 `#2BC4B8`）。
+6. **菜单「ADB 一键」项**仅打开主窗口，实际 ADB 操作在设置页；非从菜单直接执行。
+7. **叶子证书 p12 口令**硬编码字符串 `"baobox"`（设计如此，非安全边界，代码注明）。
+
+### 18.3 已修复（本次复核）
+
+- **`SecPKCS12Import` 结果的无保护 force-cast**（`MITMCertAuthority.importIdentity` 的 `as! SecIdentity`）违反 CLAUDE.md「决不 crash / 无 force-unwrap」。已加运行时类型校验：`guard CFGetTypeID(identityAny as CFTypeRef) == SecIdentityGetTypeID() else { return nil }` 后再桥接；类型不符则返回 nil、该 host 走透传兜底。
+
+### 18.4 待真机验证 / 已知项（有 Mac 者优先核对）
+
+1. **回环 TLS 终止握手**（§14 已标风险）：确认原始客户端字节 pump 进回环 TLS 服务端能完成握手并产出明文；per-session listener 自毁的竞态窗口是否稳妥。
+2. **`SecPKCS12Import`**：macOS 上能否解析系统 LibreSSL `pkcs12 -export` 的 PBE；失败已降级为该 host 透传（已在 `importIdentity` 注明）。
+3. **iOS `com.apple.wifi.managed` 代理 payload**：非监督设备上 `EncryptionType=Any` 能否对既连 SSID 实际生效——本方案最不确定处，需真机确认并按需调 `EncryptionType`。
+4. **MCP `capture_status` 用 `main.sync`**：注释断言主线程从不反向 sync 进 MCP 连接队列故无死锁——此不变量须长期维持，后续改动勿破坏。
+5. **flow 上限为全局**（`netcapture.maxFlows` 默认 1000，跨设备共享）：某设备流量大会挤掉其它设备旧包（§17.6 既定取舍，非 bug）。可评估「按设备各自上限」。
+6. **`body` 解压提示文案**（如「brotli 未解压」）是英文常量；其中出现在原生 `FlowDetailView` 里的 `decoded.note` 属 App UI，按本地化约定本应走 `L()`——**遗留 L10n 缺口，建议后续补词条**。
+7. **`ProxyServer.start()` 再入**：`.starting`/`.failed` 态下再调 `start` 会再建 listener（仅 `.running` 拦截）；快速双击 `.starting` 有并发起两个 listener 的竞态（第二个应 `.failed` 优雅收场）。
+8. **`NWEndpoint.Port(rawValue: mcpPort)!`**：靠 `mcpPort` getter 的 `1024...65535` clamp 保证安全，属受不变量保护的 bang。

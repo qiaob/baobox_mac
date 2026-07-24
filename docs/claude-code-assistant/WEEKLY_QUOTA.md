@@ -173,3 +173,31 @@ private func checkWeeklyBudgetReminder(window: UsageWindow?) { /* 同 checkBudge
 4. 周窗口与 5h 窗口共用同一次后台扫描，菜单打开无卡顿（沿用内存缓存，无同步磁盘 IO）。
 5. 5h 窗口的既有数值与重构前逐一致（回归：`lastActiveBlock(span:5h)` == 原 `activeWindow`）。
 6. 费用/重置均标「估算」；解析仍全程容错，字段缺失不 crash。
+
+## 7. 实现状态（as-built，2026-07-24 复核）
+
+> 实现见 commit `5b1769a`；本节据代码复核补记，与上文设计对照。整体与设计 1:1，差异与已知项如下。
+
+### 7.1 落地事实（补记设计未写明的细节）
+
+- **文件**：改动集中在 `ClaudeUsage.swift`（聚合 + 周窗口）、`ClaudeCodeTool.swift`（菜单）、`ClaudeCodeSettingsView.swift`（`ClaudeNotificationsSection`）、`ClaudeCodeCenterWindow.swift`（周卡片 + `ClaudeFormat.countdownLong`）、`ClaudeLiveStatus.swift`（`ClaudeNotifier.notifyWeeklyBudget/notifyWeeklyBudgetRestored`）。
+- **UserDefaults 键（确切字符串）**：`claudecode.weeklyTokenBudget`、`claudecode.weeklyResetFixed`（默认 `false`）、`claudecode.weeklyResetWeekday`（默认 `2`）、`claudecode.weeklyResetHour`（默认 `0`）；沿用既有 `claudecode.tokenBudget`。`weeklyAnchorConfig()` 对 weekday 做 `1...7`、hour 做 `0...23` 防御性 clamp。
+- **5h 重构等价**：`activeWindow(from:)` 现委托 `lastActiveBlock(from:span:)`（span=5h），与重构前逐字节等价（仅常量改参数）。
+- **菜单**：`twoLineTitle` → `multiLineTitle(_:subtitles:)`；`quotaSubtitles()` 返回两行，各自独立降级（`claudecode.menu.noWindow` / `claudecode.menu.noWeekWindow`）。
+- **通知开关共用**：周提醒复用 5h 的 `budgetAlertEnabled` / `budgetRestoreEnabled`，**没有**独立的「周通知」开关。`notifyWeeklyBudget(percent:windowEnd:)` 与 5h 版一样**忽略 `windowEnd` 参数**（沿用既有写法）。
+- **countdownLong**：`<24h` 直接复用 `countdown`（`HhMm`）；`≥24h` 用 key `claudecode.usage.countdown.dayHour %lld %lld`（zh「%lld 天 %lld 小时」/ en「%lldd %lldh」）。
+
+### 7.2 与设计的差异
+
+- **星期选择器排序**：设计写「周一…周日」，实现按 `Calendar.current` 的 weekday 序（周日在前，`standaloneWeekdaySymbols`，1=周日）。语义正确（存的是 Calendar weekday int），仅界面排序与文案描述不同。以实现为准。
+- **周合计脚注**：仅在**滚动模式**（`!weeklyFixed`）渲染；固定锚点下不显示（其总量不是「近 7 天」滚动和，脚注的消歧义前提不成立）。合理，设计未写明此条件——以实现为准。
+
+### 7.3 已修复（本次复核）
+
+- **固定锚点空数据返回 nil 的契约违背**：`weeklyWindow(from:anchor:)` 原先顶层 `guard !entries.isEmpty` 在分支之前，导致固定锚点模式下近 7.5h 无任何用量时也返回 nil，与「固定锚点始终有值」的属性契约及设计 §4.2 矛盾。已改为：空判定只在滚动模式（及锚点求解失败回退时）生效，固定锚点即使 totals 为 0 也返回带起止的 window。
+
+### 7.4 已知项 / 待真机验证
+
+- `Calendar.nextDate(direction:.backward, matchingPolicy:.nextTime)` 在「恰好落在锚点时刻」的边界取值跨 Foundation 版本是否确定，需真机确认（5 分钟刷新节奏下影响极小）。
+- 提醒的「窗口切换」检测用的是启发式集合判断（非存「上一个窗口起点」），5h 与周两处结构重复；单窗口跟踪下低风险，但改动时需留意别过度清空导致重复提醒。
+- 同一次 `refresh()` 里 5h 与周若同时越过 80% 阈值，可能同刻发两条通知（预期可接受）。

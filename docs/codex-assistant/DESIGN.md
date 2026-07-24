@@ -230,3 +230,33 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 5. 维护节可看磁盘占用、清理旧会话、显示/检查 Codex 版本、复制升级命令；断网时检查更新优雅失败。
 6. 既有能力（会话续接、完成通知、配置可视化）回归正常；config.toml 写入仍保注释 + 备份。
 7. 全部新文案中英双语入 catalog；Cursor 词条已清理，catalog 合法。
+
+## 9. 实现状态（as-built，2026-07-24 复核）
+
+> 实现见 commit `6e273d1`。据代码复核补记。Cursor 移除干净（`CursorEnv.swift`、`AIToolsSessionsWindow.swift` 已删，`Sources/` 内无任何 Cursor CLI/编辑器引用与 `cursor.*` 词条；仅剩 `AIToolsSettingsView.swift:5` 一句「Cursor 已移除」注释）。整体与设计 §§1–6 高度一致。
+
+### 9.1 落地事实（补记设计未写明的细节）
+
+- **模块**：id 仍 `"aitools"`，名 `Codex 助手` / `Codex Assistant`，symbol `chevron.left.forwardslash.chevron.right`，注册位置不变（`AppDelegate.swift:18`，ClaudeCode 之后、NetCapture 之前）。
+- **UserDefaults 键（确切）**：`codex.tokenBudget`、`codex.weeklyTokenBudget`、`codex.weeklyResetFixed`、`codex.weeklyResetWeekday`（默认 2=周一，Calendar 序实际周日在前，同 Claude 侧）、`codex.weeklyResetHour`（默认 0）；通知偏好用 `aitools.notificationSound`、`aitools.budgetAlertEnabled`（**注意前缀不一致**：用量相关 `codex.*`、通知相关 `aitools.*`）。
+- **token_count 聚合**：`CodexUsage.parseFile` 逐文件三选一——有 `info.last_token_usage`（增量）→ 全部相加；否则有 `info.total_token_usage`（累计）→ 只取时间最大一条；否则用 `payload` 顶层计数（仅当无 `info`）当增量。与 §2 反双计规则一致。
+- **窗口**：`lastActiveBlock(from:span:)`（floor 到整点，span 5h/168h，末块 `now<=end` 才活跃）；周窗口滚动（默认）/ 固定锚点（`weekAnchorStart` 用 `Calendar.nextDate(.backward)`）。与 Claude 侧**平行独立实现**（`CodexWeeklyAnchor` 对 `WeeklyAnchor`），未按 §7 建议上移 Core 共享——保持了「Codex 与 Claude 平行不耦合」的取舍。
+- **中心窗口**：`AIToolsCenterController.shared.show(tab:)`，两 Tab（`.sessions` / `.usage`）；跨 AppKit/SwiftUI 用小单例 `AIToolsCenterTabSelection`（`selectedTab`）驱动 `TabView`。格式化用新 `AIToolsFormat`（内联在 `AIToolsCenterWindow.swift`，非独立文件）。
+- **设置 5 节**：config / notify / usage / mcp / maintenance。`CodexEnv` 新增 `cliVersion()`（后台 `Process` 经 `/bin/zsh -lc`，先读 stdout 再 `waitUntilExit` 防管道死锁）、`sessionsDiskStats()`、`cleanupSessions(olderThanDays:)`、`mcpServers()`（行扫 `[mcp_servers.*]`，只读 command/args）。
+- **调用统计**：`computeInvocationStats(days:)` 识别 `function_call`/`tool_call`/`mcp_tool_call`/`local_shell_call`/`custom_tool_call`；MCP 经显式 `server` 字段或 `<server>__<tool>` 名或裸 `mcp_tool_call` 三法判定；`local_shell_call` 归一为 `shell`。Codex 无 Skill/斜杠命令概念，故只有 builtin + mcp 两类。
+- **跨模块依赖（既存）**：`AIToolsTool`/`AIToolsCenterWindow` 调用 `TerminalLauncher.run(...)`（定义在 `ClaudeCode/ClaudeEnv.swift`），此依赖在本次之前即存在，非新引入，但 AITools 未与 ClaudeCode 完全解耦——留作已知项。
+
+### 9.2 与设计的差异
+
+- **MCP 面板**：仅实现 MVP **只读**列出 + 打开 config.toml；§5.1 的 P1 块级 `addServerBlock`/`removeServerBlock` **未实现**（符合「不确定就只读」的指引）。
+- **「今日改动」审计 Tab**：按 §4.2 允许，MVP **未做**。
+- **菜单分隔线**：设计 mock 在状态行与最近会话之间有分隔线，实现未加（仅两条分隔线）。纯外观。
+- **周合计脚注**：同 Claude 侧，固定模式下不显示（合理）。
+
+### 9.3 待真机验证 / 已知项
+
+- `CodexEnv.cliVersion()` 的子进程**无超时**：`codex` 二进制挂死会让该后台线程一直阻塞（不阻塞主线程）。建议后续加超时。
+- `cleanupSessions` 直接删 rollout jsonl，仅应用内二次确认，**不可撤销**（无回收站）。
+- token_count 若某文件同时出现 `total_token_usage` 与「仅顶层无 info」的 token_count，一旦走累计路径则顶层条目被丢弃（符合规则，但存在潜在丢数据、无遥测可察）。
+- 预算提醒的「窗口切换」清空启发式与 Claude 侧同源、现已复制一份，改动时注意别过度清空致重复提醒。
+- 并发/安全合规：`@Published` 均主线程写；`CodexTOML` 写前备份 `.baobox.bak`、拒改多行/非字符串值、保留未知行；未见 `try!`/force-unwrap。
