@@ -352,6 +352,57 @@ segmented / DisclosureGroup 分节：
 
 1. AI 经 MCP 调 `start_capture` → 菜单主开关与窗口即时变「停止抓包」、状态行显示运行；`stop_capture` 反之；`capture_status` 与 UI 手动开关结果一致（双向驱动）。
 2. `list_flows`/`get_flow` 经 MCP 返回带过滤的列表与单包详情，鉴权头脱敏。
-3. UI 呈现**两个独立二维码**：「① 装证书」(`/cert`) 与「② 配代理」(`/proxy`)，各自可单独扫。
-4. iOS 扫①→装 CA 描述文件（再手动开信任）；扫②→装仅 Wi-Fi 代理描述文件，该 SSID 自动指向 Mac；拿不到 SSID 时②返回说明页不报错。
-5. Android 扫①下证书；②处明示改用 ADB 一键或手动填 `IP:端口`。两个二维码内容互不重叠。
+3. UI 呈现**一个二维码**指向 `http://baobox.proxy/`，扫开是一个含「装证书 / 配代理 / 关代理」三块的自适应网页。
+4. iOS 在页内点①装 CA 描述文件（再手动开信任）；点②装仅 Wi-Fi 代理描述文件，该 SSID 自动指向 Mac；点③装「代理=None」描述文件关代理；拿不到 SSID 时 `/proxy` 302 回首页不报错。
+5. Android 在页内点①下证书；②③处明示改用 ADB 一键或手动填/清 `IP:端口`（页内大字 + 一键复制）。
+
+## 17. v1.2 增量：多设备区分与按设备分 Tab
+
+> 设计者：Fable（2026-07-24 追加）。对应用户诉求：多台手机同时抓包时，UI 要能区分设备，用多个 Tab 分别显示各设备抓到的包。
+
+### 17.1 原理
+
+HTTP 代理下，每个客户端（手机 / 本机）以自己的**局域网源 IP** 连到代理。故**客户端源 IP = 设备标识**：`ProxyConnection` 的入站连接 `self.client.currentPath?.remoteEndpoint` 即手机 IP（Mac 本地抓包经系统代理，源为 `127.0.0.1` → 标为「本机」）。给每条 `Flow` 打上 `clientIP`，UI 即可按设备分组/分 Tab，无需额外协议。
+
+### 17.2 数据模型
+
+- `Flow` 新增 `var clientIP: String?`（源设备 LAN IP；`127.0.0.1`/`::1` → 本机；nil 未知）。`init` 加默认 `nil` 参数。
+- `ProxyConnection`：`start()`（或 client `.ready`）时用与 `remoteIP(of:)` 相同的 `.hostPort` 提取逻辑，从 **`self.client`** 取源 IP 存 `clientIP`（去掉 IPv6 作用域后缀 `%en0`、`::ffff:` 前缀归一）；`appendFlow` 前统一 `flow.clientIP = self.clientIP`（RelayEngine 产出的 flow、blind tunnel 的 `tunnelFlow`、magic 域名的本地应答 flow 全部要打上——最简做法：在 `appendFlow(_:)` 里统一赋值 `var f = flow; f.clientIP = clientIP; …`，一处兜底）。
+- `DeviceInfo`（Identifiable，Sendable）：`id: String`（=clientIP）、`ip`、`label`（alias ?? 反查名 ?? ip；本机特殊标「本机 / This Mac」）、`flowCount`、`lastActivity`。
+
+### 17.3 FlowStore 扩展
+
+- 新增 `@Published private(set) var devices: [DeviceInfo]`：`append`/`clear` 后从 `flows` 重算（distinct clientIP → 计数 + 末次时间），按 `lastActivity` 降序，本机固定排最前。1000 条上限内重算成本可忽略。
+- 设备别名持久化：UserDefaults 字典 `netcapture.deviceAliases`（ip→alias），`setAlias(ip:_:)` / `alias(ip:)`；`DeviceInfo.label` 取别名优先。
+- 反查设备名（可选，best-effort）：新 IP 首次出现时后台 `getnameinfo`（`gethostbyaddr` 亦可）异步解析主机名，成功则缓存内存供 label 兜底；失败保持 IP。**不阻塞**、失败不报错；MVP 允许只显示 IP + 手动改名。
+- 过滤签名加设备维度：`filtered(query:methods:statusClasses:device:)`，`device: String?`（=clientIP，nil=全部）。同步维护的 `FlowSnapshotStore` 不变（快照里 flow 已含 clientIP，MCP 直接读）。
+
+### 17.4 UI —— 设备 Tab 条
+
+`NetCaptureRootView` 在 Flow 列表**上方**加一条**设备 Tab 条**（水平、超出可横向滚动）：
+
+- 首个 Tab「全部 (N)」；其后每设备一个 Tab：`label`（本机/别名/主机名/IP）+ 计数徽标，如 `本机 (12)`、`iPhone · 1.23 (42)`、`192.168.1.45 (7)`。新设备连上即随 `devices` 实时新增。
+- `@State var deviceFilter: String? = nil`；选中某 Tab → `deviceFilter = 设备ip`，列表用新的 `filtered(...device:)`。选「全部」→ nil。
+- 「全部」视图下，`FlowRow` 增一个小设备徽标（label 或 IP 短形），便于混合视图里辨别来源；单设备 Tab 下不显示该徽标（冗余）。
+- 设备 Tab 右键菜单：**重命名…**（弹小 sheet/alert 输入别名 → `setAlias`）、**只看此设备**（=选中）、**清空此设备的包**（可选：`FlowStore.clearDevice(ip:)` 移除该 clientIP 的 flow）。
+- 样式沿用设计令牌：选中 Tab 用 accent（浅 `#17A398`/深 `#2BC4B8`）底或下划线，未选中次要色；计数徽标小号次要色。
+- 底部状态条追加：`设备 M · 全部 N 条 · 当前 K 条`。
+
+### 17.5 MCP 扩展（让 AI 也能按设备查）
+
+- 新工具 `list_devices` → 返回各设备 `{ip, label, flowCount, lastActivity}`（读 `FlowSnapshotStore` 快照聚合，别名从 UserDefaults 读）。
+- `list_flows` / `search_flows` 入参加可选 `device`（=clientIP，按 `flow.clientIP` 过滤）；`get_flow` 详情/摘要行加 `device` 字段。工具 description（英文）说明「device = client LAN IP, get it from list_devices」。
+- 摘要格式在末尾追加 ` @<clientIP>`，AI 可据此区分。
+
+### 17.6 取舍与说明
+
+- **环形缓冲仍是全局上限**（`netcapture.maxFlows`），跨设备共享；某设备流量大可能挤掉其它设备旧包。MVP 接受，UI/文档说明；后续可评估「按设备各自上限」。
+- 设备身份是**源 IP**：手机换网/重连 DHCP 可能变 IP → 视为新设备（别名按 IP 绑定，换 IP 需重命名）。可接受，文档说明。
+- 反查主机名可能超时/无 PTR → 一律 IP 兜底，不影响功能。
+
+### 17.7 验收增量
+
+1. 两台手机 + 本机同时经代理上网，设备 Tab 条出现「全部 / 本机 / 手机A / 手机B」并各带实时计数；切 Tab 只看该设备的包。
+2. 「全部」视图每行带设备徽标；右键设备 Tab 可重命名，别名持久化、重启仍在。
+3. MCP `list_devices` 返回设备列表；`list_flows(device:)` 只回该设备的包，摘要带 `@IP`。
+4. 单设备流量不影响其它设备 Tab 的存在与计数（除非触发全局上限淘汰，属已知取舍）。
