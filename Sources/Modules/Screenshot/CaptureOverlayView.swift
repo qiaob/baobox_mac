@@ -67,6 +67,9 @@ final class CaptureOverlayView: NSView {
     private var mosaicImage: CGImage?
     private var freezeTask: Task<CGImage, Error>?
 
+    /// 菜单场景的「含菜单整屏」冻结底图。非 nil 即冻结模式：框选/标注基于它裁剪，渲染也铺它而非透实时屏。
+    private let frozenBackground: CGImage?
+
     /// 进行中的一笔（选区本地坐标）。
     private var draftAnchorLocal: NSPoint = .zero
     private var draftShape: AnnotationOp.Shape?
@@ -75,10 +78,12 @@ final class CaptureOverlayView: NSView {
     private var textEditor: NSTextField?
     private var finishing = false
 
-    init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false) {
+    init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false,
+         frozenBackground: CGImage? = nil) {
         self.screenRef = screen
         self.controller = controller
         self.recordMode = recordMode
+        self.frozenBackground = frozenBackground
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         // 不使用 layer-backing：draw(_:) 里以 .clear 混合模式在非透明 backing 上"挖洞"，
         // 需要窗口 backing 直接透明，layer-backed 会改变透明合成行为。
@@ -496,6 +501,14 @@ final class CaptureOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
+        // 冻结模式（菜单场景）：先铺满「含菜单整屏」底图，后续 dim/挖洞都基于它，而非透出实时屏。
+        if let frozenBackground {
+            ctx.saveGState()
+            ctx.interpolationQuality = .high
+            ctx.draw(frozenBackground, in: bounds)
+            ctx.restoreGState()
+        }
+
         switch phase {
         case .hovering(let detected):
             drawDim(ctx)
@@ -680,6 +693,15 @@ final class CaptureOverlayView: NSView {
     }
 
     private func punchHole(_ ctx: CGContext, rect: NSRect) {
+        if let frozenBackground {
+            // 冻结模式：选区露出「含菜单底图」的亮部（而非清透明透出实时屏）。
+            ctx.saveGState()
+            ctx.clip(to: rect)
+            ctx.interpolationQuality = .high
+            ctx.draw(frozenBackground, in: bounds)
+            ctx.restoreGState()
+            return
+        }
         ctx.setBlendMode(.clear)
         NSColor.black.setFill()
         rect.fill()
@@ -788,7 +810,20 @@ final class CaptureOverlayView: NSView {
 
     /// 首次选定工具时捕获选区画面（排除自身蒙层与工具条，overlay 无需消隐）。
     private func beginFreezeIfNeeded(rect: NSRect) {
-        guard freezeTask == nil, let controller else { return }
+        guard freezeTask == nil else { return }
+        // 冻结模式：标注底图直接从「含菜单整屏」裁剪（同步），不用实时 freezeRegion（那会丢失菜单）。
+        if frozenBackground != nil {
+            guard let cropped = cropFrozenBackground(localRect: rect) else { return }
+            frozenImage = cropped
+            needsDisplay = true
+            Task { @MainActor [weak self] in
+                let mosaic = await Task.detached { AnnotationRenderer.pixellated(cropped) }.value
+                self?.mosaicImage = mosaic
+                self?.needsDisplay = true
+            }
+            return
+        }
+        guard let controller else { return }
         let globalRect = globalAKRect(fromLocal: rect)
         let extra: Set<CGWindowID> = toolbar.map { [$0.windowID] } ?? []
         let task = Task { try await controller.freezeRegion(globalRect, on: self.screenRef,
@@ -803,6 +838,18 @@ final class CaptureOverlayView: NSView {
             self.mosaicImage = mosaic
             self.needsDisplay = true
         }
+    }
+
+    /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上、Retina 换算。
+    private func cropFrozenBackground(localRect: NSRect) -> CGImage? {
+        guard let frozenBackground else { return nil }
+        let scale = screenRef.backingScaleFactor
+        let x = localRect.minX * scale
+        let y = (bounds.height - localRect.maxY) * scale
+        let w = localRect.width * scale
+        let h = localRect.height * scale
+        let pixelRect = CGRect(x: x.rounded(), y: y.rounded(), width: w.rounded(), height: h.rounded())
+        return frozenBackground.cropping(to: pixelRect)
     }
 
     // MARK: - 标注：绘制提交 / 橡皮 / 撤销
@@ -971,6 +1018,9 @@ final class CaptureOverlayView: NSView {
             var base = self.frozenImage
             if base == nil, let task = self.freezeTask {
                 base = try? await task.value
+            }
+            if base == nil, self.frozenBackground != nil {
+                base = self.cropFrozenBackground(localRect: rect)
             }
             if base == nil {
                 base = try? await controller.freezeRegion(globalRect, on: self.screenRef,

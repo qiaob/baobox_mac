@@ -265,6 +265,79 @@ enum CodexEnv {
         guard s.first == "=" else { return nil }
         return String(s.dropFirst())
     }
+
+    // MARK: - config.toml [mcp_servers.*] 段级增删（stdio）
+
+    /// 写入/更新一个 stdio 型 `[mcp_servers.<name>]` 段（command/args/env）。
+    /// 幂等：先删同名段再在文件末尾追加。写前备份 `.baobox.bak`。后台线程调用。
+    static func setMCPServer(name: String, command: String, args: [String], env: [String: String]) throws {
+        var text = (try? String(contentsOf: configFile, encoding: .utf8)) ?? ""
+        text = removeMCPBlock(text, name: name)
+        var block = "\n[mcp_servers.\(tomlSectionKey(name))]\n"
+        block += "command = \(CodexTOML.encodeString(command))\n"
+        if !args.isEmpty {
+            block += "args = \(CodexTOML.encodeStringArray(args))\n"
+        }
+        if !env.isEmpty {
+            let pairs = env.keys.sorted().map {
+                "\(CodexTOML.encodeString($0)) = \(CodexTOML.encodeString(env[$0] ?? ""))"
+            }
+            block += "env = { " + pairs.joined(separator: ", ") + " }\n"
+        }
+        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+        text += block
+        try writeConfig(text)
+    }
+
+    /// 删除 `[mcp_servers.<name>]` 段。写前备份。后台线程调用。
+    static func removeMCPServer(name: String) throws {
+        guard let text = try? String(contentsOf: configFile, encoding: .utf8) else { return }
+        try writeConfig(removeMCPBlock(text, name: name))
+    }
+
+    /// 移除指定 `[mcp_servers.<name>]` 段（从段头到下一段头/文件尾）。保全其余内容。
+    private static func removeMCPBlock(_ text: String, name: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var out: [String] = []
+        var skipping = false
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                // 到达任意段头：目标段→开始跳过；其它段→停止跳过并保留。
+                if mcpServerName(fromHeader: trimmed) == name {
+                    skipping = true
+                    continue
+                }
+                skipping = false
+                out.append(line)
+                continue
+            }
+            if skipping { continue }
+            out.append(line)
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// TOML 段名：bare key 安全（A-Za-z0-9_-）则原样，否则加引号。
+    private static func tomlSectionKey(_ name: String) -> String {
+        let bare = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        if !name.isEmpty && name.allSatisfy({ bare.contains($0) }) { return name }
+        return "\"\(name.replacingOccurrences(of: "\"", with: "\\\""))\""
+    }
+
+    /// 备份后写 config.toml。
+    private static func writeConfig(_ text: String) throws {
+        let url = configFile
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            let bak = url.appendingPathExtension("baobox.bak")
+            try? fm.removeItem(at: bak)
+            try? fm.copyItem(at: url, to: bak)
+        }
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = text.data(using: .utf8) else { throw CodexTOML.EditError.uneditable }
+        try data.write(to: url)
+    }
 }
 
 // MARK: - TOML 行级编辑器

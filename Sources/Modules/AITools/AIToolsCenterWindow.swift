@@ -213,10 +213,11 @@ struct AIToolsSessionsTab: View {
     }
 }
 
-/// 单条会话行：标题、项目、相对时间 + 操作按钮。
+/// 单条会话行：标题、项目、相对时间 + 悬停浮现操作 + 右键菜单 + 导出 Markdown（对齐 Claude 版）。
 private struct AIToolsSessionRow: View {
     let session: CodexSessionSummary
     @ObservedObject private var index = CodexSessionIndex.shared
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -232,28 +233,38 @@ private struct AIToolsSessionRow: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            HStack(spacing: 12) {
-                Button {
-                    resume()
-                } label: {
-                    Label("aitools.sessions.resume", systemImage: "terminal")
+            if hovering {
+                HStack(spacing: 12) {
+                    actionButton("aitools.sessions.resume", "terminal") { resume() }
+                    actionButton("aitools.sessions.copyCommand", "doc.on.doc") { copyCommand() }
+                    actionButton("aitools.sessions.export", "square.and.arrow.up") { exportMarkdown() }
+                    actionButton("aitools.sessions.delete", "trash", destructive: true) { confirmDelete() }
                 }
-                Button {
-                    copyCommand()
-                } label: {
-                    Label("aitools.sessions.copyCommand", systemImage: "doc.on.doc")
-                }
-                Button(role: .destructive) {
-                    confirmDelete()
-                } label: {
-                    Label("aitools.sessions.delete", systemImage: "trash")
-                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .padding(.top, 2)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .padding(.top, 2)
         }
         .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2) { resume() }
+        .contextMenu {
+            Button("aitools.sessions.resume") { resume() }
+            Button("aitools.sessions.copyCommand") { copyCommand() }
+            Button("aitools.sessions.export") { exportMarkdown() }
+            Divider()
+            Button("aitools.sessions.delete", role: .destructive) { confirmDelete() }
+        }
+        .help(Text("aitools.sessions.rowHint"))
+    }
+
+    private func actionButton(_ title: LocalizedStringKey, _ icon: String,
+                              destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(role: destructive ? .destructive : nil, action: action) {
+            Label(title, systemImage: icon)
+        }
     }
 
     private func resume() {
@@ -267,6 +278,23 @@ private struct AIToolsSessionRow: View {
         NSPasteboard.general.setString(command, forType: .string)
     }
 
+    private func exportMarkdown() {
+        index.exportMarkdown(session) { markdown in
+            guard let markdown else {
+                Self.alert(L("aitools.sessions.exportFailed"), "")
+                return
+            }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = Self.safeFileName(session.title) + ".md"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+                try markdown.data(using: .utf8)?.write(to: url)
+            } catch {
+                Self.alert(L("aitools.sessions.exportFailed"), error.localizedDescription)
+            }
+        }
+    }
+
     private func confirmDelete() {
         let alert = NSAlert()
         alert.messageText = L("aitools.sessions.deleteConfirm.title")
@@ -276,6 +304,23 @@ private struct AIToolsSessionRow: View {
         alert.addButton(withTitle: L("common.cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         index.deleteSession(session) { _ in }
+    }
+
+    private static func safeFileName(_ title: String) -> String {
+        let cleaned = title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let clipped = String(cleaned.prefix(60))
+        return clipped.isEmpty ? "codex-session" : clipped
+    }
+
+    private static func alert(_ title: String, _ message: String) {
+        let a = NSAlert()
+        a.messageText = title
+        if !message.isEmpty { a.informativeText = message }
+        a.addButton(withTitle: L("common.ok"))
+        a.runModal()
     }
 }
 

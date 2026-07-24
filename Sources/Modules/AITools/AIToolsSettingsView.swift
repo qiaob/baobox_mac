@@ -390,11 +390,12 @@ struct AIToolsUsageSettingsSection: View {
     }
 }
 
-// MARK: - MCP 节（只读列出 [mcp_servers.*]）
+// MARK: - MCP 节（列出 + 增删 [mcp_servers.*]，stdio）
 
 struct AIToolsMCPSection: View {
     @State private var servers: [CodexEnv.MCPServerInfo] = []
     @State private var loading = false
+    @State private var showAdd = false
 
     var body: some View {
         Form {
@@ -406,21 +407,33 @@ struct AIToolsMCPSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(servers) { server in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: server.name)
-                            let detail = server.args.isEmpty
-                                ? server.command
-                                : "\(server.command) \(server.args.joined(separator: " "))"
-                            if !detail.trimmingCharacters(in: .whitespaces).isEmpty {
-                                Text(verbatim: detail)
-                                    .font(.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).truncationMode(.middle)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: server.name)
+                                let detail = server.args.isEmpty
+                                    ? server.command
+                                    : "\(server.command) \(server.args.joined(separator: " "))"
+                                if !detail.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    Text(verbatim: detail)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
                             }
+                            Spacer()
+                            Button(role: .destructive) {
+                                confirmDelete(server)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
                         }
                     }
                 }
-                Button("aitools.settings.mcp.openConfig") {
-                    NSWorkspace.shared.open(CodexEnv.configFile)
+                HStack {
+                    Button("aitools.settings.mcp.add") { showAdd = true }
+                    Button("aitools.settings.mcp.openConfig") {
+                        NSWorkspace.shared.open(CodexEnv.configFile)
+                    }
                 }
                 Text("aitools.settings.mcp.help")
                     .font(.caption).foregroundStyle(.secondary)
@@ -428,6 +441,24 @@ struct AIToolsMCPSection: View {
         }
         .formStyle(.grouped)
         .onAppear { reload() }
+        .sheet(isPresented: $showAdd) {
+            AIToolsMCPAddSheet { reload() }
+        }
+    }
+
+    private func confirmDelete(_ server: CodexEnv.MCPServerInfo) {
+        let alert = NSAlert()
+        alert.messageText = L("aitools.settings.mcp.deleteConfirm.title \(server.name)")
+        alert.informativeText = L("aitools.settings.mcp.deleteConfirm.message")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("aitools.common.remove"))
+        alert.addButton(withTitle: L("common.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = server.name
+        DispatchQueue.global(qos: .utility).async {
+            try? CodexEnv.removeMCPServer(name: name)
+            DispatchQueue.main.async { MainActor.assumeIsolated { reload() } }
+        }
     }
 
     private func reload() {
@@ -438,6 +469,71 @@ struct AIToolsMCPSection: View {
                 MainActor.assumeIsolated {
                     servers = result
                     loading = false
+                }
+            }
+        }
+    }
+}
+
+// MARK: - MCP 添加 sheet（stdio：command/args/env）
+
+struct AIToolsMCPAddSheet: View {
+    var onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var command = ""
+    @State private var argsText = ""
+    @State private var envText = ""
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !command.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("aitools.settings.mcp.addTitle").font(.headline)
+            Form {
+                TextField("aitools.settings.mcp.name", text: $name)
+                TextField("aitools.settings.mcp.command", text: $command)
+                TextField("aitools.settings.mcp.args", text: $argsText)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("aitools.settings.mcp.env").font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $envText)
+                        .font(.caption.monospaced())
+                        .frame(height: 60)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.1)))
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("common.cancel") { dismiss() }
+                Button("aitools.common.save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(16)
+        .frame(width: 420)
+    }
+
+    private func save() {
+        let serverName = name.trimmingCharacters(in: .whitespaces)
+        let cmd = command.trimmingCharacters(in: .whitespaces)
+        let args = argsText.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
+        var env: [String: String] = [:]
+        for line in envText.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, !parts[0].isEmpty { env[parts[0]] = parts[1] }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            try? CodexEnv.setMCPServer(name: serverName, command: cmd, args: args, env: env)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    onSaved()
+                    dismiss()
                 }
             }
         }

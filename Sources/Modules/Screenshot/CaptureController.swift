@@ -12,6 +12,9 @@ final class CaptureController {
     private var overlays: [CaptureOverlayWindow] = []
     private var isActive = false
     private var sessionMode: CaptureSessionMode = .capture
+    /// 菜单场景的「含菜单整屏」冻结图（displayID → 图）。非空即冻结模式：框选/全屏/窗口都从它裁剪，
+    /// 而非重新实时抓屏（那样会丢失已收起的菜单）。
+    private var frozenScreens: [CGDirectDisplayID: CGImage] = [:]
 
     func begin() {
         begin(.capture)
@@ -34,11 +37,14 @@ final class CaptureController {
 
         isActive = true
         sessionMode = mode
+        // 菜单场景：取「含菜单整屏」快照（截图快捷键在菜单打开时按下，已在收菜单前抓好）。仅截图、非录屏。
+        frozenScreens = (mode == .capture) ? ScreenMenuSnapshot.take() : [:]
         let mouseAK = NSEvent.mouseLocation
 
         for screen in NSScreen.screens {
+            let frozen = screen.displayID.flatMap { frozenScreens[$0] }
             let overlay = CaptureOverlayWindow(screen: screen, controller: self,
-                                               recordMode: mode == .record)
+                                               recordMode: mode == .record, frozenBackground: frozen)
             overlays.append(overlay)
             overlay.orderFrontRegardless()
         }
@@ -66,6 +72,7 @@ final class CaptureController {
         }
         overlays.removeAll()
         isActive = false
+        frozenScreens = [:] // 释放含菜单大图
     }
 
     // MARK: - overlay 回调
@@ -88,6 +95,19 @@ final class CaptureController {
             startRecording(rectAK.intersection(screen.frame), on: screen)
             return
         }
+        // 冻结模式：从含菜单整屏裁剪窗口所在矩形（与所在屏求交），不重新实时抓。
+        if !frozenScreens.isEmpty {
+            let rectAK = Geometry.appKitRect(fromCG: window.frameCG)
+            if let screen = NSScreen.screens.first(where: { s in
+                   guard let id = s.displayID, frozenScreens[id] != nil else { return false }
+                   return s.frame.intersects(rectAK)
+               }),
+               let displayID = screen.displayID, let frozen = frozenScreens[displayID],
+               let cropped = Self.crop(frozen, rectAK: rectAK.intersection(screen.frame), screen: screen) {
+                finishComposited(cropped, mode: .standard)
+                return
+            }
+        }
         performCapture(target: .window(window.windowID), mode: .standard)
     }
 
@@ -100,6 +120,15 @@ final class CaptureController {
             dismissOverlays()
             return
         }
+        // 冻结模式：从含菜单整屏裁剪，不重新实时抓（否则丢失已收起的菜单）。
+        if let frozen = frozenScreens[displayID] {
+            if let cropped = Self.crop(frozen, rectAK: rectAK, screen: screen) {
+                finishComposited(cropped, mode: mode)
+            } else {
+                dismissOverlays()
+            }
+            return
+        }
         performCapture(target: .displayRect(displayID, rectAK: rectAK, screen: screen), mode: mode)
     }
 
@@ -110,6 +139,11 @@ final class CaptureController {
         }
         guard let displayID = screen.displayID else {
             dismissOverlays()
+            return
+        }
+        // 冻结模式：整张含菜单快照即为全屏截图。
+        if let frozen = frozenScreens[displayID] {
+            finishComposited(frozen, mode: .standard)
             return
         }
         performCapture(target: .display(displayID), mode: .standard)
@@ -182,5 +216,16 @@ final class CaptureController {
                 alert.runModal()
             }
         }
+    }
+
+    /// 从整屏图裁剪 AK 全局 rect 对应的像素区域（原点左上，同 CaptureEngine.displayRect 口径）。
+    static func crop(_ full: CGImage, rectAK: NSRect, screen: NSScreen) -> CGImage? {
+        let scale = screen.backingScaleFactor
+        let x = (rectAK.minX - screen.frame.minX) * scale
+        let y = (screen.frame.maxY - rectAK.maxY) * scale
+        let w = rectAK.width * scale
+        let h = rectAK.height * scale
+        let pixelRect = CGRect(x: x.rounded(), y: y.rounded(), width: w.rounded(), height: h.rounded())
+        return full.cropping(to: pixelRect)
     }
 }

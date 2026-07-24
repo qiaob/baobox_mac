@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
 
 /// 全局快捷键中心（Carbon RegisterEventHotKey）。
 ///
@@ -29,6 +30,14 @@ final class HotkeyCenter: ObservableObject {
     /// 系统保留组合缓存，见 `systemReservedCombos()`。
     private lazy var systemReserved: Set<UInt64> = Self.systemReservedCombos()
 
+    /// 触发任一热键 action 之前的回调（主线程执行）。用于在执行动作前收起可能正打开的状态栏菜单，
+    /// 否则菜单会与动作弹出的窗口（如截图选区浮层）同时在场、抢占鼠标事件。由 AppDelegate 装配。
+    var onWillFireAction: (@MainActor () -> Void)?
+
+    /// 仅经 CGEventTap（状态栏菜单打开期）触发时，在收起菜单**之前**回调。用于截图先抓「含菜单整屏」
+    /// 快照，实现「菜单打开时截图也能截到菜单」。由 AppDelegate 装配。
+    var onBeforeFire: (@MainActor () -> Void)?
+
     private init() {}
 
     // MARK: - 事件处理器安装
@@ -50,10 +59,12 @@ final class HotkeyCenter: ObservableObject {
                                            &hkID)
             if status == noErr {
                 let carbonID = hkID.id
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        HotkeyCenter.shared.handle(carbonID: carbonID)
-                    }
+                // Carbon 应用级事件回调本就在主线程执行，这里直接同步派发到 handle，不经任何队列/RunLoop。
+                // 状态栏 NSMenu 打开时主 runloop 进入事件跟踪模式，DispatchQueue.main.async / RunLoop.perform
+                // 入队的 block 在该模式不被服务、要等菜单关闭才执行 —— 表现为「菜单开着时按快捷键无反应，
+                // 关掉菜单才触发」。同步执行则在回调栈内立即处理（含收起菜单 + 弹出截图浮层）。
+                MainActor.assumeIsolated {
+                    HotkeyCenter.shared.handle(carbonID: carbonID)
                 }
             }
             return noErr
@@ -71,7 +82,74 @@ final class HotkeyCenter: ObservableObject {
     @MainActor
     private func handle(carbonID: UInt32) {
         guard let id = idByCarbonID[carbonID], let reg = registrations[id] else { return }
+        // 先收起可能正打开的状态栏菜单，再执行动作，避免菜单与动作窗口并存、抢占事件。
+        onWillFireAction?()
         reg.def.action()
+    }
+
+    // MARK: - 菜单跟踪期热键补捉（CGEventTap）
+    //
+    // 状态栏 NSMenu 打开时进入独立的事件跟踪循环、独占事件，Carbon 全局热键此时**收不到**
+    // （表现为「菜单开着按快捷键无反应」）。这里在菜单打开期间临时启用一个 CGEventTap，在 HID
+    // 层补捉键盘事件；命中已注册组合就收起菜单并触发对应动作。需辅助功能权限，无权限则静默不启用。
+
+    private var menuEventTap: CFMachPort?
+    private var menuTapSource: CFRunLoopSource?
+
+    /// 状态栏菜单即将打开：启用补捉 tap（幂等）。
+    func beginMenuTrackingCapture() {
+        guard menuEventTap == nil else { return }
+        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        let callback: CGEventTapCallBack = { _, _, event, _ in
+            if HotkeyCenter.shared.handleTapKeyDown(event) {
+                return nil // 命中：吞掉该按键，避免再被菜单当作导航键处理
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap,
+                                          place: .headInsertEventTap,
+                                          options: .defaultTap,
+                                          eventsOfInterest: mask,
+                                          callback: callback,
+                                          userInfo: nil) else {
+            return // 无辅助功能权限等 → 静默不启用，不影响其它功能
+        }
+        menuEventTap = tap
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        menuTapSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// 状态栏菜单已关闭：停用并释放 tap。
+    func endMenuTrackingCapture() {
+        if let tap = menuEventTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let source = menuTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        menuEventTap = nil
+        menuTapSource = nil
+    }
+
+    /// tap 回调：把 keyDown 转 keyCode + 修饰键，匹配已注册热键。命中则收起菜单 + 触发，返回是否命中。
+    /// tap source 挂在主 run loop，回调在主线程执行。
+    fileprivate func handleTapKeyDown(_ event: CGEvent) -> Bool {
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        var carbon: UInt32 = 0
+        if flags.contains(.maskCommand) { carbon |= KeyCombo.cmd }
+        if flags.contains(.maskShift) { carbon |= KeyCombo.shift }
+        if flags.contains(.maskAlternate) { carbon |= KeyCombo.option }
+        if flags.contains(.maskControl) { carbon |= KeyCombo.control }
+        return MainActor.assumeIsolated {
+            for (_, reg) in registrations {
+                guard let combo = reg.combo,
+                      combo.keyCode == keyCode, combo.carbonModifiers == carbon else { continue }
+                onBeforeFire?()      // 收菜单前：截图先抓含菜单整屏快照
+                onWillFireAction?()  // 收起菜单
+                reg.def.action()
+                return true
+            }
+            return false
+        }
     }
 
     // MARK: - 注册 API

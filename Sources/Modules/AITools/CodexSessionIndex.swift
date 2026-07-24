@@ -157,6 +157,16 @@ final class CodexSessionIndex: ObservableObject {
             }
         }
     }
+
+    /// 导出单个会话为 Markdown（后台解析整份 rollout，回主线程回调）。解析失败回调 nil。
+    func exportMarkdown(_ summary: CodexSessionSummary, completion: @escaping (String?) -> Void) {
+        let url = summary.fileURL
+        let title = summary.title
+        DispatchQueue.global(qos: .utility).async {
+            let markdown = Self.buildMarkdown(fileURL: url, title: title)
+            DispatchQueue.main.async { completion(markdown) }
+        }
+    }
 }
 
 // MARK: - 缓存记录
@@ -293,5 +303,28 @@ extension CodexSessionIndex {
     nonisolated static func projectName(fromPath path: String) -> String {
         let name = URL(fileURLWithPath: path).lastPathComponent
         return name.isEmpty ? path : name
+    }
+
+    /// 遍历 rollout jsonl，把 user / assistant 的对话文本拼成 Markdown。
+    /// 只取 `payload.type == "message"` 的 `response_item`（`event_msg` 的 user_message/agent_message
+    /// 是镜像，取之会重复）；跳过 developer/system 角色与 `<...>` 系统注入块。整份读入（可能较大，
+    /// 故只在后台线程调用）。全程容错，任何行解析失败只跳过。
+    nonisolated static func buildMarkdown(fileURL: URL, title: String) -> String? {
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+        var out = "# \(title)\n"
+        for lineData in content.split(separator: "\n") {
+            guard let object = CodexJSONLParsing.parseObject(Data(lineData.utf8)),
+                  let payload = object["payload"] as? [String: Any],
+                  (payload["type"] as? String) == "message",
+                  let role = payload["role"] as? String,
+                  role == "user" || role == "assistant",
+                  let text = CodexJSONLParsing.extractText(from: payload["content"]) else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 跳过系统注入（<environment_context> / <permissions instructions> 等 `<` 起头块）。
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("<") else { continue }
+            let heading = role == "user" ? L("aitools.export.user") : L("aitools.export.assistant")
+            out += "\n## \(heading)\n\n\(trimmed)\n"
+        }
+        return out
     }
 }
