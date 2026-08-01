@@ -35,11 +35,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
 
 ### Clipboard (default ⌘⇧V)
-- Background monitoring with history for text, rich text, images, file paths, and links; content marked `org.nspasteboard.ConcealedType` / `TransientType` is never stored.
+- Background monitoring with history for text, rich text, images, file paths, and links. Content marked `org.nspasteboard.TransientType` is never stored; passwords marked `org.nspasteboard.ConcealedType` are skipped by default, with an opt-in switch (behind a confirmation) to record them.
 - Floating history panel: type-to-search, filter by type, arrow-key navigation, ⏎ to paste, ⌥⏎ for a plain-text paste, ⌘P to pin.
 - Selecting an entry auto-pastes into the frontmost app via a simulated ⌘V (requires Accessibility); without that permission, it falls back to copy-only.
 - Configurable history limit with automatic eviction; persists across restarts.
 - Per-app ignore list, automatic expiry (never / 1 / 7 / 30 / 90 days), and per-item delete (⌘⌫ or an inline button); a global ⌘⌥V shortcut pastes the most recent item as plain text.
+- **Encrypted on disk** (on by default, switchable): history text and images are sealed with AES-GCM before they hit `~/Library/Application Support/Baobox/`; the 256-bit key lives in your login keychain, never leaves the Mac and is not synced to iCloud. Flipping the switch converts the existing history either way.
+- **Text tools in the preview pane**: the selected entry is matched against JWT / JSON / XML / timestamps / URLs / Base64, and the pane offers in-place actions — format, minify, escape/unescape, percent decode/encode, Base64 decode/encode, extract a JWT header or payload, and generate a QR code pinned to the screen. Timestamps expand into a conversion table (local, UTC, ISO 8601, seconds, milliseconds, relative) with per-row copy buttons; ⏎ pastes whatever the preview currently shows. JSON is re-indented by an order-preserving scanner, so key order and long integer IDs survive untouched. Press Tab to expand the preview to the full panel width, ⌘1…⌘9 to fire actions, ⌘0 to revert. Every format has its own switch in Settings — the ones you turn off are never run at all.
 
 ### Color Picker (unbound by default)
 - System-native magnifier sampling via `NSColorSampler` — no permissions required.
@@ -57,10 +59,6 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Layout snapshots**: "Save current layout…" records the position and size of every regular, non-minimized window; restoring re-applies them with title-first matching and an ordering fallback, skipping apps that aren't running.
 - **Multi-display aware** throughout: the target display is whichever one has the largest intersection with the window; layouts are computed against each display's visible frame (avoiding the menu bar and Dock); moving a window between displays scales its relative position and size to fit, clamped to stay on-screen; snapshots store a stable per-display UUID plus a relative position, so restoring works correctly even if resolution or display arrangement changed since the snapshot was taken.
 
-### QR Code Generator (default ⌃⇧Q)
-- Opens a floating panel pre-filled with the current clipboard text; edits regenerate the code live (error-correction level M, quiet zone included).
-- Copy as an image, save as PNG, or pin it on screen.
-- Fully local (`CIQRCodeGenerator`), no permissions required.
 
 ### Claude Code Assistant (unbound by default)
 - A menu-bar dashboard for the local Claude Code CLI, built entirely from `~/.claude` files — no AI API, no login: live session status (running / awaiting confirmation), the five most recent sessions for one-click terminal resume, the current 5-hour usage window (tokens, estimated cost, reset countdown) and today's estimated spend.

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 剪贴板设置：历史上限、保留时长、隐私（敏感内容开关 + 按 App 忽略名单）、
-/// 存储（落盘加密开关）、清空。
+/// 文本工具（逐格式识别开关）、存储（落盘加密开关）、清空。
 struct ClipboardSettingsView: View {
     @ObservedObject var store: ClipboardStore
     @AppStorage(ClipboardStore.maxItemsKey) private var maxItems = 200
@@ -10,7 +10,11 @@ struct ClipboardSettingsView: View {
     @AppStorage(ClipboardStore.recordConcealedKey) private var recordConcealed = false
     // 默认 true，与 ClipboardCrypto.isEnabled 的 `object(forKey:) as? Bool ?? true` 一致。
     @AppStorage(ClipboardCrypto.enabledKey) private var encryptStorage = true
+    @AppStorage(TextToolSettings.masterKey) private var textToolsEnabled = true
     @State private var ignoredApps: [String] = ClipboardStore.ignoredBundleIDs
+    /// 逐格式开关。数量不固定又要 ForEach，没法一个格式一个 @AppStorage，
+    /// 所以本地存一份镜像，写的时候同步回 UserDefaults。
+    @State private var toolStates: [String: Bool] = TextToolSettings.currentStates()
 
     var body: some View {
         Form {
@@ -58,6 +62,21 @@ struct ClipboardSettingsView: View {
                 Text("clipboard.settings.transientHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("clipboard.settings.textToolsSection") {
+                Toggle("clipboard.settings.textTools", isOn: $textToolsEnabled)
+                Text("clipboard.settings.textToolsHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if textToolsEnabled {
+                    ForEach(TextToolSettings.descriptors, id: \.id) { descriptor in
+                        Toggle(isOn: toolBinding(descriptor.id)) {
+                            Text(verbatim: descriptor.title)
+                        }
+                        .padding(.leading, 14)
+                    }
+                }
             }
 
             Section("clipboard.settings.ignoredApps") {
@@ -140,6 +159,18 @@ struct ClipboardSettingsView: View {
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: L("common.cancel"))
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - 文本工具
+
+    private func toolBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { toolStates[id] ?? true },
+            set: { newValue in
+                toolStates[id] = newValue
+                TextToolSettings.setEnabled(newValue, for: id)
+            }
+        )
     }
 
     // MARK: - 忽略名单

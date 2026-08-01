@@ -43,6 +43,15 @@ final class ClipboardTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x09, carbonModifiers: KeyCombo.cmd | KeyCombo.option) // ⌘⌥V
             ) { [weak self] in
                 self?.pastePlainLast()
+            },
+            HotkeyDefinition(
+                id: "clipboard.qrcodeLast",
+                title: L("clipboard.hotkey.qrcodeLast"),
+                subtitle: L("clipboard.hotkey.qrcodeLast.subtitle"),
+                // 出厂不绑定：按项目约定，易冲突的组合留给用户自设。
+                defaultCombo: nil
+            ) { [weak self] in
+                self?.qrCodeLast()
             }
         ]
     }
@@ -63,6 +72,16 @@ final class ClipboardTool: ToolModule {
     private func pastePlainLast() {
         guard let latest = store.items.max(by: { $0.createdAt < $1.createdAt }) else { return }
         PasteService.paste(latest, plainText: true, store: store, monitor: monitor)
+    }
+
+    /// 不开面板，直接给最近一条文本生成二维码钉到屏幕 ——
+    /// 「刚复制了个链接，立刻要给手机」这个场景中间不该插一步选面板。
+    private func qrCodeLast() {
+        guard let latest = store.items
+            .filter({ $0.type != .image })
+            .max(by: { $0.createdAt < $1.createdAt }),
+              let text = latest.text, !text.isEmpty else { return }
+        ClipboardQRCode.pin(text)
     }
 
     private func confirmClear() {

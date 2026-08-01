@@ -129,6 +129,22 @@ enum TextFormatRegistry {
 
 **绝不**在 `ClipboardMonitor` 入库时跑：那是 0.3s 轮询的热路径，而且结果一旦存进 `ClipboardItem` 就得跟着格式变更做迁移。
 
+### 3.1.1 开关（`TextToolSettings`）
+
+```swift
+enum TextToolSettings {           // 纯 UserDefaults 读写，非 @MainActor，设置页与注册表共用
+    static let masterKey = "clipboard.textTools.enabled"
+    static func key(for id: String) -> String { "clipboard.textTools.\(id)" }
+    static var descriptors: [Descriptor]      // 设置页行顺序 = 面板徽章优先级顺序
+    static var isMasterEnabled: Bool          // object(forKey:) as? Bool ?? true
+    static func isEnabled(_ id: String) -> Bool
+}
+```
+
+`detectAll` 里 **filter 在 detect 之前** —— 关掉的识别器一次 `detect` 都不跑，这是这组开关存在的唯一意义（识别走主线程同步）。二维码不是识别器但共用同一套键（`qrCodeID = "qrcode"`），由 `commonActions(for:)` 判断。
+
+设置页用 `@AppStorage(masterKey)` 管总开关；逐格式那组数量不固定又要 `ForEach`，没法一格式一个 `@AppStorage`，改用 `@State var toolStates: [String: Bool]` 镜像 + 自定义 `Binding` 写回 UserDefaults。
+
 ### 3.2 长度上限（常量，不做配置项）
 
 | 常量 | 值 | 行为 |

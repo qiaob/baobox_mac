@@ -51,7 +51,8 @@ final class ClipboardPanelController: NSObject {
             onPaste: { [weak self] item, plain in self?.paste(item, plainText: plain) },
             onTogglePin: { [weak self] item in self?.store.togglePin(item.id) },
             onDelete: { [weak self] item in self?.delete(item) },
-            onClose: { [weak self] in self?.hide() }
+            onClose: { [weak self] in self?.hide() },
+            onCopyText: { [weak self] text in self?.copyOnly(text) }
         )
         let hosting = NSHostingView(rootView: content)
 
@@ -136,16 +137,53 @@ final class ClipboardPanelController: NSObject {
                 delete(item)
             }
             return true
-        case 0x35: // Esc
-            hide()
+        case 0x30: // Tab 切换预览区最大化
+            viewModel.isPreviewMaximized.toggle()
+            return true
+        case 0x35: // Esc：最大化时先收起（渐进撤销），否则才关面板
+            if viewModel.isPreviewMaximized {
+                viewModel.isPreviewMaximized = false
+            } else {
+                hide()
+            }
+            return true
+        case 0x08 where event.modifierFlags.contains(.command): // ⌘C 只复制预览内容
+            copyOnly(viewModel.previewText)
+            return true
+        case 0x1D where event.modifierFlags.contains(.command): // ⌘0 还原转换
+            viewModel.transformed = nil
             return true
         default:
+            // ⌘1…⌘9 触发动作栏第 n 个动作
+            if event.modifierFlags.contains(.command),
+               let slot = Self.actionKeyCodes.firstIndex(of: event.keyCode) {
+                let actions = viewModel.visibleActions
+                if actions.indices.contains(slot) { viewModel.run(actions[slot]) }
+                return true
+            }
             return false
         }
     }
 
+    /// ⌘1…⌘9 的 keyCode。注意 5 和 6 是反直觉的 0x17 / 0x16。
+    private static let actionKeyCodes: [UInt16] = [0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19]
+
     private func paste(_ item: ClipboardItem, plainText: Bool) {
-        PasteService.paste(item, plainText: plainText, store: store, monitor: monitor)
+        PasteService.paste(item, plainText: plainText,
+                           overrideText: viewModel.pasteOverride,
+                           store: store, monitor: monitor)
+    }
+
+    /// 只写剪贴板，不粘贴、不关面板（⌘C 与表格行的复制按钮）。
+    ///
+    /// `ignoreNextChange` 不能省：不抑制的话，格式化一次 JSON 就会被监听器当成
+    /// 一次新的复制记进历史 —— 这正是「转换不污染历史」的实现。
+    private func copyOnly(_ text: String) {
+        guard !text.isEmpty else { return }
+        monitor.ignoreNextChange = true
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func delete(_ item: ClipboardItem) {

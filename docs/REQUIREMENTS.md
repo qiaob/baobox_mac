@@ -87,7 +87,8 @@
 - ✅ **窗口管理**：快捷键贴半屏/四分屏/最大化/居中（出厂不绑定键位——常用的 ⌃⌥ 系列与 Rectangle 完全同键，用户在快捷键页自行设置；菜单入口始终可用），复用已申请的辅助功能权限；**必须完整兼容多显示器**——布局以窗口当前所在屏幕的可用区域为基准，支持把窗口在显示器之间循环移动（等比缩放适配目标屏），支持恢复窗口原始位置
 
 ### M2 后追加实现
-- ✅ **二维码生成**（独立模块）：⌃⇧Q 唤起浮层，自动带入剪贴板文字、可编辑实时重绘（纠错 M、含静区），支持复制图片/保存 PNG/钉在屏幕上；纯本地 CIQRCodeGenerator，无需权限
+- ✅ **二维码生成**：原为独立模块（⌃⇧Q 浮层），已并入剪贴板预览区的通用动作 —— 生成后直接钉到屏幕（`PinnedImageWindow`，自带复制/另存右键菜单），另有出厂不绑定的 `clipboard.qrcodeLast` 快捷键给最近一条直接生成。生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 的证书/代理二维码也用它）。纯本地 CIQRCodeGenerator，无需权限
+- ✅ **剪贴板文本工具**（详见 `docs/clipboard-text-tools/`）：预览区识别 JWT / JSON / XML / 时间戳 / URL / Base64，提供就地转换动作与转换表；转换结果只进预览缓冲、⏎ 粘贴的就是它，不写回历史；Tab 展开预览区、⌘1…⌘9 触发动作；每个格式在设置里独立开关，关掉的不参与检测
 - ✅ **窗口布局快照**（并入窗口管理）：菜单「保存当前布局…」记录所有常规 App 非最小化窗口的位置尺寸，菜单点击一键恢复（标题优先匹配、顺序兜底；未运行的 App 跳过），设置页可删除。**多显示器**：每条记录存所在显示器 UUID + 屏内相对位置，恢复时原屏还在则按相对位置精确还原（分辨率/排列变化不影响），原屏拔掉则夹回现有屏幕可见区域
 - ✅ **Codex 助手**（详见 `docs/codex-assistant/DESIGN.md`；前身 `docs/cursor-codex-assistant/`，**Cursor 已移除**）：把本地 Codex CLI 的状态、用量与配置收进菜单栏，向 Claude Code 助手看齐——最近 Codex 会话浏览与一键终端续接（`codex resume`）+ 带 Tab 的中心窗口（会话 / 用量）；用量/额度展示（5 小时窗口 + 周窗口 + 今日估算，含重置倒计时）与按天/项目/模型报表、调用统计；Codex 配置可视化（approval_policy / sandbox_mode / model 单选，对 config.toml 做保注释的行级读写）；可选把 Baobox 通知程序写入 config.toml `notify`，回合结束发系统通知；维护节（磁盘清理 + 版本检查）。纯本地文件解析，不调用任何 AI API、无需登录，写用户文件保留未知内容并备份 `.baobox.bak`
 - 🆕 **网络抓包**（详见 `docs/packet-capture/`）：菜单栏一键开关的本地 HTTP(S) 抓包器（对标 Charles / Proxyman 核心能力）——原生 Network.framework 自建中间人代理，支持 Mac 本地（自动设/还原系统代理）与手机（Android/iOS 设代理）抓包，HTTPS 解密走本地 CA（openssl 签发 + SecPKCS12Import + 内部回环 TLS，SNI 动态选证书，故障透传不断网）；醒目展示局域网代理 IP:端口 + 证书下载二维码，Mac 一键装信任 CA、Android 可经 ADB 一键设代理推证书；Proxyman 式两栏窗口（Flow 列表 + 请求/响应/头/Body 详情，JSON 美化、gzip 解压、图片预览）；开关关闭即零后台开销、默认不落盘；结合 AI——单独的本地 MCP 开关（Streamable HTTP，暴露 list/get/search/clear flow 工具，一键注册进 Claude Code / Codex）与「复制 cURL / Markdown / 发送到 Claude Code」

@@ -3,19 +3,39 @@ import AppKit
 
 @MainActor
 final class ClipboardPanelViewModel: ObservableObject {
+    /// 一次转换动作的结果。只在内存里，不写回历史、不落盘。
+    struct TransformState {
+        let actionTitle: String
+        let text: String
+    }
+
+    static let maximizedKey = "clipboard.previewMaximized"
+
     @Published var query = ""
     @Published var typeFilter: ClipboardItemType?
-    @Published var selectedIndex = 0
+    @Published var selectedIndex = 0 { didSet { refreshDetection() } }
+
+    /// 当前选中条目命中的格式，按优先级升序。
+    @Published private(set) var matches: [FormatMatch] = []
+    /// 徽章行选中的那一个。切格式要清掉转换结果 —— 两个格式的转换不该串。
+    @Published var activeMatchIndex = 0 { didSet { transformed = nil } }
+    /// 预览缓冲：执行转换动作后的结果。
+    @Published var transformed: TransformState?
+    /// 预览区最大化（列表列隐藏）。状态持久化，经常看 JSON 的人不必每次按一下。
+    @Published var isPreviewMaximized: Bool {
+        didSet { UserDefaults.standard.set(isPreviewMaximized, forKey: Self.maximizedKey) }
+    }
 
     private let store: ClipboardStore
 
     init(store: ClipboardStore) {
         self.store = store
+        self.isPreviewMaximized = UserDefaults.standard.bool(forKey: Self.maximizedKey)
     }
 
     var filtered: [ClipboardItem] {
         store.items.filter { item in
-            (typeFilter == nil || item.type == typeFilter) && matches(item)
+            (typeFilter == nil || item.type == typeFilter) && matchesQuery(item)
         }
     }
 
@@ -29,6 +49,8 @@ final class ClipboardPanelViewModel: ObservableObject {
         query = ""
         typeFilter = nil
         selectedIndex = 0
+        // selectedIndex 本来就是 0 时 didSet 不触发，这里必须显式刷一次。
+        refreshDetection()
     }
 
     func moveSelection(_ delta: Int) {
@@ -41,9 +63,68 @@ final class ClipboardPanelViewModel: ObservableObject {
         let count = filtered.count
         if count == 0 { selectedIndex = 0 }
         else if selectedIndex >= count { selectedIndex = count - 1 }
+        // 搜索/过滤会让同一个 selectedIndex 指向另一条，识别结果必须跟着重算。
+        refreshDetection()
     }
 
-    private func matches(_ item: ClipboardItem) -> Bool {
+    // MARK: - 格式识别
+
+    /// 只对**当前选中的这一条**跑，纯内存、不落盘。绝不在 ClipboardMonitor 入库时跑 ——
+    /// 那是 0.3s 轮询的热路径。
+    func refreshDetection() {
+        transformed = nil
+        activeMatchIndex = 0
+        guard let item = selectedItem, item.type != .image,
+              let text = item.text, !text.isEmpty else {
+            matches = []
+            return
+        }
+        matches = TextFormatRegistry.detectAll(text)
+    }
+
+    var activeMatch: FormatMatch? {
+        matches.indices.contains(activeMatchIndex) ? matches[activeMatchIndex] : nil
+    }
+
+    /// 预览区显示的内容，也是 ⌘C 复制的内容 —— 所见即所copy。
+    var previewText: String {
+        if let transformed = transformed { return transformed.text }
+        if let rendered = activeMatch?.rendered { return rendered }
+        return selectedItem?.text ?? ""
+    }
+
+    /// 转换动作的输入：已转换过就在结果上接着转，否则用条目原文。
+    /// **不用 `rendered`** —— 那只是展示（如 JWT 解码视图），不是可再转换的源。
+    var transformInput: String {
+        transformed?.text ?? (selectedItem?.text ?? "")
+    }
+
+    /// ⏎ 粘贴时的覆盖内容。只有**显式转换过**才覆盖 —— 仅仅选中一条 JWT
+    /// 不该让 ⏎ 粘出解码后的 JSON，那时用户要的就是原 token。
+    var pasteOverride: String? { transformed?.text }
+
+    /// 动作栏内容：格式专属在前，通用动作（二维码）在后。
+    var visibleActions: [FormatAction] {
+        var actions = activeMatch?.actions ?? []
+        if let item = selectedItem, item.type != .image, let text = item.text, !text.isEmpty {
+            actions += TextFormatRegistry.commonActions(for: text)
+        }
+        return actions
+    }
+
+    func run(_ action: FormatAction) {
+        guard action.isEnabled else { return }
+        switch action.kind {
+        case .transform(let transform):
+            guard let result = transform(transformInput) else { return }
+            transformed = TransformState(actionTitle: action.title, text: result)
+        case .terminal(let terminal):
+            terminal(previewText)
+        }
+    }
+
+    /// 名字不能叫 `matches` —— 会和 `@Published var matches: [FormatMatch]` 撞名。
+    private func matchesQuery(_ item: ClipboardItem) -> Bool {
         guard !query.isEmpty else { return true }
         let q = query.lowercased()
         if let text = item.text, text.lowercased().contains(q) { return true }
@@ -60,6 +141,8 @@ struct ClipboardPanelView: View {
     var onTogglePin: (ClipboardItem) -> Void
     var onDelete: (ClipboardItem) -> Void
     var onClose: () -> Void
+    /// 只复制不粘贴（表格行的复制按钮）。由 controller 负责抑制监听，避免转换结果进历史。
+    var onCopyText: (String) -> Void
 
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
@@ -75,8 +158,11 @@ struct ClipboardPanelView: View {
             searchBar
             Divider()
             HStack(spacing: 0) {
-                listColumn
-                Divider()
+                // 最大化 = 藏掉列表列，预览区独占面板宽度。
+                if !viewModel.isPreviewMaximized {
+                    listColumn
+                    Divider()
+                }
                 previewColumn
             }
             Divider()
@@ -202,16 +288,15 @@ struct ClipboardPanelView: View {
     private var previewColumn: some View {
         if let item = viewModel.selectedItem {
             VStack(alignment: .leading, spacing: 10) {
-                Text("clipboard.preview.header \(typeLabel(item.type))")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
+                badgeRow(item)
 
                 previewBody(item)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(14)
                     .background(Color.primary.opacity(0.05),
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                if !viewModel.visibleActions.isEmpty { actionBar }
 
                 HStack(spacing: 16) {
                     Text("clipboard.preview.source \(item.sourceAppName ?? L("common.unknown"))")
@@ -234,15 +319,111 @@ struct ClipboardPanelView: View {
         }
     }
 
+    // MARK: 徽章行 / 表格 / 动作栏
+
+    private func badgeRow(_ item: ClipboardItem) -> some View {
+        HStack(spacing: 6) {
+            Text("clipboard.preview.header \(typeLabel(item.type))")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            ForEach(Array(viewModel.matches.enumerated()), id: \.element.id) { index, match in
+                let active = index == viewModel.activeMatchIndex
+                Text(verbatim: match.badge)
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(active ? Color.accentColor : Color.primary.opacity(0.09), in: Capsule())
+                    .foregroundStyle(active ? Color.white : Color.secondary)
+                    .onTapGesture { viewModel.activeMatchIndex = index }
+            }
+
+            Spacer(minLength: 0)
+
+            // 「已转换」必须显眼：否则用户不知道 ⏎ 粘出去的是哪个版本。
+            if let transformed = viewModel.transformed {
+                Text(verbatim: transformed.actionTitle)
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.2), in: Capsule())
+                    .foregroundStyle(.orange)
+                Button("clipboard.tools.revert") { viewModel.transformed = nil }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            if viewModel.isPreviewMaximized {
+                Text(verbatim: "\(viewModel.selectedIndex + 1) / \(viewModel.filtered.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func rowsTable(_ rows: [FormatRow]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: row.label)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 86, alignment: .leading)
+                    Text(verbatim: row.value)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(row.isWarning ? Color.orange : Color.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let copy = row.copyValue {
+                        Button {
+                            onCopyText(copy)
+                        } label: {
+                            Image(systemName: "doc.on.doc").font(.system(size: 9))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 面板窄，动作多了会挤 —— 横向可滚。
+    private var actionBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(viewModel.visibleActions.enumerated()), id: \.element.id) { index, action in
+                    Button {
+                        viewModel.run(action)
+                    } label: {
+                        Text(verbatim: index < 9 ? "\(action.title)  ⌘\(index + 1)" : action.title)
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!action.isEnabled)
+                    .help(action.disabledHint ?? "")
+                }
+            }
+            .padding(.vertical, 1)
+        }
+    }
+
     @ViewBuilder
     private func previewBody(_ item: ClipboardItem) -> some View {
         switch item.type {
         case .text, .link:
             ScrollView {
-                Text(item.text ?? "")
-                    .font(.system(size: 12, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(viewModel.previewText)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                    if let rows = viewModel.activeMatch?.rows, !rows.isEmpty {
+                        Divider()
+                        rowsTable(rows)
+                    }
+                }
             }
         case .image:
             // 图片是加密落盘的，不能直接 NSImage(contentsOf:)。
@@ -274,16 +455,17 @@ struct ClipboardPanelView: View {
     // MARK: 底部
 
     private var footer: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Text("clipboard.footer.count \(store.items.count)")
             Spacer()
             hint("↑↓", L("clipboard.footer.select"))
             hint("⏎", L("clipboard.footer.paste"))
             hint("⌥⏎", L("clipboard.footer.pastePlain"))
+            hint("⇥", L("clipboard.footer.expand"))
             hint("⌘P", L("clipboard.footer.pin"))
             hint("⌘⌫", L("clipboard.footer.delete"))
         }
-        .font(.system(size: 11.5))
+        .font(.system(size: 11))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
