@@ -1089,6 +1089,23 @@ extension CaptureOverlayView: AnnotationToolbarDelegate {
     func toolbarRedo() { redoAnnotation() }
     func toolbarCancel() { controller?.cancel() }
     func toolbarPin() { finishSelection(.pin) }
+
+    /// 长截屏：选区就位后交给 `ScrollingCaptureController`，由用户滚动页面继续拼接。
+    /// 已画的标注不参与（长图内容随滚动变化，标注贴在哪一段都没有意义），点这里即放弃它们。
+    func toolbarLongCapture() {
+        guard !finishing else { return }
+        let rect: NSRect
+        switch phase {
+        case .adjusting(let r), .annotating(let r):
+            rect = r
+        default:
+            return
+        }
+        commitTextEditor(cancel: true)
+        finishing = true
+        controller?.finishLongCapture(globalAKRect(fromLocal: rect), on: screenRef)
+    }
+
     func toolbarSave() { finishSelection(.save) }
     func toolbarCopy() { finishSelection(.copy) }
 }

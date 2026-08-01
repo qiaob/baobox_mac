@@ -29,6 +29,13 @@ final class CaptureController {
     private func begin(_ mode: CaptureSessionMode) {
         guard !isActive else { return }
 
+        // 长截屏进行中：再拉一层选区 overlay 会被原样拼进长图。此时快捷键/菜单一律
+        // 理解为「收工」——与录屏用同一个快捷键停止是一致的直觉。
+        if ScrollingCaptureController.shared.isRunning {
+            ScrollingCaptureController.shared.finish()
+            return
+        }
+
         guard Permissions.hasScreenRecording else {
             Permissions.requestScreenRecording()
             OnboardingController.shared.present()
@@ -39,6 +46,13 @@ final class CaptureController {
         sessionMode = mode
         // 菜单场景：取「含菜单整屏」快照（截图快捷键在菜单打开时按下，已在收菜单前抓好）。仅截图、非录屏。
         frozenScreens = (mode == .capture) ? ScreenMenuSnapshot.take() : [:]
+        // 别的 App 的右键菜单/下拉菜单：Carbon 热键照常触发，但下面的 NSApp.activate 与 overlay
+        // 上屏会让对方菜单立刻收起 —— 等 overlay 摆好再抓，菜单早没了（issue #6）。
+        // 所以在**创建任何窗口、激活本 App 之前**同步抓一张整屏，之后框选/窗口/全屏都从它裁剪。
+        if mode == .capture, frozenScreens.isEmpty, ScreenMenuSnapshot.hasForeignMenuOnScreen() {
+            ScreenMenuSnapshot.captureAllScreens()
+            frozenScreens = ScreenMenuSnapshot.take()
+        }
         let mouseAK = NSEvent.mouseLocation
 
         for screen in NSScreen.screens {
@@ -186,6 +200,17 @@ final class CaptureController {
     func finishComposited(_ image: CGImage, mode: ResultMode) {
         dismissOverlays()
         ScreenshotResultHandler.handle(image: image, mode: mode)
+    }
+
+    /// 长截屏：选区定住不动，overlay 退场后由 `ScrollingCaptureController` 边抓帧边拼接，
+    /// 用户滚动页面、点「完成」才产出结果。
+    func finishLongCapture(_ rectAK: NSRect, on screen: NSScreen) {
+        dismissOverlays()
+        Task { @MainActor in
+            // 等 overlay 完全消隐，否则蒙层会被拼进首帧。
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            ScrollingCaptureController.shared.start(rectAK: rectAK, on: screen)
+        }
     }
 
     /// 贴图：把图像钉在原选区位置的置顶浮窗里。贴图不走 handle()，需单独记入历史。

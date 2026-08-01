@@ -27,10 +27,12 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 ### Screenshot (default ⌘⇧2)
 - Single shortcut, intent detected automatically: hover to highlight and capture a window with one click; click-drag (past a ~4pt threshold) for a region capture with eight-way resize handles, arrow-key nudging (⇧ for ×10), and a pixel loupe; ⏎ for a full-screen capture; Esc to cancel.
 - Multi-display support, one overlay per screen.
+- Menus stay in the shot: if a context menu or menu-bar dropdown is open when the shortcut fires, the screen is frozen before the app activates, so the menu is still there in the result.
 - Built on ScreenCaptureKit. Results copy to the clipboard and, optionally, save to a configurable folder with a customizable filename template.
 - In-place annotation editor: rectangle, ellipse, arrow, pen, highlighter, mosaic/blur, text, eraser, undo/redo (⌘Z / ⇧⌘Z), three stroke widths, a seven-color palette.
 - Pin: keep a capture floating on top of every window, draggable, scroll-to-zoom (0.2×–5×), ⌥+scroll for opacity; pin directly from the clipboard.
 - Pixel loupe for precise selection: an 8×-magnified 17×17 grid follows the cursor while hovering, dragging, or resizing a handle, with live coordinates and a hex color readout.
+- Scrolling capture: pick the scrollable area, hit the scrolling-capture button next to Pin, then scroll — consecutive frames are matched by their overlap and stitched into one tall image (copied and saved like any other capture). A floating bar shows the stitched height and finishes or cancels the session.
 - Screenshot history: every capture is archived automatically (configurable retention, default 20), with a thumbnail menu for copy / re-pin / save-as / delete.
 - Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
 

@@ -24,6 +24,12 @@ final class ScreenshotTool: ToolModule {
             self?.toggleRecording()
         }
         var items: [NSMenuItem] = [start, record]
+        // 长截屏进行中：控制条可能被用户拖到别处或挡住，菜单里留一个出口。
+        if ScrollingCaptureController.shared.isRunning {
+            items.append(ClosureMenuItem(title: L("screenshot.menu.finishLongCapture")) {
+                ScrollingCaptureController.shared.finish()
+            })
+        }
         if RecordingController.shared.isRecording {
             let pauseTitle = RecordingController.shared.isPaused
                 ? L("screenshot.record.hud.resume") : L("screenshot.record.hud.pause")
