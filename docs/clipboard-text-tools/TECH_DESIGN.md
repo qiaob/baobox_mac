@@ -22,10 +22,11 @@
 | `TimestampRecognizer.swift` | 时间识别与转换表 | ~230 |
 | `JSONRecognizer.swift` | JSON 检测 + **保序扫描器**（格式化/压缩）+ 转义/去转义 | ~270 |
 | `XMLRecognizer.swift` | XML 检测与格式化（禁 XXE） | ~90 |
-| `URLRecognizer.swift` | URL 检测、编解码、query 表 | ~120 |
+| `URLRecognizer.swift` | URL 检测、编解码、query 表；cURL 归并于此（解析拆表 + 格式化/压缩/提取） | ~150 |
+| `CurlCommand.swift` | curl 命令解析/重组（shell 子集分词，2026-08-02 增补） | ~210 |
 | `Base64Recognizer.swift` | Base64 检测（严格门槛）与编解码 | ~110 |
 | `JWTRecognizer.swift` | JWT 检测与分段渲染（组合 Base64 + JSON + 时间） | ~140 |
-| `CommonTextActions.swift` | 通用动作（本期：二维码）+ `ClipboardQRCode.pin` | ~90 |
+| `CommonTextActions.swift` | 通用动作：「编码/解码」下拉（Base64 编解码/JWT 解码/MD5/SHA1/SHA256）+ 二维码（预览区内嵌）+ 钉住卡片 + 大窗编辑 + `ClipboardQRCode.pin`（快捷键钉屏路径） | ~170 |
 
 移动：`Sources/Modules/QRCode/QRCodePanel.swift` 里的 `QRCodeGenerator` → **`Sources/Core/QRCodeGenerator.swift`**（原样搬，不改实现）。
 
@@ -37,7 +38,7 @@
 |---|---|---|
 | `ClipboardPanelView.swift` | 徽章行、表格区、动作栏、最大化布局 | ~+200 |
 | `ClipboardPanelViewModel` | 识别结果、预览缓冲、最大化状态 | ~+70 |
-| `ClipboardPanelController.swift` | Tab / ⌘1–9 / ⌘0 / ⌘⇧C / Esc 渐进撤销 | ~+50 |
+| `ClipboardPanelController.swift` | Tab / ⌘1–9 / ⌘0 / ⌘⇧C / Esc 渐进撤销；面板可调大小 + 尺寸记忆（styleMask 加 `.resizable`，660×420 为最小） | ~+50 |
 | `PasteService.swift` | `overrideText` 参数 | ~+12 |
 | `ClipboardTool.swift` | `clipboard.qrcodeLast` 快捷键 | ~+15 |
 
@@ -58,9 +59,13 @@ struct FormatRow: Identifiable {
 enum FormatActionKind {
     /// 文本 → 文本。结果进预览缓冲，⏎ 粘贴的就是它。返回 nil = 本次转换不适用（按钮不该被点到，兜底静默）。
     case transform((String) -> String?)
-    /// 输出不是文本，自己收尾（二维码钉屏、浏览器打开…）。
+    /// 文本 → 图片，内嵌进预览区展示（二维码）。再按一次收起由面板负责；返回 nil = 生成失败，静默不动。
+    case imagePreview((String) -> CGImage?)
+    /// 输出不是文本也不是内嵌图片，自己收尾（浏览器打开、Finder 中显示…）。
     /// 标 @MainActor：闭包里要碰 PinnedImageWindow / 面板控制器。
     case terminal(@MainActor (String) -> Void)
+    /// 一组转换收进一个下拉按钮（通用「编码/哈希」）。子项须是 transform，容器不可执行。
+    case menu([FormatAction])
 }
 
 struct FormatAction: Identifiable {
@@ -127,7 +132,8 @@ enum TextFormatRegistry {
 @Published var selectedIndex = 0                          // 不挂 didSet，见上
 @Published private(set) var matches: [FormatMatch] = []
 @Published var activeMatchIndex = 0 { didSet { transformed = nil } }
-@Published var transformed: TransformState?
+@Published var transformed: TransformState? { didSet { previewImage = nil } }
+@Published var previewImage: CGImage?   // 内嵌二维码；transformed 任何赋值都会清掉它
 
 // View 侧：
 .onChange(of: viewModel.selectedItem?.id) { _, _ in viewModel.refreshDetection() }
@@ -149,7 +155,7 @@ enum TextToolSettings {           // 纯 UserDefaults 读写，非 @MainActor，
 }
 ```
 
-`detectAll` 里 **filter 在 detect 之前** —— 关掉的识别器一次 `detect` 都不跑，这是这组开关存在的唯一意义（识别走主线程同步）。二维码不是识别器但共用同一套键（`qrCodeID = "qrcode"`），由 `commonActions(for:)` 判断。
+`detectAll` 里 **filter 在 detect 之前** —— 关掉的识别器一次 `detect` 都不跑，这是这组开关存在的唯一意义（识别走主线程同步）。通用动作不是识别器但共用同一套键（`qrcode` / `encodemenu` / `pincard` / `editor`），由 `commonActions(for:)` 逐个判断。
 
 设置页用 `@AppStorage(masterKey)` 管总开关；逐格式那组数量不固定又要 `ForEach`，没法一格式一个 `@AppStorage`，改用 `@State var toolStates: [String: Bool]` 镜像 + 自定义 `Binding` 写回 UserDefaults。
 
@@ -272,7 +278,7 @@ let compact = doc.xmlData(options: [.nodeCompactEmptyElement])
 static func decodeFlexible(_ s: String) -> Data?
 ```
 
-解出来是 JSON 时，在 `FormatMatch.rendered` 里直接给格式化后的结果，并让徽章行追加 `JSON`（由 `detectAll` 对解码结果二次识别产生，最多**一层**，不递归）。
+不给 `rendered`（2026-08-02 调整：选中即自动换预览，会与 ⏎ 粘贴的原文不一致），预览保持原文；「解码」是显式 transform，解出来是 JSON 时顺手 `rewrite(pretty:)` 格式化。
 
 ### 4.6 JWT（`JWTRecognizer.swift`）
 
@@ -299,19 +305,32 @@ static func qrCodeAction(for text: String) -> FormatAction {
     return FormatAction(
         id: "common.qrcode",
         title: L("clipboard.tools.qrcode"),
-        kind: .terminal { text in
-            guard let cg = QRCodeGenerator.image(for: text, minPixels: 1024) else { return }
-            // 钉在鼠标所在屏中央，260pt 见方（照搬原 QRCodePanelController.pinCentered）
-            PinnedImageWindow.pin(image: cg, at: centeredRect(side: 260))
-            ClipboardPanelController.current?.hide()
-        },
+        kind: .imagePreview { QRCodeGenerator.image(for: $0, minPixels: 1024) },
         isEnabled: !overLimit,
         disabledHint: overLimit ? L("clipboard.tools.qrcode.tooLong") : nil
     )
 }
 ```
 
-**必须钉屏而不是画在预览区**：面板装了 `globalClickMonitor`（点面板外即 `hide()`），画在预览区的话用户一去扫码面板就没了。理由详见需求 §5.7。
+**内嵌预览区、不关面板**（2026-08-02 按实际使用反馈从「钉屏 + 关面板」改）：扫码只是把手机举到屏幕前，Mac 上不需要点击，面板保持前台即可；切走焦点面板收起属可接受代价。无面板的 `clipboard.qrcodeLast` 快捷键路径仍钉屏（`ClipboardQRCode.pin` 保留）。理由详见需求 §5.7。
+
+### 4.8 编码/解码下拉（2026-08-02 增补）
+
+通用 transform 组，收进一个 `FormatActionKind.menu` 下拉按钮：Base64 编码 / Base64 解码（`explicitDecode`，显式触发不做长度门槛）/ JWT 解码（复用 `JWTRecognizer.parse`，输出 header+payload 两段格式化 JSON）/ MD5 / SHA1 / SHA256（小写十六进制，与 `md5` / `shasum` 一致）。解码类对不匹配文本返回 nil 静默不动。纯按钮、零检测开销；2026-08-02 起通用动作（编码/解码、二维码、钉住卡片、大窗编辑）在设置页各有独立开关，共用 `clipboard.textTools.*` 键。
+
+**⌘ 序号扁平化**：格式专属动作也聚合成下拉（JSON / URL / cURL）后，⌘1…⌘9 按 `keyboardActions`（下拉展开后的顺序）分配 —— 容器不占号，子项序号写进菜单项标题，按 ⌘n 直接触发、不必先打开菜单。
+
+### 4.9 cURL（`CurlCommand.swift`，2026-08-02 增补）
+
+归并进 URL 识别器（同 id `url`、同开关，徽章显示 `cURL`）。检测：trim 后以 `curl ` 开头且分词成功。分词是 shell 子集：`'…'`、`"…"`（`\` 转义）、`$'…'`（ANSI-C，Chrome 导出用）、裸 `\` 转义、行尾 `\` 续行；引号不闭合判不匹配。参数覆盖 `-X`/`-H`/`-b`/`-u`/`-d` 族/`-F`/`--url`；已知带值参数连值收进 `otherArgs` 防止值被误认成 URL，未知参数原样保留不丢。表格区拆行展示方法/URL/Header/Cookie/认证/Body（JSON body 格式化显示、复制给原文）。动作：格式化（归一化反斜杠多行）、压缩成一行、提取 URL；纯 URL 侧对应新增「转为 curl」。上限 64KB（带大 Cookie 的导出很容易破纯 URL 的 8KB 上限）。
+
+### 4.10a 大窗编辑（`ClipboardEditorWindow.swift`，2026-08-02 增补）
+
+`terminal` 动作：把 `transformInput` 开成独立**标准窗口**（titled/resizable/绿灯全屏，`NSApp.activate` 先激活 —— accessory App 不激活拿不到键盘焦点）。编辑器用 `NSTextView`（非 SwiftUI TextEditor：大文本性能、撤销、⌘F 查找条都是现成的），**关掉全部智能替换**（弯引号会毁掉 JSON）。底部「复制」写回剪贴板且不抑制监听 —— 显式复制进历史是正常语义。打开后面板 `hide()`：浮层面板 level 比标准窗口高，留着会盖在编辑器上。窗口池强引用 + `isReleasedWhenClosed = false`，`windowWillClose` 出池。
+
+### 4.10 钉住卡片（`PinnedTextCard.swift`，2026-08-02 增补）
+
+`terminal` 动作：把 `transformInput` 钉成屏幕最上层浮动卡片，面板不关。交互对齐贴图 `PinnedImageWindow`：borderless 非激活浮层、背景 `performDrag` 任意拖动、双击/Esc 关闭、右键菜单（复制内容/关闭）、⌥滚轮透明度。卡片按文本测量自适应（内容区上限 420×560），超长截断 —— **不做内部滚动**，滚动视图会拦截背景拖拽，「任意拖动」是底线。多张级联摆放。
 
 ## 5. UI 改造
 
@@ -420,7 +439,7 @@ HotkeyDefinition(id: "clipboard.qrcodeLast",
 | Base64 误报刷屏 | 五道门槛 + 优先级最低；误报只是多一个 chip，不影响正常操作 |
 | 主线程卡顿 | 三档长度上限（§3.2）；识别是 O(n) 单遍 |
 | 用户搞不清 ⏎ 粘的是哪个版本 | 徽章行「已转换 · 还原」是**必需**的，不是装饰 |
-| 二维码扫不到 | 必须钉屏，不能只画在预览区（面板会被点没） |
+| 二维码扫不到 | 预览区内嵌 1024px 原图缩放显示；需要常驻/跨 App 的场景用 qrcodeLast 快捷键钉屏 |
 | 删 QRCode 模块打断 NetCapture | `QRCodeGenerator` 迁 `Sources/Core/`，不能跟着模块一起删 |
 | 转换结果污染历史 | 所有写剪贴板路径都要置 `ignoreNextChange` |
 

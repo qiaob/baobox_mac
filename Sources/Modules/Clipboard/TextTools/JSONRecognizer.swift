@@ -12,7 +12,11 @@ struct JSONRecognizer: TextFormatRecognizer {
     let priority = 20
 
     func detect(_ text: String) -> FormatMatch? {
-        guard JSONFormatter.isValid(text) else { return nil }
+        // 两种命中：① 本体就是合法 JSON；② 转义后的 JSON 字符串字面量（需求 §11
+        // 「去转义」的主场景：日志里的 `"{\"code\":0}"`）—— 本体以引号开头不是合法
+        // JSON，剥掉转义后才是。动作给同一组：转换都自校验入参，② 里点格式化只会
+        // 静默不动，点「去除转义」剥出 JSON 后又能接着串格式化/压缩。
+        guard JSONFormatter.isValid(text) || JSONFormatter.isEscapedJSONString(text) else { return nil }
         return FormatMatch(
             id: id,
             badge: "JSON",
@@ -20,17 +24,20 @@ struct JSONRecognizer: TextFormatRecognizer {
             rendered: nil,
             rows: [],
             actions: [
-                // 转换是可以串起来的（格式化 → 转义 → …），所以每次都要重新校验入参：
-                // 对着「转义后的字符串字面量」再点格式化，扫描器不校验的话会吐出一堆
-                // 乱缩进。返回 nil = 静默不动。
-                FormatAction(id: "json.pretty", title: L("clipboard.tools.action.format"),
-                             kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: true) : nil }),
-                FormatAction(id: "json.minify", title: L("clipboard.tools.action.minify"),
-                             kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: false) : nil }),
-                FormatAction(id: "json.escape", title: L("clipboard.tools.action.escape"),
-                             kind: .transform { JSONFormatter.escaped($0) }),
-                FormatAction(id: "json.unescape", title: L("clipboard.tools.action.unescape"),
-                             kind: .transform { JSONFormatter.unescaped($0) })
+                // 四个转换收进一个「JSON」下拉（2026-08-02 动作栏聚合），⌘ 序号仍按
+                // 展开顺序分配、显示在菜单项里。转换可以串（格式化 → 转义 → …），
+                // 所以每次都要重新校验入参：对着「转义后的字符串字面量」点格式化，
+                // 扫描器不校验的话会吐出乱缩进。返回 nil = 静默不动。
+                FormatAction(id: "json.menu", title: "JSON", kind: .menu([
+                    FormatAction(id: "json.pretty", title: L("clipboard.tools.action.format"),
+                                 kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: true) : nil }),
+                    FormatAction(id: "json.minify", title: L("clipboard.tools.action.minify"),
+                                 kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: false) : nil }),
+                    FormatAction(id: "json.escape", title: L("clipboard.tools.action.escape"),
+                                 kind: .transform { JSONFormatter.escaped($0) }),
+                    FormatAction(id: "json.unescape", title: L("clipboard.tools.action.unescape"),
+                                 kind: .transform { JSONFormatter.unescaped($0) })
+                ]))
             ]
         )
     }
@@ -150,6 +157,15 @@ enum JSONFormatter {
             }
         }
         return out + "\""
+    }
+
+    /// 「转义后的 JSON 字符串字面量」检测。只「剥得动」还不够 —— 任何带引号的普通
+    /// 句子（`"hello"`）都剥得动，必须以**剥完是合法 JSON** 为准，否则随手复制的
+    /// 引号文本都会被打上 JSON 徽章。非引号开头的文本在 `unescaped` 第一步就出局，
+    /// 代价可忽略。
+    static func isEscapedJSONString(_ text: String) -> Bool {
+        guard let peeled = unescaped(text) else { return false }
+        return isValid(peeled)
     }
 
     /// 递归剥掉转义层。日志里嵌两层很常见（`"{\"data\":\"{\\\"id\\\":1}\"}"`），

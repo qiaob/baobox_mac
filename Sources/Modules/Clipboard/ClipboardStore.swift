@@ -97,9 +97,13 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
+    /// 清空历史，收藏条目**保留** —— 「收藏 = 永远不删」对显式清空同样成立；
+    /// 真想连收藏一起清，先逐条取消收藏。弹窗文案（clearConfirm.message）与此一致。
     func clearAll() {
-        for item in items { deleteImageFile(for: item) }
-        items.removeAll()
+        let removed = items.filter { !$0.isPinned }
+        guard !removed.isEmpty else { return }
+        for item in removed { deleteImageFile(for: item) }
+        items.removeAll { !$0.isPinned }
         scheduleSave()
     }
 

@@ -11,16 +11,26 @@ final class ClipboardPanelViewModel: ObservableObject {
 
     static let maximizedKey = "clipboard.previewMaximized"
 
+    /// 顶栏筛选。类型之外还有「收藏」维度，所以不是单纯的 ClipboardItemType?。
+    enum PanelFilter: Equatable {
+        case all
+        case type(ClipboardItemType)
+        case favorites
+    }
+
     @Published var query = ""
-    @Published var typeFilter: ClipboardItemType?
+    @Published var filter: PanelFilter = .all
     @Published var selectedIndex = 0
 
     /// 当前选中条目命中的格式，按优先级升序。
     @Published private(set) var matches: [FormatMatch] = []
     /// 徽章行选中的那一个。切格式要清掉转换结果 —— 两个格式的转换不该串。
     @Published var activeMatchIndex = 0 { didSet { transformed = nil } }
-    /// 预览缓冲：执行转换动作后的结果。
-    @Published var transformed: TransformState?
+    /// 预览缓冲：执行转换动作后的结果。任何赋值（转换、撤销、换条目/换格式时的
+    /// 清空）都顺带清掉内嵌图片 —— 图片是按当时的文本生成的，文本一动它就是陈旧的。
+    @Published var transformed: TransformState? { didSet { previewImage = nil } }
+    /// 内嵌进预览区的图片（二维码）。非 nil 时预览区显示它而不是文本。
+    @Published var previewImage: CGImage?
     /// 预览区最大化（列表列隐藏）。状态持久化，经常看 JSON 的人不必每次按一下。
     @Published var isPreviewMaximized: Bool {
         didSet { UserDefaults.standard.set(isPreviewMaximized, forKey: Self.maximizedKey) }
@@ -35,7 +45,7 @@ final class ClipboardPanelViewModel: ObservableObject {
 
     var filtered: [ClipboardItem] {
         store.items.filter { item in
-            (typeFilter == nil || item.type == typeFilter) && matchesQuery(item)
+            matchesFilter(item) && matchesQuery(item)
         }
     }
 
@@ -47,7 +57,7 @@ final class ClipboardPanelViewModel: ObservableObject {
 
     func resetForShow() {
         query = ""
-        typeFilter = nil
+        filter = .all
         selectedIndex = 0
         // selectedIndex 本来就是 0 时 didSet 不触发，这里必须显式刷一次。
         refreshDetection()
@@ -120,16 +130,38 @@ final class ClipboardPanelViewModel: ObservableObject {
         return actions
     }
 
+    /// ⌘1…⌘9 的映射：把下拉子项按出现顺序展开，容器本身不占号。
+    /// 动作栏菜单项里显示的序号与这里一致（slotTitle）。
+    var keyboardActions: [FormatAction] {
+        visibleActions.flatMap { action in
+            if case .menu(let subActions) = action.kind { return subActions }
+            return [action]
+        }
+    }
+
     func run(_ action: FormatAction) {
         guard action.isEnabled else { return }
         switch action.kind {
         case .transform(let transform):
             guard let result = transform(transformInput) else { return }
             transformed = TransformState(actionTitle: action.title, text: result)
+        case .imagePreview(let render):
+            // 再按一次 = 收起。输入用 transformInput 而不是 previewText：选中一个
+            // JWT 时预览区是解码视图，但要生成二维码的显然是原 token。
+            previewImage = previewImage == nil ? render(transformInput) : nil
         case .terminal(let terminal):
-            // 同样用 transformInput 而不是 previewText：选中一个 JWT 时预览区是解码
-            // 视图，但要生成二维码的显然是原 token。
             terminal(transformInput)
+        case .menu:
+            // 容器不可执行也不进 keyboardActions，走不到这里；纯防御兜底。
+            break
+        }
+    }
+
+    private func matchesFilter(_ item: ClipboardItem) -> Bool {
+        switch filter {
+        case .all: return true
+        case .type(let type): return item.type == type
+        case .favorites: return item.isPinned
         }
     }
 
@@ -157,10 +189,10 @@ struct ClipboardPanelView: View {
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
 
-    private let typeChips: [(String, ClipboardItemType?)] = [
-        (L("clipboard.chip.all"), nil), (L("clipboard.chip.text"), .text),
-        (L("clipboard.chip.link"), .link), (L("clipboard.chip.image"), .image),
-        (L("clipboard.chip.file"), .file)
+    private let typeChips: [(String, ClipboardPanelViewModel.PanelFilter)] = [
+        (L("clipboard.chip.all"), .all), (L("clipboard.chip.text"), .type(.text)),
+        (L("clipboard.chip.link"), .type(.link)), (L("clipboard.chip.image"), .type(.image)),
+        (L("clipboard.chip.file"), .type(.file)), (L("clipboard.chip.favorites"), .favorites)
     ]
 
     var body: some View {
@@ -178,7 +210,9 @@ struct ClipboardPanelView: View {
             Divider()
             footer
         }
-        .frame(width: 660, height: 420)
+        // 只锁下限：面板可拖拽调整大小（ClipboardPanelController.minSize 同值），
+        // 根视图跟着窗口尺寸铺满。
+        .frame(minWidth: 660, minHeight: 420)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -191,7 +225,7 @@ struct ClipboardPanelView: View {
             searchFocused = true
         }
         .onChange(of: viewModel.query) { _, _ in viewModel.clampSelection() }
-        .onChange(of: viewModel.typeFilter) { _, _ in viewModel.clampSelection() }
+        .onChange(of: viewModel.filter) { _, _ in viewModel.clampSelection() }
         // 选中的**条目**变了就重新识别 —— 不管是键盘换行、搜索过滤变了，还是面板
         // 开着时来了新的复制把列表顶开。首次显示由 resetForShow() 负责。
         .onChange(of: viewModel.selectedItem?.id) { _, _ in viewModel.refreshDetection() }
@@ -209,14 +243,14 @@ struct ClipboardPanelView: View {
 
             HStack(spacing: 6) {
                 ForEach(Array(typeChips.enumerated()), id: \.offset) { _, chip in
-                    let active = viewModel.typeFilter == chip.1
+                    let active = viewModel.filter == chip.1
                     Text(chip.0)
                         .font(.caption)
                         .padding(.horizontal, 11).padding(.vertical, 4)
                         .background(active ? Color.accentColor : Color.primary.opacity(0.07),
                                     in: Capsule())
                         .foregroundStyle(active ? Color.white : Color.primary)
-                        .onTapGesture { viewModel.typeFilter = chip.1 }
+                        .onTapGesture { viewModel.filter = chip.1 }
                 }
             }
         }
@@ -402,28 +436,75 @@ struct ClipboardPanelView: View {
     }
 
     /// 面板窄，动作多了会挤 —— 横向可滚。
+    ///
+    /// ⌘ 序号按 keyboardActions（下拉展开后的顺序）分配：容器不占号，子项的
+    /// 序号写进菜单项标题，按 ⌘n 直接触发、不用先打开菜单。
     private var actionBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        // uniquingKeysWith 而非 uniqueKeysWithValues：后者遇到重复 id 直接 crash，
+        // 而 id 唯一性靠的是各识别器自觉 —— 不值得用崩溃来强制。
+        let slots = Dictionary(viewModel.keyboardActions.enumerated().map { ($1.id, $0) },
+                               uniquingKeysWith: { first, _ in first })
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(Array(viewModel.visibleActions.enumerated()), id: \.element.id) { index, action in
-                    Button {
-                        viewModel.run(action)
-                    } label: {
-                        Text(verbatim: index < 9 ? "\(action.title)  ⌘\(index + 1)" : action.title)
-                            .font(.system(size: 11))
+                ForEach(viewModel.visibleActions) { action in
+                    if case .menu(let subActions) = action.kind {
+                        Menu {
+                            ForEach(subActions) { sub in
+                                Button {
+                                    viewModel.run(sub)
+                                } label: {
+                                    Text(verbatim: slotTitle(sub, slots))
+                                }
+                                .disabled(!sub.isEnabled)
+                            }
+                        } label: {
+                            Text(verbatim: action.title)
+                                .font(.system(size: 11))
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .fixedSize()
+                    } else {
+                        Button {
+                            viewModel.run(action)
+                        } label: {
+                            Text(verbatim: slotTitle(action, slots))
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!action.isEnabled)
+                        .help(action.disabledHint ?? "")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!action.isEnabled)
-                    .help(action.disabledHint ?? "")
                 }
             }
             .padding(.vertical, 1)
         }
     }
 
+    /// 标题 + ⌘ 序号（keyboardActions 里前 9 个才有）。
+    private func slotTitle(_ action: FormatAction, _ slots: [String: Int]) -> String {
+        if let slot = slots[action.id], slot < 9 { return "\(action.title)  ⌘\(slot + 1)" }
+        return action.title
+    }
+
     @ViewBuilder
     private func previewBody(_ item: ClipboardItem) -> some View {
+        // 内嵌图片（二维码）盖过一切文本形态。源图 1024px、显示区约 370pt，
+        // 缩放交给默认插值（与钉屏窗一致，实测可扫）。
+        if let cg = viewModel.previewImage {
+            Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            textPreviewBody(item)
+        }
+    }
+
+    @ViewBuilder
+    private func textPreviewBody(_ item: ClipboardItem) -> some View {
         switch item.type {
         case .text, .link:
             ScrollView {

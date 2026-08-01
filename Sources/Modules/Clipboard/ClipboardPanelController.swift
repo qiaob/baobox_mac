@@ -35,6 +35,22 @@ final class ClipboardPanelController: NSObject {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    // MARK: - 尺寸记忆
+
+    /// 出厂尺寸即最小尺寸；用户拉大后的尺寸跨启动记住。
+    static let minSize = NSSize(width: 660, height: 420)
+    private static let sizeKey = "clipboard.panelSize"
+
+    private static func restoredSize() -> NSSize {
+        guard let dict = UserDefaults.standard.dictionary(forKey: sizeKey),
+              let width = dict["w"] as? Double, let height = dict["h"] as? Double else { return minSize }
+        return NSSize(width: max(width, minSize.width), height: max(height, minSize.height))
+    }
+
+    private static func saveSize(_ size: NSSize) {
+        UserDefaults.standard.set(["w": size.width, "h": size.height], forKey: sizeKey)
+    }
+
     func toggle() {
         if isVisible { hide() } else { show() }
     }
@@ -56,9 +72,11 @@ final class ClipboardPanelController: NSObject {
         )
         let hosting = NSHostingView(rootView: content)
 
+        // .resizable 让无边框窗口的边缘出现不可见的拖拽区（光标会变），
+        // 这是「大 JSON 看不下」的解法：拉大一次，尺寸记住。
         let panel = ClipboardPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 420),
-            styleMask: [.borderless, .nonactivatingPanel],
+            contentRect: NSRect(origin: .zero, size: Self.restoredSize()),
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -68,14 +86,18 @@ final class ClipboardPanelController: NSObject {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
+        panel.contentMinSize = Self.minSize
         panel.contentView = hosting
 
-        // 居中于鼠标所在屏
+        // 居中于鼠标所在屏；记忆尺寸超过当前屏可视区时压回去（换了小屏的情况）。
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
         if let visible = screen?.visibleFrame {
-            let origin = NSPoint(x: visible.midX - 330, y: visible.midY - 210)
-            panel.setFrameOrigin(origin)
+            var frame = panel.frame
+            frame.size.width = min(frame.size.width, visible.width)
+            frame.size.height = min(frame.size.height, visible.height)
+            frame.origin = NSPoint(x: visible.midX - frame.width / 2, y: visible.midY - frame.height / 2)
+            panel.setFrame(frame, display: false)
         }
 
         panel.makeKeyAndOrderFront(nil)
@@ -86,6 +108,7 @@ final class ClipboardPanelController: NSObject {
 
     func hide() {
         removeMonitors()
+        if let size = panel?.frame.size { Self.saveSize(size) }
         panel?.orderOut(nil)
         panel = nil
         if ClipboardPanelController.current === self {
@@ -157,10 +180,10 @@ final class ClipboardPanelController: NSObject {
             viewModel.transformed = nil
             return true
         default:
-            // ⌘1…⌘9 触发动作栏第 n 个动作
+            // ⌘1…⌘9 触发动作栏第 n 个动作（下拉展开后的顺序，容器不占号）
             if event.modifierFlags.contains(.command),
                let slot = Self.actionKeyCodes.firstIndex(of: event.keyCode) {
-                let actions = viewModel.visibleActions
+                let actions = viewModel.keyboardActions
                 if actions.indices.contains(slot) { viewModel.run(actions[slot]) }
                 return true
             }

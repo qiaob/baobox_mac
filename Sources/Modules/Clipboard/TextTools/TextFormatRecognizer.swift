@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // MARK: - 数据结构
@@ -17,8 +18,15 @@ enum FormatActionKind {
     /// 文本 → 文本。结果进预览缓冲，⏎ 粘贴的就是它。
     /// 返回 nil = 这次转换不适用（按钮理论上不该被点到，兜底静默）。
     case transform((String) -> String?)
-    /// 输出不是文本，动作自己收尾（二维码钉屏、浏览器打开…）。
+    /// 文本 → 图片，内嵌进预览区展示（二维码）。同一动作再按一次收起，由面板负责。
+    /// 返回 nil = 生成失败，静默不动。
+    case imagePreview((String) -> CGImage?)
+    /// 输出不是文本，动作自己收尾（浏览器打开、Finder 中显示…）。
     case terminal(@MainActor (String) -> Void)
+    /// 一组转换收进一个下拉按钮（JSON / URL / cURL / 通用「编码/解码」）。
+    /// 子项须是 transform；容器本身不可执行也不占 ⌘ 序号（keyboardActions
+    /// 只展开子项），面板把它渲染成 Menu。
+    case menu([FormatAction])
 }
 
 struct FormatAction: Identifiable {
@@ -39,8 +47,9 @@ struct FormatMatch: Identifiable {
     let badge: String
     /// 覆盖预览正文的渲染结果；nil = 照常显示条目原文。
     ///
-    /// **只有原文本身不可读时才给**（JWT、Base64）。JSON / XML 这类原文可读的一律
-    /// 留 nil —— 格式化是用户显式动作，不能因为「选中了」就把预览换掉。
+    /// **只有原文不可读、且没有等价显式动作时才给**（当前仅 JWT 的分段视图）。
+    /// 其余一律留 nil —— 转换是用户显式动作，不能因为「选中了」就把预览换掉，
+    /// 否则预览显示的和 ⏎ 粘出去的不一致（Base64 曾自动渲染，2026-08-02 撤销）。
     var rendered: String? = nil
     /// 表格区内容；空数组 = 不显示表格。
     var rows: [FormatRow] = []
@@ -81,21 +90,29 @@ enum TextToolSettings {
     }
 
     static let masterKey = "clipboard.textTools.enabled"
-    /// 二维码不是识别器，但同样出现在设置列表里，共用一套键。
+    /// 通用动作不是识别器，但同样出现在设置列表里，共用一套键
+    /// （2026-08-02 起二维码之外的通用动作也各有开关）。
     static let qrCodeID = "qrcode"
+    static let encodeMenuID = "encodemenu"
+    static let pinCardID = "pincard"
+    static let editorID = "editor"
 
     static func key(for id: String) -> String { "clipboard.textTools.\(id)" }
 
-    /// 设置页的行顺序 = 面板徽章的优先级顺序。
+    /// 设置页的行顺序 = 面板徽章的优先级顺序；通用动作按动作栏顺序排在后面。
     static var descriptors: [Descriptor] {
         [
             Descriptor(id: "jwt", title: "JWT"),
             Descriptor(id: "json", title: "JSON"),
             Descriptor(id: "xml", title: "XML"),
             Descriptor(id: "timestamp", title: L("clipboard.tools.name.timestamp")),
-            Descriptor(id: "url", title: "URL"),
+            // URL 开关同管 cURL（同一识别器、同一 id）
+            Descriptor(id: "url", title: "URL / cURL"),
             Descriptor(id: "base64", title: "Base64"),
-            Descriptor(id: qrCodeID, title: L("clipboard.tools.action.qrcode"))
+            Descriptor(id: encodeMenuID, title: L("clipboard.tools.action.encodeDecode")),
+            Descriptor(id: qrCodeID, title: L("clipboard.tools.action.qrcode")),
+            Descriptor(id: pinCardID, title: L("clipboard.tools.name.pinCard")),
+            Descriptor(id: editorID, title: L("clipboard.tools.name.editor"))
         ]
     }
 
@@ -153,8 +170,9 @@ enum TextFormatRegistry {
     }
 
     /// 对任何文本条目都出现的动作，排在格式专属动作之后。
+    /// 各通用动作的独立开关在 CommonTextActions 里逐个判断；这里只把总开关的关。
     static func commonActions(for text: String) -> [FormatAction] {
-        guard TextToolSettings.isEnabled(TextToolSettings.qrCodeID) else { return [] }
+        guard TextToolSettings.isMasterEnabled else { return [] }
         return CommonTextActions.all(for: text)
     }
 }
