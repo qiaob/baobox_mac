@@ -1,11 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 剪贴板设置：历史上限、保留时长、隐私（Concealed 过滤 + 按 App 忽略名单）、清空。
+/// 剪贴板设置：历史上限、保留时长、隐私（敏感内容开关 + 按 App 忽略名单）、清空。
 struct ClipboardSettingsView: View {
     @ObservedObject var store: ClipboardStore
     @AppStorage(ClipboardStore.maxItemsKey) private var maxItems = 200
     @AppStorage(ClipboardStore.retentionDaysKey) private var retentionDays = 0
+    @AppStorage(ClipboardStore.recordConcealedKey) private var recordConcealed = false
     @State private var ignoredApps: [String] = ClipboardStore.ignoredBundleIDs
 
     var body: some View {
@@ -29,9 +30,29 @@ struct ClipboardSettingsView: View {
             }
 
             Section("clipboard.settings.privacySection") {
-                Toggle("clipboard.settings.ignoreConcealed", isOn: .constant(true))
-                    .disabled(true)
-                Text("clipboard.settings.ignoreConcealedHelp")
+                // 自定义 Binding 而不是直接绑 $recordConcealed：开启前要弹确认框，
+                // 用户点「取消」时开关不能已经翻过去了。
+                Toggle("clipboard.settings.recordConcealed", isOn: Binding(
+                    get: { recordConcealed },
+                    set: { newValue in
+                        if newValue {
+                            if confirmEnableConcealed() { recordConcealed = true }
+                        } else {
+                            recordConcealed = false
+                            store.removeConcealed()
+                        }
+                    }
+                ))
+                if recordConcealed {
+                    Text("clipboard.settings.recordConcealedOnHelp")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("clipboard.settings.recordConcealedOffHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("clipboard.settings.transientHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -63,6 +84,17 @@ struct ClipboardSettingsView: View {
         .onChange(of: retentionDays) { _, _ in
             store.pruneExpired()
         }
+    }
+
+    /// 开启前的二次确认（历史是明文落盘的）。返回 true = 用户确认开启。
+    private func confirmEnableConcealed() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = L("clipboard.concealedConfirm.title")
+        alert.informativeText = L("clipboard.concealedConfirm.message")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("clipboard.concealedConfirm.confirm"))
+        alert.addButton(withTitle: L("common.cancel"))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - 忽略名单

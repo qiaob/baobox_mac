@@ -63,6 +63,11 @@ struct ClipboardPanelView: View {
 
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
+    /// 本次打开面板期间被用户手动「显示」过的敏感条目。面板每次 show() 都会重建
+    /// ClipboardPanelView，这份状态随之清空 —— 关掉再打开重新打码。
+    @State private var revealedIDs: Set<UUID> = []
+
+    private static let maskText = "••••••••"
 
     private let typeChips: [(String, ClipboardItemType?)] = [
         (L("clipboard.chip.all"), nil), (L("clipboard.chip.text"), .text),
@@ -154,7 +159,7 @@ struct ClipboardPanelView: View {
 
     private func row(item: ClipboardItem, selected: Bool) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: iconName(item.type))
+            Image(systemName: item.isConcealed ? "lock.fill" : iconName(item.type))
                 .font(.system(size: 12))
                 .frame(width: 26, height: 26)
                 .background(selected ? Color.white.opacity(0.22) : Color.primary.opacity(0.08),
@@ -215,7 +220,8 @@ struct ClipboardPanelView: View {
 
                 HStack(spacing: 16) {
                     Text("clipboard.preview.source \(item.sourceAppName ?? L("common.unknown"))")
-                    if let text = item.text { Text("clipboard.preview.chars \(text.count)") }
+                    // 打码时连字符数也不显示 —— 密码长度本身就是信息。
+                    if let text = item.text, !isMasked(item) { Text("clipboard.preview.chars \(text.count)") }
                     Text(absoluteTime(item.createdAt))
                 }
                 .font(.system(size: 11.5))
@@ -236,6 +242,28 @@ struct ClipboardPanelView: View {
 
     @ViewBuilder
     private func previewBody(_ item: ClipboardItem) -> some View {
+        if isMasked(item) {
+            concealedPlaceholder(item)
+        } else {
+            unmaskedPreviewBody(item)
+        }
+    }
+
+    private func concealedPlaceholder(_ item: ClipboardItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(verbatim: Self.maskText)
+                .font(.system(size: 16, design: .monospaced))
+            Text("clipboard.preview.concealedHint")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+            Button("clipboard.preview.reveal") { revealedIDs.insert(item.id) }
+                .buttonStyle(.link)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func unmaskedPreviewBody(_ item: ClipboardItem) -> some View {
         switch item.type {
         case .text, .link:
             ScrollView {
@@ -317,7 +345,13 @@ struct ClipboardPanelView: View {
         }
     }
 
+    /// 敏感条目在未手动展开前一律打码 —— 列表是一眼扫过去的，密码不该出现在这里。
+    private func isMasked(_ item: ClipboardItem) -> Bool {
+        item.isConcealed && !revealedIDs.contains(item.id)
+    }
+
     private func previewLine(_ item: ClipboardItem) -> String {
+        if isMasked(item) { return Self.maskText }
         switch item.type {
         case .image:
             return item.imageFilename ?? L("clipboard.type.image")

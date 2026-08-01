@@ -244,7 +244,8 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
 ### 4.2 ClipboardMonitor
 
 - 0.3s `Timer`（`.common` runloop mode）轮询 `NSPasteboard.general.changeCount`。
-- 跳过条件：changeCount 未变；`ignoreNextChange` 标志（PasteService 回填时置位，消费一次后复位）；pasteboard types 含 `org.nspasteboard.ConcealedType` 或 `org.nspasteboard.TransientType`。
+- 跳过条件：changeCount 未变；`ignoreNextChange` 标志（PasteService 回填时置位，消费一次后复位）；pasteboard types 含 `org.nspasteboard.TransientType`（来源明确要求不保存，无开关）。
+- `org.nspasteboard.ConcealedType`（1Password 等密码管理器标记的密码）由 `clipboard.recordConcealed`（`UserDefaults`，默认 `false`）控制：关 → 直接跳过；开 → 入库并置 `ClipboardItem.isConcealed = true`，面板内默认打码（列表行显示 `••••••••` + 锁图标，预览区需点「显示」才展开，展开状态只在本次开面板期间有效）。设置页把开关关回去时调 `ClipboardStore.removeConcealed()` 清掉已入库的敏感条目（含置顶）。`isConcealed` 为后加字段，`ClipboardItem` 手写 `init(from:)` 用 `decodeIfPresent` 兜底，保证老 `clipboard.json` 可解码。
 - 读取优先级：`fileURLs`（`readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])`）→ file；`NSImage` 可读 → image（PNG 落盘）；string → 以 `URL(string:)` 且 scheme http(s) 判定 link，否则 text。
 - 来源 App：`NSWorkspace.shared.frontmostApplication`（读取时刻的前台 App 即复制来源，足够准确）。
 

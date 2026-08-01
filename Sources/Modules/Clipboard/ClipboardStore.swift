@@ -17,6 +17,7 @@ final class ClipboardStore: ObservableObject {
     static let maxItemsKey = "clipboard.maxItems"
     static let retentionDaysKey = "clipboard.retentionDays"
     static let ignoredBundleIDsKey = "clipboard.ignoredBundleIDs"
+    static let recordConcealedKey = "clipboard.recordConcealed"
 
     private var saveWorkItem: DispatchWorkItem?
 
@@ -39,6 +40,14 @@ final class ClipboardStore: ObservableObject {
     static var ignoredBundleIDs: [String] {
         get { UserDefaults.standard.stringArray(forKey: ignoredBundleIDsKey) ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: ignoredBundleIDsKey) }
+    }
+
+    /// 是否记录被来源标记为敏感（ConcealedType）的内容 —— 1Password / Bitwarden 等
+    /// 密码管理器复制的密码走的就是这个标记。出厂关闭；`bool(forKey:)` 未设置时返回
+    /// false，正好等于「默认不记录」，无需注册默认值。
+    static var recordConcealed: Bool {
+        get { UserDefaults.standard.bool(forKey: recordConcealedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: recordConcealedKey) }
     }
 
     // MARK: - 变更
@@ -84,6 +93,16 @@ final class ClipboardStore: ObservableObject {
     func clearAll() {
         for item in items { deleteImageFile(for: item) }
         items.removeAll()
+        scheduleSave()
+    }
+
+    /// 关掉「记录敏感内容」开关时调用：把已经入库的敏感条目一并清掉（含置顶的）。
+    /// 只停止新增而把旧的留在磁盘上，等于开关关了密码还在，不符合用户预期。
+    func removeConcealed() {
+        let concealed = items.filter(\.isConcealed)
+        guard !concealed.isEmpty else { return }
+        for item in concealed { deleteImageFile(for: item) }
+        items.removeAll { $0.isConcealed }
         scheduleSave()
     }
 
