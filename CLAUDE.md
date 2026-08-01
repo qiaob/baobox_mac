@@ -71,6 +71,22 @@ BaoboxApp(@main, Settings scene)
 - 提交者邮箱须 `noreply@anthropic.com`（`git config user.email noreply@anthropic.com && user.name Claude`）。
 - ⚠️ 本环境**无可用的 commit 签名密钥**（`ssh-keygen` 缺失、签名 key 为空文件），提交会显示 Unverified —— 这是环境限制，非代码问题，邮箱正确即可。
 
+## 发布（Release）
+
+三步全自动，**不需要任何 secrets**（流程 2026-08-02 起生效，v0.0.0-test 实测通过）：
+
+1. `project.yml` 两处版本号（`CFBundleShortVersionString` + `MARKETING_VERSION`）改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
+3. `.github/workflows/release.yml` 自动：Release 构建 → **ad-hoc 签名** → zip → 创建 GitHub Release（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。
+
+背景与取舍：
+
+- **无付费 Apple Developer 账号** → 没有 Developer ID 证书、不能公证。带证书导入 + notarytool 的旧工作流在 git 历史里（`ce39940` 之前），将来有付费账号可恢复；在那之前**不要**给工作流加 secrets 依赖。
+- ad-hoc 产物仅用于**分发**：他人首次打开需右键 →「打开」；且 ad-hoc 的 cdhash 每次构建都变，覆盖安装会作废 TCC 授权（屏幕录制/辅助功能）。
+- **用户自己的 Mac 一律装本地构建**（Apple Development 证书签名，TCC 授权跨版本稳定）：`xcodegen generate` + `xcodebuild -scheme Baobox -configuration Release build`，产物 `ditto` 到 `/Applications`（先退出运行中的 Baobox）。若 `xcode-select` 指向 CommandLineTools，命令前加 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`。
+- tag 触发的 workflow 取自 **tag 指向的提交**里的文件 —— 对旧 tag 重跑不会用新流程。
+- 历史备注：v0.0.2–v0.0.4 实为本地构建手动 `gh release create` 发布（旧工作流因 secrets 缺失从未成功过）。
+
 ## 校验脚本
 
 catalog JSON 合法性 + 静态 key 是否入表：
