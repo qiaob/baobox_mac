@@ -34,7 +34,7 @@ BaoboxApp(@main, Settings scene)
 | 模块 | id | 说明 |
 |---|---|---|
 | Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、录屏、历史。ScreenCaptureKit |
-| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤 |
+| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain 密钥，见 `ClipboardCrypto`） |
 | ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
 | QRCode | `qrcode` | 二维码生成（CIQRCodeGenerator，纯本地）——**新模块要生成二维码时复用其思路** |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |

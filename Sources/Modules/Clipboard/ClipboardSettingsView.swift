@@ -73,6 +73,21 @@ struct ClipboardSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("clipboard.settings.storageSection") {
+                if ClipboardCrypto.isAvailable {
+                    Label("clipboard.settings.encryptionOn", systemImage: "lock.fill")
+                    Text("clipboard.settings.encryptionOnHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("clipboard.settings.encryptionOff", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("clipboard.settings.encryptionOffHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section {
                 Button("clipboard.settings.clear", role: .destructive) { confirmClear() }
                 Text("clipboard.settings.count \(store.items.count)")
