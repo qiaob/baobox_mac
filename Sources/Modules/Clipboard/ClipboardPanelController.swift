@@ -147,7 +147,10 @@ final class ClipboardPanelController: NSObject {
                 hide()
             }
             return true
-        case 0x08 where event.modifierFlags.contains(.command): // ⌘C 只复制预览内容
+        // 复制整个预览内容用 ⌘⇧C 而不是 ⌘C —— 主菜单的「编辑」里 ⌘C 绑的是
+        // NSText.copy(_:)，劫持它会让搜索框和预览区（textSelection 开着）里
+        // 选中一段文字后的复制失效。
+        case 0x08 where event.modifierFlags.contains([.command, .shift]):
             copyOnly(viewModel.previewText)
             return true
         case 0x1D where event.modifierFlags.contains(.command): // ⌘0 还原转换

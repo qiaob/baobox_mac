@@ -13,7 +13,7 @@ final class ClipboardPanelViewModel: ObservableObject {
 
     @Published var query = ""
     @Published var typeFilter: ClipboardItemType?
-    @Published var selectedIndex = 0 { didSet { refreshDetection() } }
+    @Published var selectedIndex = 0
 
     /// 当前选中条目命中的格式，按优先级升序。
     @Published private(set) var matches: [FormatMatch] = []
@@ -63,14 +63,17 @@ final class ClipboardPanelViewModel: ObservableObject {
         let count = filtered.count
         if count == 0 { selectedIndex = 0 }
         else if selectedIndex >= count { selectedIndex = count - 1 }
-        // 搜索/过滤会让同一个 selectedIndex 指向另一条，识别结果必须跟着重算。
-        refreshDetection()
     }
 
     // MARK: - 格式识别
 
     /// 只对**当前选中的这一条**跑，纯内存、不落盘。绝不在 ClipboardMonitor 入库时跑 ——
     /// 那是 0.3s 轮询的热路径。
+    ///
+    /// 触发点统一在 View 的 `.onChange(of: selectedItem?.id)`，不挂在 `selectedIndex`
+    /// 的 didSet 上：面板开着时用户在别处复制，新条目插到列表最前，`selectedIndex`
+    /// 没变但它指向的已经是另一条了 —— 只盯索引会留下错位的徽章和动作。
+    /// 反过来，选中项没变时（比如只是在搜索框里打字）也不该白清掉用户的转换结果。
     func refreshDetection() {
         transformed = nil
         activeMatchIndex = 0
@@ -93,10 +96,15 @@ final class ClipboardPanelViewModel: ObservableObject {
         return selectedItem?.text ?? ""
     }
 
-    /// 转换动作的输入：已转换过就在结果上接着转，否则用条目原文。
-    /// **不用 `rendered`** —— 那只是展示（如 JWT 解码视图），不是可再转换的源。
+    /// 动作的输入：已转换过就在结果上接着转，否则用条目原文。
+    ///
+    /// **不用 `rendered`** —— 那只是展示（如 JWT 的解码视图带着分段注释），不是可再
+    /// 转换的源；给二维码编码的也必须是原 token 而不是那份视图。
+    /// 这里必须 trim：检测拿到的是 trim 过的文本，不 trim 的话「带尾换行的 Base64
+    /// 徽章亮着、解码按钮却静默无反应」。
     var transformInput: String {
-        transformed?.text ?? (selectedItem?.text ?? "")
+        (transformed?.text ?? (selectedItem?.text ?? ""))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// ⏎ 粘贴时的覆盖内容。只有**显式转换过**才覆盖 —— 仅仅选中一条 JWT
@@ -119,7 +127,9 @@ final class ClipboardPanelViewModel: ObservableObject {
             guard let result = transform(transformInput) else { return }
             transformed = TransformState(actionTitle: action.title, text: result)
         case .terminal(let terminal):
-            terminal(previewText)
+            // 同样用 transformInput 而不是 previewText：选中一个 JWT 时预览区是解码
+            // 视图，但要生成二维码的显然是原 token。
+            terminal(transformInput)
         }
     }
 
@@ -182,6 +192,9 @@ struct ClipboardPanelView: View {
         }
         .onChange(of: viewModel.query) { _, _ in viewModel.clampSelection() }
         .onChange(of: viewModel.typeFilter) { _, _ in viewModel.clampSelection() }
+        // 选中的**条目**变了就重新识别 —— 不管是键盘换行、搜索过滤变了，还是面板
+        // 开着时来了新的复制把列表顶开。首次显示由 resetForShow() 负责。
+        .onChange(of: viewModel.selectedItem?.id) { _, _ in viewModel.refreshDetection() }
     }
 
     // MARK: 顶部搜索 + 过滤

@@ -13,9 +13,6 @@ struct JSONRecognizer: TextFormatRecognizer {
 
     func detect(_ text: String) -> FormatMatch? {
         guard JSONFormatter.isValid(text) else { return nil }
-        let tooBig = text.utf8.count > TextToolLimits.maxTransform
-        let hint = tooBig ? L("clipboard.tools.tooLong") : nil
-
         return FormatMatch(
             id: id,
             badge: "JSON",
@@ -23,18 +20,17 @@ struct JSONRecognizer: TextFormatRecognizer {
             rendered: nil,
             rows: [],
             actions: [
+                // 转换是可以串起来的（格式化 → 转义 → …），所以每次都要重新校验入参：
+                // 对着「转义后的字符串字面量」再点格式化，扫描器不校验的话会吐出一堆
+                // 乱缩进。返回 nil = 静默不动。
                 FormatAction(id: "json.pretty", title: L("clipboard.tools.action.format"),
-                             kind: .transform { JSONFormatter.rewrite($0, pretty: true) },
-                             isEnabled: !tooBig, disabledHint: hint),
+                             kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: true) : nil }),
                 FormatAction(id: "json.minify", title: L("clipboard.tools.action.minify"),
-                             kind: .transform { JSONFormatter.rewrite($0, pretty: false) },
-                             isEnabled: !tooBig, disabledHint: hint),
+                             kind: .transform { JSONFormatter.isValid($0) ? JSONFormatter.rewrite($0, pretty: false) : nil }),
                 FormatAction(id: "json.escape", title: L("clipboard.tools.action.escape"),
-                             kind: .transform { JSONFormatter.escaped($0) },
-                             isEnabled: !tooBig, disabledHint: hint),
+                             kind: .transform { JSONFormatter.escaped($0) }),
                 FormatAction(id: "json.unescape", title: L("clipboard.tools.action.unescape"),
-                             kind: .transform { JSONFormatter.unescaped($0) },
-                             isEnabled: !tooBig, disabledHint: hint)
+                             kind: .transform { JSONFormatter.unescaped($0) })
             ]
         )
     }

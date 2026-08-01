@@ -25,7 +25,7 @@
 | `URLRecognizer.swift` | URL 检测、编解码、query 表 | ~120 |
 | `Base64Recognizer.swift` | Base64 检测（严格门槛）与编解码 | ~110 |
 | `JWTRecognizer.swift` | JWT 检测与分段渲染（组合 Base64 + JSON + 时间） | ~140 |
-| `CommonActions.swift` | 通用动作（本期：二维码） | ~90 |
+| `CommonTextActions.swift` | 通用动作（本期：二维码）+ `ClipboardQRCode.pin` | ~90 |
 
 移动：`Sources/Modules/QRCode/QRCodePanel.swift` 里的 `QRCodeGenerator` → **`Sources/Core/QRCodeGenerator.swift`**（原样搬，不改实现）。
 
@@ -37,7 +37,7 @@
 |---|---|---|
 | `ClipboardPanelView.swift` | 徽章行、表格区、动作栏、最大化布局 | ~+200 |
 | `ClipboardPanelViewModel` | 识别结果、预览缓冲、最大化状态 | ~+70 |
-| `ClipboardPanelController.swift` | Tab / ⌘1–9 / ⌘0 / ⌘C / Esc 渐进撤销 | ~+50 |
+| `ClipboardPanelController.swift` | Tab / ⌘1–9 / ⌘0 / ⌘⇧C / Esc 渐进撤销 | ~+50 |
 | `PasteService.swift` | `overrideText` 参数 | ~+12 |
 | `ClipboardTool.swift` | `clipboard.qrcodeLast` 快捷键 | ~+15 |
 
@@ -59,17 +59,18 @@ enum FormatActionKind {
     /// 文本 → 文本。结果进预览缓冲，⏎ 粘贴的就是它。返回 nil = 本次转换不适用（按钮不该被点到，兜底静默）。
     case transform((String) -> String?)
     /// 输出不是文本，自己收尾（二维码钉屏、浏览器打开…）。
-    case terminal((String) -> Void)
+    /// 标 @MainActor：闭包里要碰 PinnedImageWindow / 面板控制器。
+    case terminal(@MainActor (String) -> Void)
 }
 
 struct FormatAction: Identifiable {
     let id: String              // "json.pretty"
     let title: String           // 已本地化
     let kind: FormatActionKind
-    /// false = 按钮置灰（超长度上限、超二维码容量…）。
-    let isEnabled: Bool
+    /// false = 按钮置灰（当前只有二维码超 2900 字节这一种）。
+    var isEnabled = true
     /// 置灰原因，作为 tooltip。
-    let disabledHint: String?
+    var disabledHint: String? = nil
 }
 
 struct FormatMatch: Identifiable {
@@ -116,13 +117,20 @@ enum TextFormatRegistry {
 
 ### 3.1 时机
 
-只对**当前选中的那一条**跑，在 `ClipboardPanelViewModel.selectedIndex` 的 `didSet` 里触发（列表点击也走这个属性，所以 `didSet` 比在 `moveSelection` 里手动清更保险）：
+只对**当前选中的那一条**跑，触发点是 View 上的 `.onChange(of: viewModel.selectedItem?.id)` ——
+**不是** `selectedIndex` 的 `didSet`。盯索引会漏一种情况：面板开着时用户在别处复制，
+新条目插到列表最前，`selectedIndex` 没变但它指向的已经是另一条了，徽章和动作就此错位。
+反过来，选中项没变时（比如只是在搜索框里打字）也不该白清掉用户已有的转换结果。
+首次显示由 `resetForShow()` 兜底（它在面板视图创建之前就跑了，`onChange` 那时还不存在）。
 
 ```swift
-@Published var selectedIndex = 0 { didSet { refreshDetection() } }
+@Published var selectedIndex = 0                          // 不挂 didSet，见上
 @Published private(set) var matches: [FormatMatch] = []
-@Published var activeMatchIndex = 0
-@Published var transformed: (actionTitle: String, text: String)?
+@Published var activeMatchIndex = 0 { didSet { transformed = nil } }
+@Published var transformed: TransformState?
+
+// View 侧：
+.onChange(of: viewModel.selectedItem?.id) { _, _ in viewModel.refreshDetection() }
 ```
 
 `refreshDetection()`：清空 `transformed`、重置 `activeMatchIndex = 0`、对 `selectedItem` 的文本重跑 `detectAll`。图片/文件类型条目不跑（`item.type == .image` 直接返回空）。
@@ -147,10 +155,11 @@ enum TextToolSettings {           // 纯 UserDefaults 读写，非 @MainActor，
 
 ### 3.2 长度上限（常量，不做配置项）
 
+动作只可能挂在识别成功的条目上，而识别本身已被上限卡住，所以**只留一道**：再给转换单设一道更宽的门槛（原设计里的 2MB）永远不会触发，是死代码。
+
 | 常量 | 值 | 行为 |
 |---|---|---|
-| `maxDetectLength` | 256 KB | 超过：`matches` 直接为空，只显示原文（通用动作仍在） |
-| `maxTransformLength` | 2 MB | 超过：格式化/压缩类动作 `isEnabled = false` + tooltip |
+| `TextToolLimits.maxDetect` | 256 KB | 超过：`matches` 直接为空，只显示原文（通用动作仍在） |
 | `QRCodeGenerator.maxBytes` | 2900 | 超过：二维码动作置灰 |
 
 ### 3.3 多命中与优先级
@@ -345,11 +354,15 @@ var visibleActions: [FormatAction]
 | Esc | `0x35` | 最大化 → 先收起并 `return true`；否则 `hide()` |
 | ⌘1…⌘9 | `0x12 0x13 0x14 0x15 0x17 0x16 0x1A 0x1C 0x19` | 触发 `visibleActions[n-1]` |
 | ⌘0 | `0x1D` | `viewModel.transformed = nil` |
-| ⌘C | `0x08` | 只复制 `previewText`，不粘贴、不关面板 |
+| ⌘⇧C | `0x08` + `[.command, .shift]` | 只复制 `previewText`，不粘贴、不关面板。**不能占用 ⌘C**：主菜单「编辑」把 ⌘C 绑给了 `NSText.copy(_:)`，劫持后搜索框与预览区的选中复制就废了 |
 
 ⏎ / ⌥⏎ 改为传 `overrideText: viewModel.previewText`。
 
 执行 `.transform` 动作：结果写 `viewModel.transformed`，**不碰剪贴板**。执行 `.terminal`：调闭包，由动作自己收尾。
+
+两类动作的入参都是 `transformInput`（`transformed ?? 条目原文`，且 **trim 过**），不是 `previewText`：
+- 不用 `rendered` —— 选中一个 JWT 时预览区是带分段注释的解码视图，要生成二维码的显然是原 token；
+- 必须 trim —— 检测拿到的是 trim 过的文本，不 trim 会出现「带尾换行的 Base64 徽章亮着、解码按钮却静默无反应」。
 
 ### 5.4 PasteService
 
