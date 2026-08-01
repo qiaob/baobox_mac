@@ -312,9 +312,11 @@ open Baobox.xcodeproj    # 或 xcodebuild -scheme Baobox build
 
 ## 7-A. M2 增量模块：取色器与防休眠
 
-两个模块均为标准 `ToolModule`，在 AppDelegate 中于 ClipboardTool 之后注册（菜单顺序：截图、剪贴板、取色器、防休眠）。
+两个模块均为标准 `ToolModule`，在 AppDelegate 中于 ClipboardTool 之后注册。
 
-### 7-A.1 取色器（ColorPicker）
+> **取色器已于 issue #7 整体移除**（7-A.1 仅作历史设计留档，代码已不在仓库）。当前菜单顺序：截图、剪贴板、防休眠。
+
+### 7-A.1 取色器（ColorPicker）——⛔️ 已移除，仅存档
 
 ```
 Sources/Modules/ColorPicker/ColorPickerTool.swift        # 模块壳
