@@ -42,18 +42,24 @@ final class ClipboardMonitor {
             return
         }
 
-        // 忽略密码管理器等标记为隐私/临时的内容。
+        var concealed = false
         if let types = pasteboard.types {
             let raw = Set(types.map { $0.rawValue })
-            if raw.contains("org.nspasteboard.ConcealedType") || raw.contains("org.nspasteboard.TransientType") {
-                return
+            // Transient 是来源显式声明的「临时内容，别存」（如某些启动器的中间结果），
+            // 与敏感无关，始终不入库、不给开关。
+            if raw.contains("org.nspasteboard.TransientType") { return }
+            // Concealed 是密码管理器给密码打的标记 —— 1Password 复制的密码不出现在
+            // 历史里就是因为它。是否记录由设置里的开关决定，出厂关闭。
+            if raw.contains("org.nspasteboard.ConcealedType") {
+                guard ClipboardStore.recordConcealed else { return }
+                concealed = true
             }
         }
 
-        readAndStore(pasteboard)
+        readAndStore(pasteboard, concealed: concealed)
     }
 
-    private func readAndStore(_ pasteboard: NSPasteboard) {
+    private func readAndStore(_ pasteboard: NSPasteboard, concealed: Bool) {
         let frontApp = NSWorkspace.shared.frontmostApplication
         let sourceName = frontApp?.localizedName
         let sourceBundle = frontApp?.bundleIdentifier
@@ -70,7 +76,7 @@ final class ClipboardMonitor {
             let text = urls.map { $0.path }.joined(separator: "\n")
             store.add(ClipboardItem(id: UUID(), type: .file, text: text, imageFilename: nil,
                                     sourceAppName: sourceName, sourceBundleID: sourceBundle,
-                                    createdAt: Date(), isPinned: false))
+                                    createdAt: Date(), isPinned: false, isConcealed: concealed))
             return
         }
 
@@ -88,7 +94,7 @@ final class ClipboardMonitor {
             if let filename = saveImage(image) {
                 store.add(ClipboardItem(id: UUID(), type: .image, text: nil, imageFilename: filename,
                                         sourceAppName: sourceName, sourceBundleID: sourceBundle,
-                                        createdAt: Date(), isPinned: false))
+                                        createdAt: Date(), isPinned: false, isConcealed: concealed))
             }
             return
         }
@@ -98,7 +104,7 @@ final class ClipboardMonitor {
             let type: ClipboardItemType = isLink(string) ? .link : .text
             store.add(ClipboardItem(id: UUID(), type: type, text: string, imageFilename: nil,
                                     sourceAppName: sourceName, sourceBundleID: sourceBundle,
-                                    createdAt: Date(), isPinned: false))
+                                    createdAt: Date(), isPinned: false, isConcealed: concealed))
             return
         }
     }
@@ -116,12 +122,8 @@ final class ClipboardMonitor {
         let url = dir.appendingPathComponent(filename)
         // 同内容已落盘则直接复用，不重复写。
         if FileManager.default.fileExists(atPath: url.path) { return filename }
-        do {
-            try png.write(to: url)
-            return filename
-        } catch {
-            return nil
-        }
+        // 文件名仍取**明文** PNG 的哈希（内容寻址、去重靠它），落盘的是密文。
+        return ClipboardCrypto.write(png, to: url) ? filename : nil
     }
 
     private static func sha256Hex(_ data: Data) -> String {

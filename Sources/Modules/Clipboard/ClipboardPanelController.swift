@@ -35,6 +35,22 @@ final class ClipboardPanelController: NSObject {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    // MARK: - 尺寸记忆
+
+    /// 出厂尺寸即最小尺寸；用户拉大后的尺寸跨启动记住。
+    static let minSize = NSSize(width: 660, height: 420)
+    private static let sizeKey = "clipboard.panelSize"
+
+    private static func restoredSize() -> NSSize {
+        guard let dict = UserDefaults.standard.dictionary(forKey: sizeKey),
+              let width = dict["w"] as? Double, let height = dict["h"] as? Double else { return minSize }
+        return NSSize(width: max(width, minSize.width), height: max(height, minSize.height))
+    }
+
+    private static func saveSize(_ size: NSSize) {
+        UserDefaults.standard.set(["w": size.width, "h": size.height], forKey: sizeKey)
+    }
+
     func toggle() {
         if isVisible { hide() } else { show() }
     }
@@ -51,13 +67,16 @@ final class ClipboardPanelController: NSObject {
             onPaste: { [weak self] item, plain in self?.paste(item, plainText: plain) },
             onTogglePin: { [weak self] item in self?.store.togglePin(item.id) },
             onDelete: { [weak self] item in self?.delete(item) },
-            onClose: { [weak self] in self?.hide() }
+            onClose: { [weak self] in self?.hide() },
+            onCopyText: { [weak self] text in self?.copyOnly(text) }
         )
         let hosting = NSHostingView(rootView: content)
 
+        // .resizable 让无边框窗口的边缘出现不可见的拖拽区（光标会变），
+        // 这是「大 JSON 看不下」的解法：拉大一次，尺寸记住。
         let panel = ClipboardPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 420),
-            styleMask: [.borderless, .nonactivatingPanel],
+            contentRect: NSRect(origin: .zero, size: Self.restoredSize()),
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -67,14 +86,18 @@ final class ClipboardPanelController: NSObject {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
+        panel.contentMinSize = Self.minSize
         panel.contentView = hosting
 
-        // 居中于鼠标所在屏
+        // 居中于鼠标所在屏；记忆尺寸超过当前屏可视区时压回去（换了小屏的情况）。
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
         if let visible = screen?.visibleFrame {
-            let origin = NSPoint(x: visible.midX - 330, y: visible.midY - 210)
-            panel.setFrameOrigin(origin)
+            var frame = panel.frame
+            frame.size.width = min(frame.size.width, visible.width)
+            frame.size.height = min(frame.size.height, visible.height)
+            frame.origin = NSPoint(x: visible.midX - frame.width / 2, y: visible.midY - frame.height / 2)
+            panel.setFrame(frame, display: false)
         }
 
         panel.makeKeyAndOrderFront(nil)
@@ -85,6 +108,7 @@ final class ClipboardPanelController: NSObject {
 
     func hide() {
         removeMonitors()
+        if let size = panel?.frame.size { Self.saveSize(size) }
         panel?.orderOut(nil)
         panel = nil
         if ClipboardPanelController.current === self {
@@ -136,16 +160,56 @@ final class ClipboardPanelController: NSObject {
                 delete(item)
             }
             return true
-        case 0x35: // Esc
-            hide()
+        case 0x30: // Tab 切换预览区最大化
+            viewModel.isPreviewMaximized.toggle()
+            return true
+        case 0x35: // Esc：最大化时先收起（渐进撤销），否则才关面板
+            if viewModel.isPreviewMaximized {
+                viewModel.isPreviewMaximized = false
+            } else {
+                hide()
+            }
+            return true
+        // 复制整个预览内容用 ⌘⇧C 而不是 ⌘C —— 主菜单的「编辑」里 ⌘C 绑的是
+        // NSText.copy(_:)，劫持它会让搜索框和预览区（textSelection 开着）里
+        // 选中一段文字后的复制失效。
+        case 0x08 where event.modifierFlags.contains([.command, .shift]):
+            copyOnly(viewModel.previewText)
+            return true
+        case 0x1D where event.modifierFlags.contains(.command): // ⌘0 还原转换
+            viewModel.transformed = nil
             return true
         default:
+            // ⌘1…⌘9 触发动作栏第 n 个动作（下拉展开后的顺序，容器不占号）
+            if event.modifierFlags.contains(.command),
+               let slot = Self.actionKeyCodes.firstIndex(of: event.keyCode) {
+                let actions = viewModel.keyboardActions
+                if actions.indices.contains(slot) { viewModel.run(actions[slot]) }
+                return true
+            }
             return false
         }
     }
 
+    /// ⌘1…⌘9 的 keyCode。注意 5 和 6 是反直觉的 0x17 / 0x16。
+    private static let actionKeyCodes: [UInt16] = [0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19]
+
     private func paste(_ item: ClipboardItem, plainText: Bool) {
-        PasteService.paste(item, plainText: plainText, store: store, monitor: monitor)
+        PasteService.paste(item, plainText: plainText,
+                           overrideText: viewModel.pasteOverride,
+                           store: store, monitor: monitor)
+    }
+
+    /// 只写剪贴板，不粘贴、不关面板（⌘C 与表格行的复制按钮）。
+    ///
+    /// `ignoreNextChange` 不能省：不抑制的话，格式化一次 JSON 就会被监听器当成
+    /// 一次新的复制记进历史 —— 这正是「转换不污染历史」的实现。
+    private func copyOnly(_ text: String) {
+        guard !text.isEmpty else { return }
+        monitor.ignoreNextChange = true
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func delete(_ item: ClipboardItem) {

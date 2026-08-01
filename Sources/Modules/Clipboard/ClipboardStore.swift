@@ -12,11 +12,19 @@ final class ClipboardStore: ObservableObject {
         return appSupport.appendingPathComponent("Baobox", isDirectory: true)
     }()
     static var imagesDir: URL { baseDir.appendingPathComponent("ClipboardImages", isDirectory: true) }
-    static var storeFile: URL { baseDir.appendingPathComponent("clipboard.json") }
+    /// 历史文件。内容是密文还是明文取决于「加密存储」开关，读取侧两种都认，
+    /// 所以文件名保持中性（不叫 .json / .enc）。见 `ClipboardCrypto`。
+    static var storeFile: URL { baseDir.appendingPathComponent("clipboard.dat") }
+    /// 更早版本用过的文件名，启动时按序尝试读入并迁移到 `storeFile` 后删除。
+    static var legacyStoreFiles: [URL] {
+        [baseDir.appendingPathComponent("clipboard.enc"),
+         baseDir.appendingPathComponent("clipboard.json")]
+    }
 
     static let maxItemsKey = "clipboard.maxItems"
     static let retentionDaysKey = "clipboard.retentionDays"
     static let ignoredBundleIDsKey = "clipboard.ignoredBundleIDs"
+    static let recordConcealedKey = "clipboard.recordConcealed"
 
     private var saveWorkItem: DispatchWorkItem?
 
@@ -39,6 +47,14 @@ final class ClipboardStore: ObservableObject {
     static var ignoredBundleIDs: [String] {
         get { UserDefaults.standard.stringArray(forKey: ignoredBundleIDsKey) ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: ignoredBundleIDsKey) }
+    }
+
+    /// 是否记录被来源标记为敏感（ConcealedType）的内容 —— 1Password / Bitwarden 等
+    /// 密码管理器复制的密码走的就是这个标记。出厂关闭；`bool(forKey:)` 未设置时返回
+    /// false，正好等于「默认不记录」，无需注册默认值。
+    static var recordConcealed: Bool {
+        get { UserDefaults.standard.bool(forKey: recordConcealedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: recordConcealedKey) }
     }
 
     // MARK: - 变更
@@ -81,9 +97,23 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
+    /// 清空历史，收藏条目**保留** —— 「收藏 = 永远不删」对显式清空同样成立；
+    /// 真想连收藏一起清，先逐条取消收藏。弹窗文案（clearConfirm.message）与此一致。
     func clearAll() {
-        for item in items { deleteImageFile(for: item) }
-        items.removeAll()
+        let removed = items.filter { !$0.isPinned }
+        guard !removed.isEmpty else { return }
+        for item in removed { deleteImageFile(for: item) }
+        items.removeAll { !$0.isPinned }
+        scheduleSave()
+    }
+
+    /// 关掉「记录敏感内容」开关时调用：把已经入库的敏感条目一并清掉（含置顶的）。
+    /// 只停止新增而把旧的留在磁盘上，等于开关关了密码还在，不符合用户预期。
+    func removeConcealed() {
+        let concealed = items.filter(\.isConcealed)
+        guard !concealed.isEmpty else { return }
+        for item in concealed { deleteImageFile(for: item) }
+        items.removeAll { $0.isConcealed }
         scheduleSave()
     }
 
@@ -138,6 +168,12 @@ final class ClipboardStore: ObservableObject {
 
     // MARK: - 持久化
 
+    /// 「加密存储」开关切换后调用：历史文件立刻按新格式重写，图片文件后台批量转换。
+    func applyStorageEncryptionChange() {
+        flushPendingSave()
+        ClipboardCrypto.syncStoredImages(in: Self.imagesDir)
+    }
+
     /// 立即落盘并取消待执行的防抖任务。
     /// 保存是 0.5s 防抖的，App 退出时若不强制 flush，退出前最后 0.5s 内的
     /// 复制 / 置顶 / 删除会永久丢失。
@@ -162,18 +198,40 @@ final class ClipboardStore: ObservableObject {
         try? FileManager.default.createDirectory(at: Self.baseDir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(items) {
-            try? data.write(to: Self.storeFile)
-        }
+        guard let data = try? encoder.encode(items) else { return }
+        ClipboardCrypto.write(data, to: Self.storeFile)
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: Self.storeFile) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let decoded = try? decoder.decode([ClipboardItem].self, from: data) {
+
+        if let data = ClipboardCrypto.read(from: Self.storeFile),
+           let decoded = try? decoder.decode([ClipboardItem].self, from: data) {
             items = decoded
             sortItems()
+            return
+        }
+
+        // 走到这里说明 storeFile 不存在，或存在但解不开/解不出（钥匙串里的密钥被删、
+        // 换了机器…）。后者不能就这么放着 —— 下一次 saveNow() 会直接覆盖它。先挪成
+        // .bak 留个念想，符合「改用户文件前先备份」的约定。
+        if FileManager.default.fileExists(atPath: Self.storeFile.path) {
+            let backup = Self.baseDir.appendingPathComponent("clipboard.dat.baobox.bak")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.moveItem(at: Self.storeFile, to: backup)
+        }
+
+        // 迁移老文件名：读出来后按当前开关重写到 storeFile，再删掉原件。
+        // 解码失败时保留原文件不删 —— 宁可留个读不出的文件，也不擅自销毁用户数据。
+        for legacyURL in Self.legacyStoreFiles {
+            guard let legacy = ClipboardCrypto.read(from: legacyURL),
+                  let decoded = try? decoder.decode([ClipboardItem].self, from: legacy) else { continue }
+            items = decoded
+            sortItems()
+            saveNow()
+            try? FileManager.default.removeItem(at: legacyURL)
+            return
         }
     }
 }

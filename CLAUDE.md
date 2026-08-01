@@ -34,9 +34,8 @@ BaoboxApp(@main, Settings scene)
 | 模块 | id | 说明 |
 |---|---|---|
 | Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、录屏、历史。ScreenCaptureKit |
-| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤 |
+| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`） |
 | ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
-| QRCode | `qrcode` | 二维码生成（CIQRCodeGenerator，纯本地）——**新模块要生成二维码时复用其思路** |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
@@ -62,6 +61,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
+- `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
 
 **流程惯例**：新功能先在 `docs/<feature>/` 写需求 + 技术设计，再实现；文档为准，实现照文档。
 

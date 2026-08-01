@@ -237,14 +237,26 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
 ```
 
 - `ClipboardStore: ObservableObject`：`@Published private(set) var items: [ClipboardItem]`（新→旧，pinned 排最前）。
-- 目录：`~/Library/Application Support/Baobox/`，`clipboard.json` + `ClipboardImages/<uuid>.png`。
+- 目录：`~/Library/Application Support/Baobox/`，`clipboard.dat` + `ClipboardImages/<sha256>.png`，两者内容是否加密取决于「加密存储」开关（见 4.1.1）。
 - `add(_:)`：与最近一条内容相同则仅刷新时间戳；超出上限（`clipboard.maxItems`，默认 200）从**未置顶**尾部淘汰并删除关联图片文件；节流写盘（0.5s debounce，`DispatchWorkItem`）。
 - `togglePin` / `delete` / `clearAll`；启动时从磁盘加载。
+
+#### 4.1.1 落盘加密（ClipboardCrypto）
+
+- 开关：`clipboard.encryptStorage`（`UserDefaults`，`object(forKey:) as? Bool ?? true` —— **出厂开启**）。设置页「存储」区，关闭需二次确认（等于把已有历史明文重写回磁盘）。切换后 `ClipboardStore.applyStorageEncryptionChange()`：`flushPendingSave()` 立刻按新格式重写历史文件 + `syncStoredImages(in:)` 后台批量转图片。
+- 密钥：256-bit 随机对称密钥，Keychain generic password（service `com.baobox.app`，account `clipboard.historyKey`），`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` —— 解锁后可读、不同步 iCloud、不随备份换机。App 用固定 `DEVELOPMENT_TEAM` 签名，签名身份稳定，重编译不会反复弹钥匙串授权。首次取不到则 `SecItemAdd` 生成；`errSecDuplicateItem` 回读现存那把，**绝不覆盖**（覆盖 = 已有历史永久锁死）。进程内缓存 + `NSLock`（后台迁移线程也会用）。
+- 数据：`AES.GCM.seal` 整份封装，落盘 `combined`（nonce + 密文 + tag）。历史 JSON 与图片 PNG 走同一套 `write(_:to:)` / `read(from:)`。
+- 兼容与降级：`read` 先按密文解，解不开就当明文原样返回（开关关着时写的、或老版本留下的）；`write` 在开关关着或拿不到密钥时写明文 —— **宁可明文也不丢数据**。开关开着却拿不到密钥（钥匙串锁着）时，设置页据 `ClipboardCrypto.isAvailable` 显示降级警告。
+- 文件名：历史统一叫 `clipboard.dat`（内容可能是密文也可能是明文，读取侧自适应，所以名字保持中性）；`legacyStoreFiles` = `clipboard.enc` / `clipboard.json`，`load()` 里按序尝试读入、重写到 `clipboard.dat` 后删除原件，解码失败则保留原件不动。
+- 图片格式转换：`syncStoredImages(in:)` 在 `activate()` 与每次切开关时调用，专用**串行**队列（`.utility`）—— 连点开关时后入队的那次决定最终状态。任务开始时才读开关：开 → 给明文文件补加密，关 → 把密文解回明文。文件名是内容哈希不变、读取侧两种格式都吃，所以中断了也无副作用，下次启动接着来。
+- `clipboard.dat` 存在却解不出来时（密钥被删/换机器），`load()` 先把它挪成 `clipboard.dat.baobox.bak` 再继续，避免被下一次 `saveNow()` 直接覆盖。
+- 未加密的仍有：`UserDefaults` 里的设置项、`colors.json`、`window_layouts.json`（不含剪贴板内容）。
 
 ### 4.2 ClipboardMonitor
 
 - 0.3s `Timer`（`.common` runloop mode）轮询 `NSPasteboard.general.changeCount`。
-- 跳过条件：changeCount 未变；`ignoreNextChange` 标志（PasteService 回填时置位，消费一次后复位）；pasteboard types 含 `org.nspasteboard.ConcealedType` 或 `org.nspasteboard.TransientType`。
+- 跳过条件：changeCount 未变；`ignoreNextChange` 标志（PasteService 回填时置位，消费一次后复位）；pasteboard types 含 `org.nspasteboard.TransientType`（来源明确要求不保存，无开关）。
+- `org.nspasteboard.ConcealedType`（1Password 等密码管理器标记的密码）由 `clipboard.recordConcealed`（`UserDefaults`，默认 `false`）控制：关 → 直接跳过；开 → 入库并置 `ClipboardItem.isConcealed = true`，面板列表行图标换成锁（内容照常明文显示）。设置页把开关关回去时调 `ClipboardStore.removeConcealed()` 清掉已入库的敏感条目（含置顶）。`isConcealed` 为后加字段，`ClipboardItem` 手写 `init(from:)` 用 `decodeIfPresent` 兜底，保证老 `clipboard.json` 可解码。
 - 读取优先级：`fileURLs`（`readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])`）→ file；`NSImage` 可读 → image（PNG 落盘）；string → 以 `URL(string:)` 且 scheme http(s) 判定 link，否则 text。
 - 来源 App：`NSWorkspace.shared.frontmostApplication`（读取时刻的前台 App 即复制来源，足够准确）。
 

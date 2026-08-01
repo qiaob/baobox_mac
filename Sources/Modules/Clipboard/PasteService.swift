@@ -3,11 +3,15 @@ import Carbon.HIToolbox
 
 /// 回填粘贴服务。
 enum PasteService {
+    /// - Parameter overrideText: 非 nil 时粘贴它而不是 `item.text`（预览区里做过转换）。
+    ///   转换结果只在内存里，历史条目本身不变。
     @MainActor
-    static func paste(_ item: ClipboardItem, plainText: Bool, store: ClipboardStore, monitor: ClipboardMonitor) {
+    static func paste(_ item: ClipboardItem, plainText: Bool,
+                      overrideText: String? = nil,
+                      store: ClipboardStore, monitor: ClipboardMonitor) {
         // 1) 忽略本次回填产生的 pasteboard 变更
         monitor.ignoreNextChange = true
-        guard writeToPasteboard(item, plainText: plainText) else {
+        guard writeToPasteboard(item, plainText: plainText, overrideText: overrideText) else {
             // 图片缓存文件已丢失：此时剪贴板已被 clearContents 清空，
             // 继续合成 ⌘V 会"粘贴出空气"，必须就地报错停下。
             ClipboardPanelController.current?.hide()
@@ -81,9 +85,16 @@ enum PasteService {
 
     /// 写入成功返回 true；仅当图片条目的缓存文件丢失时返回 false（此时剪贴板已被清空）。
     @MainActor
-    private static func writeToPasteboard(_ item: ClipboardItem, plainText: Bool) -> Bool {
+    private static func writeToPasteboard(_ item: ClipboardItem, plainText: Bool,
+                                          overrideText: String? = nil) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
+
+        // 转换结果永远是纯文本，与条目原本的类型无关（图片条目不产生 override）。
+        if let overrideText {
+            pasteboard.setString(overrideText, forType: .string)
+            return true
+        }
 
         switch item.type {
         case .text, .link:
@@ -108,7 +119,7 @@ enum PasteService {
                 pasteboard.setString(item.imageFilename ?? "", forType: .string)
             } else {
                 guard let filename = item.imageFilename,
-                      let data = try? Data(contentsOf: ClipboardStore.imagesDir.appendingPathComponent(filename)),
+                      let data = ClipboardCrypto.read(from: ClipboardStore.imagesDir.appendingPathComponent(filename)),
                       let image = NSImage(data: data) else {
                     return false
                 }

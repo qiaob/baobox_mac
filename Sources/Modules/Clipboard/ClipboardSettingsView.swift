@@ -1,12 +1,20 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 剪贴板设置：历史上限、保留时长、隐私（Concealed 过滤 + 按 App 忽略名单）、清空。
+/// 剪贴板设置：历史上限、保留时长、隐私（敏感内容开关 + 按 App 忽略名单）、
+/// 文本工具（逐格式识别开关）、存储（落盘加密开关）、清空。
 struct ClipboardSettingsView: View {
     @ObservedObject var store: ClipboardStore
     @AppStorage(ClipboardStore.maxItemsKey) private var maxItems = 200
     @AppStorage(ClipboardStore.retentionDaysKey) private var retentionDays = 0
+    @AppStorage(ClipboardStore.recordConcealedKey) private var recordConcealed = false
+    // 默认 true，与 ClipboardCrypto.isEnabled 的 `object(forKey:) as? Bool ?? true` 一致。
+    @AppStorage(ClipboardCrypto.enabledKey) private var encryptStorage = true
+    @AppStorage(TextToolSettings.masterKey) private var textToolsEnabled = true
     @State private var ignoredApps: [String] = ClipboardStore.ignoredBundleIDs
+    /// 逐格式开关。数量不固定又要 ForEach，没法一个格式一个 @AppStorage，
+    /// 所以本地存一份镜像，写的时候同步回 UserDefaults。
+    @State private var toolStates: [String: Bool] = TextToolSettings.currentStates()
 
     var body: some View {
         Form {
@@ -29,11 +37,46 @@ struct ClipboardSettingsView: View {
             }
 
             Section("clipboard.settings.privacySection") {
-                Toggle("clipboard.settings.ignoreConcealed", isOn: .constant(true))
-                    .disabled(true)
-                Text("clipboard.settings.ignoreConcealedHelp")
+                // 自定义 Binding 而不是直接绑 $recordConcealed：开启前要弹确认框，
+                // 用户点「取消」时开关不能已经翻过去了。
+                Toggle("clipboard.settings.recordConcealed", isOn: Binding(
+                    get: { recordConcealed },
+                    set: { newValue in
+                        if newValue {
+                            if confirmEnableConcealed() { recordConcealed = true }
+                        } else {
+                            recordConcealed = false
+                            store.removeConcealed()
+                        }
+                    }
+                ))
+                if recordConcealed {
+                    Text("clipboard.settings.recordConcealedOnHelp")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("clipboard.settings.recordConcealedOffHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("clipboard.settings.transientHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("clipboard.settings.textToolsSection") {
+                Toggle("clipboard.settings.textTools", isOn: $textToolsEnabled)
+                Text("clipboard.settings.textToolsHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if textToolsEnabled {
+                    ForEach(TextToolSettings.descriptors, id: \.id) { descriptor in
+                        Toggle(isOn: toolBinding(descriptor.id)) {
+                            Text(verbatim: descriptor.title)
+                        }
+                        .padding(.leading, 14)
+                    }
+                }
             }
 
             Section("clipboard.settings.ignoredApps") {
@@ -52,6 +95,35 @@ struct ClipboardSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("clipboard.settings.storageSection") {
+                // 同上：关掉是把已有历史明文重写到磁盘，先确认再翻开关。
+                Toggle("clipboard.settings.encryptStorage", isOn: Binding(
+                    get: { encryptStorage },
+                    set: { newValue in
+                        if newValue || confirmDisableEncryption() {
+                            encryptStorage = newValue
+                            store.applyStorageEncryptionChange()
+                        }
+                    }
+                ))
+                if encryptStorage {
+                    if ClipboardCrypto.isAvailable {
+                        Text("clipboard.settings.encryptStorageOnHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("clipboard.settings.encryptionUnavailable",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                } else {
+                    Text("clipboard.settings.encryptStorageOffHelp")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
             Section {
                 Button("clipboard.settings.clear", role: .destructive) { confirmClear() }
                 Text("clipboard.settings.count \(store.items.count)")
@@ -63,6 +135,42 @@ struct ClipboardSettingsView: View {
         .onChange(of: retentionDays) { _, _ in
             store.pruneExpired()
         }
+    }
+
+    /// 开启前的二次确认（记录进来的密码在面板里是明文可见的）。返回 true = 确认开启。
+    private func confirmEnableConcealed() -> Bool {
+        confirm(title: L("clipboard.concealedConfirm.title"),
+                message: L("clipboard.concealedConfirm.message"),
+                confirmTitle: L("clipboard.concealedConfirm.confirm"))
+    }
+
+    /// 关闭加密前的二次确认（已有历史会被明文重写回磁盘）。返回 true = 确认关闭。
+    private func confirmDisableEncryption() -> Bool {
+        confirm(title: L("clipboard.encryptOffConfirm.title"),
+                message: L("clipboard.encryptOffConfirm.message"),
+                confirmTitle: L("clipboard.encryptOffConfirm.confirm"))
+    }
+
+    private func confirm(title: String, message: String, confirmTitle: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: L("common.cancel"))
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - 文本工具
+
+    private func toolBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { toolStates[id] ?? true },
+            set: { newValue in
+                toolStates[id] = newValue
+                TextToolSettings.setEnabled(newValue, for: id)
+            }
+        )
     }
 
     // MARK: - 忽略名单
