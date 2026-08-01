@@ -2,17 +2,17 @@
 
 [![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
 
-A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, color picker, and more — into a single native app with one shortcut system and one settings window.
+A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, window manager, and more — into a single native app with one shortcut system and one settings window.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 ## Overview
 
-Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for color picking — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
+Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for window management — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
 
 - **Native, not Electron** — Swift 5.9, SwiftUI + AppKit, zero third-party dependencies. Resident memory stays under ~50 MB.
 - **Modular by design** — the app shell has no knowledge of individual tools; each one implements a common `ToolModule` protocol and self-registers its menu entry, shortcuts, and settings tab.
-- **Local-first** — all data (clipboard history, screenshots, color history, window layouts) stays on disk, on your Mac. Nothing is uploaded.
+- **Local-first** — all data (clipboard history, screenshots, window layouts) stays on disk, on your Mac. Nothing is uploaded.
 - **macOS 14 (Sonoma) or later**, built against ScreenCaptureKit and other modern system frameworks.
 
 ## Features
@@ -45,12 +45,6 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - Per-app ignore list, automatic expiry (never / 1 / 7 / 30 / 90 days), and per-item delete (⌘⌫ or an inline button); a global ⌘⌥V shortcut pastes the most recent item as plain text.
 - **Encrypted on disk** (on by default, switchable): history text and images are sealed with AES-GCM before they hit `~/Library/Application Support/Baobox/`; the 256-bit key lives in your login keychain, never leaves the Mac and is not synced to iCloud. Flipping the switch converts the existing history either way.
 - **Text tools in the preview pane**: the selected entry is matched against JWT / JSON / XML / timestamps / URLs / Base64, and the pane offers in-place actions — format, minify, escape/unescape, percent decode/encode, Base64 decode/encode, extract a JWT header or payload, and generate a QR code pinned to the screen. Timestamps expand into a conversion table (local, UTC, ISO 8601, seconds, milliseconds, relative) with per-row copy buttons; ⏎ pastes whatever the preview currently shows. JSON is re-indented by an order-preserving scanner, so key order and long integer IDs survive untouched. Press Tab to expand the preview to the full panel width, ⌘1…⌘9 to fire actions, ⌘0 to revert. Every format has its own switch in Settings — the ones you turn off are never run at all.
-
-### Color Picker (unbound by default)
-- System-native magnifier sampling via `NSColorSampler` — no permissions required.
-- Copies the sampled color in your preferred format (Hex / RGB / SwiftUI `Color`) and keeps a history (up to 50 entries).
-- The submenu shows the five most recent colors as swatches for one-click re-copy.
-- Settings let you choose the output format, hex letter case, and whether to auto-copy after sampling.
 
 ### Caffeinate — Sleep Prevention (menu-only)
 - Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).

@@ -88,7 +88,7 @@ final class ClaudeCodeTool: ToolModule {
                 id: "claudecode.center",
                 title: L("claudecode.hotkey.center"),
                 subtitle: L("claudecode.hotkey.center.subtitle"),
-                // 出厂不绑定（同取色器惯例），用户在快捷键页自行设置。
+                // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页自行设置。
                 defaultCombo: nil
             ) {
                 ClaudeCodeCenterController.shared.show(tab: .sessions)
