@@ -12,10 +12,14 @@ final class ClipboardStore: ObservableObject {
         return appSupport.appendingPathComponent("Baobox", isDirectory: true)
     }()
     static var imagesDir: URL { baseDir.appendingPathComponent("ClipboardImages", isDirectory: true) }
-    /// 加密后的历史（AES-GCM，密钥在 Keychain）。见 `ClipboardCrypto`。
-    static var storeFile: URL { baseDir.appendingPathComponent("clipboard.enc") }
-    /// 加密之前的明文历史文件，启动时一次性迁移到 `storeFile` 后删除。
-    static var legacyStoreFile: URL { baseDir.appendingPathComponent("clipboard.json") }
+    /// 历史文件。内容是密文还是明文取决于「加密存储」开关，读取侧两种都认，
+    /// 所以文件名保持中性（不叫 .json / .enc）。见 `ClipboardCrypto`。
+    static var storeFile: URL { baseDir.appendingPathComponent("clipboard.dat") }
+    /// 更早版本用过的文件名，启动时按序尝试读入并迁移到 `storeFile` 后删除。
+    static var legacyStoreFiles: [URL] {
+        [baseDir.appendingPathComponent("clipboard.enc"),
+         baseDir.appendingPathComponent("clipboard.json")]
+    }
 
     static let maxItemsKey = "clipboard.maxItems"
     static let retentionDaysKey = "clipboard.retentionDays"
@@ -160,6 +164,12 @@ final class ClipboardStore: ObservableObject {
 
     // MARK: - 持久化
 
+    /// 「加密存储」开关切换后调用：历史文件立刻按新格式重写，图片文件后台批量转换。
+    func applyStorageEncryptionChange() {
+        flushPendingSave()
+        ClipboardCrypto.syncStoredImages(in: Self.imagesDir)
+    }
+
     /// 立即落盘并取消待执行的防抖任务。
     /// 保存是 0.5s 防抖的，App 退出时若不强制 flush，退出前最后 0.5s 内的
     /// 复制 / 置顶 / 删除会永久丢失。
@@ -201,20 +211,23 @@ final class ClipboardStore: ObservableObject {
 
         // 走到这里说明 storeFile 不存在，或存在但解不开/解不出（钥匙串里的密钥被删、
         // 换了机器…）。后者不能就这么放着 —— 下一次 saveNow() 会直接覆盖它。先挪成
-        // .bak 留个念想，符合"改用户文件前先备份"的约定。
+        // .bak 留个念想，符合「改用户文件前先备份」的约定。
         if FileManager.default.fileExists(atPath: Self.storeFile.path) {
-            let backup = Self.baseDir.appendingPathComponent("clipboard.enc.baobox.bak")
+            let backup = Self.baseDir.appendingPathComponent("clipboard.dat.baobox.bak")
             try? FileManager.default.removeItem(at: backup)
             try? FileManager.default.moveItem(at: Self.storeFile, to: backup)
         }
 
-        // 迁移：老版本的明文 clipboard.json 读进来后立刻加密重写，再删掉明文原件。
+        // 迁移老文件名：读出来后按当前开关重写到 storeFile，再删掉原件。
         // 解码失败时保留原文件不删 —— 宁可留个读不出的文件，也不擅自销毁用户数据。
-        guard let legacy = try? Data(contentsOf: Self.legacyStoreFile),
-              let decoded = try? decoder.decode([ClipboardItem].self, from: legacy) else { return }
-        items = decoded
-        sortItems()
-        saveNow()
-        try? FileManager.default.removeItem(at: Self.legacyStoreFile)
+        for legacyURL in Self.legacyStoreFiles {
+            guard let legacy = ClipboardCrypto.read(from: legacyURL),
+                  let decoded = try? decoder.decode([ClipboardItem].self, from: legacy) else { continue }
+            items = decoded
+            sortItems()
+            saveNow()
+            try? FileManager.default.removeItem(at: legacyURL)
+            return
+        }
     }
 }

@@ -53,8 +53,9 @@ final class ClipboardTool: ToolModule {
 
     func activate() {
         monitor.start()
-        // 老版本留下的明文 PNG 后台补加密；读取侧明文/密文都兼容，没迁完也不影响使用。
-        ClipboardCrypto.migrateLegacyImages(in: ClipboardStore.imagesDir)
+        // 把图片文件对齐到当前的「加密存储」开关（老版本留下的明文补加密 / 关了开关的
+        // 解回明文）。读取侧明文密文都兼容，没转完也不影响使用。
+        ClipboardCrypto.syncStoredImages(in: ClipboardStore.imagesDir)
     }
 
     // MARK: - 动作

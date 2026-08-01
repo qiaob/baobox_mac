@@ -1,12 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 剪贴板设置：历史上限、保留时长、隐私（敏感内容开关 + 按 App 忽略名单）、清空。
+/// 剪贴板设置：历史上限、保留时长、隐私（敏感内容开关 + 按 App 忽略名单）、
+/// 存储（落盘加密开关）、清空。
 struct ClipboardSettingsView: View {
     @ObservedObject var store: ClipboardStore
     @AppStorage(ClipboardStore.maxItemsKey) private var maxItems = 200
     @AppStorage(ClipboardStore.retentionDaysKey) private var retentionDays = 0
     @AppStorage(ClipboardStore.recordConcealedKey) private var recordConcealed = false
+    // 默认 true，与 ClipboardCrypto.isEnabled 的 `object(forKey:) as? Bool ?? true` 一致。
+    @AppStorage(ClipboardCrypto.enabledKey) private var encryptStorage = true
     @State private var ignoredApps: [String] = ClipboardStore.ignoredBundleIDs
 
     var body: some View {
@@ -74,17 +77,31 @@ struct ClipboardSettingsView: View {
             }
 
             Section("clipboard.settings.storageSection") {
-                if ClipboardCrypto.isAvailable {
-                    Label("clipboard.settings.encryptionOn", systemImage: "lock.fill")
-                    Text("clipboard.settings.encryptionOnHelp")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                // 同上：关掉是把已有历史明文重写到磁盘，先确认再翻开关。
+                Toggle("clipboard.settings.encryptStorage", isOn: Binding(
+                    get: { encryptStorage },
+                    set: { newValue in
+                        if newValue || confirmDisableEncryption() {
+                            encryptStorage = newValue
+                            store.applyStorageEncryptionChange()
+                        }
+                    }
+                ))
+                if encryptStorage {
+                    if ClipboardCrypto.isAvailable {
+                        Text("clipboard.settings.encryptStorageOnHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("clipboard.settings.encryptionUnavailable",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 } else {
-                    Label("clipboard.settings.encryptionOff", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("clipboard.settings.encryptionOffHelp")
+                    Text("clipboard.settings.encryptStorageOffHelp")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -101,13 +118,26 @@ struct ClipboardSettingsView: View {
         }
     }
 
-    /// 开启前的二次确认（历史是明文落盘的）。返回 true = 用户确认开启。
+    /// 开启前的二次确认（记录进来的密码在面板里是明文可见的）。返回 true = 确认开启。
     private func confirmEnableConcealed() -> Bool {
+        confirm(title: L("clipboard.concealedConfirm.title"),
+                message: L("clipboard.concealedConfirm.message"),
+                confirmTitle: L("clipboard.concealedConfirm.confirm"))
+    }
+
+    /// 关闭加密前的二次确认（已有历史会被明文重写回磁盘）。返回 true = 确认关闭。
+    private func confirmDisableEncryption() -> Bool {
+        confirm(title: L("clipboard.encryptOffConfirm.title"),
+                message: L("clipboard.encryptOffConfirm.message"),
+                confirmTitle: L("clipboard.encryptOffConfirm.confirm"))
+    }
+
+    private func confirm(title: String, message: String, confirmTitle: String) -> Bool {
         let alert = NSAlert()
-        alert.messageText = L("clipboard.concealedConfirm.title")
-        alert.informativeText = L("clipboard.concealedConfirm.message")
+        alert.messageText = title
+        alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: L("clipboard.concealedConfirm.confirm"))
+        alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: L("common.cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
