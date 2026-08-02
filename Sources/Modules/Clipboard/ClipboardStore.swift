@@ -85,8 +85,19 @@ final class ClipboardStore: ObservableObject {
 
     // MARK: - 文本片段（= 手工创建的收藏条目）
 
-    /// 所有片段：收藏 + 带标题或关键字。顺手复制来的收藏不算。
-    var snippets: [ClipboardItem] { items.filter { $0.isSnippet } }
+    /// 片段管理列表：所有**文本类收藏**。
+    ///
+    /// 不能只列 `isSnippet`（带标题或关键字的）—— 那样「给已有收藏补一个关键字」就永远
+    /// 没有入口，而这正是最自然的录入路径（顺手复制 → 收藏 → 想起来给它设个触发词）。
+    /// 专门写的片段与顺手收藏的东西混在一张列表里，靠关键字一栏区分。
+    var snippets: [ClipboardItem] {
+        items.filter { $0.isPinned && ($0.type == .text || $0.type == .link) }
+            .sorted { lhs, rhs in
+                // 专门写的片段排在顺手收藏的前面，同类按时间新→旧。
+                if lhs.isSnippet != rhs.isSnippet { return lhs.isSnippet }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
 
     /// 新建一条片段。不走 `add(_:)` —— 那条路径带「与最近一条同内容就合并」的去重逻辑，
     /// 对手工创建的片段是错的（用户可能就是要存一条和刚复制的东西一样的片段）。
@@ -109,16 +120,14 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
-    /// 设关键字。空串 = 取消触发；同一关键字只允许一条，后设的顶掉先设的。
+    /// 设关键字。空串 = 取消触发。
+    ///
+    /// **不**去清理其它条目上的同名关键字：设置页里是边打字边保存的，打到一半的
+    /// 中间态（"m" → "ma" → "mail"）会顺手把别人的关键字抹掉，用户根本不知道发生了什么。
+    /// 重名交给匹配侧处理 —— `snippet(forKeyword:)` 取列表里的第一条，结果是确定的。
     func setSnippetKeyword(_ id: UUID, _ keyword: String) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        let normalized = normalizedKeyword(keyword)
-        if let normalized {
-            for other in items.indices where items[other].id != id && items[other].keyword == normalized {
-                items[other].keyword = nil
-            }
-        }
-        items[index].keyword = normalized
+        items[index].keyword = normalizedKeyword(keyword)
         scheduleSave()
     }
 
@@ -128,7 +137,8 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
-    /// 按关键字找片段（关键字展开用）。
+    /// 按关键字找片段（关键字展开用）。重名时取列表里的第一条（收藏置顶且顺序稳定，
+    /// 所以"第一条"对用户是可预期的）。
     func snippet(forKeyword keyword: String) -> ClipboardItem? {
         items.first { $0.isPinned && $0.keyword == keyword }
     }

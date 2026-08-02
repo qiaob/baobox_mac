@@ -90,25 +90,34 @@ struct ClipboardSettingsView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(store.snippets) { snippet in
-                        HStack(spacing: 8) {
-                            TextField("clipboard.settings.snippetTitle",
-                                      text: snippetTitleBinding(snippet.id))
-                            TextField("clipboard.settings.snippetKeyword",
-                                      text: snippetKeywordBinding(snippet.id))
-                                .frame(width: 110)
-                            Button {
-                                editingSnippet = (editingSnippet == snippet.id) ? nil : snippet.id
-                            } label: {
-                                Image(systemName: editingSnippet == snippet.id ? "chevron.down" : "pencil")
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 8) {
+                                TextField("clipboard.settings.snippetTitle",
+                                          text: snippetTitleBinding(snippet.id))
+                                TextField("clipboard.settings.snippetKeyword",
+                                          text: snippetKeywordBinding(snippet.id))
+                                    .frame(width: 110)
+                                Button {
+                                    editingSnippet = (editingSnippet == snippet.id) ? nil : snippet.id
+                                } label: {
+                                    Image(systemName: editingSnippet == snippet.id ? "chevron.down" : "pencil")
+                                }
+                                .buttonStyle(.borderless)
+                                Button {
+                                    if editingSnippet == snippet.id { editingSnippet = nil }
+                                    store.delete(snippet.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
-                            Button {
-                                if editingSnippet == snippet.id { editingSnippet = nil }
-                                store.delete(snippet.id)
-                            } label: {
-                                Image(systemName: "trash")
+                            // 顺手收藏来的条目没有名字，光看空输入框认不出是哪条 —— 补一行内容预览。
+                            if (snippet.title ?? "").isEmpty {
+                                Text(verbatim: Self.preview(of: snippet))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
-                            .buttonStyle(.borderless)
                         }
                     }
                 }
@@ -236,6 +245,13 @@ struct ClipboardSettingsView: View {
     }
 
     // MARK: - 文本工具
+
+    /// 内容首行（截断），用于没起名字的收藏条目。
+    private static func preview(of item: ClipboardItem) -> String {
+        let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = text.components(separatedBy: "\n").first ?? ""
+        return firstLine.count > 60 ? String(firstLine.prefix(60)) + "…" : firstLine
+    }
 
     private func snippetTitleBinding(_ id: UUID) -> Binding<String> {
         Binding(

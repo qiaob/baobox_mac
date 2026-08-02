@@ -196,7 +196,14 @@ final class SnippetExpander {
     private func expand(text: String, backspaces: Int) {
         isExpanding = true
         let previous = Self.restoresClipboard ? NSPasteboard.general.string(forType: .string) : nil
-        Self.sendBackspaces(backspaces)
+
+        // 退格必须推到下一拍再发：此刻还在 tap 回调栈里，回调尚未返回、当前这一击也还没被
+        // 丢弃，在这里同步 post 事件等于往自己正在处理的队列里插队，顺序不可控。
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                Self.sendBackspaces(backspaces)
+            }
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
             MainActor.assumeIsolated {
