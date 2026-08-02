@@ -1,10 +1,11 @@
 import Foundation
 
-/// 局域网接口枚举与 magic 域名常量。
+/// 局域网接口枚举：可用网卡与本机局域网 IP。
+///
+/// 原属网络抓包模块；局域网传输也要用「手机连得上的那个 IP」，故下沉为共享基础设施
+/// （同 `QRCodeGenerator` 的先例）。NetCapture 专属的 magic 域名与 URL 常量留在该模块内的
+/// extension 里，调用点写法不变。
 enum NetworkInterfaces {
-
-    /// magic 域名：被代理设备访问 `http://baobox.proxy/` 可下载 CA 证书（由 ProxyConnection 本地应答）。
-    static let magicHost = "baobox.proxy"
 
     /// 一个可用局域网接口。
     struct Interface: Identifiable {
@@ -94,11 +95,4 @@ enum NetworkInterfaces {
         inet_ntop(AF_INET, &local.sin_addr, &buf, socklen_t(buf.count))
         return String(cString: buf)
     }
-
-    /// 证书下载 URL（保留，供直链 / 展示）——扫码下载 CA 文件。
-    static var certDownloadURL: String { "http://\(magicHost)/cert" }
-
-    /// 配置页 URL（供二维码 / 展示）——手机**未设代理**时也能同 Wi-Fi 直连打开（装证书 / 配代理，§16.2）。
-    /// 用本机局域网 IP:端口直连；不能用 magic 域名 `baobox.proxy`（那要先设代理才能解析，首次配置时打不开）。
-    static var landingPageURL: String { "http://\(primaryIP()):\(NetCaptureEnv.port)/" }
 }

@@ -60,6 +60,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Multi-display aware** throughout: the target display is whichever one has the largest intersection with the window; layouts are computed against each display's visible frame (avoiding the menu bar and Dock); moving a window between displays scales its relative position and size to fit, clamped to stay on-screen; snapshots store a stable per-display UUID plus a relative position, so restoring works correctly even if resolution or display arrangement changed since the snapshot was taken.
 
 
+### LAN Drop — File Transfer (unbound by default)
+- Turn on a temporary receiver from the menu, scan the QR code with your phone, and send files straight to this Mac — no cable, no cloud sync, and none of AirDrop's Apple-only limits.
+- The phone-side page has **zero external dependencies** (all CSS/JS inlined): multi-select, camera capture, drag-and-drop on desktop browsers, and per-file progress. Chinese or English is chosen from the phone's own language, not the Mac's.
+- Writes are **streamed**: every chunk goes straight into `<target>.baobox-part` and is renamed only once complete — memory stays flat on a 1 GB transfer, and an interrupted upload leaves no half file behind. Saves to `~/Downloads/Baobox` by default; same-name files get a numeric suffix and are never overwritten.
+- A notification when a transfer starts and another when it lands, with live progress and a "Recently received" list (click to reveal in Finder) in the menu.
+- **Security**: off by default; each start mints a new one-time access code embedded in the QR code, and any request without it gets a flat 404. The service only receives — phones can't browse or download anything from this Mac. Auto-stops after 10 idle minutes (configurable), and immediately on sleep, display sleep, or app quit. Per-file size cap is configurable.
+
 ### Claude Code Assistant (unbound by default)
 - A menu-bar dashboard for the local Claude Code CLI, built entirely from `~/.claude` files — no AI API, no login: live session status (running / awaiting confirmation), the five most recent sessions for one-click terminal resume, the current 5-hour usage window (tokens, estimated cost, reset countdown) and today's estimated spend.
 - **Center window** (Sessions / Usage / Audit): searchable session history with resume, copy-command, Markdown export and delete; a usage report by day / project / model plus an invocation breakdown (skills & slash commands, MCP servers › tools, built-in tools); and a per-day file-change audit that reveals edited files in Finder.

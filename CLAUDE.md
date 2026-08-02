@@ -38,6 +38,7 @@ BaoboxApp(@main, Settings scene)
 | ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
+| LanDrop | `landrop` | **局域网传输**：手机扫码打开网页上传文件到 Mac，一次性访问码、空闲/睡眠自动关闭、通知与进度。`docs/lan-drop/` |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
@@ -61,6 +62,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
+- `docs/lan-drop/` —— 局域网传输（手机扫码上传文件到 Mac）REQUIREMENTS + TECH_DESIGN。局域网 IP 枚举 `NetworkInterfaces` 随此特性从 NetCapture 下沉为 `Sources/Core/NetworkInterfaces.swift`（抓包专属的 magic 域名/URL 留在模块内 extension）。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
 
 **流程惯例**：新功能先在 `docs/<feature>/` 写需求 + 技术设计，再实现；文档为准，实现照文档。

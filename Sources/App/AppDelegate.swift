@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ColorPickerTool())
         registry.register(CaffeinateTool())
         registry.register(WindowManagerTool())
+        registry.register(LanDropTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())
