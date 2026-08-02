@@ -7,10 +7,11 @@ final class CaptureOverlayWindow: NSWindow {
     private let overlayView: CaptureOverlayView
 
     init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false,
-         frozenBackground: CGImage? = nil) {
+         ocrMode: Bool = false, frozenBackground: CGImage? = nil) {
         self.targetScreen = screen
         self.overlayView = CaptureOverlayView(screen: screen, controller: controller,
-                                              recordMode: recordMode, frozenBackground: frozenBackground)
+                                              recordMode: recordMode, ocrMode: ocrMode,
+                                              frozenBackground: frozenBackground)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
 
         // level 必须先于 setFrame 设置：普通级别的窗口会被 AppKit 的

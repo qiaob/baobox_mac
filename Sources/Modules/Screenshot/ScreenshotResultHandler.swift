@@ -60,6 +60,19 @@ enum ScreenshotSettings {
         RecordFormat(rawValue: UserDefaults.standard.string(forKey: recordFormatKey) ?? "") ?? .mp4
     }
 
+    /// 屏幕取字的识别语言组合，默认中英混合。
+    static let ocrLanguageKey = "screenshot.ocrLanguage"
+    static var ocrLanguageOption: TextRecognizer.LanguageOption {
+        let raw = UserDefaults.standard.string(forKey: ocrLanguageKey) ?? ""
+        return TextRecognizer.LanguageOption(rawValue: raw) ?? .chineseEnglish
+    }
+
+    /// 取字后直接复制、不弹结果窗，默认关（识别难免有错，默认给用户一次校对机会）。
+    static let ocrAutoCopyOnlyKey = "screenshot.ocrAutoCopyOnly"
+    static var ocrAutoCopyOnly: Bool {
+        UserDefaults.standard.bool(forKey: ocrAutoCopyOnlyKey)
+    }
+
     /// 系统声音 + 麦克风同录时，完成后把双音轨混为单轨（兼容只播首轨的播放器），默认开。
     static let recordMixAudioKey = "screenshot.recordMixAudio"
     static var recordMixAudio: Bool {

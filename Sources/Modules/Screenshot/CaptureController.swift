@@ -1,9 +1,11 @@
 import AppKit
 
-/// 一次 overlay 会话的目的：截图或录屏。选区交互完全一致，仅完成后的链路不同。
+/// 一次 overlay 会话的目的：截图 / 录屏 / 取字。选区交互基本一致，仅完成后的链路不同。
 enum CaptureSessionMode {
     case capture
     case record
+    /// 屏幕取字：选完即识别，不落盘、不入历史。
+    case ocr
 }
 
 /// 截图会话协调：管理多屏 overlay、汇总完成/取消回调、驱动捕获与结果处理。
@@ -26,6 +28,11 @@ final class CaptureController {
         begin(.record)
     }
 
+    /// 屏幕取字入口：同一套选区交互，松手/点窗口/⏎ 即识别，不出标注工具条。
+    func beginTextRecognition() {
+        begin(.ocr)
+    }
+
     private func begin(_ mode: CaptureSessionMode) {
         guard !isActive else { return }
 
@@ -44,12 +51,13 @@ final class CaptureController {
 
         isActive = true
         sessionMode = mode
-        // 菜单场景：取「含菜单整屏」快照（截图快捷键在菜单打开时按下，已在收菜单前抓好）。仅截图、非录屏。
-        frozenScreens = (mode == .capture) ? ScreenMenuSnapshot.take() : [:]
+        // 菜单场景：取「含菜单整屏」快照（截图快捷键在菜单打开时按下，已在收菜单前抓好）。
+        // 截图与取字都要（菜单里的文字同样该能取），录屏不要。
+        frozenScreens = (mode != .record) ? ScreenMenuSnapshot.take() : [:]
         // 别的 App 的右键菜单/下拉菜单：Carbon 热键照常触发，但下面的 NSApp.activate 与 overlay
         // 上屏会让对方菜单立刻收起 —— 等 overlay 摆好再抓，菜单早没了（issue #6）。
         // 所以在**创建任何窗口、激活本 App 之前**同步抓一张整屏，之后框选/窗口/全屏都从它裁剪。
-        if mode == .capture, frozenScreens.isEmpty, ScreenMenuSnapshot.hasForeignMenuOnScreen() {
+        if mode != .record, frozenScreens.isEmpty, ScreenMenuSnapshot.hasForeignMenuOnScreen() {
             ScreenMenuSnapshot.captureAllScreens()
             frozenScreens = ScreenMenuSnapshot.take()
         }
@@ -58,7 +66,8 @@ final class CaptureController {
         for screen in NSScreen.screens {
             let frozen = screen.displayID.flatMap { frozenScreens[$0] }
             let overlay = CaptureOverlayWindow(screen: screen, controller: self,
-                                               recordMode: mode == .record, frozenBackground: frozen)
+                                               recordMode: mode == .record, ocrMode: mode == .ocr,
+                                               frozenBackground: frozen)
             overlays.append(overlay)
             overlay.orderFrontRegardless()
         }
@@ -197,9 +206,20 @@ final class CaptureController {
     }
 
     /// 标注完成：直接用合成图走结果链路（不再重新捕获屏幕）。
+    /// 取字会话走到这里说明选区图已到手 —— 冻结裁剪与实时抓屏两条路都汇到这，识别只需接在终点。
     func finishComposited(_ image: CGImage, mode: ResultMode) {
         dismissOverlays()
+        if sessionMode == .ocr {
+            OCRResultWindow.present(image: image)
+            return
+        }
         ScreenshotResultHandler.handle(image: image, mode: mode)
+    }
+
+    /// 屏幕取字：不落盘、不入历史，直接识别这张图。标注工具条的「取字」按钮走这条。
+    func finishRecognize(_ image: CGImage) {
+        dismissOverlays()
+        OCRResultWindow.present(image: image)
     }
 
     /// 长截屏：选区定住不动，overlay 退场后由 `ScrollingCaptureController` 边抓帧边拼接，
@@ -229,7 +249,11 @@ final class CaptureController {
             try? await Task.sleep(nanoseconds: 80_000_000)
             do {
                 let image = try await CaptureEngine.capture(target)
-                ScreenshotResultHandler.handle(image: image, mode: mode)
+                if self.sessionMode == .ocr {
+                    OCRResultWindow.present(image: image)
+                } else {
+                    ScreenshotResultHandler.handle(image: image, mode: mode)
+                }
             } catch {
                 // overlay 已消隐，此刻 App 可能已不是前台；不先激活的话弹窗会藏在
                 // 其他 App 窗口后面，而主线程已进入模态循环 —— 看起来就是「卡死」。

@@ -107,6 +107,11 @@ final class PinnedImageWindow: NSPanel {
         }
     }
 
+    /// 对贴图内容取字：贴着的常是别人发来的截图，直接在这儿取文字最顺手。
+    func recognizeText() {
+        OCRResultWindow.present(image: image)
+    }
+
     func saveImage() {
         let rep = NSBitmapImageRep(cgImage: image)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
@@ -158,6 +163,9 @@ private final class PinContentView: NSImageView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: L("pin.menu.copy")) { [weak self] in self?.owner?.copyImage() })
+        menu.addItem(ClosureMenuItem(title: L("pin.menu.recognizeText")) { [weak self] in
+            self?.owner?.recognizeText()
+        })
         menu.addItem(ClosureMenuItem(title: L("pin.menu.save")) { [weak self] in self?.owner?.saveImage() })
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: L("pin.menu.resetSize")) { [weak self] in self?.owner?.resetSize() })

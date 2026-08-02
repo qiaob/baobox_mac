@@ -23,7 +23,10 @@ final class ScreenshotTool: ToolModule {
         let record = ClosureMenuItem(title: recordTitle, hotkeyID: "screenshot.record") { [weak self] in
             self?.toggleRecording()
         }
-        var items: [NSMenuItem] = [start, record]
+        let ocr = ClosureMenuItem(title: L("screenshot.menu.ocr"), hotkeyID: "screenshot.ocr") { [weak self] in
+            self?.captureController.beginTextRecognition()
+        }
+        var items: [NSMenuItem] = [start, record, ocr]
         // 长截屏进行中：控制条可能被用户拖到别处或挡住，菜单里留一个出口。
         if ScrollingCaptureController.shared.isRunning {
             items.append(ClosureMenuItem(title: L("screenshot.menu.finishLongCapture")) {
@@ -51,6 +54,15 @@ final class ScreenshotTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x13, carbonModifiers: KeyCombo.cmd | KeyCombo.shift) // ⌘⇧2
             ) { [weak self] in
                 self?.captureController.begin()
+            },
+            HotkeyDefinition(
+                id: "screenshot.ocr",
+                title: L("screenshot.menu.ocr"),
+                subtitle: L("screenshot.ocr.hotkey.subtitle"),
+                // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页自行设置。
+                defaultCombo: nil
+            ) { [weak self] in
+                self?.captureController.beginTextRecognition()
             },
             HotkeyDefinition(
                 id: "screenshot.record",
@@ -104,6 +116,10 @@ final class ScreenshotTool: ToolModule {
                 actions.addItem(ClosureMenuItem(title: L("screenshot.history.pin")) { [weak self] in
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
                     self?.pinCentered(cg)
+                })
+                actions.addItem(ClosureMenuItem(title: L("pin.menu.recognizeText")) {
+                    guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
+                    OCRResultWindow.present(image: cg)
                 })
                 actions.addItem(ClosureMenuItem(title: L("pin.menu.save")) {
                     Self.saveEntry(entry)

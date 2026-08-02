@@ -9,6 +9,7 @@ protocol AnnotationToolbarDelegate: AnyObject {
     func toolbarCancel()
     func toolbarPin()
     func toolbarLongCapture()
+    func toolbarRecognizeText()
     func toolbarSave()
     func toolbarCopy()
 }
@@ -111,6 +112,8 @@ final class AnnotationToolbar: NSObject {
                                                    action: #selector(pinTapped)))
         toolsRow.addArrangedSubview(makeIconButton(symbol: "arrow.up.and.down", tip: L("annotation.longCapture"),
                                                    action: #selector(longCaptureTapped)))
+        toolsRow.addArrangedSubview(makeIconButton(symbol: "text.viewfinder", tip: L("annotation.recognizeText"),
+                                                   action: #selector(recognizeTextTapped)))
         toolsRow.addArrangedSubview(makeIconButton(symbol: "square.and.arrow.down", tip: L("annotation.save"),
                                                    action: #selector(saveTapped)))
         toolsRow.addArrangedSubview(makeIconButton(symbol: "doc.on.doc", tip: L("annotation.copy"),
@@ -309,6 +312,7 @@ final class AnnotationToolbar: NSObject {
     @objc private func cancelTapped() { delegate?.toolbarCancel() }
     @objc private func pinTapped() { delegate?.toolbarPin() }
     @objc private func longCaptureTapped() { delegate?.toolbarLongCapture() }
+    @objc private func recognizeTextTapped() { delegate?.toolbarRecognizeText() }
     @objc private func saveTapped() { delegate?.toolbarSave() }
     @objc private func copyTapped() { delegate?.toolbarCopy() }
 }

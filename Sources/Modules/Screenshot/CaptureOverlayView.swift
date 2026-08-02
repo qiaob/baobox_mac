@@ -23,6 +23,9 @@ final class CaptureOverlayView: NSView {
     /// 录制模式：选区交互不变，但不出标注工具条，⏎/双击 = 开始录制。
     private let recordMode: Bool
 
+    /// 取字模式：不出标注工具条，框选松手 / 点窗口 / ⏎ 全屏即识别。
+    private let ocrMode: Bool
+
     private var phase: Phase = .hovering(nil)
 
     // hovering → dragging 的按下点与命中窗口
@@ -79,10 +82,11 @@ final class CaptureOverlayView: NSView {
     private var finishing = false
 
     init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false,
-         frozenBackground: CGImage? = nil) {
+         ocrMode: Bool = false, frozenBackground: CGImage? = nil) {
         self.screenRef = screen
         self.controller = controller
         self.recordMode = recordMode
+        self.ocrMode = ocrMode
         self.frozenBackground = frozenBackground
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         // 不使用 layer-backing：draw(_:) 里以 .clear 混合模式在非透明 backing 上"挖洞"，
@@ -353,6 +357,10 @@ final class CaptureOverlayView: NSView {
                 phase = .adjusting(rect: rect)
                 if recordMode {
                     showRecordBar(for: rect)
+                } else if ocrMode {
+                    // 取字不需要标注/微调，松手即识别 —— 这条路径的价值就是快。
+                    // 会话已是 .ocr，controller 在终点分流到识别，无需另开方法。
+                    controller?.finishRect(globalAKRect(fromLocal: rect), on: screenRef, mode: .standard)
                 } else {
                     showToolbar(for: rect)
                 }
@@ -529,6 +537,11 @@ final class CaptureOverlayView: NSView {
                 drawHintPill([L("screenshot.record.hint.click"),
                               L("screenshot.record.hint.drag"),
                               L("screenshot.record.hint.enter"),
+                              L("screenshot.overlay.hint.esc")])
+            } else if ocrMode {
+                drawHintPill([L("screenshot.ocr.hint.click"),
+                              L("screenshot.ocr.hint.drag"),
+                              L("screenshot.overlay.hint.enter"),
                               L("screenshot.overlay.hint.esc")])
             } else {
                 drawHintPill([L("screenshot.overlay.hint.click"),
@@ -982,7 +995,7 @@ final class CaptureOverlayView: NSView {
 
     // MARK: - 标注：完成
 
-    private enum FinishAction { case copy, save, pin }
+    private enum FinishAction { case copy, save, pin, ocr }
 
     private func finishSelection(_ action: FinishAction) {
         guard !finishing else { return }
@@ -1005,8 +1018,8 @@ final class CaptureOverlayView: NSView {
             case .save:
                 controller?.finishRect(globalRect, on: screenRef, mode: .saveOnly)
                 return
-            case .pin:
-                break // 贴图需要拿到图像本身，统一走下方冻结路径。
+            case .pin, .ocr:
+                break // 贴图与取字都需要拿到图像本身，统一走下方冻结路径。
             }
         }
 
@@ -1032,7 +1045,8 @@ final class CaptureOverlayView: NSView {
             }
 
             var final = baseImage
-            if !self.ops.isEmpty {
+            // 取字不合成标注（下面直接用 baseImage），省掉一次没意义的整图合成。
+            if !self.ops.isEmpty, action != .ocr {
                 // 马赛克底图若还没在后台生成完，这里同步补齐，保证导出不缺笔画。
                 var mosaic = self.mosaicImage
                 if mosaic == nil, self.ops.contains(where: { $0.tool == .mosaic }) {
@@ -1047,6 +1061,8 @@ final class CaptureOverlayView: NSView {
             case .copy: controller.finishComposited(final, mode: .standard)
             case .save: controller.finishComposited(final, mode: .saveOnly)
             case .pin: controller.finishPin(final, at: globalRect)
+            // 取字用未合成标注的原图：标注是画在文字上的遮挡物，喂给 OCR 只会添乱。
+            case .ocr: controller.finishRecognize(baseImage)
             }
         }
     }
@@ -1105,6 +1121,9 @@ extension CaptureOverlayView: AnnotationToolbarDelegate {
         finishing = true
         controller?.finishLongCapture(globalAKRect(fromLocal: rect), on: screenRef)
     }
+
+    /// 取字：把选区图交给 Vision 本地识别，不落盘、不入历史。
+    func toolbarRecognizeText() { finishSelection(.ocr) }
 
     func toolbarSave() { finishSelection(.save) }
     func toolbarCopy() { finishSelection(.copy) }
