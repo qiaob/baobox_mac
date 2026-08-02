@@ -83,6 +83,61 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
+    // MARK: - 文本片段（= 手工创建的收藏条目）
+
+    /// 所有片段：收藏 + 带标题或关键字。顺手复制来的收藏不算。
+    var snippets: [ClipboardItem] { items.filter { $0.isSnippet } }
+
+    /// 新建一条片段。不走 `add(_:)` —— 那条路径带「与最近一条同内容就合并」的去重逻辑，
+    /// 对手工创建的片段是错的（用户可能就是要存一条和刚复制的东西一样的片段）。
+    @discardableResult
+    func addSnippet(title: String, content: String, keyword: String? = nil) -> UUID {
+        let item = ClipboardItem(id: UUID(), type: .text, text: content, imageFilename: nil,
+                                 sourceAppName: nil, sourceBundleID: nil, createdAt: Date(),
+                                 isPinned: true, isConcealed: false,
+                                 title: title, keyword: normalizedKeyword(keyword))
+        items.append(item)
+        sortItems()
+        scheduleSave()
+        return item.id
+    }
+
+    func setSnippetTitle(_ id: UUID, _ title: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        items[index].title = trimmed.isEmpty ? nil : trimmed
+        scheduleSave()
+    }
+
+    /// 设关键字。空串 = 取消触发；同一关键字只允许一条，后设的顶掉先设的。
+    func setSnippetKeyword(_ id: UUID, _ keyword: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let normalized = normalizedKeyword(keyword)
+        if let normalized {
+            for other in items.indices where items[other].id != id && items[other].keyword == normalized {
+                items[other].keyword = nil
+            }
+        }
+        items[index].keyword = normalized
+        scheduleSave()
+    }
+
+    func setSnippetContent(_ id: UUID, _ content: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].text = content
+        scheduleSave()
+    }
+
+    /// 按关键字找片段（关键字展开用）。
+    func snippet(forKeyword keyword: String) -> ClipboardItem? {
+        items.first { $0.isPinned && $0.keyword == keyword }
+    }
+
+    private func normalizedKeyword(_ raw: String?) -> String? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func togglePin(_ id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].isPinned.toggle()

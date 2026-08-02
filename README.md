@@ -49,6 +49,11 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - The submenu shows the five most recent colors as swatches for one-click re-copy.
 - Settings let you choose the output format, hex letter case, and whether to auto-copy after sampling.
 
+### Text snippets (part of the clipboard)
+- A snippet is simply a favourite you wrote yourself: it never expires, survives Clear History, and shows up under Favourites in the same panel — same search, same ⏎ to paste.
+- Give a snippet a keyword and typing `;keyword` in any text field expands it in place.
+- Keyword expansion is **off by default**. When on, it keeps at most 32 characters in memory for prefix matching, never writes them to disk or to history, skips apps on the ignore list, and never sees password fields (macOS withholds those keystrokes entirely).
+
 ### Caffeinate — Sleep Prevention (menu-only)
 - Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).
 - Enable for 15 minutes / 1 hour / 2 hours / indefinitely from the submenu; the assertion clears automatically on expiry, with a live countdown shown in the menu.

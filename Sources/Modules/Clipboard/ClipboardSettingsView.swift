@@ -15,6 +15,11 @@ struct ClipboardSettingsView: View {
     /// 逐格式开关。数量不固定又要 ForEach，没法一个格式一个 @AppStorage，
     /// 所以本地存一份镜像，写的时候同步回 UserDefaults。
     @State private var toolStates: [String: Bool] = TextToolSettings.currentStates()
+    @AppStorage(SnippetExpander.enabledKey) private var snippetExpandEnabled = false
+    @AppStorage(SnippetExpander.prefixKey) private var snippetPrefix = ";"
+    @AppStorage(SnippetExpander.restoreClipboardKey) private var snippetRestoreClipboard = true
+    /// 正在编辑内容的片段。nil = 只显示列表。
+    @State private var editingSnippet: UUID?
 
     var body: some View {
         Form {
@@ -77,6 +82,75 @@ struct ClipboardSettingsView: View {
                         .padding(.leading, 14)
                     }
                 }
+            }
+
+            Section("clipboard.settings.snippetsSection") {
+                if store.snippets.isEmpty {
+                    Text("clipboard.settings.snippetsEmpty")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.snippets) { snippet in
+                        HStack(spacing: 8) {
+                            TextField("clipboard.settings.snippetTitle",
+                                      text: snippetTitleBinding(snippet.id))
+                            TextField("clipboard.settings.snippetKeyword",
+                                      text: snippetKeywordBinding(snippet.id))
+                                .frame(width: 110)
+                            Button {
+                                editingSnippet = (editingSnippet == snippet.id) ? nil : snippet.id
+                            } label: {
+                                Image(systemName: editingSnippet == snippet.id ? "chevron.down" : "pencil")
+                            }
+                            .buttonStyle(.borderless)
+                            Button {
+                                if editingSnippet == snippet.id { editingSnippet = nil }
+                                store.delete(snippet.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+
+                Button("clipboard.settings.snippetNew") {
+                    editingSnippet = store.addSnippet(title: L("clipboard.settings.snippetNewName"),
+                                                      content: "")
+                }
+
+                if let editingSnippet, store.items.contains(where: { $0.id == editingSnippet }) {
+                    TextEditor(text: snippetContentBinding(editingSnippet))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 120)
+                }
+
+                Toggle("clipboard.settings.snippetExpand", isOn: $snippetExpandEnabled)
+                    .onChange(of: snippetExpandEnabled) { _, _ in
+                        SnippetExpander.shared.refresh()
+                    }
+                if snippetExpandEnabled {
+                    HStack {
+                        Text("clipboard.settings.snippetPrefix")
+                        Spacer()
+                        TextField("", text: $snippetPrefix)
+                            .frame(width: 60)
+                    }
+                    .padding(.leading, 14)
+                    Toggle("clipboard.settings.snippetRestore", isOn: $snippetRestoreClipboard)
+                        .padding(.leading, 14)
+                    if !Permissions.hasAccessibility {
+                        Text("clipboard.settings.snippetNeedsAX")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.leading, 14)
+                    }
+                }
+                Text("clipboard.settings.snippetHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("clipboard.settings.snippetPrivacy")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
 
             Section("clipboard.settings.ignoredApps") {
@@ -162,6 +236,27 @@ struct ClipboardSettingsView: View {
     }
 
     // MARK: - 文本工具
+
+    private func snippetTitleBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { store.items.first(where: { $0.id == id })?.title ?? "" },
+            set: { store.setSnippetTitle(id, $0) }
+        )
+    }
+
+    private func snippetKeywordBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { store.items.first(where: { $0.id == id })?.keyword ?? "" },
+            set: { store.setSnippetKeyword(id, $0) }
+        )
+    }
+
+    private func snippetContentBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { store.items.first(where: { $0.id == id })?.text ?? "" },
+            set: { store.setSnippetContent(id, $0) }
+        )
+    }
 
     private func toolBinding(_ id: String) -> Binding<Bool> {
         Binding(
