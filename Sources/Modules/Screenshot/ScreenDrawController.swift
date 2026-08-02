@@ -46,12 +46,14 @@ final class ScreenDrawController {
         isRunning = true
         isPassThrough = false
 
-        let toolbar = ScreenDrawToolbar()
-        toolbar.delegate = self
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
             ?? NSScreen.main ?? NSScreen.screens[0]
-        toolbar.show(on: screen)
+        let host = windows.first(where: { $0.targetScreen == screen }) ?? windows[0]
+
+        let toolbar = ScreenDrawToolbar()
+        toolbar.delegate = self
+        toolbar.show(on: screen, attachedTo: host)
         self.toolbar = toolbar
 
         applyStyleToViews { view in
@@ -61,18 +63,18 @@ final class ScreenDrawController {
 
         // 必须激活：Esc / ⌘Z / ⌫ 都要靠键盘，不激活就收不到。
         NSApp.activate(ignoringOtherApps: true)
-        let keyWindow = windows.first(where: { $0.targetScreen == screen }) ?? windows[0]
-        keyWindow.makeKeyAndOrderFront(nil)
-        keyWindow.focusDrawView()
+        host.makeKeyAndOrderFront(nil)
+        host.focusDrawView()
     }
 
     func stop() {
+        // 先摘工具条（它是画布的子窗口），再关画布 —— 顺序反了会留下孤儿子窗口。
+        toolbar?.close()
+        toolbar = nil
         for window in windows {
             window.orderOut(nil)
         }
         windows.removeAll()
-        toolbar?.close()
-        toolbar = nil
         activeView = nil
         isRunning = false
         isPassThrough = false
@@ -95,8 +97,9 @@ final class ScreenDrawController {
         if !isPassThrough {
             // 回到绘制态要把键盘焦点抢回来，否则 ⌘Z / Esc 失灵。
             NSApp.activate(ignoringOtherApps: true)
-            windows.first?.makeKeyAndOrderFront(nil)
-            windows.first?.focusDrawView()
+            let host = (toolbar?.panel.parent as? ScreenDrawOverlayWindow) ?? windows.first
+            host?.makeKeyAndOrderFront(nil)
+            host?.focusDrawView()
         }
     }
 

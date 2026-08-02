@@ -52,8 +52,10 @@ final class ScreenDrawToolbar: NSObject {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        // 比画布高一层，保证工具条永远压在笔迹之上、也不会被自己的画布吃掉点击。
-        panel.level = .popUpMenu
+        // 必须与画布同级（.screenSaver）并作为画布的子窗口：`.popUpMenu`(101) 低于
+        // `.screenSaver`(1000)，工具条会被自己的画布整个盖住、点击也落到画布上画出一笔。
+        // 同级 + 子窗口关系才能保证它稳定压在画布之上（截图工具条同样的做法）。
+        panel.level = .screenSaver
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
@@ -212,17 +214,20 @@ final class ScreenDrawToolbar: NSObject {
     // MARK: - 展示
 
     /// 摆在屏幕底部居中偏上（避开 Dock），可拖动。
-    func show(on screen: NSScreen) {
+    /// `parent` 为该屏的画布窗口 —— 挂成子窗口才能稳定压在画布之上。
+    func show(on screen: NSScreen, attachedTo parent: NSWindow) {
         sizeToFit()
         let size = panel.frame.size
         let visible = screen.visibleFrame
         let origin = NSPoint(x: visible.midX - size.width / 2,
                              y: visible.minY + 28)
         panel.setFrameOrigin(origin)
+        parent.addChildWindow(panel, ordered: .above)
         panel.orderFrontRegardless()
     }
 
     func close() {
+        panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)
     }
 
