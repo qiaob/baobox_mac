@@ -33,7 +33,7 @@ BaoboxApp(@main, Settings scene)
 
 | 模块 | id | 说明 |
 |---|---|---|
-| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、录屏、历史。ScreenCaptureKit |
+| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**屏幕标注画笔**、录屏、历史。ScreenCaptureKit；画笔见 `docs/screen-draw/` |
 | Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`） |
 | ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
@@ -60,6 +60,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/design/ui-design-v1.html` —— UI 设计稿与**设计令牌（配色）**：accent 浅 `#17A398` / 深 `#2BC4B8`，深浅两套变量。
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
+- `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态），嵌在截图模块内。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
 

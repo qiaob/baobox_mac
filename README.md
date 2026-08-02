@@ -31,6 +31,7 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - In-place annotation editor: rectangle, ellipse, arrow, pen, highlighter, mosaic/blur, text, eraser, undo/redo (⌘Z / ⇧⌘Z), three stroke widths, a seven-color palette.
 - Pin: keep a capture floating on top of every window, draggable, scroll-to-zoom (0.2×–5×), ⌥+scroll for opacity; pin directly from the clipboard.
 - Pixel loupe for precise selection: an 8×-magnified 17×17 grid follows the cursor while hovering, dragging, or resizing a handle, with live coordinates and a hex color readout.
+- Draw on screen: a transparent canvas over the live screen for demos and walkthroughs — pen, highlighter, arrow, rectangle, ellipse, eraser, undo/redo, seven colors, three widths. Click-through mode keeps the marks on screen while you keep using the app underneath; esc exits, ⌫ clears. Marks are captured by screen recording, which is the point.
 - Screenshot history: every capture is archived automatically (configurable retention, default 20), with a thumbnail menu for copy / re-pin / save-as / delete.
 - Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
 
