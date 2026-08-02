@@ -185,6 +185,8 @@ struct ClipboardPanelView: View {
     var onClose: () -> Void
     /// 只复制不粘贴（表格行的复制按钮）。由 controller 负责抑制监听，避免转换结果进历史。
     var onCopyText: (String) -> Void
+    /// 图片条目开独立预览窗（徽章行按钮 / 双击缩略图）。
+    var onPreviewImage: (ClipboardItem) -> Void
 
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
@@ -400,6 +402,17 @@ struct ClipboardPanelView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if item.type == .image {
+                Button {
+                    onPreviewImage(item)
+                } label: {
+                    Label("clipboard.preview.open", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+
             if viewModel.isPreviewMaximized {
                 Text(verbatim: "\(viewModel.selectedIndex + 1) / \(viewModel.filtered.count)")
                     .font(.system(size: 10, design: .monospaced))
@@ -520,14 +533,12 @@ struct ClipboardPanelView: View {
                 }
             }
         case .image:
-            // 图片是加密落盘的，不能直接 NSImage(contentsOf:)。
-            if let name = item.imageFilename,
-               let data = ClipboardCrypto.read(from: ClipboardStore.imagesDir.appendingPathComponent(name)),
-               let image = NSImage(data: data) {
+            if let image = ClipboardStore.image(for: item) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onTapGesture(count: 2) { onPreviewImage(item) }
             } else {
                 Text("clipboard.preview.missingImage").foregroundStyle(.secondary)
             }

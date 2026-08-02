@@ -2,17 +2,17 @@
 
 [![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
 
-A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, color picker, and more — into a single native app with one shortcut system and one settings window.
+A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, window manager, and more — into a single native app with one shortcut system and one settings window.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 ## Overview
 
-Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for color picking — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
+Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for window management — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
 
 - **Native, not Electron** — Swift 5.9, SwiftUI + AppKit, zero third-party dependencies. Resident memory stays under ~50 MB.
 - **Modular by design** — the app shell has no knowledge of individual tools; each one implements a common `ToolModule` protocol and self-registers its menu entry, shortcuts, and settings tab.
-- **Local-first** — all data (clipboard history, screenshots, color history, window layouts) stays on disk, on your Mac. Nothing is uploaded.
+- **Local-first** — all data (clipboard history, screenshots, window layouts) stays on disk, on your Mac. Nothing is uploaded.
 - **macOS 14 (Sonoma) or later**, built against ScreenCaptureKit and other modern system frameworks.
 
 ## Features
@@ -27,10 +27,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 ### Screenshot (default ⌘⇧2)
 - Single shortcut, intent detected automatically: hover to highlight and capture a window with one click; click-drag (past a ~4pt threshold) for a region capture with eight-way resize handles, arrow-key nudging (⇧ for ×10), and a pixel loupe; ⏎ for a full-screen capture; Esc to cancel.
 - Multi-display support, one overlay per screen.
+- Menus stay in the shot: if a context menu or menu-bar dropdown is open when the shortcut fires, the screen is frozen before the app activates, so the menu is still there in the result.
 - Built on ScreenCaptureKit. Results copy to the clipboard and, optionally, save to a configurable folder with a customizable filename template.
 - In-place annotation editor: rectangle, ellipse, arrow, pen, highlighter, mosaic/blur, text, eraser, undo/redo (⌘Z / ⇧⌘Z), three stroke widths, a seven-color palette.
 - Pin: keep a capture floating on top of every window, draggable, scroll-to-zoom (0.2×–5×), ⌥+scroll for opacity; pin directly from the clipboard.
 - Pixel loupe for precise selection: an 8×-magnified 17×17 grid follows the cursor while hovering, dragging, or resizing a handle, with live coordinates and a hex color readout.
+- Scrolling capture: pick the scrollable area, hit the scrolling-capture button next to Pin, then scroll — consecutive frames are matched by their overlap and stitched into one tall image (copied and saved like any other capture). A floating bar shows the stitched height and finishes or cancels the session.
+- Text capture (OCR): recognize the text inside any selection locally via Vision — from the annotation toolbar, from a dedicated shortcut (unbound by default), or from any screenshot in history / any pinned image. QR and barcodes in the shot are decoded too. The result opens in an editable window so you can fix a misread before copying; recognition languages are configurable and nothing is uploaded.
 - Screenshot history: every capture is archived automatically (configurable retention, default 20), with a thumbnail menu for copy / re-pin / save-as / delete.
 - Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
 
@@ -43,16 +46,11 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Encrypted on disk** (on by default, switchable): history text and images are sealed with AES-GCM before they hit `~/Library/Application Support/Baobox/`; the 256-bit key lives in your login keychain, never leaves the Mac and is not synced to iCloud. Flipping the switch converts the existing history either way.
 - **Text tools in the preview pane**: the selected entry is matched against JWT / JSON / XML / timestamps / URLs / Base64, and the pane offers in-place actions — format, minify, escape/unescape, percent decode/encode, Base64 decode/encode, extract a JWT header or payload, and generate a QR code pinned to the screen. Timestamps expand into a conversion table (local, UTC, ISO 8601, seconds, milliseconds, relative) with per-row copy buttons; ⏎ pastes whatever the preview currently shows. JSON is re-indented by an order-preserving scanner, so key order and long integer IDs survive untouched. Press Tab to expand the preview to the full panel width, ⌘1…⌘9 to fire actions, ⌘0 to revert. Every format has its own switch in Settings — the ones you turn off are never run at all.
 
-### Color Picker (unbound by default)
-- System-native magnifier sampling via `NSColorSampler` — no permissions required.
-- Copies the sampled color in your preferred format (Hex / RGB / SwiftUI `Color`) and keeps a history (up to 50 entries).
-- The submenu shows the five most recent colors as swatches for one-click re-copy.
-- Settings let you choose the output format, hex letter case, and whether to auto-copy after sampling.
-
 ### Text snippets (part of the clipboard)
 - A snippet is simply a favourite you wrote yourself: it never expires, survives Clear History, and shows up under Favourites in the same panel — same search, same ⏎ to paste.
 - Give a snippet a keyword and typing `;keyword` in any text field expands it in place.
 - Keyword expansion is **off by default**. When on, it keeps at most 32 characters in memory for prefix matching, never writes them to disk or to history, skips apps on the ignore list, and never sees password fields (macOS withholds those keystrokes entirely).
+
 
 ### Caffeinate — Sleep Prevention (menu-only)
 - Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).

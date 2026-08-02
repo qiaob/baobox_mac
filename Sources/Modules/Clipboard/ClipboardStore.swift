@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// 剪贴板历史存储：内存 + 磁盘持久化（JSON + 图片文件）。
@@ -31,6 +32,20 @@ final class ClipboardStore: ObservableObject {
     init() {
         load()
         pruneExpired()
+    }
+
+    // MARK: - 图片读取
+
+    /// 解密读取图片条目的原始 PNG 数据。图片是加密落盘的，不能直接 `NSImage(contentsOf:)` ——
+    /// 预览面板 / 粘贴 / 预览窗共用这一处，避免解密逻辑散落。
+    static func imageData(for item: ClipboardItem) -> Data? {
+        guard let name = item.imageFilename else { return nil }
+        return ClipboardCrypto.read(from: imagesDir.appendingPathComponent(name))
+    }
+
+    static func image(for item: ClipboardItem) -> NSImage? {
+        guard let data = imageData(for: item) else { return nil }
+        return NSImage(data: data)
     }
 
     var maxItems: Int {

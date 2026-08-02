@@ -23,6 +23,9 @@ final class CaptureOverlayView: NSView {
     /// 录制模式：选区交互不变，但不出标注工具条，⏎/双击 = 开始录制。
     private let recordMode: Bool
 
+    /// 取字模式：不出标注工具条，框选松手 / 点窗口 / ⏎ 全屏即识别。
+    private let ocrMode: Bool
+
     private var phase: Phase = .hovering(nil)
 
     // hovering → dragging 的按下点与命中窗口
@@ -66,6 +69,9 @@ final class CaptureOverlayView: NSView {
     private var frozenImage: CGImage?
     private var mosaicImage: CGImage?
     private var freezeTask: Task<CGImage, Error>?
+    /// 预取底图的代际：点选窗口预取的真窗口图在选区被改动后作废（自增即作废），
+    /// 迟到的旧捕获结果对不上号就丢弃，不会污染新选区。
+    private var freezeGeneration = 0
 
     /// 菜单场景的「含菜单整屏」冻结底图。非 nil 即冻结模式：框选/标注基于它裁剪，渲染也铺它而非透实时屏。
     private let frozenBackground: CGImage?
@@ -79,10 +85,11 @@ final class CaptureOverlayView: NSView {
     private var finishing = false
 
     init(screen: NSScreen, controller: CaptureController, recordMode: Bool = false,
-         frozenBackground: CGImage? = nil) {
+         ocrMode: Bool = false, frozenBackground: CGImage? = nil) {
         self.screenRef = screen
         self.controller = controller
         self.recordMode = recordMode
+        self.ocrMode = ocrMode
         self.frozenBackground = frozenBackground
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         // 不使用 layer-backing：draw(_:) 里以 .clear 混合模式在非透明 backing 上"挖洞"，
@@ -238,6 +245,7 @@ final class CaptureOverlayView: NSView {
                 dragStartRect = rect
             } else {
                 // 选区外按下 → 重新开始框选
+                invalidateSeededWindowImage()
                 phase = .dragging(anchor: p, current: p)
                 toolbar?.setHidden(true)
                 recordBar?.setHidden(true)
@@ -290,6 +298,7 @@ final class CaptureOverlayView: NSView {
             phase = .dragging(anchor: anchor, current: p)
             needsDisplay = true
         case .adjusting:
+            if activeHandle != nil || movingSelection { invalidateSeededWindowImage() }
             if let handle = activeHandle {
                 let resized = resize(rect: dragStartRect, handle: handle, to: p)
                 phase = .adjusting(rect: clampToBounds(resized))
@@ -341,8 +350,11 @@ final class CaptureOverlayView: NSView {
                         showRecordBar(for: local)
                         needsDisplay = true
                     }
-                } else {
+                } else if ocrMode {
+                    // 取字模式：点窗口即识别 —— 这条路径的价值就是快。
                     controller?.finishWindow(detected)
+                } else {
+                    enterWindowAdjust(detected)
                 }
             }
         case .dragging(let anchor, _):
@@ -353,6 +365,10 @@ final class CaptureOverlayView: NSView {
                 phase = .adjusting(rect: rect)
                 if recordMode {
                     showRecordBar(for: rect)
+                } else if ocrMode {
+                    // 取字不需要标注/微调，松手即识别 —— 这条路径的价值就是快。
+                    // 会话已是 .ocr，controller 在终点分流到识别，无需另开方法。
+                    controller?.finishRect(globalAKRect(fromLocal: rect), on: screenRef, mode: .standard)
                 } else {
                     showToolbar(for: rect)
                 }
@@ -411,14 +427,20 @@ final class CaptureOverlayView: NSView {
                 phase = .adjusting(rect: bounds)
                 showRecordBar(for: bounds)
                 needsDisplay = true
-            } else {
+            } else if ocrMode {
                 controller?.finishFullScreen(on: screenRef)
+            } else {
+                // 截图：⏎ 把整屏转成选区进入调整相（可标注/微调），再按 ⏎ 才完成 —— 与框选一致。
+                phase = .adjusting(rect: bounds)
+                showToolbar(for: bounds)
+                needsDisplay = true
             }
         }
     }
 
     private func handleArrow(keyCode: UInt16, large: Bool) {
         guard case .adjusting(let rect) = phase else { return }
+        invalidateSeededWindowImage()
         let step: CGFloat = large ? 10 : 1
         var dx: CGFloat = 0, dy: CGFloat = 0
         switch keyCode {
@@ -529,6 +551,11 @@ final class CaptureOverlayView: NSView {
                 drawHintPill([L("screenshot.record.hint.click"),
                               L("screenshot.record.hint.drag"),
                               L("screenshot.record.hint.enter"),
+                              L("screenshot.overlay.hint.esc")])
+            } else if ocrMode {
+                drawHintPill([L("screenshot.ocr.hint.click"),
+                              L("screenshot.ocr.hint.drag"),
+                              L("screenshot.overlay.hint.enter"),
                               L("screenshot.overlay.hint.esc")])
             } else {
                 drawHintPill([L("screenshot.overlay.hint.click"),
@@ -840,6 +867,69 @@ final class CaptureOverlayView: NSView {
         }
     }
 
+    /// 截图模式点选窗口：不再直接完成，把窗口区域转成选区进入调整相（对齐录制模式与框选），
+    /// 之后可标注、⏎ 完成、或走贴图/长截屏/取字。同时后台预取真窗口图
+    /// （SCKit desktopIndependentWindow，被遮挡部分完整）种进 freezeTask ——
+    /// 标注底图与直接 ⏎ 完成的像素都与旧的「点击即截」一致。
+    /// 冻结模式（菜单场景）不预取：既有的「含菜单整屏」裁剪路径已是正确内容。
+    private func enterWindowAdjust(_ detected: DetectedWindow) {
+        let full = localRect(fromGlobalCG: detected.frameCG)
+        let visible = full.intersection(bounds)
+        guard visible.width >= 3, visible.height >= 3 else {
+            controller?.finishWindow(detected)
+            return
+        }
+        phase = .adjusting(rect: visible)
+        showToolbar(for: visible)
+        needsDisplay = true
+
+        guard frozenBackground == nil else { return }
+        freezeGeneration += 1
+        let generation = freezeGeneration
+        let windowID = detected.windowID
+        let task = Task {
+            let image = try await CaptureEngine.capture(.window(windowID))
+            return Self.cropToVisible(image, fullLocal: full, visibleLocal: visible)
+        }
+        freezeTask = task
+        Task { @MainActor [weak self] in
+            guard let image = try? await task.value else { return }
+            guard let self, self.freezeGeneration == generation else { return }
+            self.frozenImage = image
+            self.needsDisplay = true
+            let mosaic = await Task.detached { AnnotationRenderer.pixellated(image) }.value
+            guard self.freezeGeneration == generation else { return }
+            self.mosaicImage = mosaic
+            self.needsDisplay = true
+        }
+    }
+
+    /// 窗口局部在屏外时，把真窗口图裁到屏内可见部分 —— 选区（已与屏相交）和标注坐标
+    /// 都以可见部分为准，不裁的话标注会错位、导出内容也与所见不符。
+    private static func cropToVisible(_ image: CGImage, fullLocal: NSRect, visibleLocal: NSRect) -> CGImage {
+        guard fullLocal != visibleLocal, fullLocal.width > 0, fullLocal.height > 0 else { return image }
+        let sx = CGFloat(image.width) / fullLocal.width
+        let sy = CGFloat(image.height) / fullLocal.height
+        // 图像空间原点左上：x 同向，y 取两者顶边之差。
+        let pixelRect = CGRect(x: ((visibleLocal.minX - fullLocal.minX) * sx).rounded(),
+                               y: ((fullLocal.maxY - visibleLocal.maxY) * sy).rounded(),
+                               width: (visibleLocal.width * sx).rounded(),
+                               height: (visibleLocal.height * sy).rounded())
+        return image.cropping(to: pixelRect) ?? image
+    }
+
+    /// 调整相里选区一旦被改动（拖手柄/整体移动/方向键/重新框选），预取的窗口图与选区
+    /// 不再对应：作废之，回到「按屏幕区域捕获」的标准语义（框选流程本来的行为）。
+    /// 调整相里 freezeTask 只可能来自窗口预取 —— 工具条选定工具后即离开调整相，选区随之锁定。
+    private func invalidateSeededWindowImage() {
+        guard freezeTask != nil else { return }
+        freezeGeneration += 1
+        freezeTask?.cancel()
+        freezeTask = nil
+        frozenImage = nil
+        mosaicImage = nil
+    }
+
     /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上、Retina 换算。
     private func cropFrozenBackground(localRect: NSRect) -> CGImage? {
         guard let frozenBackground else { return nil }
@@ -982,7 +1072,7 @@ final class CaptureOverlayView: NSView {
 
     // MARK: - 标注：完成
 
-    private enum FinishAction { case copy, save, pin }
+    private enum FinishAction { case copy, save, pin, ocr }
 
     private func finishSelection(_ action: FinishAction) {
         guard !finishing else { return }
@@ -1005,8 +1095,8 @@ final class CaptureOverlayView: NSView {
             case .save:
                 controller?.finishRect(globalRect, on: screenRef, mode: .saveOnly)
                 return
-            case .pin:
-                break // 贴图需要拿到图像本身，统一走下方冻结路径。
+            case .pin, .ocr:
+                break // 贴图与取字都需要拿到图像本身，统一走下方冻结路径。
             }
         }
 
@@ -1032,7 +1122,8 @@ final class CaptureOverlayView: NSView {
             }
 
             var final = baseImage
-            if !self.ops.isEmpty {
+            // 取字不合成标注（下面直接用 baseImage），省掉一次没意义的整图合成。
+            if !self.ops.isEmpty, action != .ocr {
                 // 马赛克底图若还没在后台生成完，这里同步补齐，保证导出不缺笔画。
                 var mosaic = self.mosaicImage
                 if mosaic == nil, self.ops.contains(where: { $0.tool == .mosaic }) {
@@ -1047,6 +1138,8 @@ final class CaptureOverlayView: NSView {
             case .copy: controller.finishComposited(final, mode: .standard)
             case .save: controller.finishComposited(final, mode: .saveOnly)
             case .pin: controller.finishPin(final, at: globalRect)
+            // 取字用未合成标注的原图：标注是画在文字上的遮挡物，喂给 OCR 只会添乱。
+            case .ocr: controller.finishRecognize(baseImage)
             }
         }
     }
@@ -1089,6 +1182,26 @@ extension CaptureOverlayView: AnnotationToolbarDelegate {
     func toolbarRedo() { redoAnnotation() }
     func toolbarCancel() { controller?.cancel() }
     func toolbarPin() { finishSelection(.pin) }
+
+    /// 长截屏：选区就位后交给 `ScrollingCaptureController`，由用户滚动页面继续拼接。
+    /// 已画的标注不参与（长图内容随滚动变化，标注贴在哪一段都没有意义），点这里即放弃它们。
+    func toolbarLongCapture() {
+        guard !finishing else { return }
+        let rect: NSRect
+        switch phase {
+        case .adjusting(let r), .annotating(let r):
+            rect = r
+        default:
+            return
+        }
+        commitTextEditor(cancel: true)
+        finishing = true
+        controller?.finishLongCapture(globalAKRect(fromLocal: rect), on: screenRef)
+    }
+
+    /// 取字：把选区图交给 Vision 本地识别，不落盘、不入历史。
+    func toolbarRecognizeText() { finishSelection(.ocr) }
+
     func toolbarSave() { finishSelection(.save) }
     func toolbarCopy() { finishSelection(.copy) }
 }
