@@ -84,6 +84,19 @@ enum ScreenshotSettings {
         return DrawScreenScope(rawValue: raw) ?? .current
     }
 
+    /// 屏幕取字的识别语言组合，默认中英混合。
+    static let ocrLanguageKey = "screenshot.ocrLanguage"
+    static var ocrLanguageOption: TextRecognizer.LanguageOption {
+        let raw = UserDefaults.standard.string(forKey: ocrLanguageKey) ?? ""
+        return TextRecognizer.LanguageOption(rawValue: raw) ?? .chineseEnglish
+    }
+
+    /// 取字后直接复制、不弹结果窗，默认关（识别难免有错，默认给用户一次校对机会）。
+    static let ocrAutoCopyOnlyKey = "screenshot.ocrAutoCopyOnly"
+    static var ocrAutoCopyOnly: Bool {
+        UserDefaults.standard.bool(forKey: ocrAutoCopyOnlyKey)
+    }
+
     /// 系统声音 + 麦克风同录时，完成后把双音轨混为单轨（兼容只播首轨的播放器），默认开。
     static let recordMixAudioKey = "screenshot.recordMixAudio"
     static var recordMixAudio: Bool {
@@ -137,6 +150,14 @@ enum ScreenshotResultHandler {
         let rep = NSBitmapImageRep(cgImage: image)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
         copyToPasteboard(png: png, cgImage: image)
+    }
+
+    /// 仅落盘、不记历史（长截屏预览这类已自行 record 过的场景；handle 会重复记）。
+    @MainActor
+    static func save(image: CGImage) {
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        saveToDisk(png: png)
     }
 
     private static func copyToPasteboard(png: Data, cgImage: CGImage) {

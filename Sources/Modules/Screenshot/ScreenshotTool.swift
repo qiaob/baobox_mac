@@ -23,7 +23,16 @@ final class ScreenshotTool: ToolModule {
         let record = ClosureMenuItem(title: recordTitle, hotkeyID: "screenshot.record") { [weak self] in
             self?.toggleRecording()
         }
-        var items: [NSMenuItem] = [start, record]
+        let ocr = ClosureMenuItem(title: L("screenshot.menu.ocr"), hotkeyID: "screenshot.ocr") { [weak self] in
+            self?.captureController.beginTextRecognition()
+        }
+        var items: [NSMenuItem] = [start, record, ocr]
+        // 长截屏进行中：控制条可能被用户拖到别处或挡住，菜单里留一个出口。
+        if ScrollingCaptureController.shared.isRunning {
+            items.append(ClosureMenuItem(title: L("screenshot.menu.finishLongCapture")) {
+                ScrollingCaptureController.shared.finish()
+            })
+        }
         if RecordingController.shared.isRecording {
             let pauseTitle = RecordingController.shared.isPaused
                 ? L("screenshot.record.hud.resume") : L("screenshot.record.hud.pause")
@@ -50,6 +59,15 @@ final class ScreenshotTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x13, carbonModifiers: KeyCombo.cmd | KeyCombo.shift) // ⌘⇧2
             ) { [weak self] in
                 self?.captureController.begin()
+            },
+            HotkeyDefinition(
+                id: "screenshot.ocr",
+                title: L("screenshot.menu.ocr"),
+                subtitle: L("screenshot.ocr.hotkey.subtitle"),
+                // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页自行设置。
+                defaultCombo: nil
+            ) { [weak self] in
+                self?.captureController.beginTextRecognition()
             },
             HotkeyDefinition(
                 id: "screenshot.record",
@@ -107,9 +125,13 @@ final class ScreenshotTool: ToolModule {
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
                     ScreenshotResultHandler.copy(image: cg)
                 })
-                actions.addItem(ClosureMenuItem(title: L("screenshot.history.pin")) { [weak self] in
+                actions.addItem(ClosureMenuItem(title: L("screenshot.history.pin")) {
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
-                    self?.pinCentered(cg)
+                    Self.pinCentered(cg)
+                })
+                actions.addItem(ClosureMenuItem(title: L("pin.menu.recognizeText")) {
+                    guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
+                    OCRResultWindow.present(image: cg)
                 })
                 actions.addItem(ClosureMenuItem(title: L("pin.menu.save")) {
                     Self.saveEntry(entry)
@@ -191,11 +213,11 @@ final class ScreenshotTool: ToolModule {
         }
         var rect = NSRect(origin: .zero, size: image.size)
         guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
-        pinCentered(cg)
+        Self.pinCentered(cg)
     }
 
-    /// 把图像按点尺寸钉在鼠标所在屏中央（超屏时等比缩到可见区域 80%）。
-    private func pinCentered(_ cg: CGImage) {
+    /// 把图像按点尺寸钉在鼠标所在屏中央（超屏时等比缩到可见区域 80%）。长截屏预览的「贴图」也走这。
+    static func pinCentered(_ cg: CGImage) {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
             ?? NSScreen.main

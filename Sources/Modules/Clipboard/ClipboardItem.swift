@@ -22,6 +22,14 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     /// 来源把内容标记为敏感（org.nspasteboard.ConcealedType，典型是 1Password 等密码管理器）。
     /// 仅当用户在设置里显式开启「记录敏感内容」时才会入库，面板里默认打码显示。
     var isConcealed: Bool
+    /// 文本片段的展示名。仅手工创建的片段会有，缺省时界面回落到内容首行。
+    var title: String?
+    /// 文本片段的关键字触发词（不含前缀）。有值即参与关键字展开。
+    var keyword: String?
+
+    /// 片段 = 手工创建的收藏条目。收藏这条线已经保证了「不被清空/过期/超限淘汰」，
+    /// 片段要的生命周期与它完全一致，所以不另开数据源。
+    var isSnippet: Bool { isPinned && (title != nil || keyword != nil) }
 
     /// 用于去重的内容签名（图片按文件名，其余按文本）。
     var contentSignature: String {
@@ -35,11 +43,13 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     // 里没有这个键，合成的 Decodable 实现会整份解码失败 → 用户历史全部清空。
     private enum CodingKeys: String, CodingKey {
         case id, type, text, imageFilename, sourceAppName, sourceBundleID, createdAt, isPinned, isConcealed
+        case title, keyword
     }
 
     init(id: UUID, type: ClipboardItemType, text: String?, imageFilename: String?,
          sourceAppName: String?, sourceBundleID: String?, createdAt: Date,
-         isPinned: Bool, isConcealed: Bool = false) {
+         isPinned: Bool, isConcealed: Bool = false,
+         title: String? = nil, keyword: String? = nil) {
         self.id = id
         self.type = type
         self.text = text
@@ -49,6 +59,8 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
         self.createdAt = createdAt
         self.isPinned = isPinned
         self.isConcealed = isConcealed
+        self.title = title
+        self.keyword = keyword
     }
 
     init(from decoder: Decoder) throws {
@@ -62,5 +74,9 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         isConcealed = try container.decodeIfPresent(Bool.self, forKey: .isConcealed) ?? false
+        // 老 clipboard.dat 里没有这两个键，必须 decodeIfPresent —— 当年 isConcealed
+        // 就是踩了这个坑：合成的 Decodable 遇到缺键会整份解码失败，用户历史一次性清空。
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
     }
 }

@@ -33,9 +33,8 @@ BaoboxApp(@main, Settings scene)
 
 | 模块 | id | 说明 |
 |---|---|---|
-| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**屏幕标注画笔**、录屏、历史。ScreenCaptureKit；画笔见 `docs/screen-draw/` |
-| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`） |
-| ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
+| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、**屏幕标注画笔**、录屏、历史。ScreenCaptureKit；菜单场景走「含菜单整屏」冻结底图，见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
+| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
@@ -61,8 +60,13 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态），嵌在截图模块内。
+- `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
+- `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
+- `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `Sources/Core/TextRecognizer.swift`。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
+
+> 已移除的模块：**QRCode**（并入剪贴板文本工具）、**ColorPicker 取色器**（issue #7，整体删除）。`docs/TECH_DESIGN.md` §7-A.1 仅作历史留档。
 
 **流程惯例**：新功能先在 `docs/<feature>/` 写需求 + 技术设计，再实现；文档为准，实现照文档。
 
@@ -71,6 +75,22 @@ BaoboxApp(@main, Settings scene)
 - 开发在指定 feature 分支；提交信息末尾带 `Co-Authored-By: Claude …` 与 `Claude-Session:` 尾行。
 - 提交者邮箱须 `noreply@anthropic.com`（`git config user.email noreply@anthropic.com && user.name Claude`）。
 - ⚠️ 本环境**无可用的 commit 签名密钥**（`ssh-keygen` 缺失、签名 key 为空文件），提交会显示 Unverified —— 这是环境限制，非代码问题，邮箱正确即可。
+
+## 发布（Release）
+
+三步全自动，**不需要任何 secrets**（流程 2026-08-02 起生效，v0.0.0-test 实测通过）：
+
+1. `project.yml` 两处版本号（`CFBundleShortVersionString` + `MARKETING_VERSION`）改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
+3. `.github/workflows/release.yml` 自动：Release 构建 → **ad-hoc 签名** → zip → 创建 GitHub Release（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。
+
+背景与取舍：
+
+- **无付费 Apple Developer 账号** → 没有 Developer ID 证书、不能公证。带证书导入 + notarytool 的旧工作流在 git 历史里（`ce39940` 之前），将来有付费账号可恢复；在那之前**不要**给工作流加 secrets 依赖。
+- ad-hoc 产物仅用于**分发**：他人首次打开需右键 →「打开」；且 ad-hoc 的 cdhash 每次构建都变，覆盖安装会作废 TCC 授权（屏幕录制/辅助功能）。
+- **用户自己的 Mac 一律装本地构建**（Apple Development 证书签名，TCC 授权跨版本稳定）：`xcodegen generate` + `xcodebuild -scheme Baobox -configuration Release build`，产物 `ditto` 到 `/Applications`（先退出运行中的 Baobox）。若 `xcode-select` 指向 CommandLineTools，命令前加 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`。
+- tag 触发的 workflow 取自 **tag 指向的提交**里的文件 —— 对旧 tag 重跑不会用新流程。
+- 历史备注：v0.0.2–v0.0.4 实为本地构建手动 `gh release create` 发布（旧工作流因 secrets 缺失从未成功过）。
 
 ## 校验脚本
 

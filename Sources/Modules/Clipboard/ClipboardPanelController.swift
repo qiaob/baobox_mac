@@ -68,7 +68,9 @@ final class ClipboardPanelController: NSObject {
             onTogglePin: { [weak self] item in self?.store.togglePin(item.id) },
             onDelete: { [weak self] item in self?.delete(item) },
             onClose: { [weak self] in self?.hide() },
-            onCopyText: { [weak self] text in self?.copyOnly(text) }
+            onCopyText: { [weak self] text in self?.copyOnly(text) },
+            onPreviewImage: { [weak self] item in self?.previewImage(item) },
+            onEditSnippet: { [weak self] item in self?.editSnippet(item) }
         )
         let hosting = NSHostingView(rootView: content)
 
@@ -144,6 +146,14 @@ final class ClipboardPanelController: NSObject {
         case 0x7E: // ↑
             viewModel.moveSelection(-1)
             return true
+        case 0x7B: // ← 切换类型筛选。搜索框有内容时不拦 —— 留给光标移动。
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleFilter(-1)
+            return true
+        case 0x7C: // → 同上
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleFilter(1)
+            return true
         case 0x24, 0x4C: // Return / Enter
             if let item = viewModel.selectedItem {
                 paste(item, plainText: event.modifierFlags.contains(.option))
@@ -215,5 +225,35 @@ final class ClipboardPanelController: NSObject {
     private func delete(_ item: ClipboardItem) {
         store.delete(item.id)
         viewModel.clampSelection()
+    }
+
+    /// 收藏条目开片段编辑窗（名称/关键字/内容）。面板 floating 层级会挡住标准窗口，先收面板。
+    private func editSnippet(_ item: ClipboardItem) {
+        SnippetEditorWindow.open(store: store, id: item.id)
+        hide()
+    }
+
+    /// 图片条目开独立预览窗看原图。面板是 floating 层级会挡在标准窗口前面，
+    /// 与「大窗编辑」同款处理 —— 开窗后收面板。
+    private func previewImage(_ item: ClipboardItem) {
+        guard let image = ClipboardStore.image(for: item) else { return }
+        var rect = NSRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+        let data = ClipboardStore.imageData(for: item)
+        ImagePreviewWindow.present(
+            image: cg,
+            title: L("clipboard.preview.open"),
+            actions: [
+                ImagePreviewWindow.Action(title: L("clipboard.preview.copyImage"),
+                                          isDefault: true, closesWindow: true) { [weak self] in
+                    // 复制的就是历史里这张图，抑制监听避免同图再记一条。
+                    self?.monitor.ignoreNextChange = true
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects([image])
+                    if let data { pasteboard.setData(data, forType: .png) }
+                }
+            ])
+        hide()
     }
 }

@@ -75,6 +75,19 @@ final class ClipboardPanelViewModel: ObservableObject {
         else if selectedIndex >= count { selectedIndex = count - 1 }
     }
 
+    /// 顶栏 chips 的展示顺序，←/→ 循环切换也走它 —— 单一事实来源。
+    static let filterOrder: [PanelFilter] = [
+        .all, .favorites, .type(.text), .type(.image), .type(.link), .type(.file)
+    ]
+
+    /// ←/→ 在类型筛选间循环切换（越界回绕）。
+    func cycleFilter(_ delta: Int) {
+        let order = Self.filterOrder
+        let current = order.firstIndex(of: filter) ?? 0
+        filter = order[(current + delta + order.count) % order.count]
+        clampSelection()
+    }
+
     // MARK: - 格式识别
 
     /// 只对**当前选中的这一条**跑，纯内存、不落盘。绝不在 ClipboardMonitor 入库时跑 ——
@@ -185,15 +198,28 @@ struct ClipboardPanelView: View {
     var onClose: () -> Void
     /// 只复制不粘贴（表格行的复制按钮）。由 controller 负责抑制监听，避免转换结果进历史。
     var onCopyText: (String) -> Void
+    /// 图片条目开独立预览窗（徽章行按钮 / 双击缩略图）。
+    var onPreviewImage: (ClipboardItem) -> Void
+    /// 收藏条目开片段编辑窗（动作栏「设关键字 / ;kw」按钮）。
+    var onEditSnippet: (ClipboardItem) -> Void
 
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
 
-    private let typeChips: [(String, ClipboardPanelViewModel.PanelFilter)] = [
-        (L("clipboard.chip.all"), .all), (L("clipboard.chip.text"), .type(.text)),
-        (L("clipboard.chip.link"), .type(.link)), (L("clipboard.chip.image"), .type(.image)),
-        (L("clipboard.chip.file"), .type(.file)), (L("clipboard.chip.favorites"), .favorites)
-    ]
+    /// 顺序由 `ClipboardPanelViewModel.filterOrder` 决定（与 ←/→ 切换一致）。
+    private let typeChips: [(String, ClipboardPanelViewModel.PanelFilter)] =
+        ClipboardPanelViewModel.filterOrder.map { (Self.chipLabel($0), $0) }
+
+    private static func chipLabel(_ filter: ClipboardPanelViewModel.PanelFilter) -> String {
+        switch filter {
+        case .all: return L("clipboard.chip.all")
+        case .favorites: return L("clipboard.chip.favorites")
+        case .type(.text): return L("clipboard.chip.text")
+        case .type(.link): return L("clipboard.chip.link")
+        case .type(.image): return L("clipboard.chip.image")
+        case .type(.file): return L("clipboard.chip.file")
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -269,7 +295,10 @@ struct ClipboardPanelView: View {
                             .id(item.id)
                             .contentShape(Rectangle())
                             .onTapGesture(count: 2) { onPaste(item, false) }
-                            .onTapGesture { viewModel.selectedIndex = index }
+                            // 单击选中不能再用 onTapGesture：与双击并存时它要等双击超时
+                            // 才发火，每次点击都憋 0.3s。simultaneousGesture 第一击立即选中，
+                            // 双击的第二击照常触发粘贴 —— 与 NSTableView 的行为一致。
+                            .simultaneousGesture(TapGesture().onEnded { viewModel.selectedIndex = index })
                     }
                 }
                 .padding(8)
@@ -343,7 +372,7 @@ struct ClipboardPanelView: View {
                     .background(Color.primary.opacity(0.05),
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                if !viewModel.visibleActions.isEmpty { actionBar }
+                if !viewModel.visibleActions.isEmpty || Self.snippetEligible(item) { actionBar(item) }
 
                 HStack(spacing: 16) {
                     Text("clipboard.preview.source \(item.sourceAppName ?? L("common.unknown"))")
@@ -400,6 +429,17 @@ struct ClipboardPanelView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if item.type == .image {
+                Button {
+                    onPreviewImage(item)
+                } label: {
+                    Label("clipboard.preview.open", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+
             if viewModel.isPreviewMaximized {
                 Text(verbatim: "\(viewModel.selectedIndex + 1) / \(viewModel.filtered.count)")
                     .font(.system(size: 10, design: .monospaced))
@@ -439,7 +479,12 @@ struct ClipboardPanelView: View {
     ///
     /// ⌘ 序号按 keyboardActions（下拉展开后的顺序）分配：容器不占号，子项的
     /// 序号写进菜单项标题，按 ⌘n 直接触发、不用先打开菜单。
-    private var actionBar: some View {
+    /// 只有文本类收藏能当片段（与 `ClipboardStore.snippets` 同一口径）。
+    private static func snippetEligible(_ item: ClipboardItem) -> Bool {
+        item.isPinned && (item.type == .text || item.type == .link)
+    }
+
+    private func actionBar(_ item: ClipboardItem) -> some View {
         // uniquingKeysWith 而非 uniqueKeysWithValues：后者遇到重复 id 直接 crash，
         // 而 id 唯一性靠的是各识别器自觉 —— 不值得用崩溃来强制。
         let slots = Dictionary(viewModel.keyboardActions.enumerated().map { ($1.id, $0) },
@@ -477,6 +522,23 @@ struct ClipboardPanelView: View {
                         .disabled(!action.isEnabled)
                         .help(action.disabledHint ?? "")
                     }
+                }
+                // 收藏条目：就地编辑片段（名称/关键字/内容）。放末尾 —— 它属于条目本身，
+                // 与前面「对文本做转换」的动作性质不同。设了关键字就直接显示完整触发词。
+                if Self.snippetEligible(item) {
+                    Button {
+                        onEditSnippet(item)
+                    } label: {
+                        if let keyword = item.keyword, !keyword.isEmpty {
+                            Text(verbatim: SnippetExpander.prefix + keyword)
+                                .font(.system(size: 11, design: .monospaced))
+                        } else {
+                            Text("clipboard.tools.action.setKeyword")
+                                .font(.system(size: 11))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
             .padding(.vertical, 1)
@@ -520,14 +582,12 @@ struct ClipboardPanelView: View {
                 }
             }
         case .image:
-            // 图片是加密落盘的，不能直接 NSImage(contentsOf:)。
-            if let name = item.imageFilename,
-               let data = ClipboardCrypto.read(from: ClipboardStore.imagesDir.appendingPathComponent(name)),
-               let image = NSImage(data: data) {
+            if let image = ClipboardStore.image(for: item) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onTapGesture(count: 2) { onPreviewImage(item) }
             } else {
                 Text("clipboard.preview.missingImage").foregroundStyle(.secondary)
             }
@@ -552,6 +612,7 @@ struct ClipboardPanelView: View {
         HStack(spacing: 12) {
             Text("clipboard.footer.count \(store.items.count)")
             Spacer()
+            hint("←→", L("clipboard.footer.filter"))
             hint("↑↓", L("clipboard.footer.select"))
             hint("⏎", L("clipboard.footer.paste"))
             hint("⌥⏎", L("clipboard.footer.pastePlain"))

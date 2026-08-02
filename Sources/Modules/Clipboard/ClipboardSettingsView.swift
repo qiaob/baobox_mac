@@ -15,6 +15,9 @@ struct ClipboardSettingsView: View {
     /// 逐格式开关。数量不固定又要 ForEach，没法一个格式一个 @AppStorage，
     /// 所以本地存一份镜像，写的时候同步回 UserDefaults。
     @State private var toolStates: [String: Bool] = TextToolSettings.currentStates()
+    @AppStorage(SnippetExpander.enabledKey) private var snippetExpandEnabled = false
+    @AppStorage(SnippetExpander.prefixKey) private var snippetPrefix = ";"
+    @AppStorage(SnippetExpander.restoreClipboardKey) private var snippetRestoreClipboard = true
 
     var body: some View {
         Form {
@@ -77,6 +80,93 @@ struct ClipboardSettingsView: View {
                         .padding(.leading, 14)
                     }
                 }
+            }
+
+            Section("clipboard.settings.snippetsSection") {
+                if store.snippets.isEmpty {
+                    Text("clipboard.settings.snippetsEmpty")
+                        .foregroundStyle(.secondary)
+                } else {
+                    // 行只做展示（名称/内容预览 + 触发词胶囊），编辑集中到弹窗：
+                    // 行内无边框输入框看不出可编辑，内容编辑器也没法贴在被编辑的行旁边。
+                    ForEach(store.snippets) { snippet in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: Self.displayName(of: snippet))
+                                    .lineLimit(1)
+                                if !(snippet.title ?? "").isEmpty, !Self.preview(of: snippet).isEmpty {
+                                    Text(verbatim: Self.preview(of: snippet))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            if let keyword = snippet.keyword, !keyword.isEmpty {
+                                Text(verbatim: snippetPrefix + keyword)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            Button {
+                                SnippetEditorWindow.open(store: store, id: snippet.id)
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(.borderless)
+                            Button {
+                                store.delete(snippet.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            SnippetEditorWindow.open(store: store, id: snippet.id)
+                        }
+                    }
+                }
+
+                Button("clipboard.settings.snippetNew") {
+                    // 空壳开编辑窗；什么都没填就关掉时由编辑窗负责删掉它。
+                    let id = store.addSnippet(title: "", content: "")
+                    SnippetEditorWindow.open(store: store, id: id)
+                }
+
+                Toggle("clipboard.settings.snippetExpand", isOn: $snippetExpandEnabled)
+                    .onChange(of: snippetExpandEnabled) { _, _ in
+                        SnippetExpander.shared.refresh()
+                    }
+                if snippetExpandEnabled {
+                    HStack {
+                        Text("clipboard.settings.snippetPrefix")
+                        Spacer()
+                        TextField("", text: $snippetPrefix)
+                            .frame(width: 60)
+                    }
+                    .padding(.leading, 14)
+                    Toggle("clipboard.settings.snippetRestore", isOn: $snippetRestoreClipboard)
+                        .padding(.leading, 14)
+                    // 「还原剪贴板」不解释实现根本看不懂 —— 展开=写剪贴板+模拟⌘V，开关管的是借完还不还。
+                    Text("clipboard.settings.snippetRestoreHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 14)
+                    if !Permissions.hasAccessibility {
+                        Text("clipboard.settings.snippetNeedsAX")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.leading, 14)
+                    }
+                }
+                Text("clipboard.settings.snippetHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("clipboard.settings.snippetPrivacy")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
 
             Section("clipboard.settings.ignoredApps") {
@@ -162,6 +252,20 @@ struct ClipboardSettingsView: View {
     }
 
     // MARK: - 文本工具
+
+    /// 内容首行（截断），用于没起名字的收藏条目。
+    private static func preview(of item: ClipboardItem) -> String {
+        let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = text.components(separatedBy: "\n").first ?? ""
+        return firstLine.count > 60 ? String(firstLine.prefix(60)) + "…" : firstLine
+    }
+
+    /// 列表主行文字：有名称用名称，没有就用内容首行顶上。
+    private static func displayName(of item: ClipboardItem) -> String {
+        if let title = item.title, !title.isEmpty { return title }
+        let fallback = preview(of: item)
+        return fallback.isEmpty ? L("clipboard.snippetEditor.untitled") : fallback
+    }
 
     private func toolBinding(_ id: String) -> Binding<Bool> {
         Binding(

@@ -13,6 +13,8 @@ struct ScreenshotSettingsView: View {
     @AppStorage(ScreenshotSettings.recordMixAudioKey) private var recordMixAudio = true
     @AppStorage(ScreenshotSettings.drawScreenScopeKey)
     private var drawScope = ScreenshotSettings.DrawScreenScope.current.rawValue
+    @AppStorage(ScreenshotSettings.ocrLanguageKey) private var ocrLanguage = TextRecognizer.LanguageOption.chineseEnglish.rawValue
+    @AppStorage(ScreenshotSettings.ocrAutoCopyOnlyKey) private var ocrAutoCopyOnly = false
 
     var body: some View {
         Form {
@@ -58,6 +60,18 @@ struct ScreenshotSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("screenshot.settings.mixAudioHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("screenshot.settings.ocrSection") {
+                Picker("screenshot.settings.ocrLanguage", selection: $ocrLanguage) {
+                    ForEach(TextRecognizer.LanguageOption.allCases) { option in
+                        Text(option.displayName).tag(option.rawValue)
+                    }
+                }
+                Toggle("screenshot.settings.ocrAutoCopy", isOn: $ocrAutoCopyOnly)
+                Text("screenshot.settings.ocrHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
