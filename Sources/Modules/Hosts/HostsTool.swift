@@ -10,6 +10,10 @@ final class HostsTool: ToolModule {
 
     private var store: HostsStore { HostsStore.shared }
 
+    func willTerminate() {
+        store.flushPendingSave()
+    }
+
     func activate() {
         // 无常驻后台服务。只在启动时同步一次「系统 hosts 是否已被接管」，
         // 之后菜单只读这份内存缓存（约定 2：菜单构建零磁盘 IO）。

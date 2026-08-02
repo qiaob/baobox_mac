@@ -151,4 +151,12 @@ final class HostsStore: ObservableObject {
             try? data.write(to: HostsEnv.schemesFile, options: .atomic)
         }
     }
+
+    /// 退出前同步落盘。上面的 save 是后台异步的，用户改完名字立刻退出 App 时那次写入
+    /// 可能还没跑就被杀掉 —— 文件很小，退出这一次直接同步写。
+    func flushPendingSave() {
+        HostsEnv.ensureSupportDir()
+        guard let data = try? JSONEncoder().encode(schemes) else { return }
+        try? data.write(to: HostsEnv.schemesFile, options: .atomic)
+    }
 }

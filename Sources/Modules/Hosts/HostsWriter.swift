@@ -8,6 +8,15 @@ enum HostsWriter {
     /// **必须在后台线程调用**（内部同步等待授权与子进程）。
     static func write(block: String) -> HostsApplyOutcome {
         let current = HostsFile.readSystem()
+
+        // 从没接管过、这次也没有内容要写 → 什么都不用做。
+        // 少了这一条，「全部停用」或首次点「立即应用」会因为 compose 顺手规范化了
+        // 首尾空白而判定「内容有变」，白弹一次授权框去改一个用户看不出差别的文件。
+        if block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !HostsFile.isManaged(current) {
+            return .ok
+        }
+
         let composed = HostsFile.compose(userContent: HostsFile.stripBlock(current), block: block)
 
         // 内容没变就别弹授权框 —— 频繁无谓地要密码是这个功能最容易被讨厌的地方。
