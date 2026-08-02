@@ -49,6 +49,12 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - The submenu shows the five most recent colors as swatches for one-click re-copy.
 - Settings let you choose the output format, hex letter case, and whether to auto-copy after sampling.
 
+### Hosts (menu-only)
+- Multiple hosts schemes, each toggled from the menu bar; several can be active at once and are stacked into one block.
+- Only Baobox's own block is rewritten — the system's entries and anything you wrote by hand are left untouched. The original file is backed up to `/etc/hosts.baobox.bak` the first time.
+- Writing needs administrator rights, so macOS asks for your password; DNS caches are flushed right after. Nothing is written when the composed content is unchanged.
+- Import your current `/etc/hosts` as a starting scheme; edit schemes inline in Settings.
+
 ### Caffeinate — Sleep Prevention (menu-only)
 - Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).
 - Enable for 15 minutes / 1 hour / 2 hours / indefinitely from the submenu; the assertion clears automatically on expiry, with a live countdown shown in the menu.

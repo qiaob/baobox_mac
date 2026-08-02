@@ -38,6 +38,7 @@ BaoboxApp(@main, Settings scene)
 | ColorPicker | `colorpicker` | 屏幕取色（NSColorSampler）、格式化、历史色板 |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
+| Hosts | `hosts` | hosts 管理：多套方案叠加、菜单勾选即生效、块标记只动自己那段、osascript 提权写入 + 刷 DNS。`docs/hosts-manager/` |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
@@ -60,6 +61,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/design/ui-design-v1.html` —— UI 设计稿与**设计令牌（配色）**：accent 浅 `#17A398` / 深 `#2BC4B8`，深浅两套变量。
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
+- `docs/hosts-manager/DESIGN.md` —— hosts 管理（块标记读-改-写、提权方案、勾选即生效的回滚约定）。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
 
