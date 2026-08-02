@@ -128,6 +128,14 @@ enum ScreenshotResultHandler {
         copyToPasteboard(png: png, cgImage: image)
     }
 
+    /// 仅落盘、不记历史（长截屏预览这类已自行 record 过的场景；handle 会重复记）。
+    @MainActor
+    static func save(image: CGImage) {
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        saveToDisk(png: png)
+    }
+
     private static func copyToPasteboard(png: Data, cgImage: CGImage) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

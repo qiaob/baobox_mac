@@ -113,9 +113,9 @@ final class ScreenshotTool: ToolModule {
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
                     ScreenshotResultHandler.copy(image: cg)
                 })
-                actions.addItem(ClosureMenuItem(title: L("screenshot.history.pin")) { [weak self] in
+                actions.addItem(ClosureMenuItem(title: L("screenshot.history.pin")) {
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
-                    self?.pinCentered(cg)
+                    Self.pinCentered(cg)
                 })
                 actions.addItem(ClosureMenuItem(title: L("pin.menu.recognizeText")) {
                     guard let cg = ScreenshotHistoryStore.shared.cgImage(for: entry) else { return }
@@ -201,11 +201,11 @@ final class ScreenshotTool: ToolModule {
         }
         var rect = NSRect(origin: .zero, size: image.size)
         guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
-        pinCentered(cg)
+        Self.pinCentered(cg)
     }
 
-    /// 把图像按点尺寸钉在鼠标所在屏中央（超屏时等比缩到可见区域 80%）。
-    private func pinCentered(_ cg: CGImage) {
+    /// 把图像按点尺寸钉在鼠标所在屏中央（超屏时等比缩到可见区域 80%）。长截屏预览的「贴图」也走这。
+    static func pinCentered(_ cg: CGImage) {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
             ?? NSScreen.main

@@ -67,7 +67,7 @@ final class ScrollingCaptureController {
         // `optionOnScreenBelowWindow` 抓不到东西，等一拍最稳。
     }
 
-    /// 结束并输出长图（复制到剪贴板、按设置落盘、记入历史）。
+    /// 结束拼接并进入预览窗（先记历史、按设置落盘，再由用户决定复制/贴图/取字）。
     func finish() {
         guard isRunning, let stitcher else { return }
         teardown()
@@ -79,10 +79,37 @@ final class ScrollingCaptureController {
                         Self.reportEmpty()
                         return
                     }
-                    ScreenshotResultHandler.handle(image: image, mode: .standard)
+                    Self.presentResult(image)
                 }
             }
         }
+    }
+
+    /// 拼接结果先入历史、按设置落盘 —— 预览窗误关也不丢图；不再自动复制，
+    /// 长图往往要先检查有无错位，预览窗里的「复制」才是明确意图。
+    private static func presentResult(_ image: CGImage) {
+        ScreenshotHistoryStore.shared.record(image: image)
+        if ScreenshotSettings.autoSave {
+            ScreenshotResultHandler.save(image: image)
+        }
+        ImagePreviewWindow.present(
+            image: image,
+            title: L("screenshot.longshot.preview.title"),
+            actions: [
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.save")) {
+                    ScreenshotResultHandler.save(image: image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.ocr")) {
+                    OCRResultWindow.present(image: image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.pin"), closesWindow: true) {
+                    ScreenshotTool.pinCentered(image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.copy"),
+                                          isDefault: true, closesWindow: true) {
+                    ScreenshotResultHandler.copy(image: image)
+                }
+            ])
     }
 
     /// 放弃本次长截屏，不产出任何结果。
