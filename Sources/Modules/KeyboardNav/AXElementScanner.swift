@@ -17,6 +17,9 @@ enum AXElementScanner {
         "AXMenuButton", "AXMenuItem", "AXTabButton", "AXTextField", "AXTextArea",
         "AXComboBox", "AXDisclosureTriangle", "AXStepper", "AXSlider",
         "AXSegmentedControl", "AXColorWell", "AXSwitch", "AXIncrementor",
+        // 滚动条：点击轨道即翻页/跳转（能否出 hint 取决于目标 App 是否把它暴露给 AX ——
+        // 网页自绘的滚动条不一定暴露；真正顺手的滚动还得靠后续的 Scroll Mode）。
+        "AXScrollBar",
     ]
 
     /// 遍历 pid 对应 App 的 AX 树，返回可点击元素（带 CG 矩形）。
