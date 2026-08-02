@@ -582,12 +582,8 @@ struct ClipboardPanelView: View {
                 }
             }
         case .image:
-            if let image = ClipboardStore.image(for: item) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onTapGesture(count: 2) { onPreviewImage(item) }
+            if let filename = item.imageFilename {
+                EncryptedImagePreview(filename: filename) { onPreviewImage(item) }
             } else {
                 Text("clipboard.preview.missingImage").foregroundStyle(.secondary)
             }
@@ -684,5 +680,45 @@ struct ClipboardPanelView: View {
         formatter.locale = L10n.locale
         formatter.setLocalizedDateFormatFromTemplate("MdHHmm")
         return formatter.string(from: date)
+    }
+}
+
+/// 加密图片的异步预览：先占位，后台解密 + 降采样解码完成再上图。
+/// 同步整图解码会把面板打开的首帧卡住 —— 历史顶部常是几 MB 的 Retina 大截图。
+/// 双击开独立预览窗（那边才用原始分辨率）。
+private struct EncryptedImagePreview: View {
+    let filename: String
+    var onOpen: () -> Void
+
+    @State private var image: NSImage?
+    @State private var finished = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onTapGesture(count: 2) { onOpen() }
+            } else if finished {
+                Text("clipboard.preview.missingImage").foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: filename) {
+            // 换条目立即回占位，避免旧图残留在新条目上。
+            image = nil
+            finished = false
+            let url = ClipboardStore.imagesDir.appendingPathComponent(filename)
+            let key = filename
+            image = await Task.detached(priority: .userInitiated) {
+                ClipboardImagePreview.load(from: url, cacheKey: key)
+            }.value
+            finished = true
+        }
     }
 }

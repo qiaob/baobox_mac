@@ -1,5 +1,36 @@
 import AppKit
 import Foundation
+import ImageIO
+
+/// 图片预览的降采样解码。刻意不挂在 @MainActor 的 ClipboardStore 上 ——
+/// 要供后台线程调用：面板打开时首条若是大截图，主线程整图解码会把首帧卡住，
+/// ImageIO 直接解到目标尺寸快一个量级、内存也只有整图的零头。
+/// 文件名即明文内容的 sha256（内容寻址），缓存天然不过期；NSCache 线程安全。
+enum ClipboardImagePreview {
+    static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 24
+        return cache
+    }()
+
+    /// 解密 + 降采样解码（≤ maxPixel）。可从任意线程调用。
+    static func load(from url: URL, cacheKey: String, maxPixel: CGFloat = 1400) -> NSImage? {
+        if let cached = cache.object(forKey: cacheKey as NSString) { return cached }
+        guard let data = ClipboardCrypto.read(from: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let image = NSImage(cgImage: cg, size: .zero)
+        cache.setObject(image, forKey: cacheKey as NSString)
+        return image
+    }
+}
 
 /// 剪贴板历史存储：内存 + 磁盘持久化（JSON + 图片文件）。
 @MainActor
@@ -43,21 +74,12 @@ final class ClipboardStore: ObservableObject {
         return ClipboardCrypto.read(from: imagesDir.appendingPathComponent(name))
     }
 
-    /// 解密后的整图缓存。文件名即明文内容的 sha256 —— 内容寻址，缓存天然不会过期；
-    /// 加密开关切换只改磁盘密文，明文不变，缓存同样有效。
-    /// 预览区每次渲染都要整图，不缓存的话选中大图「点一下卡一下」。
-    private static let imageCache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 8
-        return cache
-    }()
-
+    /// 整图解码（原始分辨率）。只给一次性场景用：粘贴、独立预览窗。
+    /// 面板预览走 `ClipboardImagePreview.load`（后台 + 降采样 + 缓存），别在这加缓存 ——
+    /// 8 张 Retina 整图就是几百 MB 内存。
     static func image(for item: ClipboardItem) -> NSImage? {
-        guard let name = item.imageFilename else { return nil }
-        if let cached = imageCache.object(forKey: name as NSString) { return cached }
-        guard let data = imageData(for: item), let image = NSImage(data: data) else { return nil }
-        imageCache.setObject(image, forKey: name as NSString)
-        return image
+        guard let data = imageData(for: item) else { return nil }
+        return NSImage(data: data)
     }
 
     var maxItems: Int {
