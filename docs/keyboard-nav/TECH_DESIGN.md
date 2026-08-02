@@ -85,3 +85,40 @@ overlay 关闭、缓冲清空、不主动改焦点（AXPress 一般不夺焦）�
 2. 触发快捷键**出厂不绑定**（你自设），还是要一个默认（如 ⌥/ 之类不易冲突的）？
 3. 标签字符集：home-row 式（`sdfjkl…`）还是全字母 `a–z`？
 4. 点击优先 **AXPress**（不动鼠标）——认可？个别 App 可能 AXPress 无效，会回退合成点击。
+
+## 8. 修订：非激活 overlay + CGEventTap 输入（2026-08-02）
+
+一次线上三连问（点完 hint 快捷键失灵 / 别的 App 菜单开着无效 / 浏览器点击不生效）定位到同一病根：
+overlay 是会抢激活的普通 NSWindow、靠 key window 收键盘。修订为：
+
+- **overlay = `.nonactivatingPanel` + `ignoresMouseEvents = true` + `hidesOnDeactivate = false`**。
+  全程不抢激活：焦点始终留在目标 App（点完 hint 前台不变，下一次触发扫的还是它）；
+  别的 App 拉开的菜单不会被 `NSApp.activate` 收起（hint 直接盖在菜单项上，AXMenuItem 本就在
+  clickableRoles 里）；合成点击永远不会打在自己的 overlay 上。
+- **输入走会话期 CGEventTap**（写法同 `HotkeyCenter.beginMenuTrackingCapture`）：hint 字母 / Esc / ⌫
+  消费掉不漏进目标 App；带 ⌘⌃⌥ 的组合与其余按键放行；物理点击不消费但结束会话。
+  C 回调经非隔离 relay 进入 @MainActor 控制器（tap source 挂主 run loop）。
+- **点击顺序翻转：合成点击为主，AXPress 仅在落点无效时兜底** —— §7.4 的原始取舍在 Chrome 网页
+  元素上不成立（AXPress 返回 success 也可能无效果、元素引用易过期）。合成点击会移动真实光标，
+  视为特性而非缺陷。
+- 扫描前对 system-wide 元素设 `AXUIElementSetMessagingTimeout(0.3)`（进程级默认）：deadline 只在
+  节点间检查，拦不住单个卡死的 AX 调用（菜单跟踪中的 App 服务 AX 可能很慢）。
+- 焦点屏判定的 AX 部分挪到后台队列（对菜单跟踪中的 App 是阻塞 IPC，不能挂在热键回调的主线程上）。
+- `present()` 补「overlays 为空 → active 复位」保险丝（显示器休眠/热插拔瞬间），否则 active 永久
+  卡 true、快捷键从此失灵 —— 截图 overlay 踩过的同一个坑。
+
+## 9. Scroll Mode（滚动模式，2026-08-02）
+
+背景：Chrome 的网页滚动条不暴露 AXScrollBar，往可点角色表加角色救不了「用键盘滚页面」。
+
+关键洞察：**滚轮 CGEvent 按光标位置路由** —— 真正滚动只需「把光标移到滚动区中心 →
+发滚轮事件」，对任何 App 成立，不依赖目标暴露 AX 滚动角色。AX 扫描只服务
+「多个滚动区时挑一个」，扫不到就退化为焦点窗口矩形，永远有兜底。
+
+- 入口：`keyboardnav.scroll`（出厂不绑定）+ 菜单「滚动」；会话进行中再按 = 退出（toggle）。
+- 三分支：`scanScrollAreas`（AXScrollArea + AXWebArea，同一套护栏，同位置去重、剔除 <100×100）
+  → 多个走 hint 挑选（复用点击的标签机制）；恰好一个（网页最常见）直接进滚动态；零个用焦点窗口。
+- 滚动态：overlay 画 accent 边框 + 按键提示 pill；`CGWarpMouseCursorPosition` 到区中心；
+  j/↓、k/↑ 每步 60px，空格/⇧空格翻页（区高×0.85），按住连滚靠系统 key repeat；
+  这些键消费，⌘⌃⌥ 组合与其余按键放行；Esc / 物理点击 / 再按快捷键退出。
+- 会话状态机：`SessionMode { click, scrollPick, scrolling(rectCG) }`，与连续点击互不影响。

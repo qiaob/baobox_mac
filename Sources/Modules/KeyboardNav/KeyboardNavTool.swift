@@ -21,6 +21,9 @@ final class KeyboardNavTool: ToolModule {
         items.append(ClosureMenuItem(title: L("keyboardnav.menu.click"), hotkeyID: "keyboardnav.click") {
             KeyboardNavController.shared.activate()
         })
+        items.append(ClosureMenuItem(title: L("keyboardnav.menu.scroll"), hotkeyID: "keyboardnav.scroll") {
+            KeyboardNavController.shared.activateScroll()
+        })
         return items
     }
 
@@ -35,6 +38,15 @@ final class KeyboardNavTool: ToolModule {
             ) {
                 KeyboardNavController.shared.activate()
             },
+            HotkeyDefinition(
+                id: "keyboardnav.scroll",
+                title: L("keyboardnav.hotkey.scroll"),
+                subtitle: L("keyboardnav.hotkey.scroll.subtitle"),
+                // 易冲突组合出厂不绑定（仓库惯例），在快捷键页自设。
+                defaultCombo: nil
+            ) {
+                KeyboardNavController.shared.activateScroll()
+            },
         ]
     }
 
@@ -46,6 +58,7 @@ final class KeyboardNavTool: ToolModule {
 /// 最简设置页：说明 + 快捷键提示（字符集/忽略应用等 P1 再加）。
 private struct KeyboardNavSettingsView: View {
     @AppStorage(KeyboardNavEnv.labelScopeKey) private var labelScope = "current"
+    @AppStorage(KeyboardNavEnv.continuousClickKey) private var continuousClick = true
 
     var body: some View {
         Form {
@@ -54,6 +67,10 @@ private struct KeyboardNavSettingsView: View {
                     Text("keyboardnav.settings.scopeCurrent").tag("current")
                     Text("keyboardnav.settings.scopeAll").tag("all")
                 }
+                Toggle("keyboardnav.settings.continuous", isOn: $continuousClick)
+                Text("keyboardnav.settings.continuousHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text("keyboardnav.settings.hint")
                     .font(.callout)
                     .foregroundStyle(.secondary)

@@ -30,20 +30,29 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     // MARK: - NSMenuDelegate
+    //
+    // 三个回调都 nonisolated + 手动验线程：键盘点击类工具（含本 App 自己的 KeyboardNav）
+    // 与读屏软件对本进程做 AX 枚举时，AppKit 会在**后台线程**「模拟打开」菜单
+    // （_simulateOpening）并同步回调这里 —— rebuild 里创建 NSHostingView，SwiftUI 在
+    // 非主线程直接断言崩溃（实测栈：NSMenu(Accessibility) → menuNeedsUpdate → rebuild）。
+    // AX 巡检不需要新鲜菜单内容，非主线程一律跳过。
 
     /// 每次打开菜单前重建，保证快捷键改动即时反映。
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        rebuild()
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { rebuild() }
     }
 
     /// 菜单打开期间启用 CGEventTap 补捉全局热键：NSMenu tracking 独占事件循环，Carbon 全局热键
     /// 此时收不到（「菜单开着按快捷键无反应」）。tap 在 HID 层捕获，命中即收起菜单并触发。
-    func menuWillOpen(_ menu: NSMenu) {
-        HotkeyCenter.shared.beginMenuTrackingCapture()
+    nonisolated func menuWillOpen(_ menu: NSMenu) {
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { HotkeyCenter.shared.beginMenuTrackingCapture() }
     }
 
-    func menuDidClose(_ menu: NSMenu) {
-        HotkeyCenter.shared.endMenuTrackingCapture()
+    nonisolated func menuDidClose(_ menu: NSMenu) {
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { HotkeyCenter.shared.endMenuTrackingCapture() }
     }
 
     /// 收起可能正打开的状态栏菜单。供全局热键触发前调用（见 `HotkeyCenter.onWillFireAction`），
