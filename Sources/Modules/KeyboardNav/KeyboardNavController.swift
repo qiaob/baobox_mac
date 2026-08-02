@@ -125,8 +125,18 @@ final class KeyboardNavController {
     private func trigger(_ hint: Hint) {
         let center = CGPoint(x: hint.rectCG.midX, y: hint.rectCG.midY)
         let element = hint.element
-        dismiss() // 先关 overlay，避免挡住合成点击
+        // 先 dismiss（卸掉 tap）再合成点击：tap 还挂着的话，自己合成的 mouseDown
+        // 会被当成「用户改用鼠标」把连续会话误杀。
+        dismiss()
         ClickSimulator.click(element, centerCG: center)
+
+        // 连续点击：点完自动重扫再出 hint，不用重按快捷键。走完整 activate ——
+        // 点击会改变界面（菜单展开/页面跳转），旧 hint 不可信；前台也可能因点击而变
+        //（如点开了别的 App），按当下前台重扫才是对的。等一拍让点击效果反映到 AX 树。
+        guard KeyboardNavEnv.continuousClick else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            MainActor.assumeIsolated { KeyboardNavController.shared.activate() }
+        }
     }
 
     private func dismiss() {

@@ -46,6 +46,7 @@ final class KeyboardNavTool: ToolModule {
 /// 最简设置页：说明 + 快捷键提示（字符集/忽略应用等 P1 再加）。
 private struct KeyboardNavSettingsView: View {
     @AppStorage(KeyboardNavEnv.labelScopeKey) private var labelScope = "current"
+    @AppStorage(KeyboardNavEnv.continuousClickKey) private var continuousClick = true
 
     var body: some View {
         Form {
@@ -54,6 +55,10 @@ private struct KeyboardNavSettingsView: View {
                     Text("keyboardnav.settings.scopeCurrent").tag("current")
                     Text("keyboardnav.settings.scopeAll").tag("all")
                 }
+                Toggle("keyboardnav.settings.continuous", isOn: $continuousClick)
+                Text("keyboardnav.settings.continuousHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text("keyboardnav.settings.hint")
                     .font(.callout)
                     .foregroundStyle(.secondary)
