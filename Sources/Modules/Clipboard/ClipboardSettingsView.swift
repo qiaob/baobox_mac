@@ -18,8 +18,6 @@ struct ClipboardSettingsView: View {
     @AppStorage(SnippetExpander.enabledKey) private var snippetExpandEnabled = false
     @AppStorage(SnippetExpander.prefixKey) private var snippetPrefix = ";"
     @AppStorage(SnippetExpander.restoreClipboardKey) private var snippetRestoreClipboard = true
-    /// 正在编辑内容的片段。nil = 只显示列表。
-    @State private var editingSnippet: UUID?
 
     var body: some View {
         Form {
@@ -89,48 +87,52 @@ struct ClipboardSettingsView: View {
                     Text("clipboard.settings.snippetsEmpty")
                         .foregroundStyle(.secondary)
                 } else {
+                    // 行只做展示（名称/内容预览 + 触发词胶囊），编辑集中到弹窗：
+                    // 行内无边框输入框看不出可编辑，内容编辑器也没法贴在被编辑的行旁边。
                     ForEach(store.snippets) { snippet in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 8) {
-                                TextField("clipboard.settings.snippetTitle",
-                                          text: snippetTitleBinding(snippet.id))
-                                TextField("clipboard.settings.snippetKeyword",
-                                          text: snippetKeywordBinding(snippet.id))
-                                    .frame(width: 110)
-                                Button {
-                                    editingSnippet = (editingSnippet == snippet.id) ? nil : snippet.id
-                                } label: {
-                                    Image(systemName: editingSnippet == snippet.id ? "chevron.down" : "pencil")
-                                }
-                                .buttonStyle(.borderless)
-                                Button {
-                                    if editingSnippet == snippet.id { editingSnippet = nil }
-                                    store.delete(snippet.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                            // 顺手收藏来的条目没有名字，光看空输入框认不出是哪条 —— 补一行内容预览。
-                            if (snippet.title ?? "").isEmpty {
-                                Text(verbatim: Self.preview(of: snippet))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: Self.displayName(of: snippet))
                                     .lineLimit(1)
+                                if !(snippet.title ?? "").isEmpty, !Self.preview(of: snippet).isEmpty {
+                                    Text(verbatim: Self.preview(of: snippet))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
                             }
+                            Spacer(minLength: 8)
+                            if let keyword = snippet.keyword, !keyword.isEmpty {
+                                Text(verbatim: snippetPrefix + keyword)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            Button {
+                                SnippetEditorWindow.open(store: store, id: snippet.id)
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(.borderless)
+                            Button {
+                                store.delete(snippet.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            SnippetEditorWindow.open(store: store, id: snippet.id)
                         }
                     }
                 }
 
                 Button("clipboard.settings.snippetNew") {
-                    editingSnippet = store.addSnippet(title: L("clipboard.settings.snippetNewName"),
-                                                      content: "")
-                }
-
-                if let editingSnippet, store.items.contains(where: { $0.id == editingSnippet }) {
-                    TextEditor(text: snippetContentBinding(editingSnippet))
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 120)
+                    // 空壳开编辑窗；什么都没填就关掉时由编辑窗负责删掉它。
+                    let id = store.addSnippet(title: "", content: "")
+                    SnippetEditorWindow.open(store: store, id: id)
                 }
 
                 Toggle("clipboard.settings.snippetExpand", isOn: $snippetExpandEnabled)
@@ -253,25 +255,11 @@ struct ClipboardSettingsView: View {
         return firstLine.count > 60 ? String(firstLine.prefix(60)) + "…" : firstLine
     }
 
-    private func snippetTitleBinding(_ id: UUID) -> Binding<String> {
-        Binding(
-            get: { store.items.first(where: { $0.id == id })?.title ?? "" },
-            set: { store.setSnippetTitle(id, $0) }
-        )
-    }
-
-    private func snippetKeywordBinding(_ id: UUID) -> Binding<String> {
-        Binding(
-            get: { store.items.first(where: { $0.id == id })?.keyword ?? "" },
-            set: { store.setSnippetKeyword(id, $0) }
-        )
-    }
-
-    private func snippetContentBinding(_ id: UUID) -> Binding<String> {
-        Binding(
-            get: { store.items.first(where: { $0.id == id })?.text ?? "" },
-            set: { store.setSnippetContent(id, $0) }
-        )
+    /// 列表主行文字：有名称用名称，没有就用内容首行顶上。
+    private static func displayName(of item: ClipboardItem) -> String {
+        if let title = item.title, !title.isEmpty { return title }
+        let fallback = preview(of: item)
+        return fallback.isEmpty ? L("clipboard.snippetEditor.untitled") : fallback
     }
 
     private func toolBinding(_ id: String) -> Binding<Bool> {

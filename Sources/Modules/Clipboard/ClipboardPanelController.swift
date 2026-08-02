@@ -69,7 +69,8 @@ final class ClipboardPanelController: NSObject {
             onDelete: { [weak self] item in self?.delete(item) },
             onClose: { [weak self] in self?.hide() },
             onCopyText: { [weak self] text in self?.copyOnly(text) },
-            onPreviewImage: { [weak self] item in self?.previewImage(item) }
+            onPreviewImage: { [weak self] item in self?.previewImage(item) },
+            onEditSnippet: { [weak self] item in self?.editSnippet(item) }
         )
         let hosting = NSHostingView(rootView: content)
 
@@ -216,6 +217,12 @@ final class ClipboardPanelController: NSObject {
     private func delete(_ item: ClipboardItem) {
         store.delete(item.id)
         viewModel.clampSelection()
+    }
+
+    /// 收藏条目开片段编辑窗（名称/关键字/内容）。面板 floating 层级会挡住标准窗口，先收面板。
+    private func editSnippet(_ item: ClipboardItem) {
+        SnippetEditorWindow.open(store: store, id: item.id)
+        hide()
     }
 
     /// 图片条目开独立预览窗看原图。面板是 floating 层级会挡在标准窗口前面，

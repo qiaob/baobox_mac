@@ -187,6 +187,8 @@ struct ClipboardPanelView: View {
     var onCopyText: (String) -> Void
     /// 图片条目开独立预览窗（徽章行按钮 / 双击缩略图）。
     var onPreviewImage: (ClipboardItem) -> Void
+    /// 收藏条目开片段编辑窗（动作栏「设关键字 / ;kw」按钮）。
+    var onEditSnippet: (ClipboardItem) -> Void
 
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
@@ -345,7 +347,7 @@ struct ClipboardPanelView: View {
                     .background(Color.primary.opacity(0.05),
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                if !viewModel.visibleActions.isEmpty { actionBar }
+                if !viewModel.visibleActions.isEmpty || Self.snippetEligible(item) { actionBar(item) }
 
                 HStack(spacing: 16) {
                     Text("clipboard.preview.source \(item.sourceAppName ?? L("common.unknown"))")
@@ -452,7 +454,12 @@ struct ClipboardPanelView: View {
     ///
     /// ⌘ 序号按 keyboardActions（下拉展开后的顺序）分配：容器不占号，子项的
     /// 序号写进菜单项标题，按 ⌘n 直接触发、不用先打开菜单。
-    private var actionBar: some View {
+    /// 只有文本类收藏能当片段（与 `ClipboardStore.snippets` 同一口径）。
+    private static func snippetEligible(_ item: ClipboardItem) -> Bool {
+        item.isPinned && (item.type == .text || item.type == .link)
+    }
+
+    private func actionBar(_ item: ClipboardItem) -> some View {
         // uniquingKeysWith 而非 uniqueKeysWithValues：后者遇到重复 id 直接 crash，
         // 而 id 唯一性靠的是各识别器自觉 —— 不值得用崩溃来强制。
         let slots = Dictionary(viewModel.keyboardActions.enumerated().map { ($1.id, $0) },
@@ -490,6 +497,23 @@ struct ClipboardPanelView: View {
                         .disabled(!action.isEnabled)
                         .help(action.disabledHint ?? "")
                     }
+                }
+                // 收藏条目：就地编辑片段（名称/关键字/内容）。放末尾 —— 它属于条目本身，
+                // 与前面「对文本做转换」的动作性质不同。设了关键字就直接显示完整触发词。
+                if Self.snippetEligible(item) {
+                    Button {
+                        onEditSnippet(item)
+                    } label: {
+                        if let keyword = item.keyword, !keyword.isEmpty {
+                            Text(verbatim: SnippetExpander.prefix + keyword)
+                                .font(.system(size: 11, design: .monospaced))
+                        } else {
+                            Text("clipboard.tools.action.setKeyword")
+                                .font(.system(size: 11))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
             .padding(.vertical, 1)
