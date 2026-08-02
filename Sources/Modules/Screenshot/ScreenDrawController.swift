@@ -183,16 +183,15 @@ final class ScreenDrawController {
                                                            title: L("screendraw.preview.title"))
                 } else {
                     ScreenshotResultHandler.handle(image: image, mode: .standard)
+                    // 静默不等于无感知：工具条下方浮一条提示，不然不知道存没存上。
+                    self.toolbar?.showStatus(ScreenshotSettings.autoSave
+                        ? L("screendraw.status.savedCopied")
+                        : L("screendraw.status.copied"))
                 }
             } catch {
-                // 画布在最上层吃掉点击，先转穿透否则报错弹窗点不到。
-                self.setPassThrough(true)
-                NSApp.activate(ignoringOtherApps: true)
-                let alert = NSAlert()
-                alert.messageText = L("screenshot.error.captureFailed")
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .warning
-                alert.runModal()
+                // 不用 NSAlert：画布吃掉全屏点击，模态弹窗点不到 —— 浮条提示错误即可。
+                self.toolbar?.showStatus(L("screendraw.status.saveFailed \(error.localizedDescription)"),
+                                         isError: true)
             }
         }
     }

@@ -37,6 +37,10 @@ final class ScreenDrawToolbar: NSObject {
     private var colorButtons: [DrawToolButton] = []
     private var passThroughButton: DrawToolButton!
 
+    private var statusPanel: NSPanel?
+    private var statusLabel: NSTextField?
+    private var statusHideWork: DispatchWorkItem?
+
     private let accent = NSColor(srgbRed: 0x2B / 255.0, green: 0xC4 / 255.0, blue: 0xB8 / 255.0, alpha: 1)
     private let idleTint = NSColor(white: 0.92, alpha: 1)
 
@@ -235,8 +239,80 @@ final class ScreenDrawToolbar: NSObject {
     }
 
     func close() {
+        statusHideWork?.cancel()
+        if let statusPanel {
+            panel.removeChildWindow(statusPanel)
+            statusPanel.orderOut(nil)
+        }
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)
+    }
+
+    // MARK: - 状态提示
+
+    /// 在工具条正下方浮一条短暂提示（保存成功/失败）。
+    /// 不用 NSAlert：画布吃掉全屏点击，模态弹窗点不到；演示场景里弹窗也太打断 ——
+    /// 小浮条提示完自己消失。工具条可拖动，位置按显示那一刻的工具条位置算。
+    func showStatus(_ text: String, isError: Bool = false) {
+        statusHideWork?.cancel()
+
+        let toast: NSPanel
+        let label: NSTextField
+        if let existingPanel = statusPanel, let existingLabel = statusLabel {
+            toast = existingPanel
+            label = existingLabel
+        } else {
+            toast = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+            toast.level = .screenSaver
+            toast.backgroundColor = .clear
+            toast.isOpaque = false
+            toast.hasShadow = true
+            toast.hidesOnDeactivate = false
+            toast.ignoresMouseEvents = true
+            toast.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+            let background = NSView()
+            background.wantsLayer = true
+            background.layer?.backgroundColor = NSColor(white: 0.13, alpha: 0.96).cgColor
+            background.layer?.cornerRadius = 7
+
+            let created = NSTextField(labelWithString: "")
+            created.font = .systemFont(ofSize: 11.5)
+            created.lineBreakMode = .byTruncatingMiddle
+            created.translatesAutoresizingMaskIntoConstraints = false
+            background.addSubview(created)
+            NSLayoutConstraint.activate([
+                created.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
+                created.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
+                created.centerYAnchor.constraint(equalTo: background.centerYAnchor)
+            ])
+            toast.contentView = background
+            statusPanel = toast
+            statusLabel = created
+            label = created
+        }
+
+        label.stringValue = text
+        label.textColor = isError ? .systemOrange : idleTint
+        let textWidth = (text as NSString).size(withAttributes: [.font: label.font ?? .systemFont(ofSize: 11.5)]).width
+        let width = min(max(textWidth + 22, 100), 420)
+        toast.setContentSize(NSSize(width: width, height: 26))
+        let anchor = panel.frame
+        toast.setFrameOrigin(NSPoint(x: anchor.midX - width / 2, y: anchor.minY - 26 - 6))
+        if toast.parent == nil {
+            panel.addChildWindow(toast, ordered: .above)
+        }
+        toast.orderFrontRegardless()
+
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.statusPanel?.orderOut(nil)
+            }
+        }
+        statusHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (isError ? 4 : 1.8), execute: work)
     }
 
     /// 穿透态下按钮换成"划掉的手"，并染成 accent —— 用户必须一眼看出现在点得动下面。
