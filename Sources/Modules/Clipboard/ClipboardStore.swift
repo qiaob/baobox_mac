@@ -43,9 +43,21 @@ final class ClipboardStore: ObservableObject {
         return ClipboardCrypto.read(from: imagesDir.appendingPathComponent(name))
     }
 
+    /// 解密后的整图缓存。文件名即明文内容的 sha256 —— 内容寻址，缓存天然不会过期；
+    /// 加密开关切换只改磁盘密文，明文不变，缓存同样有效。
+    /// 预览区每次渲染都要整图，不缓存的话选中大图「点一下卡一下」。
+    private static let imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 8
+        return cache
+    }()
+
     static func image(for item: ClipboardItem) -> NSImage? {
-        guard let data = imageData(for: item) else { return nil }
-        return NSImage(data: data)
+        guard let name = item.imageFilename else { return nil }
+        if let cached = imageCache.object(forKey: name as NSString) { return cached }
+        guard let data = imageData(for: item), let image = NSImage(data: data) else { return nil }
+        imageCache.setObject(image, forKey: name as NSString)
+        return image
     }
 
     var maxItems: Int {
@@ -96,6 +108,71 @@ final class ClipboardStore: ObservableObject {
         sortItems()
         enforceLimit()
         scheduleSave()
+    }
+
+    // MARK: - 文本片段（= 手工创建的收藏条目）
+
+    /// 片段管理列表：所有**文本类收藏**。
+    ///
+    /// 不能只列 `isSnippet`（带标题或关键字的）—— 那样「给已有收藏补一个关键字」就永远
+    /// 没有入口，而这正是最自然的录入路径（顺手复制 → 收藏 → 想起来给它设个触发词）。
+    /// 专门写的片段与顺手收藏的东西混在一张列表里，靠关键字一栏区分。
+    var snippets: [ClipboardItem] {
+        items.filter { $0.isPinned && ($0.type == .text || $0.type == .link) }
+            .sorted { lhs, rhs in
+                // 专门写的片段排在顺手收藏的前面，同类按时间新→旧。
+                if lhs.isSnippet != rhs.isSnippet { return lhs.isSnippet }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    /// 新建一条片段。不走 `add(_:)` —— 那条路径带「与最近一条同内容就合并」的去重逻辑，
+    /// 对手工创建的片段是错的（用户可能就是要存一条和刚复制的东西一样的片段）。
+    @discardableResult
+    func addSnippet(title: String, content: String, keyword: String? = nil) -> UUID {
+        let item = ClipboardItem(id: UUID(), type: .text, text: content, imageFilename: nil,
+                                 sourceAppName: nil, sourceBundleID: nil, createdAt: Date(),
+                                 isPinned: true, isConcealed: false,
+                                 title: title, keyword: normalizedKeyword(keyword))
+        items.append(item)
+        sortItems()
+        scheduleSave()
+        return item.id
+    }
+
+    func setSnippetTitle(_ id: UUID, _ title: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        items[index].title = trimmed.isEmpty ? nil : trimmed
+        scheduleSave()
+    }
+
+    /// 设关键字。空串 = 取消触发。
+    ///
+    /// **不**去清理其它条目上的同名关键字：设置页里是边打字边保存的，打到一半的
+    /// 中间态（"m" → "ma" → "mail"）会顺手把别人的关键字抹掉，用户根本不知道发生了什么。
+    /// 重名交给匹配侧处理 —— `snippet(forKeyword:)` 取列表里的第一条，结果是确定的。
+    func setSnippetKeyword(_ id: UUID, _ keyword: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].keyword = normalizedKeyword(keyword)
+        scheduleSave()
+    }
+
+    func setSnippetContent(_ id: UUID, _ content: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].text = content
+        scheduleSave()
+    }
+
+    /// 按关键字找片段（关键字展开用）。重名时取列表里的第一条 —— 列表按时间新→旧，
+    /// 即「最近设置的赢」，对用户是可预期的。
+    func snippet(forKeyword keyword: String) -> ClipboardItem? {
+        items.first { $0.isPinned && $0.keyword == keyword }
+    }
+
+    private func normalizedKeyword(_ raw: String?) -> String? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     func togglePin(_ id: UUID) {
@@ -149,10 +226,9 @@ final class ClipboardStore: ObservableObject {
     // MARK: - 内部
 
     private func sortItems() {
-        items.sort { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned && !b.isPinned }
-            return a.createdAt > b.createdAt
-        }
+        // 纯按时间新→旧。收藏不再置顶：收藏有自己的筛选分区，置顶会把「最近复制的」
+        // 从列表顶部挤下去（⌘⌥V 粘最近一条也依赖 items.first 就是最新）。
+        items.sort { $0.createdAt > $1.createdAt }
     }
 
     /// 超出上限时从未置顶的尾部（最旧）淘汰，并删除关联图片。

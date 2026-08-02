@@ -65,6 +65,8 @@ final class ClipboardTool: ToolModule {
         // 把图片文件对齐到当前的「加密存储」开关（老版本留下的明文补加密 / 关了开关的
         // 解回明文）。读取侧明文密文都兼容，没转完也不影响使用。
         ClipboardCrypto.syncStoredImages(in: ClipboardStore.imagesDir)
+        // 关键字展开：默认关，只有用户在设置里打开过才会真正装 event tap。
+        SnippetExpander.shared.configure(store: store, monitor: monitor)
     }
 
     // MARK: - 动作

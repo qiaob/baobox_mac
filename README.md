@@ -46,6 +46,12 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 - **Encrypted on disk** (on by default, switchable): history text and images are sealed with AES-GCM before they hit `~/Library/Application Support/Baobox/`; the 256-bit key lives in your login keychain, never leaves the Mac and is not synced to iCloud. Flipping the switch converts the existing history either way.
 - **Text tools in the preview pane**: the selected entry is matched against JWT / JSON / XML / timestamps / URLs / Base64, and the pane offers in-place actions — format, minify, escape/unescape, percent decode/encode, Base64 decode/encode, extract a JWT header or payload, and generate a QR code pinned to the screen. Timestamps expand into a conversion table (local, UTC, ISO 8601, seconds, milliseconds, relative) with per-row copy buttons; ⏎ pastes whatever the preview currently shows. JSON is re-indented by an order-preserving scanner, so key order and long integer IDs survive untouched. Press Tab to expand the preview to the full panel width, ⌘1…⌘9 to fire actions, ⌘0 to revert. Every format has its own switch in Settings — the ones you turn off are never run at all.
 
+### Text snippets (part of the clipboard)
+- A snippet is simply a favourite you wrote yourself: it never expires, survives Clear History, and shows up under Favourites in the same panel — same search, same ⏎ to paste.
+- Give a snippet a keyword and typing `;keyword` in any text field expands it in place.
+- Keyword expansion is **off by default**. When on, it keeps at most 32 characters in memory for prefix matching, never writes them to disk or to history, skips apps on the ignore list, and never sees password fields (macOS withholds those keystrokes entirely).
+
+
 ### Caffeinate — Sleep Prevention (menu-only)
 - Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).
 - Enable for 15 minutes / 1 hour / 2 hours / indefinitely from the submenu; the assertion clears automatically on expiry, with a live countdown shown in the menu.
