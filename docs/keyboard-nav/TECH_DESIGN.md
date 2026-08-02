@@ -106,3 +106,19 @@ overlay 是会抢激活的普通 NSWindow、靠 key window 收键盘。修订为
 - 焦点屏判定的 AX 部分挪到后台队列（对菜单跟踪中的 App 是阻塞 IPC，不能挂在热键回调的主线程上）。
 - `present()` 补「overlays 为空 → active 复位」保险丝（显示器休眠/热插拔瞬间），否则 active 永久
   卡 true、快捷键从此失灵 —— 截图 overlay 踩过的同一个坑。
+
+## 9. Scroll Mode（滚动模式，2026-08-02）
+
+背景：Chrome 的网页滚动条不暴露 AXScrollBar，往可点角色表加角色救不了「用键盘滚页面」。
+
+关键洞察：**滚轮 CGEvent 按光标位置路由** —— 真正滚动只需「把光标移到滚动区中心 →
+发滚轮事件」，对任何 App 成立，不依赖目标暴露 AX 滚动角色。AX 扫描只服务
+「多个滚动区时挑一个」，扫不到就退化为焦点窗口矩形，永远有兜底。
+
+- 入口：`keyboardnav.scroll`（出厂不绑定）+ 菜单「滚动」；会话进行中再按 = 退出（toggle）。
+- 三分支：`scanScrollAreas`（AXScrollArea + AXWebArea，同一套护栏，同位置去重、剔除 <100×100）
+  → 多个走 hint 挑选（复用点击的标签机制）；恰好一个（网页最常见）直接进滚动态；零个用焦点窗口。
+- 滚动态：overlay 画 accent 边框 + 按键提示 pill；`CGWarpMouseCursorPosition` 到区中心；
+  j/↓、k/↑ 每步 60px，空格/⇧空格翻页（区高×0.85），按住连滚靠系统 key repeat；
+  这些键消费，⌘⌃⌥ 组合与其余按键放行；Esc / 物理点击 / 再按快捷键退出。
+- 会话状态机：`SessionMode { click, scrollPick, scrolling(rectCG) }`，与连续点击互不影响。

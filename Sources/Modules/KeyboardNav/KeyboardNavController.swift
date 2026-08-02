@@ -12,10 +12,18 @@ final class KeyboardNavController {
         let rectCG: CGRect
     }
 
+    /// 会话形态：点击（hint→点）/ 滚动挑选（hint→选滚动区）/ 滚动中（j/k/空格发滚轮）。
+    private enum SessionMode {
+        case click
+        case scrollPick
+        case scrolling(rectCG: CGRect)
+    }
+
     private var overlays: [KeyboardNavOverlayWindow] = []
     private var hints: [Hint] = []
     private var input = ""
     private var active = false
+    private var mode: SessionMode = .click
     /// 触发时前台 App 焦点窗口所在屏（"当前屏"模式用）。
     private var currentScreen: NSScreen?
     /// 会话期间的键盘/鼠标捕获 tap（见 installEventTap 的说明）。
@@ -38,6 +46,7 @@ final class KeyboardNavController {
         // 别的 App —— overlay 已不抢激活，正常流程里前台也不会是自己。
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
         active = true
+        mode = .click
         // AX 调用可阻塞（对着菜单跟踪中的 App 尤甚）：焦点窗口判定与扫描都放后台，回主线程显示。
         DispatchQueue.global(qos: .userInitiated).async {
             let focusRect = Self.focusedWindowRectAK(pid: pid)
@@ -49,6 +58,73 @@ final class KeyboardNavController {
                 }
             }
         }
+    }
+
+    /// 触发滚动模式（快捷键 / 菜单）。会话进行中再按 = 退出（toggle）。
+    ///
+    /// 滚轮事件按**光标位置**路由：真正滚动只需把光标移到目标区中心再发滚轮 ——
+    /// 不依赖目标 App 暴露任何 AX 滚动角色（Chrome 的网页滚动条就不暴露）。
+    /// AX 扫描只服务「多个滚动区时挑一个」，扫不到就退化为焦点窗口矩形。
+    func activateScroll() {
+        if active { dismiss(); return }
+        guard Permissions.hasAccessibility else {
+            Permissions.promptAccessibility()
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = app.processIdentifier
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+        active = true
+        mode = .scrollPick
+        DispatchQueue.global(qos: .userInitiated).async {
+            let focusRect = Self.focusedWindowRectAK(pid: pid)
+            let areas = AXElementScanner.scanScrollAreas(pid: pid)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.currentScreen = Self.screen(forFocusRectAK: focusRect)
+                    self.presentScroll(areas, focusRectAK: focusRect)
+                }
+            }
+        }
+    }
+
+    /// 滚动区三分支：多个 → hint 挑选；一个（网页最常见）→ 直接滚；零个 → 焦点窗口兜底。
+    private func presentScroll(_ areas: [ClickableElement], focusRectAK: NSRect?) {
+        guard active else { return }
+        if areas.count > 1 {
+            present(areas)
+            return
+        }
+        if let only = areas.first {
+            enterScrolling(only.frameCG)
+        } else if let focusRectAK {
+            enterScrolling(Geometry.cgRect(fromAppKit: focusRectAK))
+        } else {
+            active = false
+        }
+    }
+
+    /// 进入滚动态：overlay 改画选中区边框 + 按键提示，光标移到区中心（滚轮按光标路由）。
+    private func enterScrolling(_ rectCG: CGRect) {
+        overlays.forEach { $0.orderOut(nil) }
+        overlays.removeAll()
+        hints.removeAll()
+        input = ""
+        mode = .scrolling(rectCG: rectCG)
+
+        let rectAK = Geometry.appKitRect(fromCG: rectCG)
+        let screen = NSScreen.screens.first { $0.frame.intersects(rectAK) }
+            ?? currentScreen ?? NSScreen.main
+        if let screen {
+            let local = NSRect(x: rectAK.minX - screen.frame.minX,
+                               y: rectAK.minY - screen.frame.minY,
+                               width: rectAK.width, height: rectAK.height)
+            let overlay = KeyboardNavOverlayWindow(screen: screen, content: .scrollFrame(local))
+            overlays.append(overlay)
+            overlay.orderFrontRegardless()
+        }
+        installEventTap() // 挑选阶段已装则幂等
+        CGWarpMouseCursorPosition(CGPoint(x: rectCG.midX, y: rectCG.midY))
     }
 
     private func present(_ elements: [ClickableElement]) {
@@ -82,7 +158,7 @@ final class KeyboardNavController {
                                    width: globalAK.width, height: globalAK.height)
                 return HintTarget(label: h.label, rectAK: local)
             }
-            let overlay = KeyboardNavOverlayWindow(screen: screen, targets: targets)
+            let overlay = KeyboardNavOverlayWindow(screen: screen, content: .hints(targets))
             overlays.append(overlay)
             overlay.orderFrontRegardless()
         }
@@ -123,6 +199,11 @@ final class KeyboardNavController {
     // MARK: - 点击 / 收尾
 
     private func trigger(_ hint: Hint) {
+        // 滚动挑选：挑中的是滚动区，不点击，转入滚动态（tap 保留继续收滚动键）。
+        if case .scrollPick = mode {
+            enterScrolling(hint.rectCG)
+            return
+        }
         let center = CGPoint(x: hint.rectCG.midX, y: hint.rectCG.midY)
         let element = hint.element
         // 先 dismiss（卸掉 tap）再合成点击：tap 还挂着的话，自己合成的 mouseDown
@@ -146,6 +227,7 @@ final class KeyboardNavController {
         hints.removeAll()
         input = ""
         active = false
+        mode = .click
     }
 
     // MARK: - 键盘/鼠标捕获（CGEventTap）
@@ -208,6 +290,9 @@ final class KeyboardNavController {
     }
 
     private func handleKeyDown(_ event: CGEvent) -> Bool {
+        if case .scrolling(let rectCG) = mode {
+            return handleScrollKey(event, rectCG: rectCG)
+        }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         switch keyCode {
         case 0x35: // Esc
@@ -218,9 +303,7 @@ final class KeyboardNavController {
             return true
         default:
             // 带 ⌘/⌃/⌥ 的组合键放行 —— 全局快捷键（包括本功能自己的）照常工作。
-            let flags = event.flags
-            if flags.contains(.maskCommand) || flags.contains(.maskControl)
-                || flags.contains(.maskAlternate) {
+            if Self.hasCommandModifiers(event.flags) {
                 return false
             }
             guard let ch = Self.character(from: event)?.lowercased(), ch.count == 1,
@@ -230,6 +313,35 @@ final class KeyboardNavController {
             appendInput(ch)
             return true
         }
+    }
+
+    /// 滚动态按键：j/↓ 向下、k/↑ 向上、空格/⇧空格 翻页（消费）；Esc 退出；其余放行。
+    /// 按住不放靠 tap 收到的系统 key repeat 天然连滚。
+    private func handleScrollKey(_ event: CGEvent, rectCG: CGRect) -> Bool {
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        if keyCode == 0x35 { // Esc
+            dismiss()
+            return true
+        }
+        guard !Self.hasCommandModifiers(event.flags) else { return false }
+        switch keyCode {
+        case 0x26, 0x7D: // J / ↓ —— 向下（滚轮负值）
+            ScrollSimulator.scroll(pixels: -KeyboardNavEnv.scrollStepPixels)
+            return true
+        case 0x28, 0x7E: // K / ↑ —— 向上
+            ScrollSimulator.scroll(pixels: KeyboardNavEnv.scrollStepPixels)
+            return true
+        case 0x31: // 空格翻页，⇧空格向上翻页
+            let page = Int32(rectCG.height * KeyboardNavEnv.scrollPageFactor)
+            ScrollSimulator.scroll(pixels: event.flags.contains(.maskShift) ? page : -page)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func hasCommandModifiers(_ flags: CGEventFlags) -> Bool {
+        flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
     }
 
     /// 从 CGEvent 取按键对应的输入字符。

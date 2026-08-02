@@ -21,6 +21,9 @@ final class KeyboardNavTool: ToolModule {
         items.append(ClosureMenuItem(title: L("keyboardnav.menu.click"), hotkeyID: "keyboardnav.click") {
             KeyboardNavController.shared.activate()
         })
+        items.append(ClosureMenuItem(title: L("keyboardnav.menu.scroll"), hotkeyID: "keyboardnav.scroll") {
+            KeyboardNavController.shared.activateScroll()
+        })
         return items
     }
 
@@ -34,6 +37,15 @@ final class KeyboardNavTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x31, carbonModifiers: KeyCombo.cmd | KeyCombo.shift)
             ) {
                 KeyboardNavController.shared.activate()
+            },
+            HotkeyDefinition(
+                id: "keyboardnav.scroll",
+                title: L("keyboardnav.hotkey.scroll"),
+                subtitle: L("keyboardnav.hotkey.scroll.subtitle"),
+                // 易冲突组合出厂不绑定（仓库惯例），在快捷键页自设。
+                defaultCombo: nil
+            ) {
+                KeyboardNavController.shared.activateScroll()
             },
         ]
     }

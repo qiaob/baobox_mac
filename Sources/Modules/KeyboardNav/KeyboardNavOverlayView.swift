@@ -1,14 +1,21 @@
 import AppKit
 
-/// 键盘点击标签层：画每个可点击元素的字母标签。透明、非翻转（AppKit 左下原点）。
-/// 纯展示 —— 键盘输入由 `KeyboardNavController` 的 CGEventTap 捕获，不经过本视图。
+/// 键盘点击标签层：hint 态画字母标签，滚动态画选中区边框 + 按键提示。
+/// 透明、非翻转（AppKit 左下原点）。纯展示 —— 键盘输入由
+/// `KeyboardNavController` 的 CGEventTap 捕获，不经过本视图。
 @MainActor
 final class KeyboardNavOverlayView: NSView {
-    private let targets: [HintTarget]
+    enum Content {
+        case hints([HintTarget])
+        /// 滚动态：圈出选中的滚动区（view 本地 AppKit 坐标）。
+        case scrollFrame(NSRect)
+    }
+
+    private let content: Content
     private var input = ""
 
-    init(targets: [HintTarget]) {
-        self.targets = targets
+    init(content: Content) {
+        self.content = content
         super.init(frame: .zero)
     }
 
@@ -23,11 +30,43 @@ final class KeyboardNavOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard NSGraphicsContext.current != nil else { return }
         let accent = NSColor(calibratedRed: 0.09, green: 0.64, blue: 0.60, alpha: 1) // ≈ #17A398
-        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
-        for t in targets {
-            if !input.isEmpty && !t.label.hasPrefix(input) { continue } // 隐藏不匹配
-            drawBadge(t.label, at: t.rectAK, accent: accent, font: font)
+        switch content {
+        case .hints(let targets):
+            let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+            for t in targets {
+                if !input.isEmpty && !t.label.hasPrefix(input) { continue } // 隐藏不匹配
+                drawBadge(t.label, at: t.rectAK, accent: accent, font: font)
+            }
+        case .scrollFrame(let rect):
+            drawScrollFrame(rect, accent: accent)
         }
+    }
+
+    /// 滚动态：accent 边框圈住滚动区，框内底部一条按键提示 pill。
+    private func drawScrollFrame(_ rect: NSRect, accent: NSColor) {
+        let path = NSBezierPath(rect: rect.insetBy(dx: 1.5, dy: 1.5))
+        path.lineWidth = 3
+        accent.withAlphaComponent(0.95).setStroke()
+        path.stroke()
+
+        let text = L("keyboardnav.scroll.keysHint")
+        let font = NSFont.systemFont(ofSize: 12)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font,
+                                                    .foregroundColor: NSColor(white: 0.92, alpha: 1)]
+        let str = NSAttributedString(string: text, attributes: attrs)
+        let size = str.size()
+        let padX: CGFloat = 14, padY: CGFloat = 6
+        let w = size.width + padX * 2
+        let h = size.height + padY * 2
+        var x = rect.midX - w / 2
+        var y = rect.minY + 16
+        x = max(4, min(x, bounds.width - w - 4))
+        y = max(4, min(y, bounds.height - h - 4))
+        let bg = NSBezierPath(roundedRect: NSRect(x: x, y: y, width: w, height: h),
+                              xRadius: h / 2, yRadius: h / 2)
+        NSColor(white: 0.13, alpha: 0.92).setFill()
+        bg.fill()
+        str.draw(at: NSPoint(x: x + padX, y: y + padY))
     }
 
     private func drawBadge(_ label: String, at rect: NSRect, accent: NSColor, font: NSFont) {

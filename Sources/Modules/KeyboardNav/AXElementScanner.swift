@@ -55,6 +55,58 @@ enum AXElementScanner {
         }
     }
 
+    // MARK: - 滚动区收集（滚动模式挑选用）
+
+    /// 滚动区角色。AXWebArea = 浏览器网页根（Chromium/WebKit 都暴露且可滚）——
+    /// 网页自绘的滚动条不暴露 AXScrollBar，但网页区域本身是稳定可得的。
+    private static let scrollableRoles: Set<String> = ["AXScrollArea", "AXWebArea"]
+
+    /// 收集可滚动区域。谓词不同，护栏（深度/上限/超时）与 `scan` 相同；
+    /// 同位置去重（外层 AXScrollArea 与内层 AXWebArea 常是同一块，保留先发现的外层）。
+    static func scanScrollAreas(pid: pid_t) -> [ClickableElement] {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.3)
+        let appEl = AXUIElementCreateApplication(pid)
+        var out: [ClickableElement] = []
+        var visited = 0
+        let deadline = Date().addingTimeInterval(KeyboardNavEnv.scanTimeout)
+        traverseScrollAreas(appEl, depth: 0, out: &out, visited: &visited, deadline: deadline)
+
+        var result: [ClickableElement] = []
+        for area in out {
+            let duplicate = result.contains {
+                abs($0.frameCG.minX - area.frameCG.minX) < 2 && abs($0.frameCG.minY - area.frameCG.minY) < 2
+                    && abs($0.frameCG.width - area.frameCG.width) < 2
+                    && abs($0.frameCG.height - area.frameCG.height) < 2
+            }
+            if !duplicate { result.append(area) }
+        }
+        return result
+    }
+
+    private static func traverseScrollAreas(_ el: AXUIElement, depth: Int,
+                                            out: inout [ClickableElement], visited: inout Int,
+                                            deadline: Date) {
+        if depth > KeyboardNavEnv.maxDepth { return }
+        if out.count >= KeyboardNavEnv.maxElements { return }
+        if Date() > deadline { return }
+        visited += 1
+
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleRef) == .success,
+           let role = roleRef as? String, scrollableRoles.contains(role),
+           let rect = frameCG(of: el), rect.width >= 100, rect.height >= 100 {
+            out.append(ClickableElement(element: el, frameCG: rect))
+        }
+
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return }
+        for child in children {
+            if out.count >= KeyboardNavEnv.maxElements || Date() > deadline { return }
+            traverseScrollAreas(child, depth: depth + 1, out: &out, visited: &visited, deadline: deadline)
+        }
+    }
+
     private static func isClickable(_ el: AXUIElement) -> Bool {
         var roleRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleRef) == .success,

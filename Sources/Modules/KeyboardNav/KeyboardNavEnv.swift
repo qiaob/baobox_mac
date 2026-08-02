@@ -22,4 +22,8 @@ enum KeyboardNavEnv {
     static var continuousClick: Bool {
         UserDefaults.standard.object(forKey: continuousClickKey) as? Bool ?? true
     }
+
+    /// 滚动模式：j/k/方向键的单步像素；翻页 = 滚动区高 × pageFactor。
+    static let scrollStepPixels: Int32 = 60
+    static let scrollPageFactor: CGFloat = 0.85
 }

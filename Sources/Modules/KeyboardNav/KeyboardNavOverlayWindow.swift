@@ -16,8 +16,8 @@ struct HintTarget {
 final class KeyboardNavOverlayWindow: NSPanel {
     private let navView: KeyboardNavOverlayView
 
-    init(screen: NSScreen, targets: [HintTarget]) {
-        self.navView = KeyboardNavOverlayView(targets: targets)
+    init(screen: NSScreen, content: KeyboardNavOverlayView.Content) {
+        self.navView = KeyboardNavOverlayView(content: content)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         // level 先于 setFrame：普通级别会被菜单栏约束下移，标签坐标随之偏移（同截图 overlay 的坑）。
