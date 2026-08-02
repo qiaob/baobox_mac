@@ -69,6 +69,9 @@ final class CaptureOverlayView: NSView {
     private var frozenImage: CGImage?
     private var mosaicImage: CGImage?
     private var freezeTask: Task<CGImage, Error>?
+    /// 预取底图的代际：点选窗口预取的真窗口图在选区被改动后作废（自增即作废），
+    /// 迟到的旧捕获结果对不上号就丢弃，不会污染新选区。
+    private var freezeGeneration = 0
 
     /// 菜单场景的「含菜单整屏」冻结底图。非 nil 即冻结模式：框选/标注基于它裁剪，渲染也铺它而非透实时屏。
     private let frozenBackground: CGImage?
@@ -242,6 +245,7 @@ final class CaptureOverlayView: NSView {
                 dragStartRect = rect
             } else {
                 // 选区外按下 → 重新开始框选
+                invalidateSeededWindowImage()
                 phase = .dragging(anchor: p, current: p)
                 toolbar?.setHidden(true)
                 recordBar?.setHidden(true)
@@ -294,6 +298,7 @@ final class CaptureOverlayView: NSView {
             phase = .dragging(anchor: anchor, current: p)
             needsDisplay = true
         case .adjusting:
+            if activeHandle != nil || movingSelection { invalidateSeededWindowImage() }
             if let handle = activeHandle {
                 let resized = resize(rect: dragStartRect, handle: handle, to: p)
                 phase = .adjusting(rect: clampToBounds(resized))
@@ -345,8 +350,11 @@ final class CaptureOverlayView: NSView {
                         showRecordBar(for: local)
                         needsDisplay = true
                     }
-                } else {
+                } else if ocrMode {
+                    // 取字模式：点窗口即识别 —— 这条路径的价值就是快。
                     controller?.finishWindow(detected)
+                } else {
+                    enterWindowAdjust(detected)
                 }
             }
         case .dragging(let anchor, _):
@@ -419,14 +427,20 @@ final class CaptureOverlayView: NSView {
                 phase = .adjusting(rect: bounds)
                 showRecordBar(for: bounds)
                 needsDisplay = true
-            } else {
+            } else if ocrMode {
                 controller?.finishFullScreen(on: screenRef)
+            } else {
+                // 截图：⏎ 把整屏转成选区进入调整相（可标注/微调），再按 ⏎ 才完成 —— 与框选一致。
+                phase = .adjusting(rect: bounds)
+                showToolbar(for: bounds)
+                needsDisplay = true
             }
         }
     }
 
     private func handleArrow(keyCode: UInt16, large: Bool) {
         guard case .adjusting(let rect) = phase else { return }
+        invalidateSeededWindowImage()
         let step: CGFloat = large ? 10 : 1
         var dx: CGFloat = 0, dy: CGFloat = 0
         switch keyCode {
@@ -851,6 +865,69 @@ final class CaptureOverlayView: NSView {
             self.mosaicImage = mosaic
             self.needsDisplay = true
         }
+    }
+
+    /// 截图模式点选窗口：不再直接完成，把窗口区域转成选区进入调整相（对齐录制模式与框选），
+    /// 之后可标注、⏎ 完成、或走贴图/长截屏/取字。同时后台预取真窗口图
+    /// （SCKit desktopIndependentWindow，被遮挡部分完整）种进 freezeTask ——
+    /// 标注底图与直接 ⏎ 完成的像素都与旧的「点击即截」一致。
+    /// 冻结模式（菜单场景）不预取：既有的「含菜单整屏」裁剪路径已是正确内容。
+    private func enterWindowAdjust(_ detected: DetectedWindow) {
+        let full = localRect(fromGlobalCG: detected.frameCG)
+        let visible = full.intersection(bounds)
+        guard visible.width >= 3, visible.height >= 3 else {
+            controller?.finishWindow(detected)
+            return
+        }
+        phase = .adjusting(rect: visible)
+        showToolbar(for: visible)
+        needsDisplay = true
+
+        guard frozenBackground == nil else { return }
+        freezeGeneration += 1
+        let generation = freezeGeneration
+        let windowID = detected.windowID
+        let task = Task {
+            let image = try await CaptureEngine.capture(.window(windowID))
+            return Self.cropToVisible(image, fullLocal: full, visibleLocal: visible)
+        }
+        freezeTask = task
+        Task { @MainActor [weak self] in
+            guard let image = try? await task.value else { return }
+            guard let self, self.freezeGeneration == generation else { return }
+            self.frozenImage = image
+            self.needsDisplay = true
+            let mosaic = await Task.detached { AnnotationRenderer.pixellated(image) }.value
+            guard self.freezeGeneration == generation else { return }
+            self.mosaicImage = mosaic
+            self.needsDisplay = true
+        }
+    }
+
+    /// 窗口局部在屏外时，把真窗口图裁到屏内可见部分 —— 选区（已与屏相交）和标注坐标
+    /// 都以可见部分为准，不裁的话标注会错位、导出内容也与所见不符。
+    private static func cropToVisible(_ image: CGImage, fullLocal: NSRect, visibleLocal: NSRect) -> CGImage {
+        guard fullLocal != visibleLocal, fullLocal.width > 0, fullLocal.height > 0 else { return image }
+        let sx = CGFloat(image.width) / fullLocal.width
+        let sy = CGFloat(image.height) / fullLocal.height
+        // 图像空间原点左上：x 同向，y 取两者顶边之差。
+        let pixelRect = CGRect(x: ((visibleLocal.minX - fullLocal.minX) * sx).rounded(),
+                               y: ((fullLocal.maxY - visibleLocal.maxY) * sy).rounded(),
+                               width: (visibleLocal.width * sx).rounded(),
+                               height: (visibleLocal.height * sy).rounded())
+        return image.cropping(to: pixelRect) ?? image
+    }
+
+    /// 调整相里选区一旦被改动（拖手柄/整体移动/方向键/重新框选），预取的窗口图与选区
+    /// 不再对应：作废之，回到「按屏幕区域捕获」的标准语义（框选流程本来的行为）。
+    /// 调整相里 freezeTask 只可能来自窗口预取 —— 工具条选定工具后即离开调整相，选区随之锁定。
+    private func invalidateSeededWindowImage() {
+        guard freezeTask != nil else { return }
+        freezeGeneration += 1
+        freezeTask?.cancel()
+        freezeTask = nil
+        frozenImage = nil
+        mosaicImage = nil
     }
 
     /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上、Retina 换算。
