@@ -10,7 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         registry.register(ScreenshotTool())
         registry.register(ClipboardTool())
-        registry.register(ColorPickerTool())
         registry.register(CaffeinateTool())
         registry.register(WindowManagerTool())
         registry.register(ClaudeCodeTool())

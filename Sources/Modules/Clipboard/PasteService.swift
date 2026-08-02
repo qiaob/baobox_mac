@@ -118,8 +118,7 @@ enum PasteService {
             if plainText {
                 pasteboard.setString(item.imageFilename ?? "", forType: .string)
             } else {
-                guard let filename = item.imageFilename,
-                      let data = ClipboardCrypto.read(from: ClipboardStore.imagesDir.appendingPathComponent(filename)),
+                guard let data = ClipboardStore.imageData(for: item),
                       let image = NSImage(data: data) else {
                     return false
                 }

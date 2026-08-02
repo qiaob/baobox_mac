@@ -68,7 +68,8 @@ final class ClipboardPanelController: NSObject {
             onTogglePin: { [weak self] item in self?.store.togglePin(item.id) },
             onDelete: { [weak self] item in self?.delete(item) },
             onClose: { [weak self] in self?.hide() },
-            onCopyText: { [weak self] text in self?.copyOnly(text) }
+            onCopyText: { [weak self] text in self?.copyOnly(text) },
+            onPreviewImage: { [weak self] item in self?.previewImage(item) }
         )
         let hosting = NSHostingView(rootView: content)
 
@@ -215,5 +216,29 @@ final class ClipboardPanelController: NSObject {
     private func delete(_ item: ClipboardItem) {
         store.delete(item.id)
         viewModel.clampSelection()
+    }
+
+    /// 图片条目开独立预览窗看原图。面板是 floating 层级会挡在标准窗口前面，
+    /// 与「大窗编辑」同款处理 —— 开窗后收面板。
+    private func previewImage(_ item: ClipboardItem) {
+        guard let image = ClipboardStore.image(for: item) else { return }
+        var rect = NSRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+        let data = ClipboardStore.imageData(for: item)
+        ImagePreviewWindow.present(
+            image: cg,
+            title: L("clipboard.preview.open"),
+            actions: [
+                ImagePreviewWindow.Action(title: L("clipboard.preview.copyImage"),
+                                          isDefault: true, closesWindow: true) { [weak self] in
+                    // 复制的就是历史里这张图，抑制监听避免同图再记一条。
+                    self?.monitor.ignoreNextChange = true
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects([image])
+                    if let data { pasteboard.setData(data, forType: .png) }
+                }
+            ])
+        hide()
     }
 }
