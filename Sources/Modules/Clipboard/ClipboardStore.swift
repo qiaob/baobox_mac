@@ -152,8 +152,8 @@ final class ClipboardStore: ObservableObject {
         scheduleSave()
     }
 
-    /// 按关键字找片段（关键字展开用）。重名时取列表里的第一条（收藏置顶且顺序稳定，
-    /// 所以"第一条"对用户是可预期的）。
+    /// 按关键字找片段（关键字展开用）。重名时取列表里的第一条 —— 列表按时间新→旧，
+    /// 即「最近设置的赢」，对用户是可预期的。
     func snippet(forKeyword keyword: String) -> ClipboardItem? {
         items.first { $0.isPinned && $0.keyword == keyword }
     }
@@ -214,10 +214,9 @@ final class ClipboardStore: ObservableObject {
     // MARK: - 内部
 
     private func sortItems() {
-        items.sort { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned && !b.isPinned }
-            return a.createdAt > b.createdAt
-        }
+        // 纯按时间新→旧。收藏不再置顶：收藏有自己的筛选分区，置顶会把「最近复制的」
+        // 从列表顶部挤下去（⌘⌥V 粘最近一条也依赖 items.first 就是最新）。
+        items.sort { $0.createdAt > $1.createdAt }
     }
 
     /// 超出上限时从未置顶的尾部（最旧）淘汰，并删除关联图片。
