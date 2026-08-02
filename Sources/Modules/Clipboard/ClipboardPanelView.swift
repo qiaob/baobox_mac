@@ -75,6 +75,19 @@ final class ClipboardPanelViewModel: ObservableObject {
         else if selectedIndex >= count { selectedIndex = count - 1 }
     }
 
+    /// 顶栏 chips 的展示顺序，←/→ 循环切换也走它 —— 单一事实来源。
+    static let filterOrder: [PanelFilter] = [
+        .all, .favorites, .type(.text), .type(.image), .type(.link), .type(.file)
+    ]
+
+    /// ←/→ 在类型筛选间循环切换（越界回绕）。
+    func cycleFilter(_ delta: Int) {
+        let order = Self.filterOrder
+        let current = order.firstIndex(of: filter) ?? 0
+        filter = order[(current + delta + order.count) % order.count]
+        clampSelection()
+    }
+
     // MARK: - 格式识别
 
     /// 只对**当前选中的这一条**跑，纯内存、不落盘。绝不在 ClipboardMonitor 入库时跑 ——
@@ -193,11 +206,20 @@ struct ClipboardPanelView: View {
     @FocusState private var searchFocused: Bool
     @State private var hoveredItemID: UUID?
 
-    private let typeChips: [(String, ClipboardPanelViewModel.PanelFilter)] = [
-        (L("clipboard.chip.all"), .all), (L("clipboard.chip.text"), .type(.text)),
-        (L("clipboard.chip.link"), .type(.link)), (L("clipboard.chip.image"), .type(.image)),
-        (L("clipboard.chip.file"), .type(.file)), (L("clipboard.chip.favorites"), .favorites)
-    ]
+    /// 顺序由 `ClipboardPanelViewModel.filterOrder` 决定（与 ←/→ 切换一致）。
+    private let typeChips: [(String, ClipboardPanelViewModel.PanelFilter)] =
+        ClipboardPanelViewModel.filterOrder.map { (Self.chipLabel($0), $0) }
+
+    private static func chipLabel(_ filter: ClipboardPanelViewModel.PanelFilter) -> String {
+        switch filter {
+        case .all: return L("clipboard.chip.all")
+        case .favorites: return L("clipboard.chip.favorites")
+        case .type(.text): return L("clipboard.chip.text")
+        case .type(.link): return L("clipboard.chip.link")
+        case .type(.image): return L("clipboard.chip.image")
+        case .type(.file): return L("clipboard.chip.file")
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -587,6 +609,7 @@ struct ClipboardPanelView: View {
         HStack(spacing: 12) {
             Text("clipboard.footer.count \(store.items.count)")
             Spacer()
+            hint("←→", L("clipboard.footer.filter"))
             hint("↑↓", L("clipboard.footer.select"))
             hint("⏎", L("clipboard.footer.paste"))
             hint("⌥⏎", L("clipboard.footer.pastePlain"))

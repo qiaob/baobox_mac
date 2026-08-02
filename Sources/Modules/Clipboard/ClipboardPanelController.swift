@@ -146,6 +146,14 @@ final class ClipboardPanelController: NSObject {
         case 0x7E: // ↑
             viewModel.moveSelection(-1)
             return true
+        case 0x7B: // ← 切换类型筛选。搜索框有内容时不拦 —— 留给光标移动。
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleFilter(-1)
+            return true
+        case 0x7C: // → 同上
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleFilter(1)
+            return true
         case 0x24, 0x4C: // Return / Enter
             if let item = viewModel.selectedItem {
                 paste(item, plainText: event.modifierFlags.contains(.option))
