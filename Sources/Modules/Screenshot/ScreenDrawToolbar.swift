@@ -7,6 +7,7 @@ protocol ScreenDrawToolbarDelegate: AnyObject {
     func drawToolbarUndo()
     func drawToolbarRedo()
     func drawToolbarClear()
+    func drawToolbarSave()
     func drawToolbarTogglePassThrough()
     func drawToolbarExit()
 }
@@ -40,6 +41,8 @@ final class ScreenDrawToolbar: NSObject {
     private let idleTint = NSColor(white: 0.92, alpha: 1)
 
     private let widthSteps: [CGFloat] = [2, 4, 7]
+    /// 同一排尺寸按钮：画笔类工具是线宽，文字工具是字号。
+    private let fontSteps: [CGFloat] = [14, 18, 24]
     private var sizeStepIndex = 1
 
     private let colors: [NSColor] = [
@@ -66,6 +69,7 @@ final class ScreenDrawToolbar: NSObject {
         super.init()
         buildContent()
         style.lineWidth = widthSteps[sizeStepIndex]
+        style.fontSize = fontSteps[sizeStepIndex]
         style.color = colors[colorIndex]
     }
 
@@ -76,13 +80,14 @@ final class ScreenDrawToolbar: NSObject {
         toolsRow.orientation = .horizontal
         toolsRow.spacing = 2
 
-        // 不提供马赛克（没有底图可打码）与文字（输入需要 key 窗口，与「尽量不打扰前台 App」冲突）。
+        // 不提供马赛克（没有底图可打码）。文字只在绘制态可用 —— 绘制态本来就持有键盘焦点。
         let toolDefs: [(AnnotationTool, String, String)] = [
             (.pen, "pencil", L("annotation.tool.pen")),
             (.highlighter, "highlighter", L("annotation.tool.highlighter")),
             (.arrow, "arrow.up.right", L("annotation.tool.arrow")),
             (.rect, "rectangle", L("annotation.tool.rect")),
             (.ellipse, "circle", L("annotation.tool.ellipse")),
+            (.text, "textformat", L("annotation.tool.text")),
             (.eraser, "eraser", L("annotation.tool.eraser"))
         ]
         for (tool, symbol, tip) in toolDefs {
@@ -104,6 +109,9 @@ final class ScreenDrawToolbar: NSObject {
                                                    action: #selector(clearTapped)))
 
         toolsRow.addArrangedSubview(separator())
+        toolsRow.addArrangedSubview(makeIconButton(symbol: "square.and.arrow.down",
+                                                   tip: L("screendraw.toolbar.save"),
+                                                   action: #selector(saveTapped)))
         passThroughButton = makeIconButton(symbol: "hand.raised",
                                            tip: L("screendraw.toolbar.passThrough"),
                                            action: #selector(passThroughTapped))
@@ -258,6 +266,7 @@ final class ScreenDrawToolbar: NSObject {
 
     private func pushStyle() {
         style.lineWidth = widthSteps[sizeStepIndex]
+        style.fontSize = fontSteps[sizeStepIndex]
         style.color = colors[colorIndex]
         delegate?.drawToolbarDidChangeStyle(style)
     }
@@ -286,6 +295,7 @@ final class ScreenDrawToolbar: NSObject {
     @objc private func undoTapped() { delegate?.drawToolbarUndo() }
     @objc private func redoTapped() { delegate?.drawToolbarRedo() }
     @objc private func clearTapped() { delegate?.drawToolbarClear() }
+    @objc private func saveTapped() { delegate?.drawToolbarSave() }
     @objc private func passThroughTapped() { delegate?.drawToolbarTogglePassThrough() }
     @objc private func exitTapped() { delegate?.drawToolbarExit() }
 }

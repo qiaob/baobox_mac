@@ -95,6 +95,7 @@ final class ScreenDrawController {
         toolbar?.close()
         toolbar = nil
         for window in windows {
+            window.drawView.endTextEditing(cancel: true)
             window.orderOut(nil)
         }
         windows.removeAll()
@@ -122,6 +123,10 @@ final class ScreenDrawController {
 
     func setPassThrough(_ on: Bool) {
         guard isRunning, on != isPassThrough else { return }
+        if on {
+            // 进入穿透前提交进行中的文字 —— 半截输入框在穿透态既改不了也点不到。
+            for window in windows { window.drawView.endTextEditing(cancel: false) }
+        }
         isPassThrough = on
         for window in windows {
             window.setPassThrough(isPassThrough)
@@ -139,6 +144,56 @@ final class ScreenDrawController {
     func clearAll() {
         for window in windows {
             window.drawView.clear()
+        }
+    }
+
+    /// 保存画板：抓「最近落笔那块屏」的整屏画面 —— 笔迹本来就显示在屏上，自然在画面里；
+    /// 工具条窗口用捕获排除机制剔掉，全程不隐藏任何东西、无闪烁。
+    /// 默认静默走标准结果链（复制 + 按设置落盘 + 入历史），标注不中断；
+    /// 设置里开了「保存后弹预览窗」则结束标注并进入预览（复制/保存/贴图/取字）。
+    func saveCanvas() {
+        guard isRunning else { return }
+        // 半截输入框不该出现在成品里，先落成笔迹。
+        for window in windows { window.drawView.endTextEditing(cancel: false) }
+
+        // 抓屏需要屏幕录制权限（画笔本身不需要）。先转穿透，否则引导窗被画布挡住点不到。
+        guard Permissions.hasScreenRecording else {
+            setPassThrough(true)
+            Permissions.requestScreenRecording()
+            OnboardingController.shared.present()
+            return
+        }
+
+        let host = (activeView?.window as? ScreenDrawOverlayWindow)
+            ?? (toolbar?.panel.parent as? ScreenDrawOverlayWindow)
+            ?? windows.first
+        guard let host, let displayID = host.targetScreen.displayID else { return }
+        let screen = host.targetScreen
+        var excluded: Set<CGWindowID> = []
+        if let toolbar { excluded.insert(CGWindowID(toolbar.panel.windowNumber)) }
+
+        Task { @MainActor in
+            do {
+                let image = try await CaptureEngine.capture(
+                    .displayRect(displayID, rectAK: screen.frame, screen: screen),
+                    excludingWindowIDs: excluded)
+                if ScreenshotSettings.drawSavePreview {
+                    self.stop()
+                    ScreenshotResultHandler.presentPreview(image: image,
+                                                           title: L("screendraw.preview.title"))
+                } else {
+                    ScreenshotResultHandler.handle(image: image, mode: .standard)
+                }
+            } catch {
+                // 画布在最上层吃掉点击，先转穿透否则报错弹窗点不到。
+                self.setPassThrough(true)
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = L("screenshot.error.captureFailed")
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
         }
     }
 
@@ -170,6 +225,10 @@ extension ScreenDrawController: ScreenDrawToolbarDelegate {
 
     func drawToolbarClear() {
         clearAll()
+    }
+
+    func drawToolbarSave() {
+        saveCanvas()
     }
 
     func drawToolbarTogglePassThrough() {

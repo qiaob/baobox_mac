@@ -84,6 +84,13 @@ enum ScreenshotSettings {
         return DrawScreenScope(rawValue: raw) ?? .current
     }
 
+    /// 屏幕标注「保存画板」后是否弹预览窗。默认关 —— 演示/录屏中静默保存不打断；
+    /// 开启则保存即结束标注并进入预览（复制/保存/贴图/取字）。
+    static let drawSavePreviewKey = "screenshot.drawSavePreview"
+    static var drawSavePreview: Bool {
+        UserDefaults.standard.bool(forKey: drawSavePreviewKey)
+    }
+
     /// 屏幕取字的识别语言组合，默认中英混合。
     static let ocrLanguageKey = "screenshot.ocrLanguage"
     static var ocrLanguageOption: TextRecognizer.LanguageOption {
@@ -152,12 +159,40 @@ enum ScreenshotResultHandler {
         copyToPasteboard(png: png, cgImage: image)
     }
 
-    /// 仅落盘、不记历史（长截屏预览这类已自行 record 过的场景；handle 会重复记）。
+    /// 仅落盘、不记历史（预览窗这类已自行 record 过的场景；handle 会重复记）。
     @MainActor
     static func save(image: CGImage) {
         let rep = NSBitmapImageRep(cgImage: image)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
         saveToDisk(png: png)
+    }
+
+    /// 记历史 + 按设置自动落盘 + 开预览窗（保存/取字/贴图/复制）。
+    /// 长截屏完成与屏幕标注「保存画板」（开了弹窗设置时）共用这条链路。
+    @MainActor
+    static func presentPreview(image: CGImage, title: String) {
+        ScreenshotHistoryStore.shared.record(image: image)
+        if ScreenshotSettings.autoSave {
+            save(image: image)
+        }
+        ImagePreviewWindow.present(
+            image: image,
+            title: title,
+            actions: [
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.save")) {
+                    save(image: image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.ocr")) {
+                    OCRResultWindow.present(image: image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.pin"), closesWindow: true) {
+                    ScreenshotTool.pinCentered(image)
+                },
+                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.copy"),
+                                          isDefault: true, closesWindow: true) {
+                    copy(image: image)
+                }
+            ])
     }
 
     private static func copyToPasteboard(png: Data, cgImage: CGImage) {

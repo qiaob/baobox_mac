@@ -88,28 +88,8 @@ final class ScrollingCaptureController {
     /// 拼接结果先入历史、按设置落盘 —— 预览窗误关也不丢图；不再自动复制，
     /// 长图往往要先检查有无错位，预览窗里的「复制」才是明确意图。
     private static func presentResult(_ image: CGImage) {
-        ScreenshotHistoryStore.shared.record(image: image)
-        if ScreenshotSettings.autoSave {
-            ScreenshotResultHandler.save(image: image)
-        }
-        ImagePreviewWindow.present(
-            image: image,
-            title: L("screenshot.longshot.preview.title"),
-            actions: [
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.save")) {
-                    ScreenshotResultHandler.save(image: image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.ocr")) {
-                    OCRResultWindow.present(image: image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.pin"), closesWindow: true) {
-                    ScreenshotTool.pinCentered(image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.copy"),
-                                          isDefault: true, closesWindow: true) {
-                    ScreenshotResultHandler.copy(image: image)
-                }
-            ])
+        ScreenshotResultHandler.presentPreview(image: image,
+                                               title: L("screenshot.longshot.preview.title"))
     }
 
     /// 放弃本次长截屏，不产出任何结果。

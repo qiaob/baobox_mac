@@ -13,6 +13,7 @@ struct ScreenshotSettingsView: View {
     @AppStorage(ScreenshotSettings.recordMixAudioKey) private var recordMixAudio = true
     @AppStorage(ScreenshotSettings.drawScreenScopeKey)
     private var drawScope = ScreenshotSettings.DrawScreenScope.current.rawValue
+    @AppStorage(ScreenshotSettings.drawSavePreviewKey) private var drawSavePreview = false
     @AppStorage(ScreenshotSettings.ocrLanguageKey) private var ocrLanguage = TextRecognizer.LanguageOption.chineseEnglish.rawValue
     @AppStorage(ScreenshotSettings.ocrAutoCopyOnlyKey) private var ocrAutoCopyOnly = false
 
@@ -82,7 +83,11 @@ struct ScreenshotSettingsView: View {
                         Text(scope.displayName).tag(scope.rawValue)
                     }
                 }
+                Toggle("screenshot.settings.drawSavePreview", isOn: $drawSavePreview)
                 Text("screenshot.settings.drawScopeHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("screenshot.settings.drawSavePreviewHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

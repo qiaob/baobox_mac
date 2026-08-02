@@ -11,8 +11,17 @@ final class ScreenDrawView: NSView {
     weak var controller: ScreenDrawController?
 
     var currentTool: AnnotationTool = .pen
-    var style = AnnotationStyle()
+    var style = AnnotationStyle() {
+        didSet {
+            // 正在打字时换色/换字号立即生效（与截图标注一致）。
+            guard let editor = textEditor else { return }
+            editor.font = AnnotationRenderer.textFont(size: style.fontSize)
+            editor.textColor = style.color
+            resizeTextEditorToFit()
+        }
+    }
 
+    private var textEditor: NSTextField?
     private var ops: [AnnotationOp] = []
     private var undoSnapshots: [[AnnotationOp]] = []
     private var redoSnapshots: [[AnnotationOp]] = []
@@ -65,8 +74,15 @@ final class ScreenDrawView: NSView {
         case .pen, .highlighter:
             strokePoints = [point]
             draftShape = .stroke(strokePoints)
-        case .mosaic, .text:
-            break // 屏幕标注不提供这两个工具
+        case .text:
+            // 已有未提交的文字：这一击只负责提交它，不另起新对象（与截图标注一致）。
+            if textEditor != nil {
+                endTextEditing(cancel: false)
+            } else {
+                beginTextEditor(at: point)
+            }
+        case .mosaic:
+            break // 屏幕标注没有底图，无从打码
         }
         needsDisplay = true
     }
@@ -177,10 +193,95 @@ final class ScreenDrawView: NSView {
     }
 
     func clear() {
+        endTextEditing(cancel: true)
         guard !ops.isEmpty else { return }
         pushUndoSnapshot()
         ops.removeAll()
         redoSnapshots.removeAll()
         needsDisplay = true
+    }
+
+    // MARK: - 文字
+
+    private func beginTextEditor(at p: NSPoint) {
+        let height = style.fontSize + 8
+        let editor = NSTextField(frame: NSRect(x: p.x, y: p.y - height / 2, width: 60, height: height))
+        editor.isBezeled = false
+        editor.isBordered = false
+        editor.drawsBackground = false
+        editor.focusRingType = .none
+        editor.font = AnnotationRenderer.textFont(size: style.fontSize)
+        editor.textColor = style.color
+        editor.cell?.wraps = false
+        editor.cell?.isScrollable = true
+        editor.delegate = self
+        editor.wantsLayer = true
+        editor.layer?.borderWidth = 1
+        editor.layer?.borderColor = NSColor(white: 1, alpha: 0.45).cgColor
+        addSubview(editor)
+        textEditor = editor
+        window?.makeFirstResponder(editor)
+    }
+
+    private func resizeTextEditorToFit() {
+        guard let editor = textEditor else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: editor.font ?? AnnotationRenderer.textFont(size: style.fontSize)
+        ]
+        let size = (editor.stringValue as NSString).size(withAttributes: attrs)
+        editor.frame.size = NSSize(width: max(60, size.width + 16),
+                                   height: max(style.fontSize + 8, size.height + 6))
+    }
+
+    /// 提交（或丢弃）进行中的文字输入。穿透/清空/保存/退出前都要调，不能留半截输入框。
+    func endTextEditing(cancel: Bool) {
+        guard let editor = textEditor else { return }
+        let string = editor.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let frame = editor.frame
+        // 先置空再移除：removeFromSuperview 会触发 controlTextDidEndEditing 重入本方法。
+        textEditor = nil
+        editor.removeFromSuperview()
+        window?.makeFirstResponder(self)
+
+        guard !cancel, !string.isEmpty else {
+            needsDisplay = true
+            return
+        }
+        // x+2 抵消 NSTextField cell 的内边距，让提交后的字不跳位（与截图标注同一套换算）。
+        let attr = NSAttributedString(string: string,
+                                      attributes: AnnotationRenderer.textAttributes(style))
+        let textSize = attr.size()
+        let origin = NSPoint(x: frame.minX + 2,
+                             y: frame.minY + (frame.height - textSize.height) / 2)
+        pushUndoSnapshot()
+        ops.append(AnnotationOp(tool: .text, shape: .text(string, at: origin), style: style))
+        redoSnapshots.removeAll()
+        needsDisplay = true
+    }
+}
+
+// MARK: - 文字编辑器回调
+
+extension ScreenDrawView: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        resizeTextEditorToFit()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        endTextEditing(cancel: false)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            // Esc 只取消这条文字，不退出屏幕标注。
+            endTextEditing(cancel: true)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            endTextEditing(cancel: false)
+            return true
+        }
+        return false
     }
 }
