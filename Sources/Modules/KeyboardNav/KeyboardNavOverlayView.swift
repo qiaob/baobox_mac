@@ -1,21 +1,19 @@
 import AppKit
 
-/// 键盘点击标签层：画每个可点击元素的字母标签，捕获键盘输入。透明、非翻转（AppKit 左下原点）。
+/// 键盘点击标签层：画每个可点击元素的字母标签。透明、非翻转（AppKit 左下原点）。
+/// 纯展示 —— 键盘输入由 `KeyboardNavController` 的 CGEventTap 捕获，不经过本视图。
 @MainActor
 final class KeyboardNavOverlayView: NSView {
     private let targets: [HintTarget]
-    private weak var controller: KeyboardNavController?
     private var input = ""
 
-    init(targets: [HintTarget], controller: KeyboardNavController) {
+    init(targets: [HintTarget]) {
         self.targets = targets
-        self.controller = controller
         super.init(frame: .zero)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false }
 
     func updateInput(_ s: String) { input = s; needsDisplay = true }
@@ -58,20 +56,5 @@ final class KeyboardNavOverlayView: NSView {
                               range: NSRange(location: 0, length: matchedLen))
         }
         full.draw(at: NSPoint(x: badge.minX + padX, y: badge.minY + padY))
-    }
-
-    // MARK: - 键盘
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 0x35: // Esc
-            controller?.cancel()
-        case 0x33: // Delete
-            controller?.backspace()
-        default:
-            if let ch = event.charactersIgnoringModifiers?.first, ch.isLetter {
-                controller?.appendInput(String(ch).lowercased())
-            }
-        }
     }
 }

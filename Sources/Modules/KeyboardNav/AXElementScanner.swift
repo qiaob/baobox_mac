@@ -21,6 +21,9 @@ enum AXElementScanner {
 
     /// 遍历 pid 对应 App 的 AX 树，返回可点击元素（带 CG 矩形）。
     static func scan(pid: pid_t) -> [ClickableElement] {
+        // 给本进程发出的所有 AX 调用设默认超时（对 system-wide 元素设置即全局默认，官方语义）：
+        // deadline 只在节点之间检查，拦不住单个卡死的调用 —— 菜单跟踪中的 App 服务 AX 可能很慢。
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.3)
         let appEl = AXUIElementCreateApplication(pid)
         var out: [ClickableElement] = []
         var visited = 0
