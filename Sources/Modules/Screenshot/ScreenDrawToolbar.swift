@@ -12,9 +12,23 @@ protocol ScreenDrawToolbarDelegate: AnyObject {
     func drawToolbarExit()
 }
 
-/// 非激活面板里的按钮需要第一击就响应。
+/// 非激活面板里的按钮需要第一击就响应；悬停回调给自绘 tooltip 用
+/// （系统 tooltip 窗口层级低于 .screenSaver 的工具条，会被面板自己挡住）。
 private final class DrawToolButton: NSButton {
+    var onHover: ((Bool) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
 /// 屏幕标注的工具条：独立浮窗，工具 + 撤销/重做/清空 + 穿透 + 退出，外加颜色与粗细。
@@ -40,6 +54,10 @@ final class ScreenDrawToolbar: NSObject {
     private var statusPanel: NSPanel?
     private var statusLabel: NSTextField?
     private var statusHideWork: DispatchWorkItem?
+    private var tipPanel: NSPanel?
+    private var tipLabel: NSTextField?
+    /// 按钮 → tooltip 文案。悬停那一刻查表，穿透按钮的文案切换即时生效。
+    private var tipForButton: [ObjectIdentifier: String] = [:]
 
     private let accent = NSColor(srgbRed: 0x2B / 255.0, green: 0xC4 / 255.0, blue: 0xB8 / 255.0, alpha: 1)
     private let idleTint = NSColor(white: 0.92, alpha: 1)
@@ -183,7 +201,16 @@ final class ScreenDrawToolbar: NSObject {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
             .withSymbolConfiguration(config)
         button.contentTintColor = idleTint
-        button.toolTip = tip
+        // 不设系统 toolTip：其窗口层级低于 .screenSaver 的工具条，会被面板自己挡住 —— 自绘。
+        tipForButton[ObjectIdentifier(button)] = tip
+        button.onHover = { [weak self, weak button] inside in
+            guard let self, let button else { return }
+            if inside, let text = self.tipForButton[ObjectIdentifier(button)] {
+                self.showTip(text, for: button)
+            } else {
+                self.hideTip()
+            }
+        }
         button.target = self
         button.action = action
         button.widthAnchor.constraint(equalToConstant: 28).isActive = true
@@ -240,71 +267,80 @@ final class ScreenDrawToolbar: NSObject {
 
     func close() {
         statusHideWork?.cancel()
-        if let statusPanel {
-            panel.removeChildWindow(statusPanel)
-            statusPanel.orderOut(nil)
+        for bubble in [statusPanel, tipPanel].compactMap({ $0 }) {
+            panel.removeChildWindow(bubble)
+            bubble.orderOut(nil)
         }
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)
     }
 
-    // MARK: - 状态提示
+    // MARK: - 浮条（状态提示 + 自绘 tooltip 共用底座）
+
+    /// 无边框小气泡：深底圆角 + 居中一行字，鼠标穿透。层级与工具条一致（.screenSaver），
+    /// 挂成工具条子窗口后永远压在面板之上 —— 系统 tooltip 做不到这点。
+    private func makeBubblePanel() -> (NSPanel, NSTextField) {
+        let bubble = NSPanel(contentRect: .zero,
+                             styleMask: [.borderless, .nonactivatingPanel],
+                             backing: .buffered, defer: false)
+        bubble.level = .screenSaver
+        bubble.backgroundColor = .clear
+        bubble.isOpaque = false
+        bubble.hasShadow = true
+        bubble.hidesOnDeactivate = false
+        bubble.ignoresMouseEvents = true
+        bubble.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let background = NSView()
+        background.wantsLayer = true
+        background.layer?.backgroundColor = NSColor(white: 0.13, alpha: 0.96).cgColor
+        background.layer?.cornerRadius = 7
+
+        let label = NSTextField(labelWithString: "")
+        label.font = .systemFont(ofSize: 11.5)
+        label.lineBreakMode = .byTruncatingMiddle
+        label.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: background.centerYAnchor)
+        ])
+        bubble.contentView = background
+        return (bubble, label)
+    }
+
+    /// 填文案、按内容定宽、摆到指定原点并作为工具条子窗口浮出。
+    private func present(_ bubble: NSPanel, label: NSTextField, text: String,
+                         color: NSColor, originFor: (NSSize) -> NSPoint) {
+        label.stringValue = text
+        label.textColor = color
+        let textWidth = (text as NSString).size(withAttributes: [.font: label.font ?? .systemFont(ofSize: 11.5)]).width
+        let size = NSSize(width: min(max(textWidth + 22, 60), 420), height: 26)
+        bubble.setContentSize(size)
+        bubble.setFrameOrigin(originFor(size))
+        if bubble.parent == nil {
+            panel.addChildWindow(bubble, ordered: .above)
+        }
+        bubble.orderFrontRegardless()
+    }
 
     /// 在工具条正下方浮一条短暂提示（保存成功/失败）。
     /// 不用 NSAlert：画布吃掉全屏点击，模态弹窗点不到；演示场景里弹窗也太打断 ——
     /// 小浮条提示完自己消失。工具条可拖动，位置按显示那一刻的工具条位置算。
     func showStatus(_ text: String, isError: Bool = false) {
         statusHideWork?.cancel()
-
-        let toast: NSPanel
-        let label: NSTextField
-        if let existingPanel = statusPanel, let existingLabel = statusLabel {
-            toast = existingPanel
-            label = existingLabel
-        } else {
-            toast = NSPanel(contentRect: .zero,
-                            styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: false)
-            toast.level = .screenSaver
-            toast.backgroundColor = .clear
-            toast.isOpaque = false
-            toast.hasShadow = true
-            toast.hidesOnDeactivate = false
-            toast.ignoresMouseEvents = true
-            toast.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-            let background = NSView()
-            background.wantsLayer = true
-            background.layer?.backgroundColor = NSColor(white: 0.13, alpha: 0.96).cgColor
-            background.layer?.cornerRadius = 7
-
-            let created = NSTextField(labelWithString: "")
-            created.font = .systemFont(ofSize: 11.5)
-            created.lineBreakMode = .byTruncatingMiddle
-            created.translatesAutoresizingMaskIntoConstraints = false
-            background.addSubview(created)
-            NSLayoutConstraint.activate([
-                created.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
-                created.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
-                created.centerYAnchor.constraint(equalTo: background.centerYAnchor)
-            ])
-            toast.contentView = background
-            statusPanel = toast
-            statusLabel = created
-            label = created
+        if statusPanel == nil {
+            let (bubble, label) = makeBubblePanel()
+            statusPanel = bubble
+            statusLabel = label
         }
-
-        label.stringValue = text
-        label.textColor = isError ? .systemOrange : idleTint
-        let textWidth = (text as NSString).size(withAttributes: [.font: label.font ?? .systemFont(ofSize: 11.5)]).width
-        let width = min(max(textWidth + 22, 100), 420)
-        toast.setContentSize(NSSize(width: width, height: 26))
+        guard let statusPanel, let statusLabel else { return }
         let anchor = panel.frame
-        toast.setFrameOrigin(NSPoint(x: anchor.midX - width / 2, y: anchor.minY - 26 - 6))
-        if toast.parent == nil {
-            panel.addChildWindow(toast, ordered: .above)
+        present(statusPanel, label: statusLabel, text: text,
+                color: isError ? .systemOrange : idleTint) { size in
+            NSPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - 6)
         }
-        toast.orderFrontRegardless()
 
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -315,13 +351,32 @@ final class ScreenDrawToolbar: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + (isError ? 4 : 1.8), execute: work)
     }
 
+    /// 自绘 tooltip：悬停按钮时浮在工具条**上方**（与下方的状态提示错开），对准按钮居中。
+    private func showTip(_ text: String, for button: NSView) {
+        if tipPanel == nil {
+            let (bubble, label) = makeBubblePanel()
+            tipPanel = bubble
+            tipLabel = label
+        }
+        guard let tipPanel, let tipLabel, let window = button.window else { return }
+        let buttonRect = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let top = panel.frame.maxY
+        present(tipPanel, label: tipLabel, text: text, color: idleTint) { size in
+            NSPoint(x: buttonRect.midX - size.width / 2, y: top + 6)
+        }
+    }
+
+    private func hideTip() {
+        tipPanel?.orderOut(nil)
+    }
+
     /// 穿透态下按钮换成"划掉的手"，并染成 accent —— 用户必须一眼看出现在点得动下面。
     func setPassThrough(_ on: Bool) {
         let tip = on ? L("screendraw.toolbar.resumeDrawing") : L("screendraw.toolbar.passThrough")
         passThroughButton.image = NSImage(systemSymbolName: on ? "hand.raised.slash" : "hand.raised",
                                           accessibilityDescription: tip)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .medium))
-        passThroughButton.toolTip = tip
+        tipForButton[ObjectIdentifier(passThroughButton)] = tip
         passThroughButton.contentTintColor = on ? accent : idleTint
     }
 
