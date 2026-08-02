@@ -149,6 +149,11 @@ struct ClipboardSettingsView: View {
                     .padding(.leading, 14)
                     Toggle("clipboard.settings.snippetRestore", isOn: $snippetRestoreClipboard)
                         .padding(.leading, 14)
+                    // 「还原剪贴板」不解释实现根本看不懂 —— 展开=写剪贴板+模拟⌘V，开关管的是借完还不还。
+                    Text("clipboard.settings.snippetRestoreHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 14)
                     if !Permissions.hasAccessibility {
                         Text("clipboard.settings.snippetNeedsAX")
                             .font(.caption)
