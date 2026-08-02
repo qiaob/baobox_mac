@@ -43,9 +43,21 @@ final class ClipboardStore: ObservableObject {
         return ClipboardCrypto.read(from: imagesDir.appendingPathComponent(name))
     }
 
+    /// 解密后的整图缓存。文件名即明文内容的 sha256 —— 内容寻址，缓存天然不会过期；
+    /// 加密开关切换只改磁盘密文，明文不变，缓存同样有效。
+    /// 预览区每次渲染都要整图，不缓存的话选中大图「点一下卡一下」。
+    private static let imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 8
+        return cache
+    }()
+
     static func image(for item: ClipboardItem) -> NSImage? {
-        guard let data = imageData(for: item) else { return nil }
-        return NSImage(data: data)
+        guard let name = item.imageFilename else { return nil }
+        if let cached = imageCache.object(forKey: name as NSString) { return cached }
+        guard let data = imageData(for: item), let image = NSImage(data: data) else { return nil }
+        imageCache.setObject(image, forKey: name as NSString)
+        return image
     }
 
     var maxItems: Int {

@@ -295,7 +295,10 @@ struct ClipboardPanelView: View {
                             .id(item.id)
                             .contentShape(Rectangle())
                             .onTapGesture(count: 2) { onPaste(item, false) }
-                            .onTapGesture { viewModel.selectedIndex = index }
+                            // 单击选中不能再用 onTapGesture：与双击并存时它要等双击超时
+                            // 才发火，每次点击都憋 0.3s。simultaneousGesture 第一击立即选中，
+                            // 双击的第二击照常触发粘贴 —— 与 NSTableView 的行为一致。
+                            .simultaneousGesture(TapGesture().onEnded { viewModel.selectedIndex = index })
                     }
                 }
                 .padding(8)
