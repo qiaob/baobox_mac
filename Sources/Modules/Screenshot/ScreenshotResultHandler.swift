@@ -60,6 +60,30 @@ enum ScreenshotSettings {
         RecordFormat(rawValue: UserDefaults.standard.string(forKey: recordFormatKey) ?? "") ?? .mp4
     }
 
+    /// 屏幕标注画笔的作用范围。
+    ///
+    /// 默认**仅当前屏**：画布会吃掉整屏的鼠标事件，把所有屏一起盖住太霸道 ——
+    /// 单屏模式下另一块屏完全不受影响，可以边画边在那边操作。
+    enum DrawScreenScope: String, CaseIterable, Identifiable {
+        case current
+        case all
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .current: return L("screenshot.settings.drawScope.current")
+            case .all: return L("screenshot.settings.drawScope.all")
+            }
+        }
+    }
+
+    static let drawScreenScopeKey = "screenshot.drawScreenScope"
+    static var drawScreenScope: DrawScreenScope {
+        let raw = UserDefaults.standard.string(forKey: drawScreenScopeKey) ?? ""
+        return DrawScreenScope(rawValue: raw) ?? .current
+    }
+
     /// 系统声音 + 麦克风同录时，完成后把双音轨混为单轨（兼容只播首轨的播放器），默认开。
     static let recordMixAudioKey = "screenshot.recordMixAudio"
     static var recordMixAudio: Bool {

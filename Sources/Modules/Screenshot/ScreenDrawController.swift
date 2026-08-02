@@ -17,6 +17,8 @@ final class ScreenDrawController {
 
     private var windows: [ScreenDrawOverlayWindow] = []
     private var toolbar: ScreenDrawToolbar?
+    /// 本 App 失焦的观察者：失焦即自动转穿透，见 `appDidResignActive()`。
+    private var resignObserver: NSObjectProtocol?
     /// 最近一次落笔的画布。撤销/重做只作用于它——多屏下"撤销全部屏幕"是反直觉的。
     private weak var activeView: ScreenDrawView?
 
@@ -31,8 +33,15 @@ final class ScreenDrawController {
     func start() {
         guard !isRunning else { return }
 
-        // 每屏一层画布。多屏各画各的，与截图 overlay 的处理一致。
-        for screen in NSScreen.screens {
+        let mouse = NSEvent.mouseLocation
+        let mouseScreen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
+            ?? NSScreen.main
+        // 作用范围由设置决定：默认只铺鼠标所在屏，另一块屏完全不受影响（可以边画边在那边操作）；
+        // 选「所有屏幕」才每屏一层。多屏各画各的，与截图 overlay 的处理一致。
+        let targets: [NSScreen] = ScreenshotSettings.drawScreenScope == .all
+            ? NSScreen.screens
+            : [mouseScreen].compactMap { $0 }
+        for screen in targets {
             let window = ScreenDrawOverlayWindow(screen: screen, controller: self)
             windows.append(window)
             window.orderFrontRegardless()
@@ -46,10 +55,8 @@ final class ScreenDrawController {
         isRunning = true
         isPassThrough = false
 
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
-            ?? NSScreen.main ?? NSScreen.screens[0]
-        let host = windows.first(where: { $0.targetScreen == screen }) ?? windows[0]
+        let host = windows.first(where: { $0.targetScreen == mouseScreen }) ?? windows[0]
+        let screen = host.targetScreen
 
         let toolbar = ScreenDrawToolbar()
         toolbar.delegate = self
@@ -65,9 +72,25 @@ final class ScreenDrawController {
         NSApp.activate(ignoringOtherApps: true)
         host.makeKeyAndOrderFront(nil)
         host.focusDrawView()
+
+        // 失焦保险：⌘Tab 切走、点通知、切 Space 之后，画布还盖在最上层吃掉全部点击 ——
+        // 用户既点不到切过去的 App，也点不到菜单栏，键盘也不再进画布（Esc / ⌘Z 全失灵），
+        // 观感就是「卡死」。失焦即自动转穿透，笔迹留着、机器照常用。
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                ScreenDrawController.shared.appDidResignActive()
+            }
+        }
     }
 
     func stop() {
+        if let resignObserver {
+            NotificationCenter.default.removeObserver(resignObserver)
+        }
+        resignObserver = nil
         // 先摘工具条（它是画布的子窗口），再关画布 —— 顺序反了会留下孤儿子窗口。
         toolbar?.close()
         toolbar = nil
@@ -86,10 +109,20 @@ final class ScreenDrawController {
         activeView = view
     }
 
+    /// 本 App 失焦 → 自动转穿透（见 `start()` 里装观察者时的说明）。
+    private func appDidResignActive() {
+        guard isRunning, !isPassThrough else { return }
+        setPassThrough(true)
+    }
+
     /// 穿透态：画布放行全部鼠标事件，笔迹还在，下面的 App 照常点。
     func togglePassThrough() {
-        guard isRunning else { return }
-        isPassThrough.toggle()
+        setPassThrough(!isPassThrough)
+    }
+
+    func setPassThrough(_ on: Bool) {
+        guard isRunning, on != isPassThrough else { return }
+        isPassThrough = on
         for window in windows {
             window.setPassThrough(isPassThrough)
         }
