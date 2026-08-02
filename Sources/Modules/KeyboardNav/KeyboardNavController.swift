@@ -30,6 +30,10 @@ final class KeyboardNavController {
         }
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let pid = app.processIdentifier
+        // 不扫描本 App 自己（点完一次 hint 后焦点可能暂留在自家窗口上，此时前台就是自己）：
+        // in-process 的 AX 深遍历会让 AppKit 在后台线程「模拟打开」菜单栏菜单，
+        // 菜单重建里的 NSHostingView 非主线程创建直接崩溃。要点的本来就是别的 App。
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
         currentScreen = Self.focusedScreen(pid: pid)
         active = true
         // AX 遍历可阻塞 → 后台扫描，回主线程显示。
