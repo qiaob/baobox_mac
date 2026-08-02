@@ -3,758 +3,754 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Baobox — macOS 菜单栏效率工具集</title>
-<meta name="description" content="截图、剪贴板、窗口管理、防休眠、键盘点击、AI CLI 助手，装进一个原生 macOS 菜单栏 App。Swift 编写，零第三方依赖，数据只存本机。" />
-<meta name="theme-color" content="#17A398" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#14181A" media="(prefers-color-scheme: dark)" />
+<title>Baobox — 一个菜单栏，装下每天要用的工具</title>
+<meta name="description" content="截图、剪贴板、窗口管理、AI 编程助手，收进一个原生 macOS 菜单栏 App。一次买断，无订阅。" />
+<meta name="theme-color" content="#FBFCFC" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0B100F" media="(prefers-color-scheme: dark)" />
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="canonical" href="https://baobox.app/" />
 
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Baobox" />
-<meta property="og:title" content="Baobox — macOS 菜单栏效率工具集" />
-<meta property="og:description" content="一个菜单栏图标，装下你每天要用的那些工具。原生 Swift，零第三方依赖，数据只存本机。" />
+<meta property="og:title" content="Baobox — 一个菜单栏，装下每天要用的工具" />
+<meta property="og:description" content="截图、剪贴板、窗口管理、AI 编程助手，收进一个原生 macOS 菜单栏 App。一次买断，无订阅。" />
 <meta property="og:url" content="https://baobox.app/" />
+<meta property="og:locale" content="zh_CN" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Baobox — macOS 菜单栏效率工具集" />
-<meta name="twitter:description" content="一个菜单栏图标，装下你每天要用的那些工具。" />
+<meta name="twitter:title" content="Baobox — 一个菜单栏，装下每天要用的工具" />
+<meta name="twitter:description" content="截图、剪贴板、窗口管理、AI 编程助手，收进一个原生 macOS 菜单栏 App。" />
 
 <style>
-  html { -webkit-text-size-adjust: 100%; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   body { margin: 0; }
 </style>
 </head>
 <body>
 <style>
-  /* 令牌沿用仓库里的 docs/design/ui-design-v1.html，官网与 App 同一套色 */
   :root {
-    --bg: #F4F6F5;
+    --ground: #FBFCFC;
+    --ground-2: #F2F5F4;
     --surface: #FFFFFF;
-    --text: #1B2422;
-    --muted: #5D6B68;
-    --faint: #8A9693;
-    --line: #DDE4E2;
+    --ink: #0F1614;
+    --ink-2: #55635F;
+    --ink-3: #8B9995;
+    --hair: #E6ECEA;
     --accent: #17A398;
-    --accent-ink: #0E7C74;
-    --canvas: #E9EEEC;
-    --code-bg: #EDF1F0;
-    --menu-bg: rgba(255, 255, 255, 0.92);
-    --menu-line: #E4EAE8;
-    --shadow: 0 24px 60px -20px rgba(14, 40, 37, 0.28);
-    --ring: rgba(23, 163, 152, 0.35);
+    --accent-deep: #0E7C74;
+    --shadow-lg: 0 40px 80px -32px rgba(11, 46, 42, 0.28), 0 8px 24px -12px rgba(11, 46, 42, 0.12);
+    --shadow-sm: 0 18px 40px -22px rgba(11, 46, 42, 0.30);
+    --wall-a: #DCE9E7;
+    --wall-b: #C6DAD8;
+    --chrome: rgba(255, 255, 255, 0.86);
+    --chrome-hair: rgba(15, 22, 20, 0.09);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #14181A; --surface: #1C2224; --text: #E6ECEA; --muted: #9CAAA6;
-      --faint: #6E7B78; --line: #2A3234; --accent: #2BC4B8; --accent-ink: #7FE0D8;
-      --canvas: #171D1F; --code-bg: #232B2D;
-      --menu-bg: rgba(30, 37, 39, 0.94);
-      --menu-line: #2E3739;
-      --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
-      --ring: rgba(43, 196, 184, 0.4);
+      --ground: #0B100F;
+      --ground-2: #101716;
+      --surface: #141B1A;
+      --ink: #EAF0EE;
+      --ink-2: #98A6A2;
+      --ink-3: #6B7975;
+      --hair: #212B29;
+      --accent: #2BC4B8;
+      --accent-deep: #7FE0D8;
+      --shadow-lg: 0 40px 90px -30px rgba(0, 0, 0, 0.85), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+      --shadow-sm: 0 18px 44px -24px rgba(0, 0, 0, 0.8);
+      --wall-a: #16302E;
+      --wall-b: #0E2422;
+      --chrome: rgba(26, 34, 33, 0.9);
+      --chrome-hair: rgba(255, 255, 255, 0.09);
     }
   }
   :root[data-theme="light"] {
-    --bg: #F4F6F5; --surface: #FFFFFF; --text: #1B2422; --muted: #5D6B68;
-    --faint: #8A9693; --line: #DDE4E2; --accent: #17A398; --accent-ink: #0E7C74;
-    --canvas: #E9EEEC; --code-bg: #EDF1F0;
-    --menu-bg: rgba(255, 255, 255, 0.92); --menu-line: #E4EAE8;
-    --shadow: 0 24px 60px -20px rgba(14, 40, 37, 0.28);
-    --ring: rgba(23, 163, 152, 0.35);
+    --ground: #FBFCFC; --ground-2: #F2F5F4; --surface: #FFFFFF;
+    --ink: #0F1614; --ink-2: #55635F; --ink-3: #8B9995; --hair: #E6ECEA;
+    --accent: #17A398; --accent-deep: #0E7C74;
+    --shadow-lg: 0 40px 80px -32px rgba(11, 46, 42, 0.28), 0 8px 24px -12px rgba(11, 46, 42, 0.12);
+    --shadow-sm: 0 18px 40px -22px rgba(11, 46, 42, 0.30);
+    --wall-a: #DCE9E7; --wall-b: #C6DAD8;
+    --chrome: rgba(255, 255, 255, 0.86); --chrome-hair: rgba(15, 22, 20, 0.09);
   }
   :root[data-theme="dark"] {
-    --bg: #14181A; --surface: #1C2224; --text: #E6ECEA; --muted: #9CAAA6;
-    --faint: #6E7B78; --line: #2A3234; --accent: #2BC4B8; --accent-ink: #7FE0D8;
-    --canvas: #171D1F; --code-bg: #232B2D;
-    --menu-bg: rgba(30, 37, 39, 0.94); --menu-line: #2E3739;
-    --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
-    --ring: rgba(43, 196, 184, 0.4);
+    --ground: #0B100F; --ground-2: #101716; --surface: #141B1A;
+    --ink: #EAF0EE; --ink-2: #98A6A2; --ink-3: #6B7975; --hair: #212B29;
+    --accent: #2BC4B8; --accent-deep: #7FE0D8;
+    --shadow-lg: 0 40px 90px -30px rgba(0, 0, 0, 0.85), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+    --shadow-sm: 0 18px 44px -24px rgba(0, 0, 0, 0.8);
+    --wall-a: #16302E; --wall-b: #0E2422;
+    --chrome: rgba(26, 34, 33, 0.9); --chrome-hair: rgba(255, 255, 255, 0.09);
   }
 
   * { box-sizing: border-box; }
 
   body {
     margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    background: var(--ground);
+    color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
                  "Helvetica Neue", system-ui, sans-serif;
-    font-size: 16px;
-    line-height: 1.65;
+    font-size: 17px;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-  .narrow { max-width: 720px; }
+  .shell { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
 
-  a { color: var(--accent-ink); }
-  a:focus-visible, button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 3px;
-    border-radius: 6px;
-  }
+  h1, h2, h3 { margin: 0; text-wrap: balance; letter-spacing: -0.035em; font-weight: 800; }
+  p { margin: 0; }
 
   .mono {
     font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
     font-variant-numeric: tabular-nums;
   }
 
-  .eyebrow {
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 11.5px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--faint);
-    margin: 0 0 14px;
+  a { color: inherit; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 8px;
   }
 
-  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  /* ── 导航 ─────────────────────────────────────────── */
 
-  /* ---------- 顶部：仿 macOS 菜单栏 ---------- */
-
-  .menubar {
-    position: sticky; top: 0; z-index: 20;
-    display: flex; align-items: center; gap: 18px;
-    height: 30px; padding: 0 18px;
-    background: var(--menu-bg);
-    backdrop-filter: saturate(180%) blur(20px);
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    border-bottom: 1px solid var(--menu-line);
-    font-size: 12.5px;
+  .nav {
+    position: sticky; top: 0; z-index: 40;
+    background: color-mix(in srgb, var(--ground) 82%, transparent);
+    backdrop-filter: saturate(180%) blur(18px);
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.3s ease;
   }
-  .menubar .brand { font-weight: 700; letter-spacing: -0.01em; }
-  .menubar .spacer { flex: 1; }
-  .menubar .tray { display: flex; align-items: center; gap: 14px; color: var(--muted); }
-  .menubar .tray .live {
-    color: var(--accent);
-    position: relative;
+  .nav-in {
+    max-width: 1120px; margin: 0 auto; padding: 16px 28px;
+    display: flex; align-items: center; gap: 14px;
   }
-  .menubar .tray .live::after {
-    content: "";
-    position: absolute; inset: -5px -7px;
-    border-radius: 5px;
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
-  }
-  .menubar .tray svg { display: block; position: relative; z-index: 1; }
-  .menubar .clock { font-size: 12px; }
-
-  /* ---------- Hero ---------- */
-
-  .hero { padding: 84px 0 72px; }
-  .hero-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
-    gap: 56px;
-    align-items: start;
-  }
-  .hero h1 {
-    font-size: clamp(40px, 6vw, 62px);
-    line-height: 1.04;
-    letter-spacing: -0.035em;
-    font-weight: 800;
-  }
-  .hero h1 .dot { color: var(--accent); }
-  .hero .lede {
-    margin: 22px 0 0;
-    font-size: clamp(17px, 2.2vw, 20px);
-    line-height: 1.6;
-    color: var(--muted);
-    max-width: 34em;
-  }
-  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
-
-  .btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    padding: 12px 20px;
-    border-radius: 11px;
-    font-size: 15px; font-weight: 600;
+  .wordmark {
+    display: flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 16.5px; letter-spacing: -0.02em;
     text-decoration: none;
-    border: 1px solid transparent;
-    transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
   }
-  .btn-primary {
-    background: var(--accent); color: #fff;
-    box-shadow: 0 8px 22px -10px var(--accent);
+  .wordmark .glyph {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    color: #fff;
   }
-  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 14px 28px -12px var(--accent); }
-  .btn-ghost {
-    background: transparent; color: var(--text);
-    border-color: var(--line);
+  .nav .grow { flex: 1; }
+  .nav-buy {
+    text-decoration: none;
+    font-size: 14.5px; font-weight: 600;
+    color: var(--ink);
+    padding: 7px 16px;
+    border: 1px solid var(--hair);
+    border-radius: 999px;
+    transition: border-color 0.2s ease, color 0.2s ease;
   }
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent-ink); }
-  .btn small { display: block; font-size: 11px; font-weight: 500; opacity: 0.85; line-height: 1.2; }
+  .nav-buy:hover { border-color: var(--accent); color: var(--accent-deep); }
 
-  .meta {
-    margin-top: 18px;
-    font-size: 13px;
-    color: var(--faint);
-    display: flex; flex-wrap: wrap; gap: 6px 16px;
+  /* ── Hero ─────────────────────────────────────────── */
+
+  .hero { padding: 96px 0 0; text-align: center; }
+  .hero h1 {
+    font-size: clamp(42px, 7.2vw, 84px);
+    line-height: 1.02;
+    letter-spacing: -0.045em;
   }
+  .hero .sub {
+    margin: 26px auto 0;
+    max-width: 30em;
+    font-size: clamp(17px, 2.1vw, 20px);
+    color: var(--ink-2);
+    line-height: 1.65;
+  }
+  .buy-row {
+    margin-top: 38px;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+  .buy {
+    display: inline-flex; align-items: center; gap: 11px;
+    background: var(--ink); color: var(--ground);
+    text-decoration: none;
+    font-size: 16px; font-weight: 600;
+    padding: 15px 30px;
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.18s ease;
+  }
+  .buy:hover { transform: translateY(-2px); box-shadow: 0 26px 50px -24px rgba(11, 46, 42, 0.5); }
+  .buy-note { font-size: 13.5px; color: var(--ink-3); }
+  .buy-note b { color: var(--ink-2); font-weight: 600; }
 
-  /* ---------- Hero 里的下拉菜单还原 ---------- */
+  /* ── Hero 视觉：CSS 还原的桌面场景 ───────────────────── */
 
-  .dropdown {
-    background: var(--menu-bg);
+  .stage {
+    margin: 72px auto 0;
+    max-width: 980px;
+    position: relative;
+    padding-bottom: 40px;
+  }
+  .desk {
+    position: relative;
+    border-radius: 16px;
+    background: linear-gradient(150deg, var(--wall-a), var(--wall-b));
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    aspect-ratio: 16 / 10;
+  }
+  .desk::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(120% 90% at 78% 8%, rgba(255,255,255,0.35), transparent 55%);
+    pointer-events: none;
+  }
+  .desk-bar {
+    display: flex; align-items: center; gap: 20px;
+    height: 26px; padding: 0 14px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--chrome-hair);
+    font-size: 11.5px; color: var(--ink-2);
+    position: relative; z-index: 2;
+  }
+  .desk-bar .grow { flex: 1; }
+  .desk-bar .icons { display: flex; align-items: center; gap: 13px; }
+  .desk-bar .hit { color: var(--accent); position: relative; }
+  .desk-bar .hit::before {
+    content: ""; position: absolute; inset: -4px -6px;
+    border-radius: 5px; background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .desk-bar svg { display: block; position: relative; }
+
+  .panel {
+    position: absolute;
+    top: 34px; right: 18px;
+    width: min(280px, 46%);
+    background: var(--chrome);
     backdrop-filter: saturate(180%) blur(24px);
     -webkit-backdrop-filter: saturate(180%) blur(24px);
-    border: 1px solid var(--menu-line);
-    border-radius: 12px;
-    box-shadow: var(--shadow);
-    padding: 6px;
-    font-size: 13.5px;
-    animation: drop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+    border: 1px solid var(--chrome-hair);
+    border-radius: 11px;
+    box-shadow: 0 24px 50px -18px rgba(8, 30, 28, 0.45);
+    padding: 5px;
+    font-size: 12.5px;
+    z-index: 3;
+    animation: fadeDown 0.7s 0.15s cubic-bezier(0.2, 0.9, 0.3, 1) both;
   }
-  @keyframes drop {
-    from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  .row { display: flex; align-items: center; gap: 9px; padding: 5px 9px; border-radius: 6px; }
+  .row .t { flex: 1; }
+  .row .k { color: var(--ink-3); font-size: 11.5px; }
+  .row.on { background: var(--accent); color: #fff; }
+  .row.on .k { color: rgba(255,255,255,0.8); }
+  .row svg { flex: none; }
+  .sep { height: 1px; background: var(--chrome-hair); margin: 5px 7px; }
+
+  .float {
+    position: absolute;
+    left: 6%; bottom: 10%;
+    width: min(300px, 40%);
+    background: var(--surface);
+    border-radius: 10px;
+    box-shadow: 0 30px 60px -22px rgba(8, 30, 28, 0.5);
+    overflow: hidden;
+    transform: rotate(-2.2deg);
+    z-index: 2;
+    animation: fadeUp 0.7s 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+  .float-top {
+    height: 22px; display: flex; align-items: center; gap: 5px; padding: 0 9px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .dotr { width: 7px; height: 7px; border-radius: 50%; background: var(--hair); }
+  .float-body { padding: 13px; display: grid; gap: 7px; }
+  .bar { height: 7px; border-radius: 4px; background: var(--ground-2); }
+  .bar.a { width: 78%; }
+  .bar.b { width: 92%; }
+  .bar.c { width: 54%; }
+  .bar.hl { background: color-mix(in srgb, var(--accent) 32%, var(--ground-2)); width: 66%; }
+
+  .marquee {
+    position: absolute;
+    right: 8%; bottom: 16%;
+    width: 34%; height: 30%;
+    border: 1.5px solid var(--accent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    z-index: 1;
+    animation: fadeUp 0.7s 0.45s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+  .marquee span {
+    position: absolute; left: 0; bottom: -22px;
+    font-size: 10.5px; color: var(--accent-deep);
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  .marquee i {
+    position: absolute; width: 6px; height: 6px; background: var(--accent);
+    border-radius: 1px;
+  }
+  .marquee i:nth-child(1) { left: -3px; top: -3px; }
+  .marquee i:nth-child(2) { right: -3px; top: -3px; }
+  .marquee i:nth-child(3) { left: -3px; bottom: -3px; }
+  .marquee i:nth-child(4) { right: -3px; bottom: -3px; }
+
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: none; }
   }
-  .drop-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 6px 10px; border-radius: 6px;
-    color: var(--text);
-  }
-  .drop-row .name { flex: 1; }
-  .drop-row .key {
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 12px; color: var(--faint);
-  }
-  .drop-row .chev { color: var(--faint); font-size: 11px; }
-  .drop-row.is-hot { background: var(--accent); color: #fff; }
-  .drop-row.is-hot .key, .drop-row.is-hot .chev { color: rgba(255,255,255,0.85); }
-  .drop-sep { height: 1px; background: var(--menu-line); margin: 6px 8px; }
-  .drop-row svg { flex: none; }
-
-  /* ---------- 主张 ---------- */
-
-  .claims { padding: 12px 0 8px; }
-  .claim-grid {
-    display: grid; gap: 28px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    border-top: 1px solid var(--line);
-    padding-top: 34px;
-  }
-  .claim h3 { font-size: 17px; letter-spacing: -0.01em; margin-bottom: 6px; }
-  .claim p { margin: 0; color: var(--muted); font-size: 14.5px; }
-
-  /* ---------- 工具清单：每行一个「菜单项」 ---------- */
-
-  section { padding: 64px 0; }
-  .sec-head { margin-bottom: 30px; }
-  .sec-head h2 {
-    font-size: clamp(26px, 3.4vw, 34px);
-    letter-spacing: -0.025em;
-    font-weight: 750;
-  }
-  .sec-head p { margin: 10px 0 0; color: var(--muted); max-width: 62ch; }
-
-  .tools {
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    background: var(--surface);
-    overflow: hidden;
-  }
-  .tool {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) auto;
-    gap: 18px;
-    align-items: start;
-    padding: 22px 24px;
-    border-top: 1px solid var(--line);
-  }
-  .tool:first-child { border-top: none; }
-  .tool .ico {
-    width: 40px; height: 40px; border-radius: 10px;
-    display: grid; place-items: center;
-    background: var(--canvas);
-    color: var(--accent-ink);
-  }
-  .tool h3 { font-size: 16.5px; letter-spacing: -0.01em; }
-  .tool p { margin: 6px 0 0; color: var(--muted); font-size: 14.5px; }
-  .tool ul {
-    margin: 10px 0 0; padding: 0; list-style: none;
-    display: flex; flex-wrap: wrap; gap: 6px 8px;
-  }
-  .tool li {
-    font-size: 12.5px; color: var(--muted);
-    background: var(--code-bg);
-    border-radius: 6px; padding: 2px 8px;
-  }
-  .kbd {
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    color: var(--muted);
-    background: var(--code-bg);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
-  .kbd.none { background: transparent; border-style: dashed; color: var(--faint); }
-
-  .soon .tool { opacity: 0.96; }
-  .tag {
-    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-    font-size: 11px; letter-spacing: 0.06em;
-    color: var(--accent-ink);
-    border: 1px solid var(--ring);
-    border-radius: 999px;
-    padding: 2px 9px;
-    white-space: nowrap;
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px) rotate(-2.2deg); }
+    to { opacity: 1; }
   }
 
-  /* ---------- 权限 ---------- */
+  /* ── 定位句 ───────────────────────────────────────── */
 
-  .perm-grid {
-    display: grid; gap: 18px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .perm {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 20px 22px;
-    background: var(--surface);
-  }
-  .perm h3 { font-size: 15px; }
-  .perm p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-
-  .note {
-    margin-top: 24px;
-    border-left: 2px solid var(--accent);
-    padding: 4px 0 4px 18px;
-    color: var(--muted);
-    font-size: 14.5px;
-  }
-
-  /* ---------- 下载 ---------- */
-
-  .download {
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    background: var(--surface);
-    padding: 44px;
+  .thesis { padding: 140px 0 0; }
+  .thesis p {
+    max-width: 20em;
+    margin: 0 auto;
+    font-size: clamp(24px, 3.4vw, 36px);
+    line-height: 1.4;
+    letter-spacing: -0.03em;
+    font-weight: 700;
     text-align: center;
+    text-wrap: balance;
   }
-  .download h2 { font-size: clamp(24px, 3vw, 32px); letter-spacing: -0.025em; }
-  .download p { color: var(--muted); margin: 12px auto 0; max-width: 46ch; }
-  .download .cta-row { justify-content: center; }
+  .thesis p em { font-style: normal; color: var(--ink-3); }
+
+  /* ── 功能区 ───────────────────────────────────────── */
+
+  .feature {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    align-items: center;
+    gap: 72px;
+    padding: 140px 0 0;
+  }
+  .feature.flip .f-copy { order: 2; }
+  .f-tag {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent-deep);
+    display: block; margin-bottom: 18px;
+  }
+  .f-copy h2 { font-size: clamp(28px, 3.8vw, 40px); line-height: 1.15; }
+  .f-copy p { margin-top: 18px; color: var(--ink-2); max-width: 34em; }
+  .f-keys { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .key {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; color: var(--ink-2);
+    border: 1px solid var(--hair); border-radius: 7px;
+    padding: 4px 10px; background: var(--surface);
+  }
+
+  .f-art {
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+    padding: 26px;
+    min-height: 260px;
+    display: grid;
+    align-content: center;
+    gap: 12px;
+  }
+
+  /* 截图：选区 + 工具条 */
+  .art-shot { position: relative; background: linear-gradient(150deg, var(--wall-a), var(--wall-b)); border-radius: 10px; height: 210px; }
+  .art-shot .sel {
+    position: absolute; left: 14%; top: 16%; width: 58%; height: 56%;
+    border: 1.5px solid var(--accent); border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .art-shot .tools {
+    position: absolute; left: 14%; top: calc(16% + 56% + 10px);
+    display: flex; gap: 7px; padding: 6px 9px;
+    background: rgba(20, 26, 25, 0.94); border-radius: 8px;
+  }
+  .art-shot .tools i { width: 11px; height: 11px; border-radius: 3px; background: rgba(255,255,255,0.55); display: block; }
+  .art-shot .tools i.act { background: var(--accent); }
+  .art-shot .size {
+    position: absolute; left: 14%; top: calc(16% - 20px);
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; color: var(--accent-deep);
+  }
+
+  /* 剪贴板：搜索 + 列表 */
+  .art-list { display: grid; gap: 9px; }
+  .art-search {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--hair); border-radius: 9px; padding: 8px 12px;
+    color: var(--ink-3); font-size: 13px;
+  }
+  .art-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 12px; border-radius: 9px; font-size: 13px;
+    background: var(--ground-2);
+  }
+  .art-item.sel { background: color-mix(in srgb, var(--accent) 14%, var(--ground-2)); }
+  .art-item .badge {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; color: var(--ink-3);
+    border: 1px solid var(--hair); border-radius: 5px; padding: 1px 6px;
+  }
+  .art-item .txt { flex: 1; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 窗口管理：网格 */
+  .art-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .art-grid div {
+    aspect-ratio: 4 / 3; border-radius: 7px;
+    background: var(--ground-2); border: 1px solid var(--hair);
+    position: relative; overflow: hidden;
+  }
+  .art-grid div::after {
+    content: ""; position: absolute; background: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .art-grid .l::after { inset: 4px 50% 4px 4px; border-radius: 3px; }
+  .art-grid .r::after { inset: 4px 4px 4px 50%; border-radius: 3px; }
+  .art-grid .q::after { inset: 4px 50% 50% 4px; border-radius: 3px; }
+  .art-grid .f::after { inset: 4px; border-radius: 3px; }
+
+  /* AI 助手：用量条 */
+  .art-meter { display: grid; gap: 14px; }
+  .meter-row { display: grid; gap: 7px; }
+  .meter-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-2); }
+  .meter-head .v {
+    margin-left: auto;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; color: var(--ink);
+  }
+  .track { height: 7px; border-radius: 4px; background: var(--ground-2); overflow: hidden; }
+  .track i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+
+  /* ── 更多 ─────────────────────────────────────────── */
+
+  .more { padding: 150px 0 0; }
+  .more h2 { font-size: clamp(24px, 3.2vw, 32px); text-align: center; }
+  .more-grid {
+    margin-top: 52px;
+    display: grid; gap: 46px 56px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .more-grid h3 { font-size: 17px; letter-spacing: -0.02em; }
+  .more-grid p { margin-top: 7px; color: var(--ink-2); font-size: 15px; }
+
+  /* ── 价格 ─────────────────────────────────────────── */
+
+  .price { padding: 160px 0 0; text-align: center; }
+  .price .amount {
+    font-size: clamp(56px, 9vw, 92px);
+    line-height: 1;
+    letter-spacing: -0.05em;
+    font-weight: 800;
+  }
+  .price .amount span { font-size: 0.42em; letter-spacing: -0.02em; vertical-align: 0.55em; color: var(--ink-2); font-weight: 700; }
+  .price h2 { font-size: clamp(26px, 3.4vw, 34px); margin-bottom: 22px; }
+  .price .terms {
+    margin: 18px auto 0; max-width: 26em;
+    color: var(--ink-2); font-size: 15.5px;
+  }
+  .specs {
+    margin: 46px auto 0;
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 10px 28px;
+    font-size: 14px; color: var(--ink-3);
+    padding-top: 26px;
+    border-top: 1px solid var(--hair);
+    max-width: 760px;
+  }
+
+  /* ── 页脚 ─────────────────────────────────────────── */
 
   footer {
-    border-top: 1px solid var(--line);
-    padding: 30px 0 56px;
-    color: var(--faint);
-    font-size: 13px;
-    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+    margin-top: 140px;
+    border-top: 1px solid var(--hair);
+    padding: 34px 0 64px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 26px;
+    font-size: 14px; color: var(--ink-3);
   }
-  footer .spacer { flex: 1; }
+  footer .grow { flex: 1; }
+  footer a { text-decoration: none; }
+  footer a:hover { color: var(--accent-deep); }
 
-  @media (max-width: 860px) {
-    .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 40px; }
-    .claim-grid { grid-template-columns: minmax(0, 1fr); gap: 22px; }
-    .perm-grid { grid-template-columns: minmax(0, 1fr); }
-    .tool { grid-template-columns: 34px minmax(0, 1fr); gap: 14px; }
-    .tool .kbd, .tool .tag { grid-column: 2; justify-self: start; }
-    .download { padding: 32px 22px; }
+  @media (max-width: 900px) {
+    .feature { grid-template-columns: minmax(0, 1fr); gap: 40px; padding-top: 100px; }
+    .feature.flip .f-copy { order: 0; }
+    .more-grid { grid-template-columns: minmax(0, 1fr); gap: 34px; }
+    .thesis { padding-top: 100px; }
+    .price { padding-top: 110px; }
+    .more { padding-top: 110px; }
+    .panel { width: 54%; top: 32px; right: 10px; }
+    .float { width: 46%; left: 5%; }
+    .marquee { display: none; }
+  }
+  @media (max-width: 560px) {
+    .hero { padding-top: 64px; }
+    .desk { aspect-ratio: 4 / 3.4; }
+    .panel { width: 62%; font-size: 11px; }
+    .float { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
 </style>
 
-<div class="menubar" role="presentation">
-  <span class="brand">Baobox</span>
-  <span class="spacer"></span>
-  <span class="tray">
-    <span class="live" title="Baobox">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4h5A1.5 1.5 0 0 1 16 5.5V7" /><path d="M3 12h18" />
-      </svg>
-    </span>
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" opacity="0.55">
-      <path d="M12 3a9 9 0 1 0 9 9" /><path d="M12 7v5l3 2" />
-    </svg>
-    <span class="clock mono">周六 14:02</span>
-  </span>
-</div>
-
-<div class="wrap hero">
-  <div class="hero-grid">
-    <div>
-      <p class="eyebrow">macOS 14+ · 原生 Swift · 零第三方依赖</p>
-      <h1>一个菜单栏图标，<br />装下你每天要用的那些工具<span class="dot">.</span></h1>
-      <p class="lede">
-        截图、剪贴板、窗口管理、防休眠……这些事现在要装四五个 App，各自常驻后台、各自一套设置。
-        Baobox 把它们做成一个原生 App 里的多个模块：统一入口、统一快捷键、统一设置页。
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href="https://apps.apple.com/app/baobox/id000000000">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M16.4 12.7c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.9-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.6 2.3 2.8 2.2 1.1 0 1.6-.7 2.9-.7 1.3 0 1.7.7 2.9.7 1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.4 1.2-2.5 0 0-2.4-.9-2.4-3.6zM14.2 5.9c.6-.8 1-1.8.9-2.9-.9 0-2 .6-2.6 1.3-.6.7-1.1 1.7-.9 2.7 1 .1 2-.5 2.6-1.1z" />
-          </svg>
-          <span>从 App Store 下载<small>免费 · 需要 macOS 14 Sonoma 或更新</small></span>
-        </a>
-        <a class="btn btn-ghost" href="https://github.com/qiaob/baobox_mac">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 2C6.5 2 2 6.6 2 12.2c0 4.5 2.9 8.3 6.8 9.7.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.4-3.4-1.4-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.2-4.6-5.1 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9 9 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.8-4.6 5.1.4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10.2 10.2 0 0 0 22 12.2C22 6.6 17.5 2 12 2z" />
-          </svg>
-          <span>在 GitHub 上看源码<small>MIT 许可 · 可自行构建</small></span>
-        </a>
-      </div>
-      <p class="meta">
-        <span>无 Dock 图标</span><span>·</span>
-        <span>常驻内存 &lt; 50 MB</span><span>·</span>
-        <span>浅色 / 深色自适应</span><span>·</span>
-        <span>简体中文 / English</span>
-      </p>
-    </div>
-
-    <div class="dropdown" role="presentation">
-      <div class="drop-row is-hot">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
+<nav class="nav">
+  <div class="nav-in">
+    <a class="wordmark" href="#top">
+      <span class="glyph">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <rect x="3" y="8" width="18" height="12" rx="2" /><path d="M9 8V6.5A1.5 1.5 0 0 1 10.5 5h3A1.5 1.5 0 0 1 15 6.5V8" />
         </svg>
-        <span class="name">截图</span><span class="key">⌘⇧2</span>
-      </div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4V3h6v1" /><path d="M9 10h6M9 14h4" />
-        </svg>
-        <span class="name">剪贴板</span><span class="key">⌘⇧V</span>
-      </div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 8h11a4 4 0 0 1 0 8H4z" /><path d="M18 9h1.5a2.5 2.5 0 0 1 0 5H18" /><path d="M6 20h11" />
-        </svg>
-        <span class="name">防休眠</span><span class="chev">›</span>
-      </div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M3 12h9" />
-        </svg>
-        <span class="name">窗口管理</span><span class="chev">›</span>
-      </div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 6l6 12 2-5 5-2z" /><path d="M14 14l5 5" />
-        </svg>
-        <span class="name">键盘点击</span><span class="key">⌃⇧空格</span>
-      </div>
-      <div class="drop-sep"></div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 5h16v14H4z" /><path d="M7 9l3 3-3 3M13 15h4" />
-        </svg>
-        <span class="name">Claude Code 助手</span><span class="chev">›</span>
-      </div>
-      <div class="drop-row">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M9 7l-5 5 5 5M15 7l5 5-5 5" />
-        </svg>
-        <span class="name">Codex 助手</span><span class="chev">›</span>
-      </div>
-      <div class="drop-sep"></div>
-      <div class="drop-row"><span class="name" style="padding-left:25px">设置…</span><span class="key">⌘,</span></div>
-      <div class="drop-row"><span class="name" style="padding-left:25px">退出 Baobox</span><span class="key">⌘Q</span></div>
-    </div>
+      </span>
+      Baobox
+    </a>
+    <span class="grow"></span>
+    <a class="nav-buy" href="https://apps.apple.com/app/baobox/id000000000">在 App Store 购买</a>
   </div>
-</div>
+</nav>
 
-<div class="wrap claims">
-  <div class="claim-grid">
-    <div class="claim">
-      <h3>原生，不是 Electron</h3>
-      <p>Swift 5.9 + SwiftUI/AppKit，零第三方依赖。常驻内存控制在 50 MB 以内，不是每个工具再开一个浏览器内核。</p>
-    </div>
-    <div class="claim">
-      <h3>模块化，随时增减</h3>
-      <p>App 外壳不认识任何具体工具，每个模块自己声明菜单、快捷键与设置页。用不上的工具不会挡路，新工具接进来也不动框架。</p>
-    </div>
-    <div class="claim">
-      <h3>数据只在本机</h3>
-      <p>剪贴板历史、截图、窗口布局全部存在本地磁盘，不上传任何服务器。剪贴板落盘可开启 AES-GCM 加密，密钥进钥匙串。</p>
-    </div>
-  </div>
-</div>
-
-<section class="wrap">
-  <div class="sec-head">
-    <p class="eyebrow">已发布的工具</p>
-    <h2>每一个都做到能替掉一个独立 App 的程度</h2>
-    <p>不是把功能罗列在一起就叫工具集。下面每一项都是按「日常真的用得下去」的标准做的，右侧是出厂快捷键。</p>
-  </div>
-
-  <div class="tools">
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
-        </svg>
-      </span>
-      <div>
-        <h3>截图与录屏</h3>
-        <p>
-          一个快捷键自动识别意图：悬停高亮窗口，单击即截；按下拖拽切区域截图，八向手柄微调、方向键逐像素移动；⏎ 全屏。
-          截完原地标注，也能把图钉在屏幕最上层继续对照。录屏复用同一套选区交互，输出 MP4 或 GIF。
-        </p>
-        <ul>
-          <li>矩形 / 箭头 / 画笔 / 荧光笔 / 马赛克 / 文字</li>
-          <li>像素放大镜 · 实时坐标与色值</li>
-          <li>贴图可缩放、调透明度</li>
-          <li>历史存档，随时找回</li>
-          <li>录制系统声音与麦克风</li>
-        </ul>
-      </div>
-      <span class="kbd">⌘⇧2</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4V3h6v1" /><path d="M9 10h6M9 14h4" />
-        </svg>
-      </span>
-      <div>
-        <h3>剪贴板</h3>
-        <p>
-          文本、图片、文件、链接全都记，浮层面板里即输即搜，⏎ 直接粘回你正在写的地方。
-          密码管理器标记过的内容默认不入库；历史落盘可以加密。选中条目时预览区会自动认出 JWT、JSON、时间戳、Base64，
-          就地给出格式化、解码、生成二维码这些动作。
-        </p>
-        <ul>
-          <li>按类型过滤 · 收藏置顶</li>
-          <li>纯文本粘贴 ⌘⌥V</li>
-          <li>按 App 忽略名单</li>
-          <li>过期自动清理</li>
-          <li>AES-GCM 落盘加密</li>
-        </ul>
-      </div>
-      <span class="kbd">⌘⇧V</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M3 12h9" />
-        </svg>
-      </span>
-      <div>
-        <h3>窗口管理</h3>
-        <p>
-          半屏、四分屏、最大化、居中、跨显示器移动，共 13 条可自定义快捷键。
-          还能把当前所有窗口的位置存成一份布局，接上外接屏或换个工位时一键还原——每条记录带显示器标识与屏内相对位置，
-          分辨率变了也能对上。
-        </p>
-        <ul>
-          <li>完整多显示器支持</li>
-          <li>布局快照与恢复</li>
-          <li>恢复窗口原始位置</li>
-        </ul>
-      </div>
-      <span class="kbd none">出厂不绑定</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 6l6 12 2-5 5-2z" /><path d="M14 14l5 5" />
-        </svg>
-      </span>
-      <div>
-        <h3>键盘点击</h3>
-        <p>
-          按一下快捷键，屏幕上所有可点的东西都会浮出两个字母的标签，敲字母就等于点它——手不用离开键盘。
-          多显示器下标签范围可选当前屏或全部屏。
-        </p>
-        <ul>
-          <li>基于辅助功能，识别真实控件</li>
-          <li>优先走系统点击，不移动真实鼠标</li>
-        </ul>
-      </div>
-      <span class="kbd">⌃⇧空格</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 8h11a4 4 0 0 1 0 8H4z" /><path d="M18 9h1.5a2.5 2.5 0 0 1 0 5H18" /><path d="M6 20h11" />
-        </svg>
-      </span>
-      <div>
-        <h3>防休眠</h3>
-        <p>
-          编译、跑测试、下载大文件时别让屏幕黑掉。菜单里选 15 分钟 / 1 小时 / 2 小时 / 无限期，
-          到点自动释放，菜单实时显示剩余时间。可选连显示器一起防休眠。
-        </p>
-      </div>
-      <span class="kbd none">纯菜单操作</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 5h16v14H4z" /><path d="M7 9l3 3-3 3M13 15h4" />
-        </svg>
-      </span>
-      <div>
-        <h3>Claude Code / Codex 助手</h3>
-        <p>
-          把本地 AI 编程 CLI 的状态收进菜单栏：最近会话一键在终端里续接，5 小时与周额度窗口、今日花费、
-          按天/项目/模型的用量报表，还能用可视化控件改配置文件、装事件通知与危险命令卫士。
-          纯本地文件解析——不调用任何 AI API、不需要登录。
-        </p>
-        <ul>
-          <li>会话续接 · 用量与额度</li>
-          <li>配置可视化，写文件前先备份</li>
-          <li>statusline 生成器 · MCP 面板</li>
-        </ul>
-      </div>
-      <span class="kbd none">出厂不绑定</span>
-    </div>
-  </div>
-</section>
-
-<section class="wrap soon">
-  <div class="sec-head">
-    <p class="eyebrow">正在路上</p>
-    <h2>下一批工具</h2>
-    <p>已经在仓库里开发、尚未随正式版发布的功能。想提前试可以自己从源码构建。</p>
-  </div>
-
-  <div class="tools">
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M12 4v16M8 8l4-4 4 4M8 16l4 4 4-4" />
-        </svg>
-      </span>
-      <div>
-        <h3>长截屏与屏幕取字</h3>
-        <p>
-          框出可滚动区域后自己滚页面，相邻画面按重叠自动对齐拼成一张长图。
-          取字则是用系统 Vision 本地识别选区里的文字，顺带解出画面里的二维码，识错了还能在结果窗里就地改完再复制。
-        </p>
-      </div>
-      <span class="tag">开发中</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M3 17c3-1 4-9 7-9s3 6 6 6 3-4 5-5" /><path d="M4 21h16" />
-        </svg>
-      </span>
-      <div>
-        <h3>屏幕标注画笔</h3>
-        <p>
-          在实时画面上铺一层透明画布直接圈画，讲解和录屏时用。切到穿透模式，笔迹留在屏幕上、下面的 App 照常操作。
-        </p>
-      </div>
-      <span class="tag">开发中</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18" />
-        </svg>
-      </span>
-      <div>
-        <h3>hosts 管理</h3>
-        <p>
-          多套 hosts 方案，菜单里勾一下就生效，写完自动刷新 DNS 缓存。
-          只重写自己那一段，系统条目和你手写的内容原样保留，首次接管前还会备份原文件。
-        </p>
-      </div>
-      <span class="tag">开发中</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M5 7h14M5 12h9M5 17h11" /><path d="M17 15l3 3-3 3" />
-        </svg>
-      </span>
-      <div>
-        <h3>文本片段</h3>
-        <p>
-          常用文本存成片段，在剪贴板面板里搜出来直接粘。给它设个关键字，在任何输入框打「;关键字」就会就地展开。
-        </p>
-      </div>
-      <span class="tag">开发中</span>
-    </div>
-
-    <div class="tool">
-      <span class="ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M4 7h16M4 12h16M4 17h16" /><circle cx="8" cy="7" r="1.6" fill="currentColor" /><circle cx="15" cy="12" r="1.6" fill="currentColor" /><circle cx="10" cy="17" r="1.6" fill="currentColor" />
-        </svg>
-      </span>
-      <div>
-        <h3>网络抓包</h3>
-        <p>
-          菜单栏一键开关的本地 HTTP(S) 抓包器，Mac 与同网手机都能抓，两栏窗口看请求与响应。
-          关掉开关即零后台开销，默认不落盘。
-        </p>
-      </div>
-      <span class="tag">开发中</span>
-    </div>
-  </div>
-</section>
-
-<section class="wrap">
-  <div class="sec-head narrow">
-    <p class="eyebrow">权限与隐私</p>
-    <h2>要什么权限，为什么要，说清楚</h2>
-  </div>
-  <div class="perm-grid">
-    <div class="perm">
-      <h3>屏幕录制</h3>
-      <p>截图、录屏、屏幕取字需要。首次使用时系统会弹窗，也可以随时在系统设置里收回。</p>
-    </div>
-    <div class="perm">
-      <h3>辅助功能</h3>
-      <p>剪贴板回填粘贴、窗口管理、键盘点击需要。没授权时功能降级为仅复制，不会静默失败。</p>
-    </div>
-    <div class="perm">
-      <h3>麦克风（可选）</h3>
-      <p>只有在录屏时打开「录制麦克风」才会请求。默认关闭。</p>
-    </div>
-    <div class="perm">
-      <h3>不需要的</h3>
-      <p>不需要联网账号，不需要后台上传，不收集使用数据。所有工具的数据都留在这台 Mac 上。</p>
-    </div>
-  </div>
-  <p class="note">
-    源码在 GitHub 上公开，任何一条上面的说法都可以自己去代码里核对。
-  </p>
-</section>
-
-<section class="wrap">
-  <div class="download">
-    <h2>装一个，卸四个</h2>
-    <p>macOS 14 Sonoma 或更新版本。首次启动会引导你完成权限设置，两分钟就能用起来。</p>
-    <div class="cta-row">
-      <a class="btn btn-primary" href="https://apps.apple.com/app/baobox/id000000000">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+<main id="top">
+  <header class="hero shell">
+    <h1>一个菜单栏图标，<br />装下每天要用的工具。</h1>
+    <p class="sub">
+      截图、剪贴板、窗口管理、AI 编程助手——不用再装四五个 App，
+      也不用记四五套快捷键。
+    </p>
+    <div class="buy-row">
+      <a class="buy" href="https://apps.apple.com/app/baobox/id000000000">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M16.4 12.7c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.9-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.6 2.3 2.8 2.2 1.1 0 1.6-.7 2.9-.7 1.3 0 1.7.7 2.9.7 1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.4 1.2-2.5 0 0-2.4-.9-2.4-3.6zM14.2 5.9c.6-.8 1-1.8.9-2.9-.9 0-2 .6-2.6 1.3-.6.7-1.1 1.7-.9 2.7 1 .1 2-.5 2.6-1.1z" />
         </svg>
-        <span>从 App Store 下载</span>
+        在 App Store 购买
       </a>
-      <a class="btn btn-ghost" href="https://github.com/qiaob/baobox_mac/releases">
-        <span>或下载 .app 压缩包</span>
+      <p class="buy-note"><b>¥98</b> 一次买断 · 无订阅 · macOS 14 或更新版本</p>
+    </div>
+
+    <div class="stage">
+      <div class="desk" role="img" aria-label="Baobox 在 macOS 菜单栏展开的样子：下拉菜单、截图选区与钉在屏幕上的贴图">
+        <div class="desk-bar">
+          <strong style="font-weight:600;color:var(--ink)">Finder</strong>
+          <span>文件</span><span>编辑</span><span>显示</span>
+          <span class="grow"></span>
+          <span class="icons">
+            <span class="hit">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="8" width="18" height="12" rx="2" /><path d="M9 8V6.5A1.5 1.5 0 0 1 10.5 5h3A1.5 1.5 0 0 1 15 6.5V8" />
+              </svg>
+            </span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity="0.45">
+              <path d="M5 13l3-8 4 14 3-9 2 3h2" />
+            </svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity="0.45">
+              <circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" />
+            </svg>
+            <span class="mono" style="font-size:11px">14:02</span>
+          </span>
+        </div>
+
+        <div class="panel">
+          <div class="row on">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
+            </svg>
+            <span class="t">截图</span><span class="k mono">⌘⇧2</span>
+          </div>
+          <div class="row">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4V3h6v1" />
+            </svg>
+            <span class="t">剪贴板</span><span class="k mono">⌘⇧V</span>
+          </div>
+          <div class="row">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" />
+            </svg>
+            <span class="t">窗口管理</span><span class="k">›</span>
+          </div>
+          <div class="row">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M4 8h11a4 4 0 0 1 0 8H4z" /><path d="M18 9h1.5a2.5 2.5 0 0 1 0 5H18" />
+            </svg>
+            <span class="t">防休眠</span><span class="k">›</span>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M4 5h16v14H4z" /><path d="M7 9l3 3-3 3" />
+            </svg>
+            <span class="t">Claude Code</span><span class="k">›</span>
+          </div>
+          <div class="row">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M9 7l-5 5 5 5M15 7l5 5-5 5" />
+            </svg>
+            <span class="t">Codex</span><span class="k">›</span>
+          </div>
+        </div>
+
+        <div class="float">
+          <div class="float-top"><span class="dotr"></span><span class="dotr"></span><span class="dotr"></span></div>
+          <div class="float-body">
+            <span class="bar a"></span><span class="bar hl"></span><span class="bar b"></span><span class="bar c"></span>
+          </div>
+        </div>
+
+        <div class="marquee">
+          <i></i><i></i><i></i><i></i>
+          <span>820 × 460</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="thesis shell">
+    <p>原生 Swift 写的，不是把网页塞进壳里。<em>常驻内存不到 50 MB。</em></p>
+  </section>
+
+  <section class="feature shell">
+    <div class="f-copy">
+      <span class="f-tag">截图与录屏</span>
+      <h2>按一下，它自己知道你要截什么</h2>
+      <p>
+        悬停高亮窗口，单击即截；按住拖拽就变成区域截图，八向手柄微调、方向键逐像素对齐，
+        像素放大镜实时给出坐标和色值。截完原地标注，或者把图钉在屏幕最上层继续对照着写代码。
+        录屏复用同一套选区，输出 MP4 或 GIF。
+      </p>
+      <div class="f-keys"><span class="key">⌘⇧2 截图</span><span class="key">⌃⇧R 录屏</span></div>
+    </div>
+    <div class="f-art">
+      <div class="art-shot">
+        <span class="size mono">820 × 460</span>
+        <div class="sel"></div>
+        <div class="tools"><i class="act"></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature flip shell">
+    <div class="f-copy">
+      <span class="f-tag">剪贴板</span>
+      <h2>复制过的东西，一直都在</h2>
+      <p>
+        文本、图片、文件、链接全都记下来，浮层里即输即搜，回车直接粘回你正在写的地方。
+        密码管理器标记过的内容默认不入库，历史落盘可以整份加密。
+        选中一条时会自动认出 JWT、JSON、时间戳这些格式，就地给出解码与格式化。
+      </p>
+      <div class="f-keys"><span class="key">⌘⇧V 打开</span><span class="key">⌘⌥V 纯文本粘贴</span></div>
+    </div>
+    <div class="f-art">
+      <div class="art-list">
+        <div class="art-search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
+          </svg>
+          搜索历史…
+        </div>
+        <div class="art-item sel"><span class="badge">JSON</span><span class="txt">{ "userId": 4821, "plan": "pro" }</span></div>
+        <div class="art-item"><span class="badge">链接</span><span class="txt">https://baobox.app/changelog</span></div>
+        <div class="art-item"><span class="badge">图片</span><span class="txt">截图 2026-08-02 14.02.png</span></div>
+        <div class="art-item"><span class="badge">文本</span><span class="txt">git rebase -i origin/main</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature shell">
+    <div class="f-copy">
+      <span class="f-tag">窗口管理</span>
+      <h2>接上外接屏，一键回到原来的样子</h2>
+      <p>
+        半屏、四分屏、最大化、居中、跨显示器移动，十三条快捷键随你定义。
+        也可以把当前所有窗口的位置存成一份布局——换个工位、插上外接屏之后一键还原，
+        分辨率变了也能对得上。
+      </p>
+      <div class="f-keys"><span class="key">布局快照</span><span class="key">多显示器</span><span class="key">恢复原位</span></div>
+    </div>
+    <div class="f-art">
+      <div class="art-grid">
+        <div class="l"></div><div class="r"></div><div class="q"></div><div class="f"></div>
+      </div>
+      <div class="art-grid">
+        <div class="f"></div><div class="q"></div><div class="l"></div><div class="r"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature flip shell">
+    <div class="f-copy">
+      <span class="f-tag">AI 编程助手</span>
+      <h2>Claude Code 和 Codex 的状态，收进菜单栏</h2>
+      <p>
+        最近的会话一键在终端里续接，额度窗口、今日花费、按天与按项目的用量报表一眼看完，
+        配置文件也能用可视化控件改。全部读本机文件——不调用任何 AI 接口，不需要登录。
+      </p>
+      <div class="f-keys"><span class="key">会话续接</span><span class="key">用量与额度</span><span class="key">配置可视化</span></div>
+    </div>
+    <div class="f-art">
+      <div class="art-meter">
+        <div class="meter-row">
+          <div class="meter-head">5 小时窗口<span class="v">62%</span></div>
+          <div class="track"><i style="width:62%"></i></div>
+        </div>
+        <div class="meter-row">
+          <div class="meter-head">本周额度<span class="v">38%</span></div>
+          <div class="track"><i style="width:38%"></i></div>
+        </div>
+        <div class="meter-row">
+          <div class="meter-head">今日花费<span class="v">$4.20</span></div>
+          <div class="track"><i style="width:22%"></i></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="more shell">
+    <h2>还有这些</h2>
+    <div class="more-grid">
+      <div>
+        <h3>键盘点击</h3>
+        <p>屏幕上能点的东西都会浮出两个字母，敲字母就等于点它。手不用离开键盘。</p>
+      </div>
+      <div>
+        <h3>防休眠</h3>
+        <p>编译、跑测试、传大文件时别让屏幕黑掉。定时到点自动释放。</p>
+      </div>
+      <div>
+        <h3>数据只在本机</h3>
+        <p>剪贴板历史、截图、窗口布局都存在本地，不联网、不上传、不收集使用数据。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="price shell">
+    <h2>一次买断，永久使用</h2>
+    <p class="amount">¥98<span> 起</span></p>
+    <p class="terms">
+      在 App Store 购买，随 Apple ID 同步到你名下的每一台 Mac。后续版本免费更新。
+    </p>
+    <div class="buy-row">
+      <a class="buy" href="https://apps.apple.com/app/baobox/id000000000">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M16.4 12.7c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.9-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.6 2.3 2.8 2.2 1.1 0 1.6-.7 2.9-.7 1.3 0 1.7.7 2.9.7 1.2 0 2-1.1 2.7-2.2.9-1.2 1.2-2.4 1.2-2.5 0 0-2.4-.9-2.4-3.6zM14.2 5.9c.6-.8 1-1.8.9-2.9-.9 0-2 .6-2.6 1.3-.6.7-1.1 1.7-.9 2.7 1 .1 2-.5 2.6-1.1z" />
+        </svg>
+        在 App Store 购买
       </a>
     </div>
-  </div>
-</section>
+    <div class="specs">
+      <span>macOS 14 Sonoma 或更新版本</span>
+      <span>Apple 芯片与 Intel 均支持</span>
+      <span>简体中文 / English</span>
+      <span>浅色与深色自适应</span>
+    </div>
+  </section>
 
-<div class="wrap">
-  <footer>
+  <footer class="shell">
     <span>© 2026 Baobox</span>
-    <span class="spacer"></span>
-    <a href="https://github.com/qiaob/baobox_mac">GitHub</a>
-    <a href="https://github.com/qiaob/baobox_mac/issues">反馈问题</a>
-    <span class="mono">MIT License</span>
+    <span class="grow"></span>
+    <a href="mailto:support@baobox.app">support@baobox.app</a>
+    <a href="/privacy">隐私政策</a>
+    <a href="/terms">使用条款</a>
   </footer>
-</div>
+</main>
 
 </body>
 </html>
