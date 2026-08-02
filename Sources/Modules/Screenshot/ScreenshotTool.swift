@@ -40,6 +40,11 @@ final class ScreenshotTool: ToolModule {
                 RecordingController.shared.togglePause()
             })
         }
+        let drawTitle = ScreenDrawController.shared.isRunning
+            ? L("screendraw.menu.stop") : L("screendraw.menu.start")
+        items.append(ClosureMenuItem(title: drawTitle, hotkeyID: "screenshot.draw") {
+            ScreenDrawController.shared.toggle()
+        })
         items.append(historyMenuItem())
         items.append(pinsMenuItem())
         return items
@@ -71,7 +76,14 @@ final class ScreenshotTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x0F, carbonModifiers: KeyCombo.control | KeyCombo.shift) // ⌃⇧R
             ) { [weak self] in
                 self?.toggleRecording()
-            }
+            },
+            HotkeyDefinition(
+                id: "screenshot.draw",
+                title: L("screendraw.menu.start"),
+                subtitle: L("screendraw.hotkey.subtitle"),
+                // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页自行设置。
+                defaultCombo: nil
+            ) { ScreenDrawController.shared.toggle() }
         ]
     }
 
