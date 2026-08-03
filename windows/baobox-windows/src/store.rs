@@ -25,7 +25,11 @@ const CONFIG: &str = "config.ini";
 /// 与历史放同一个目录下 —— Windows 上没有 XDG 那种「配置与数据分家」的惯例，
 /// `%APPDATA%\Baobox\` 一处放全更符合用户的预期（也更好备份）。
 pub fn config_path() -> Option<PathBuf> {
-    dir().and_then(|d| d.parent().map(|base| base.join(CONFIG)))
+    config_path_from(&dir()?)
+}
+
+fn config_path_from(data_dir: &Path) -> Option<PathBuf> {
+    data_dir.parent().map(|base| base.join(CONFIG))
 }
 
 /// 读配置。读不出来就当是空的 —— 配置坏了不该让程序起不来。
@@ -47,18 +51,25 @@ pub fn save_config(config: &Config) -> Result<(), String> {
 
 /// 历史目录。
 pub fn dir() -> Option<PathBuf> {
-    let base = std::env::var("APPDATA")
-        .ok()
+    dir_from(
+        std::env::var("APPDATA").ok().as_deref(),
+        std::env::var("USERPROFILE").ok().as_deref(),
+    )
+}
+
+/// 目录规则的**纯函数**形式。
+///
+/// 环境变量作为参数传进来而不是就地读 —— 测试才能在不碰进程全局状态的前提下
+/// 验证规则。用 `set_var` 写测试的话，`cargo test` 的并行线程会互相踩，
+/// 表现是**偶发**失败（这里真的发生过一次，在 Windows CI 上）。
+fn dir_from(appdata: Option<&str>, userprofile: Option<&str>) -> Option<PathBuf> {
+    let base = appdata
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
             // 一段一段 join，别写 "AppData\\Roaming" —— 那样在非 Windows 上
             // （交叉编译跑测试时）整串会被当成一个目录名
-            Some(
-                PathBuf::from(std::env::var("USERPROFILE").ok()?)
-                    .join("AppData")
-                    .join("Roaming"),
-            )
+            Some(PathBuf::from(userprofile?).join("AppData").join("Roaming"))
         })?;
     Some(base.join("Baobox").join("screenshot"))
 }
@@ -139,34 +150,24 @@ mod tests {
         let roaming = PathBuf::from("C:/Users/me/AppData/Roaming");
         let expected = roaming.join("Baobox").join("screenshot");
 
-        let previous = std::env::var("APPDATA").ok();
-        std::env::set_var("APPDATA", &roaming);
-        assert_eq!(dir(), Some(expected.clone()));
-
+        assert_eq!(dir_from(Some("C:/Users/me/AppData/Roaming"), None), Some(expected.clone()));
         // 空字符串不该被当成有效路径，否则会拼出一个根目录下的路径
-        std::env::set_var("APPDATA", "");
-        std::env::set_var("USERPROFILE", "C:/Users/me");
-        assert_eq!(dir(), Some(expected));
-
-        match previous {
-            Some(value) => std::env::set_var("APPDATA", value),
-            None => std::env::remove_var("APPDATA"),
-        }
+        assert_eq!(dir_from(Some(""), Some("C:/Users/me")), Some(expected.clone()));
+        assert_eq!(dir_from(None, Some("C:/Users/me")), Some(expected));
+        // 两个都没有就只能放弃
+        assert_eq!(dir_from(None, None), None);
     }
 
     #[test]
     fn the_config_sits_beside_the_module_directories_not_inside_one() {
         // 配置是整个 App 的，不属于哪个工具，所以在 Baobox\ 而不是 Baobox\screenshot\
-        let previous = std::env::var("APPDATA").ok();
-        std::env::set_var("APPDATA", "C:/roaming");
-        let config = config_path().unwrap();
-        let history = dir().unwrap();
-        assert_eq!(config, PathBuf::from("C:/roaming").join("Baobox").join("config.ini"));
+        let history = dir_from(Some("C:/roaming"), None).unwrap();
+        let config = config_path_from(&history).unwrap();
+        assert_eq!(
+            config,
+            PathBuf::from("C:/roaming").join("Baobox").join("config.ini")
+        );
         assert!(history.starts_with(config.parent().unwrap()));
-        match previous {
-            Some(value) => std::env::set_var("APPDATA", value),
-            None => std::env::remove_var("APPDATA"),
-        }
     }
 
     #[test]

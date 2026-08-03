@@ -463,7 +463,12 @@ fn register(connection: &Connection, name: &str) -> Result<(), String> {
 ///
 /// 这是 Linux 上最常见的一种「装了但看不到」，值得把话说全。
 fn no_watcher() -> String {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    no_watcher_for(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
+}
+
+/// 同上，桌面名作为参数 —— 测试不必去改进程级的环境变量
+/// （那会和并行跑的别的测试互相踩）。
+fn no_watcher_for(desktop: &str) -> String {
     let hint = if desktop.to_ascii_lowercase().contains("gnome") {
         "检测到 GNOME：它默认不显示托盘图标，需要装一个扩展 —— \
          在 https://extensions.gnome.org 搜索 AppIndicator and KStatusNotifierItem Support 并启用。"
@@ -603,12 +608,15 @@ mod tests {
     #[test]
     fn the_gnome_case_is_called_out_by_name() {
         // GNOME 上「装了但看不到图标」是最常见的一种困惑，必须说清楚
-        std::env::set_var("XDG_CURRENT_DESKTOP", "GNOME");
-        let message = no_watcher();
+        let message = no_watcher_for("ubuntu:GNOME");
         assert!(message.contains("GNOME"));
         assert!(message.contains("扩展"));
         assert!(message.contains("快捷键照常可用"), "要说清楚程序还在跑");
-        std::env::remove_var("XDG_CURRENT_DESKTOP");
+
+        // 别的桌面给的是另一套建议，但同样要声明程序还在跑
+        let other = no_watcher_for("KDE");
+        assert!(!other.contains("扩展"));
+        assert!(other.contains("快捷键照常可用"));
     }
 }
 

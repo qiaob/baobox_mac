@@ -29,11 +29,22 @@ const CONFIG: &str = "config.ini";
 /// 与历史分开放 —— 配置是用户会手动编辑、会想备份的东西，
 /// 混在数据目录里不合 XDG 的习惯。
 pub fn config_dir() -> Option<PathBuf> {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .ok()
+    config_dir_from(
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// 目录规则的**纯函数**形式。
+///
+/// 环境变量作为参数传进来而不是就地读 —— 测试才能在不碰进程全局状态的前提下
+/// 验证规则。用 `set_var` 写测试的话，`cargo test` 的并行线程会互相踩，
+/// 表现是**偶发**失败（Windows 侧真的因此红过一次）。
+fn config_dir_from(xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    let base = xdg
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| Some(PathBuf::from(std::env::var("HOME").ok()?).join(".config")))?;
+        .or_else(|| Some(PathBuf::from(home?).join(".config")))?;
     Some(base.join("baobox"))
 }
 
@@ -61,11 +72,18 @@ pub fn save_config(config: &Config) -> Result<(), String> {
 
 /// 历史目录：`<data>/baobox/screenshot/`。
 pub fn dir() -> Option<PathBuf> {
-    let base = std::env::var("XDG_DATA_HOME")
-        .ok()
+    data_dir_from(
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// 同 [`config_dir_from`]，纯函数形式。
+fn data_dir_from(xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    let base = xdg
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| Some(PathBuf::from(std::env::var("HOME").ok()?).join(".local/share")))?;
+        .or_else(|| Some(PathBuf::from(home?).join(".local").join("share")))?;
     Some(base.join("baobox").join("screenshot"))
 }
 
@@ -138,46 +156,31 @@ mod tests {
 
     #[test]
     fn xdg_data_home_wins_over_the_home_fallback() {
-        // 只验证拼路径的规则；不动真实环境变量之外的东西
-        let previous = std::env::var("XDG_DATA_HOME").ok();
-        std::env::set_var("XDG_DATA_HOME", "/custom/data");
-        assert_eq!(dir(), Some(PathBuf::from("/custom/data/baobox/screenshot")));
-
-        // 空值应当被忽略而不是拼出 "/baobox/..."
-        std::env::set_var("XDG_DATA_HOME", "");
-        let fallback = dir();
-        assert!(
-            fallback.map(|p| p.ends_with("baobox/screenshot")).unwrap_or(true),
-            "空的 XDG_DATA_HOME 应退回 ~/.local/share"
+        assert_eq!(
+            data_dir_from(Some("/custom/data"), None),
+            Some(PathBuf::from("/custom/data/baobox/screenshot"))
         );
-
-        match previous {
-            Some(value) => std::env::set_var("XDG_DATA_HOME", value),
-            None => std::env::remove_var("XDG_DATA_HOME"),
-        }
+        // 空值应当被忽略而不是拼出 "/baobox/..."
+        assert_eq!(
+            data_dir_from(Some(""), Some("/home/me")),
+            Some(PathBuf::from("/home/me/.local/share/baobox/screenshot"))
+        );
+        assert_eq!(data_dir_from(None, None), None);
     }
 
     #[test]
     fn config_and_data_live_in_different_directories() {
         // 配置是用户会手编、会备份的东西，不该和历史缓存混在一起
-        let previous = (
-            std::env::var("XDG_CONFIG_HOME").ok(),
-            std::env::var("XDG_DATA_HOME").ok(),
+        assert_eq!(config_dir_from(Some("/c"), None), Some(PathBuf::from("/c/baobox")));
+        assert_eq!(
+            data_dir_from(Some("/d"), None),
+            Some(PathBuf::from("/d/baobox/screenshot"))
         );
-        std::env::set_var("XDG_CONFIG_HOME", "/c");
-        std::env::set_var("XDG_DATA_HOME", "/d");
-        assert_eq!(config_dir(), Some(PathBuf::from("/c/baobox")));
-        assert_eq!(dir(), Some(PathBuf::from("/d/baobox/screenshot")));
-        assert_eq!(config_path(), Some(PathBuf::from("/c/baobox/config.ini")));
-
-        match previous.0 {
-            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
-        match previous.1 {
-            Some(value) => std::env::set_var("XDG_DATA_HOME", value),
-            None => std::env::remove_var("XDG_DATA_HOME"),
-        }
+        // 同一个 HOME 下两者也不该重合
+        let config = config_dir_from(None, Some("/home/me")).unwrap();
+        let data = data_dir_from(None, Some("/home/me")).unwrap();
+        assert_ne!(config, data);
+        assert!(!data.starts_with(&config));
     }
 
     #[test]
