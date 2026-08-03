@@ -15,20 +15,23 @@
 //! baobox-linux info                      打印环境诊断
 //! ```
 
+mod app;
 mod clipboard;
-mod daemon;
 mod editor;
+mod hotkeys;
 mod ocr;
 mod overlay;
 mod pin;
 mod record;
+mod screenshot_module;
+mod settings_window;
 mod store;
 mod text;
+mod tray;
 mod x11capture;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
-use baobox_core::hotkey::KeyCombo;
 use baobox_core::editor::EditorOutcome;
 use baobox_core::selection::Outcome;
 use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
@@ -58,15 +61,16 @@ fn main() {
 
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
+        Some("app") | None => app::run(),
         Some("capture") => capture(&args[1..]),
         Some("ocr") => run_ocr(&args[1..]),
         Some("record") => run_record(&args[1..]),
         Some("history") => history(&args[1..]),
         Some("scroll") => scroll(&args[1..]),
-        Some("daemon") => run_daemon(&args[1..]),
+        Some("daemon") => app::run(),
         Some("windows") => list_windows(),
         Some("info") => Ok(info()),
-        Some("--help") | Some("-h") | None => Ok(usage()),
+        Some("--help") | Some("-h") => Ok(usage()),
         Some(other) => Err(format!("未知命令 {other}\n\n{}", usage())),
     }
 }
@@ -75,6 +79,7 @@ fn usage() -> String {
     concat!(
         "Baobox Linux —— 截图\n\n",
         "用法：\n",
+        "  baobox-linux                                   常驻运行：托盘图标 + 全局快捷键 + 设置窗口\n",
         "  baobox-linux capture [-o 输出.png]              交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
         "      截完自动进标注编辑器：画框 / 箭头 / 打码 / 写字，再按工具条上的按钮决定去向\n",
         "      --no-edit 跳过编辑，截完直接出图\n",
@@ -86,7 +91,7 @@ fn usage() -> String {
         "  baobox-linux record [--region X,Y,W,H] [--fps 15] [-o 输出.mp4]  录屏（需要 ffmpeg，⏎ 停止）\n",
         "  baobox-linux history [--clear]                                 最近的截图\n",
         "  baobox-linux scroll --region X,Y,W,H [--frames N] [--interval MS] [-o 输出.png]\n",
-        "  baobox-linux daemon [--hotkey Ctrl+Shift+S]\n",
+        "  baobox-linux daemon                            与不带参数一样（老名字，保留兼容）\n",
         "  baobox-linux windows\n",
         "  baobox-linux info\n\n",
         "不指定 -o 时按模板存到 ~/Pictures/Baobox/。"
@@ -548,63 +553,6 @@ fn scroll(args: &[String]) -> Result<String, String> {
     ))
 }
 
-/// 默认全局快捷键。带修饰键，避免抢占普通按键。
-const DEFAULT_HOTKEY: &str = "Ctrl+Shift+S";
-
-/// 常驻：注册全局快捷键，按下即唤起覆盖层截图。
-///
-/// 前台运行（`Ctrl+C` 退出）—— 交给用户自己的 systemd user unit / 桌面自启项去托管，
-/// 比自己 fork 成后台进程更符合 Linux 的习惯，也更好排查。
-fn run_daemon(args: &[String]) -> Result<String, String> {
-    let mut hotkey_text = DEFAULT_HOTKEY.to_string();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--hotkey" => {
-                index += 1;
-                hotkey_text = args.get(index).ok_or("--hotkey 缺少参数")?.clone();
-            }
-            other => return Err(format!("未知参数 {other}")),
-        }
-        index += 1;
-    }
-
-    let combo = KeyCombo::parse(&hotkey_text)?;
-    if !combo.is_safe_global() {
-        return Err(format!(
-            "{combo} 没有修饰键，注册成全局快捷键会把这个键从所有 App 手里抢走。请加上 Ctrl / Alt / Super。"
-        ));
-    }
-
-    let session = X11Session::open()?;
-    let root = session.screen().root;
-    daemon::grab(session.connection(), root, &combo)?;
-
-    println!("Baobox 已常驻：按 {combo} 截图，Ctrl+C 退出。");
-    if x11capture::is_wayland_session() {
-        eprintln!("提示：Wayland 会话下全局快捷键与抓屏都只对 XWayland 有效。");
-    }
-
-    loop {
-        if !daemon::wait_for_trigger(session.connection()) {
-            daemon::ungrab(session.connection(), root, &combo);
-            return Err("与 X 服务器的连接已断开".to_string());
-        }
-        match capture_interactively(&session) {
-            Ok(message) => println!("{message}"),
-            // 单次失败（含用户取消）不该让常驻进程退出
-            Err(message) => eprintln!("{message}"),
-        }
-    }
-}
-
-/// 走一次「覆盖层选择 → 抓屏 → 落盘」。
-fn capture_interactively(session: &X11Session) -> Result<String, String> {
-    let target = interactive_target(session)?;
-    let shot = session.capture(target)?;
-    finish(session, target, shot, None, true, true, true)
-}
-
 /// 铺覆盖层让用户选，返回要抓的矩形。
 ///
 /// 覆盖层在返回前已经销毁并 sync 过，所以接下来的抓屏不会把它自己截进去。
@@ -656,7 +604,7 @@ fn parse_window_id(value: &str) -> Result<u32, String> {
 }
 
 /// 默认保存位置：`~/Pictures/Baobox/<模板>.png`，重名自动加序号。
-fn default_path() -> Result<PathBuf, String> {
+pub fn default_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "$HOME 未设置".to_string())?;
     let dir = Path::new(&home).join("Pictures").join("Baobox");
     let stem = format_template(DEFAULT_TEMPLATE, now_parts());
@@ -677,7 +625,7 @@ fn now_parts() -> DateParts {
 }
 
 /// 当前 Unix 秒。
-fn now_seconds() -> i64 {
+pub fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

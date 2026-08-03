@@ -14,11 +14,50 @@
 //! 索引读不出来、目录建不了，都只让历史变空，**不影响截图本身**。
 //! 为了一个「找回旧截图」的辅助功能把主流程搞失败，得不偿失。
 
+use baobox_core::config::Config;
 use baobox_core::history::{decode_index, encode_index, Entry, History};
 use std::path::{Path, PathBuf};
 
 /// 索引文件名。
 const INDEX: &str = "index.tsv";
+
+/// 配置文件名。
+const CONFIG: &str = "config.ini";
+
+/// 配置目录：`$XDG_CONFIG_HOME/baobox/`，没设就是 `~/.config/baobox/`。
+///
+/// 与历史分开放 —— 配置是用户会手动编辑、会想备份的东西，
+/// 混在数据目录里不合 XDG 的习惯。
+pub fn config_dir() -> Option<PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from(std::env::var("HOME").ok()?).join(".config")))?;
+    Some(base.join("baobox"))
+}
+
+/// 配置文件的完整路径。
+pub fn config_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join(CONFIG))
+}
+
+/// 读配置。读不出来就当是空的 —— 配置坏了不该让程序起不来，
+/// 大不了全用默认值，而用户的文件原样留在那里等他自己看。
+pub fn load_config() -> Config {
+    match config_path().and_then(|path| std::fs::read_to_string(path).ok()) {
+        Some(text) => Config::parse(&text),
+        None => Config::new(),
+    }
+}
+
+/// 写配置。
+pub fn save_config(config: &Config) -> Result<(), String> {
+    let dir = config_dir().ok_or("找不到配置目录（$HOME 与 $XDG_CONFIG_HOME 都没设）")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败：{e}"))?;
+    std::fs::write(dir.join(CONFIG), config.to_text())
+        .map_err(|e| format!("写入配置失败：{e}"))
+}
 
 /// 历史目录：`<data>/baobox/screenshot/`。
 pub fn dir() -> Option<PathBuf> {
@@ -112,6 +151,29 @@ mod tests {
         );
 
         match previous {
+            Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+    }
+
+    #[test]
+    fn config_and_data_live_in_different_directories() {
+        // 配置是用户会手编、会备份的东西，不该和历史缓存混在一起
+        let previous = (
+            std::env::var("XDG_CONFIG_HOME").ok(),
+            std::env::var("XDG_DATA_HOME").ok(),
+        );
+        std::env::set_var("XDG_CONFIG_HOME", "/c");
+        std::env::set_var("XDG_DATA_HOME", "/d");
+        assert_eq!(config_dir(), Some(PathBuf::from("/c/baobox")));
+        assert_eq!(dir(), Some(PathBuf::from("/d/baobox/screenshot")));
+        assert_eq!(config_path(), Some(PathBuf::from("/c/baobox/config.ini")));
+
+        match previous.0 {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match previous.1 {
             Some(value) => std::env::set_var("XDG_DATA_HOME", value),
             None => std::env::remove_var("XDG_DATA_HOME"),
         }

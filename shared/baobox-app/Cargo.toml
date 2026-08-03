@@ -1,0 +1,9 @@
+[package]
+name = "baobox-app"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox 应用框架：工具注册表、菜单模型、设置声明、快捷键规格"
+license = "MIT"
+
+[dependencies]
+baobox-core = { path = "../baobox-core" }

@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod config;
 pub mod editor;
 pub mod filename;
 pub mod geometry;

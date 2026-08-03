@@ -49,6 +49,23 @@ impl Recording {
     }
 }
 
+#[cfg(test)]
+impl Recording {
+    /// 造一个不真的录屏的 `Recording`，只为让「正在录制」这个状态可测。
+    ///
+    /// 菜单在录制中要把「录屏…」换成「停止录制」，那是常驻 App 里唯一的停止入口，
+    /// 值得有测试盯着；而为了测这一条真去起 ffmpeg 既慢又要求环境里有它。
+    pub fn detached() -> Recording {
+        let child = Command::new("sleep")
+            .arg("0")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep 是 POSIX 必备命令");
+        Recording { child }
+    }
+}
+
 /// 开始录制一块区域。
 pub fn start(region: Rect, fps: u32, output: &Path) -> Result<Recording, String> {
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
