@@ -13,7 +13,7 @@ shared/       三平台共用的 Rust 库
 docs/         产品文档与使用手册（面向用户，不分平台）
 ```
 
-`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前只覆盖截图。
+`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前覆盖**截图**与**剪贴板**两个工具。
 
 ## 为什么 Windows / Linux 选 Rust
 
@@ -45,7 +45,11 @@ shared/
 │   ├── hotkey       快捷键组合的解析与格式化（三平台同一套文本格式）
 │   ├── filename     模板格式化、**按平台**消毒、重名去重
 │   ├── config       配置文件模型：行级 INI，改一个键只动那一行
-│   └── history      截图历史环形存储 + 索引文件的编解码
+│   ├── history      截图历史环形存储 + 索引文件的编解码
+│   ├── clipboard    剪贴板历史模型：去重、收藏豁免、过期清理、索引编解码
+│   ├── privacy      敏感内容识别（密码 / 私钥 / 令牌 / 银行卡号，Luhn 校验）
+│   ├── textformat   文本格式识别（JSON / JWT / XML / URL / 时间戳 / Base64）与转换动作
+│   └── snippet      文本片段的关键字展开匹配
 ├── baobox-app/      应用框架（只有两个 Rust 平台用；mac 那边是同构的 Swift 版）
 │   ├── ToolModule   工具接入协议 + ToolRegistry（注册顺序 = 菜单顺序）
 │   ├── menu         托盘菜单模型
@@ -239,7 +243,47 @@ Linux 之所以外挂，是因为**发行版里没有系统级 OCR**，而自带
   很多播放器与浏览器放不了）。停止要往 stdin 写 `q` 让 ffmpeg 自己写文件尾，
   直接杀进程会留下没有 moov box 的 mp4。
 
-### 剪贴板：两个平台是完全不同的模型
+### 剪贴板工具
+
+第二个接进框架的工具（`clipboard` 模块）。历史规则、敏感内容识别、文本工具的
+识别与转换全在 `shared/baobox-core` 里，两个平台共用一份实现与测试；
+平台层只负责「怎么读到变化、怎么把内容交出去、怎么替用户按下 Ctrl+V」。
+
+| 能力 | macOS | Linux | Windows |
+|---|---|---|---|
+| 监听剪贴板变化 | ✅ NSPasteboard 轮询 | ✅ XFIXES `SelectSelectionInput`（**未实测**） | ✅ `AddClipboardFormatListener`（**未实测**） |
+| 文本 / 图片 / 文件 | ✅ | ✅（图片存 PNG，文件读 `text/uri-list`） | ✅（`CF_DIB` → PNG，`CF_HDROP`） |
+| 历史去重 / 收藏 / 过期清理 | ✅ Swift | ✅ 共用 `baobox-core` | ✅ 同左 |
+| 搜索面板（键盘全流程） | ✅ SwiftUI | ✅ GTK ListBox（**未实测**） | ✅ Win32 `LISTBOX`（**未实测**） |
+| **回填粘贴** | ✅ CGEvent | ✅ XTEST（**未实测**） | ✅ `SendInput`（**未实测**） |
+| 敏感内容过滤 | ✅ | ✅ 共用 `baobox_core::privacy` | ✅ 同左 |
+| **落盘加密** | ✅ Keychain + AES-GCM | ✅ Secret Service + AES-GCM | ✅ DPAPI（系统内建，无需密钥环） |
+| 文本工具（识别 + 转换） | ✅ 预览区 | ✅ 面板第二层（Ctrl+T） | ✅ 同左 |
+| 文本片段 | ✅ 含关键字展开 | ⬜ 片段可用，**关键字展开未接** | ⬜ 同左 |
+
+三处平台差异值得单独记：
+
+- **落盘加密的密钥放哪**。macOS 是 Keychain、Linux 是 Secret Service（走 DBus，
+  zbus 已为托盘引进来了），两边都是自己做 AES-256-GCM。Windows **没有密钥这个概念** ——
+  `CryptProtectData` 直接把数据封给当前用户，密钥由系统派生保管。
+  三边共用同一个文件头（`BAOBOX1\n`）区分密文与明文。
+  **拿不到密钥环时不假装加密**：退回明文并明确告诉用户 —— 把密钥和密文放在同一个
+  目录下都用 0600 保护，是一种没有增加任何安全性的自欺。
+- **回填粘贴的顺序**。三个平台一模一样、也一样容易写错：面板要先关掉
+  （否则合成的 Ctrl+V 打到自己身上）→ 等焦点回位（120ms）→ 放剪贴板 → 合成按键。
+  **修饰键要按下去、也要抬起来** —— 只按不抬的话用户接下来打的每个字都带着 Ctrl，
+  而他手上那个键本来就没按下去过，自己解不开。
+- **面板的文本工具是压平的**。macOS 的预览区能自由排版（徽章一行、表格一块、按钮一排），
+  GTK ListBox 与 Win32 `LISTBOX` 都只认「一行一个字符串」，所以压成一张平表 ——
+  压平规则在 `baobox_core::textformat::action_list`，两个平台共用，不各写一遍。
+
+**关键字展开（打 `;sig` 自动替换）两个平台都没有接**：它需要一个全局键盘监听
+（X11 的 XRecord / Windows 的 `WH_KEYBOARD_LL`），是整个产品里最需要谨慎的一段代码，
+而这里没有图形环境可以验证它。匹配规则已经写好并测过（`baobox_core::snippet`），
+缺的只是喂给它按键的那一层。与其在设置里摆一个打开了也不生效的开关 ——
+那比不给这个选项更糟 —— 不如先不给。
+
+### 剪贴板底层：两个平台是完全不同的模型
 
 | | 模型 | 后果 |
 |---|---|---|
@@ -275,9 +319,10 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 （`TextOutW` / X11 核心字体 / Core Text）。X11 侧用 `poly_text8` / `poly_text16`
 而不是 `image_text8` —— 后者会用背景色刷一遍文字盒子，把下面的截图盖掉。
 
-### 其余五个工具
+### 其余四个工具
 
-尚未开始（屏幕取字与录屏已随截图一起做完，不在此列）。按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
+尚未开始（屏幕取字与录屏已随截图一起做完，剪贴板已完成，均不在此列）。
+按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
 
 | 工具 | 难度 | 关键点 |
 |---|---|---|
@@ -285,7 +330,10 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 | 防休眠 | 🟢 | Windows `SetThreadExecutionState`；Linux DBus inhibit |
 | 窗口管理 | 🟡 | Win32 `SetWindowPos`；Linux EWMH `_NET_WM_STATE` |
 | 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI |
-| 剪贴板 | 🟠 | 剪贴板本身好办，但 macOS 的 `org.nspasteboard.*` 隐私标记约定**别处没有对应物**，隐私过滤要重新设计 |
+
+剪贴板移植时那条「macOS 的 `org.nspasteboard.*` 隐私标记约定别处没有对应物」的
+预判是对的：两个平台改成**按内容识别**（`baobox_core::privacy`：令牌前缀、
+私钥头、Luhn 校验过的卡号），并且**默认根本不入库**，而不是记下来再打码。
 
 ## 怎么构建
 

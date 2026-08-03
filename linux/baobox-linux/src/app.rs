@@ -23,7 +23,7 @@
 //! `poll_for_event` + 30ms 睡眠，每圈看一眼「要不要重新注册」的标志位 ——
 //! 每秒三十次空转的代价，换来「改完立刻生效」。
 
-use crate::{hotkeys, screenshot_module, settings_window, store, x11capture};
+use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, x11capture};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -49,6 +49,7 @@ const DRAIN: Duration = Duration::from_millis(50);
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
+    registry.register(Box::new(clipboard_module::ClipboardTool::new()));
     registry
 }
 
@@ -322,7 +323,7 @@ mod tests {
     fn the_registry_ships_with_the_screenshot_tool() {
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID]);
+        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
     }
 
     #[test]
@@ -361,8 +362,8 @@ mod tests {
         let registry = build_registry();
         let config = Config::new();
         let resolved = resolve_hotkeys(&registry, &config);
-        // 出厂只有截图那一个是绑定的
-        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 1);
+        // 出厂绑定的：截图与剪贴板面板各一个
+        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 2);
         assert!(resolved.len() > 1, "其余规格仍然要列出来，设置里才看得到");
     }
 

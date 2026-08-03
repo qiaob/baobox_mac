@@ -6,7 +6,7 @@
 ## 这是什么
 
 `linux/baobox-linux/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前只实现了截图这一个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**与**剪贴板**两个工具。
 
 ```
 baobox-linux                    常驻：托盘 + 快捷键 + 设置
@@ -47,11 +47,16 @@ dbus-run-session -- xvfb-run -a cargo test
 | `tray.rs` | StatusNotifierItem + dbusmenu |
 | `settings_window.rs` | GTK3 设置窗口 |
 | `hotkeys.rs` | 多快捷键中心 |
-| `clipboard.rs` | X11 selection 剪贴板 |
+| `clipboard.rs` | X11 selection 剪贴板（写） |
+| `clipboard_read.rs` | 监听剪贴板变化并读回内容（XFIXES + INCR 分片） |
+| `clipboard_panel.rs` | 剪贴板面板（两层：条目 / 文本工具） |
+| `clipboard_store.rs` | 剪贴板历史落盘 + Secret Service 加密 |
+| `clipboard_module.rs` | 剪贴板工具的 `ToolModule` 适配层 |
+| `paste.rs` | 回填粘贴（XTEST 合成 Ctrl+V） |
 | `ocr.rs` / `record.rs` | 外挂 tesseract / ffmpeg |
 | `store.rs` | 配置与历史的落盘位置 |
 
-## 这个平台上最容易踩的七个坑
+## 这个平台上最容易踩的九个坑
 
 1. **X11 剪贴板要本进程持续应答**。`serve` 是阻塞的 —— 常驻模式下**必须**用
    `serve_detached`，否则复制一次界面冻 60 秒。命令行下用阻塞版才对（进程本来就要退出）。
@@ -67,6 +72,10 @@ dbus-run-session -- xvfb-run -a cargo test
    否则截出来的图在预览里整张透明。
 7. **弹 GTK 输入框前必须 ungrab 键盘**。编辑器抓着键盘，不松开的话输入法
    一个按键都收不到 —— 现象和根本没接输入法一模一样，极难查。
+8. **合成按键时修饰键要按下去、也要抬起来**（`paste.rs`）。只按不抬的话，
+   用户接下来打的每个字都带着 Ctrl，而他手上那个键本来就没按下去过，自己解不开。
+9. **回填粘贴的三步顺序不能错**：先关面板（否则 Ctrl+V 打到自己身上）→
+   等焦点回位（`FOCUS_SETTLE`）→ 放剪贴板 → 合成按键。
 
 ## 线程模型
 
@@ -75,7 +84,12 @@ dbus-run-session -- xvfb-run -a cargo test
 快捷键线程  自己一条 X11 连接，poll + 30ms 轮询（要能被「配置变了」叫醒）
 zbus 线程   zbus 自己起的，应答桌面对托盘/菜单的调用
 剪贴板线程  每次复制起一条，持有 selection 直到别人接管
+剪贴板监听  自己一条 X11 连接，只做「读出来 → 塞进队列」，不碰 Store
 ```
+
+剪贴板监听为什么不碰 Store：Store 归主线程，跨线程共享就得为它上锁，
+而上锁之后主线程画面板时会被监听线程卡住。队列里只放已经读出来的内容，
+主线程每次要用 Store 之前 `drain()` 一次。
 
 **注册表留在主线程** —— 工具不是 `Send`，而且动作本来就是模态的、一次一个。
 三条线之间只传 `String` 形式的动作 id。
@@ -105,7 +119,8 @@ zbus 线程   zbus 自己起的，应答桌面对托盘/菜单的调用
 | | 位置 |
 |---|---|
 | 配置 | `$XDG_CONFIG_HOME/baobox/config.ini`，默认 `~/.config/baobox/` |
-| 历史 | `$XDG_DATA_HOME/baobox/screenshot/`，默认 `~/.local/share/baobox/` |
+| 截图历史 | `$XDG_DATA_HOME/baobox/screenshot/`，默认 `~/.local/share/baobox/` |
+| 剪贴板历史 | `$XDG_DATA_HOME/baobox/clipboard/`（`clipboard.dat` + `images/`） |
 | 截图默认存放 | `~/Pictures/Baobox/`，可被设置里的「保存到」覆盖 |
 
 配置与数据分开放，符合 XDG 的习惯 —— 配置是用户会手编、会备份的东西。

@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod clipboard;
 pub mod config;
 pub mod editor;
 pub mod filename;
@@ -26,6 +27,9 @@ pub mod geometry;
 pub mod hotkey;
 pub mod history;
 pub mod ocr;
+pub mod privacy;
 pub mod selection;
+pub mod snippet;
 pub mod stitch;
+pub mod textformat;
 pub mod toolbar;

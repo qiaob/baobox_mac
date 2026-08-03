@@ -366,7 +366,9 @@ unsafe fn control_ex(
 }
 
 /// 系统的界面字体。
-unsafe fn message_font() -> HFONT {
+///
+/// 剪贴板面板也用它 —— 两个窗口该长得像同一个程序里出来的。
+pub unsafe fn message_font() -> HFONT {
     let mut metrics = NONCLIENTMETRICSW {
         cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
         ..Default::default()

@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{hotkeys, screenshot_module, settings_window, store, tray};
+use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -33,6 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
+    registry.register(Box::new(clipboard_module::ClipboardTool::new()));
     registry
 }
 
@@ -281,10 +282,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_registry_ships_with_the_screenshot_tool() {
+    fn the_registry_ships_with_the_screenshot_and_clipboard_tools() {
+        // 注册顺序 = 菜单顺序，三个平台一致
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID]);
+        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
     }
 
     #[test]
@@ -306,10 +308,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_capture_hotkey_ships_bound() {
+    fn only_two_hotkeys_ship_bound() {
         let resolved = resolve_hotkeys(&build_registry(), &Config::new());
-        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 1);
-        assert!(resolved.len() > 1, "其余规格仍要列出来，设置里才看得到");
+        // 出厂绑定的：截图与剪贴板面板各一个。其余易冲突的组合留给用户自设
+        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 2);
+        assert!(resolved.len() > 2, "其余规格仍要列出来，设置里才看得到");
     }
 
     #[test]
@@ -340,6 +343,7 @@ mod tests {
                 screenshot_module::CAPTURE_FULL,
                 screenshot_module::OCR,
                 screenshot_module::RECORD,
+                clipboard_module::PANEL,
             ]
         );
     }

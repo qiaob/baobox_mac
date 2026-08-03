@@ -20,12 +20,20 @@ mod app;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod clipboard_module;
+mod clipboard_panel;
+#[cfg(windows)]
+mod clipboard_read;
+mod clipboard_store;
+#[cfg(windows)]
 mod editor;
 #[cfg(windows)]
 mod hotkeys;
 mod ocr;
 #[cfg(windows)]
 mod overlay;
+#[cfg(windows)]
+mod paste;
 #[cfg(windows)]
 mod pin;
 #[cfg(windows)]
