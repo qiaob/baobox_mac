@@ -16,22 +16,29 @@
 
 mod gdi;
 #[cfg(windows)]
+mod app;
+#[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
-mod daemon;
-#[cfg(windows)]
 mod editor;
+#[cfg(windows)]
+mod hotkeys;
 mod ocr;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod pin;
+#[cfg(windows)]
+mod screenshot_module;
+#[cfg(windows)]
+mod settings_window;
+#[cfg(windows)]
+mod tray;
 mod record;
 mod store;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
-use baobox_core::hotkey::KeyCombo;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,15 +65,16 @@ fn main() {
 
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
+        Some("app") | None => run_app(),
         Some("capture") => capture(&args[1..]),
         Some("ocr") => run_ocr(&args[1..]),
         Some("record") => run_record(&args[1..]),
         Some("history") => history(&args[1..]),
-        Some("daemon") => run_daemon(&args[1..]),
+        Some("daemon") => run_app(),
         Some("scroll") => scroll(&args[1..]),
         Some("windows") => list_windows(),
         Some("info") => Ok(info()),
-        Some("--help") | Some("-h") | None => Ok(usage()),
+        Some("--help") | Some("-h") => Ok(usage()),
         Some(other) => Err(format!("未知命令 {other}\n\n{}", usage())),
     }
 }
@@ -75,6 +83,7 @@ fn usage() -> String {
     concat!(
         "Baobox Windows —— 截图\n\n",
         "用法：\n",
+        "  baobox-windows                                 常驻运行：托盘图标 + 全局快捷键 + 设置窗口\n",
         "  baobox-windows capture [-o 输出.png]            交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
         "      截完自动进标注编辑器：画框 / 箭头 / 打码 / 写字，再按工具条上的按钮决定去向\n",
         "      --no-edit 跳过编辑，截完直接出图\n",
@@ -86,7 +95,7 @@ fn usage() -> String {
         "  baobox-windows record [--region X,Y,W,H] [--fps 15] [-o 输出.mp4]  录屏（需要 ffmpeg，⏎ 停止）\n",
         "  baobox-windows history [--clear]                               最近的截图\n",
         "  baobox-windows scroll --region X,Y,W,H [--frames N] [--interval MS]\n",
-        "  baobox-windows daemon [--hotkey Ctrl+Shift+S]\n",
+        "  baobox-windows daemon                          与不带参数一样（老名字，保留兼容）\n",
         "  baobox-windows windows\n",
         "  baobox-windows info\n\n",
         "不指定 -o 时按模板存到 %USERPROFILE%\\Pictures\\Baobox\\。"
@@ -493,65 +502,15 @@ fn interactive_target() -> Result<Rect, String> {
     }
 }
 
-/// 默认全局快捷键。带修饰键，避免抢占普通按键。
-const DEFAULT_HOTKEY: &str = "Ctrl+Shift+S";
-
-/// 解析 `daemon` 的参数，返回快捷键组合。与平台无关，故不加 cfg。
-fn parse_daemon_args(args: &[String]) -> Result<KeyCombo, String> {
-    let mut text = DEFAULT_HOTKEY.to_string();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--hotkey" => {
-                index += 1;
-                text = args.get(index).ok_or("--hotkey 缺少参数")?.clone();
-            }
-            other => return Err(format!("未知参数 {other}")),
-        }
-        index += 1;
-    }
-    let combo = KeyCombo::parse(&text)?;
-    if !combo.is_safe_global() {
-        return Err(format!(
-            "{combo} 没有修饰键，注册成全局快捷键会把这个键从所有 App 手里抢走。请加上 Ctrl / Alt / Win。"
-        ));
-    }
-    Ok(combo)
-}
-
-/// 常驻：注册全局快捷键 + 托盘图标，按下即唤起覆盖层截图。
+/// 常驻：托盘图标 + 全局快捷键 + 设置窗口。
 #[cfg(windows)]
-fn run_daemon(args: &[String]) -> Result<String, String> {
-    let combo = parse_daemon_args(args)?;
-    gdi::prepare();
-    let daemon = daemon::Daemon::start(&combo)?;
-    println!("{}", daemon::describe(&combo));
-
-    while let Some(action) = daemon.next_action() {
-        match action {
-            daemon::Action::Capture => match capture_once() {
-                Ok(message) => println!("{message}"),
-                // 单次失败（含用户取消）不该让常驻进程退出
-                Err(message) => eprintln!("{message}"),
-            },
-            daemon::Action::Quit => break,
-        }
-    }
-    Ok("已退出。".to_string())
+fn run_app() -> Result<String, String> {
+    app::run()
 }
 
 #[cfg(not(windows))]
-fn run_daemon(args: &[String]) -> Result<String, String> {
-    let _ = parse_daemon_args(args)?;
+fn run_app() -> Result<String, String> {
     Err("本程序只能在 Windows 上运行。".to_string())
-}
-
-/// 走一次「覆盖层选择 → 抓屏 → 落盘」。
-#[cfg(windows)]
-fn capture_once() -> Result<String, String> {
-    let target = interactive_target()?;
-    let shot = gdi::capture(target)?;
-    finish(target, shot, None, true, true, true)
 }
 
 /// `capture` 的命令行参数。
@@ -631,7 +590,7 @@ fn parse_window_id(value: &str) -> Result<isize, String> {
 }
 
 /// 默认保存位置：`%USERPROFILE%\Pictures\Baobox\<模板>.png`。
-fn default_path() -> Result<PathBuf, String> {
+pub fn default_path() -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "%USERPROFILE% 未设置".to_string())?;
@@ -650,7 +609,7 @@ fn now_parts() -> DateParts {
 }
 
 /// 当前 Unix 秒。
-fn now_seconds() -> i64 {
+pub fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -704,16 +663,6 @@ mod tests {
         let d = civil_from_unix(1_785_760_496);
         assert_eq!((d.year, d.month, d.day), (2026, 8, 3));
         assert_eq!((d.hour, d.minute, d.second), (12, 34, 56));
-    }
-
-    #[test]
-    fn daemon_rejects_unmodified_hotkeys() {
-        let args = vec!["--hotkey".to_string(), "S".to_string()];
-        assert!(parse_daemon_args(&args).unwrap_err().contains("没有修饰键"));
-        let ok = vec!["--hotkey".to_string(), "Ctrl+Alt+P".to_string()];
-        assert_eq!(parse_daemon_args(&ok).unwrap().to_string(), "Ctrl+Alt+P");
-        // 不给参数时用默认值
-        assert_eq!(parse_daemon_args(&[]).unwrap().to_string(), "Ctrl+Shift+S");
     }
 
     #[test]

@@ -10,11 +10,40 @@
 //! 用 `%APPDATA%` 而不是 `%LOCALAPPDATA%`：截图历史是用户数据，
 //! 在域账号的漫游配置里跟着走是合理的。
 
+use baobox_core::config::Config;
 use baobox_core::history::{decode_index, encode_index, Entry, History};
 use std::path::{Path, PathBuf};
 
 /// 索引文件名。
 const INDEX: &str = "index.tsv";
+
+/// 配置文件名。
+const CONFIG: &str = "config.ini";
+
+/// 配置文件的完整路径。
+///
+/// 与历史放同一个目录下 —— Windows 上没有 XDG 那种「配置与数据分家」的惯例，
+/// `%APPDATA%\Baobox\` 一处放全更符合用户的预期（也更好备份）。
+pub fn config_path() -> Option<PathBuf> {
+    dir().and_then(|d| d.parent().map(|base| base.join(CONFIG)))
+}
+
+/// 读配置。读不出来就当是空的 —— 配置坏了不该让程序起不来。
+pub fn load_config() -> Config {
+    match config_path().and_then(|path| std::fs::read_to_string(path).ok()) {
+        Some(text) => Config::parse(&text),
+        None => Config::new(),
+    }
+}
+
+/// 写配置。
+pub fn save_config(config: &Config) -> Result<(), String> {
+    let path = config_path().ok_or("找不到配置目录（%APPDATA% 未设置）")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败：{e}"))?;
+    }
+    std::fs::write(path, config.to_text()).map_err(|e| format!("写入配置失败：{e}"))
+}
 
 /// 历史目录。
 pub fn dir() -> Option<PathBuf> {
@@ -118,6 +147,21 @@ mod tests {
         std::env::set_var("USERPROFILE", "C:/Users/me");
         assert_eq!(dir(), Some(expected));
 
+        match previous {
+            Some(value) => std::env::set_var("APPDATA", value),
+            None => std::env::remove_var("APPDATA"),
+        }
+    }
+
+    #[test]
+    fn the_config_sits_beside_the_module_directories_not_inside_one() {
+        // 配置是整个 App 的，不属于哪个工具，所以在 Baobox\ 而不是 Baobox\screenshot\
+        let previous = std::env::var("APPDATA").ok();
+        std::env::set_var("APPDATA", "C:/roaming");
+        let config = config_path().unwrap();
+        let history = dir().unwrap();
+        assert_eq!(config, PathBuf::from("C:/roaming").join("Baobox").join("config.ini"));
+        assert!(history.starts_with(config.parent().unwrap()));
         match previous {
             Some(value) => std::env::set_var("APPDATA", value),
             None => std::env::remove_var("APPDATA"),
