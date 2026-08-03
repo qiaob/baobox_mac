@@ -97,6 +97,33 @@ impl X11Session {
         &self.conn.setup().roots[self.screen_num]
     }
 
+    /// 建一个不映射的小窗口，用来持有剪贴板 selection。
+    ///
+    /// X11 的剪贴板所有权必须挂在某个窗口上，而覆盖层那会儿已经销毁了，
+    /// 所以这里单开一个"隐形"窗口专门干这件事。
+    pub fn create_owner_window(&self) -> Result<Window, String> {
+        let window = self.conn.generate_id().map_err(|e| e.to_string())?;
+        self.conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                self.root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &x11rb::protocol::xproto::CreateWindowAux::new()
+                    .override_redirect(1)
+                    .event_mask(x11rb::protocol::xproto::EventMask::PROPERTY_CHANGE),
+            )
+            .map_err(|e| format!("创建剪贴板宿主窗口失败：{e}"))?;
+        self.conn.flush().map_err(|e| e.to_string())?;
+        Ok(window)
+    }
+
     /// 抓一块区域。区域会先裁进屏幕范围 —— 越界的请求在 X11 上会直接报错，
     /// 而用户拖出屏幕边缘是很常见的操作，不该因此失败。
     pub fn capture(&self, region: Rect) -> Result<Capture, String> {

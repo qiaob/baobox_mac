@@ -25,3 +25,4 @@ pub mod hotkey;
 pub mod history;
 pub mod selection;
 pub mod stitch;
+pub mod toolbar;

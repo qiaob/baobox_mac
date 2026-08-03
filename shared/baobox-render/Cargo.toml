@@ -1,0 +1,9 @@
+[package]
+name = "baobox-render"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox 共享渲染层：把标注图形光栅化进 RGBA 缓冲"
+license = "MIT"
+
+[dependencies]
+baobox-core = { path = "../baobox-core" }

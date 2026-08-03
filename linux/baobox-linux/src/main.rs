@@ -15,6 +15,7 @@
 //! baobox-linux info                      打印环境诊断
 //! ```
 
+mod clipboard;
 mod daemon;
 mod overlay;
 mod x11capture;
@@ -68,6 +69,7 @@ fn usage() -> String {
         "  baobox-linux capture --full [-o 输出.png]\n",
         "  baobox-linux capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-linux capture --window <id> [-o 输出.png]\n",
+        "      默认复制到剪贴板并保存；--no-copy / --no-save 可分别关掉\n",
         "  baobox-linux scroll --region X,Y,W,H [--frames N] [--interval MS] [-o 输出.png]\n",
         "  baobox-linux daemon [--hotkey Ctrl+Shift+S]\n",
         "  baobox-linux windows\n",
@@ -133,6 +135,9 @@ fn capture(args: &[String]) -> Result<String, String> {
     let mut window: Option<u32> = None;
     let mut full = false;
     let mut output: Option<PathBuf> = None;
+    // 与 macOS 版默认一致：复制到剪贴板 + 同时落盘
+    let mut copy = true;
+    let mut save = true;
 
     let mut index = 0;
     while index < args.len() {
@@ -152,6 +157,8 @@ fn capture(args: &[String]) -> Result<String, String> {
                 index += 1;
                 output = Some(PathBuf::from(args.get(index).ok_or("-o 缺少路径")?));
             }
+            "--no-copy" => copy = false,
+            "--no-save" => save = false,
             other => return Err(format!("未知参数 {other}")),
         }
         index += 1;
@@ -165,12 +172,7 @@ fn capture(args: &[String]) -> Result<String, String> {
     // --full 直接走 capture_screen；其余先解析出目标区域再抓
     if full {
         let shot = session.capture_screen()?;
-        let path = match output {
-            Some(path) => path,
-            None => default_path()?,
-        };
-        baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-        return Ok(format!("已保存 {}（{}×{}）", path.display(), shot.width, shot.height));
+        return deliver(&session, &shot, output, copy, save);
     }
 
     let target = match (region, window) {
@@ -186,14 +188,55 @@ fn capture(args: &[String]) -> Result<String, String> {
     };
 
     let shot = session.capture(target)?;
-    let path = match output {
-        Some(path) => path,
-        None => default_path()?,
-    };
-    baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+    deliver(&session, &shot, output, copy, save)
+}
+
+/// 截图的收尾：按需复制到剪贴板、按需落盘，返回给用户看的一行话。
+///
+/// 复制放在保存之后 —— X11 的剪贴板要靠本进程持续服务，一进去就阻塞了，
+/// 落盘必须先做完。
+fn deliver(
+    session: &X11Session,
+    shot: &x11capture::Capture,
+    output: Option<PathBuf>,
+    copy: bool,
+    save: bool,
+) -> Result<String, String> {
+    let mut notes: Vec<String> = Vec::new();
+
+    if save || output.is_some() {
+        let path = match output {
+            Some(path) => path,
+            None => default_path()?,
+        };
+        baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+        notes.push(format!("已保存 {}", path.display()));
+    }
+
+    if copy {
+        let png = baobox_image::encode_rgba(shot.width, shot.height, &shot.rgba)?;
+        let owner = session.create_owner_window()?;
+        notes.push(format!(
+            "已复制到剪贴板（持有 {} 秒，期间可粘贴）",
+            clipboard::DEFAULT_SERVE.as_secs()
+        ));
+        println!("{}（{}×{}）", notes.join("，"), shot.width, shot.height);
+        // X11 剪贴板必须由本进程持续服务，所以这一步会阻塞
+        clipboard::serve_png(
+            session.connection(),
+            owner,
+            &png,
+            Some(clipboard::DEFAULT_SERVE),
+        )?;
+        return Ok(String::new());
+    }
+
+    if notes.is_empty() {
+        return Err("--no-copy 与 --no-save 同时给了，什么都不会发生".to_string());
+    }
     Ok(format!(
-        "已保存 {}（{}×{}）",
-        path.display(),
+        "{}（{}×{}）",
+        notes.join("，"),
         shot.width,
         shot.height
     ))

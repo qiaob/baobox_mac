@@ -9,11 +9,14 @@
 //! baobox-windows capture --region X,Y,W,H
 //! baobox-windows capture --window <hwnd>
 //! baobox-windows daemon [--hotkey 组合]   常驻，按快捷键唤起截图（默认 Ctrl+Shift+S）
+//! baobox-windows scroll --region X,Y,W,H  长截屏（滚动拼接）
 //! baobox-windows windows
 //! baobox-windows info
 //! ```
 
 mod gdi;
+#[cfg(windows)]
+mod clipboard;
 #[cfg(windows)]
 mod daemon;
 #[cfg(windows)]
@@ -50,6 +53,7 @@ fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
         Some("capture") => capture(&args[1..]),
         Some("daemon") => run_daemon(&args[1..]),
+        Some("scroll") => scroll(&args[1..]),
         Some("windows") => list_windows(),
         Some("info") => Ok(info()),
         Some("--help") | Some("-h") | None => Ok(usage()),
@@ -65,6 +69,8 @@ fn usage() -> String {
         "  baobox-windows capture --full [-o 输出.png]\n",
         "  baobox-windows capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-windows capture --window <hwnd> [-o 输出.png]\n",
+        "      默认复制到剪贴板并保存；--no-copy / --no-save 可分别关掉\n",
+        "  baobox-windows scroll --region X,Y,W,H [--frames N] [--interval MS]\n",
         "  baobox-windows daemon [--hotkey Ctrl+Shift+S]\n",
         "  baobox-windows windows\n",
         "  baobox-windows info\n\n",
@@ -135,12 +141,146 @@ fn capture(args: &[String]) -> Result<String, String> {
     };
 
     let shot = gdi::capture(target)?;
-    let path = match options.output {
+    deliver(&shot, options.output, options.copy, options.save)
+}
+
+/// 截图的收尾：按需复制到剪贴板、按需落盘。
+///
+/// Windows 的剪贴板由系统托管，交出去之后本进程可以直接退出 ——
+/// 与 X11 必须常驻服务是完全不同的模型。
+#[cfg(windows)]
+fn deliver(
+    shot: &gdi::Capture,
+    output: Option<PathBuf>,
+    copy: bool,
+    save: bool,
+) -> Result<String, String> {
+    let mut notes: Vec<String> = Vec::new();
+
+    if save || output.is_some() {
+        let path = match output {
+            Some(path) => path,
+            None => default_path()?,
+        };
+        baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+        notes.push(format!("已保存 {}", path.display()));
+    }
+    if copy {
+        clipboard::copy_rgba(shot.width, shot.height, &shot.rgba)?;
+        notes.push("已复制到剪贴板".to_string());
+    }
+    if notes.is_empty() {
+        return Err("--no-copy 与 --no-save 同时给了，什么都不会发生".to_string());
+    }
+    Ok(format!("{}（{}×{}）", notes.join("，"), shot.width, shot.height))
+}
+
+/// 长截屏：定时抓同一块区域，按重叠自动对齐拼成长图。
+///
+/// 与 Linux / macOS 同一套算法（`baobox_core::stitch`），三边拼出来的结果一致。
+#[cfg(windows)]
+fn scroll(args: &[String]) -> Result<String, String> {
+    use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
+
+    let mut region: Option<Rect> = None;
+    let mut frames = 20usize;
+    let mut interval_ms = 400u64;
+    let mut output: Option<PathBuf> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--region" => {
+                index += 1;
+                region = Some(parse_region(args.get(index).ok_or("--region 缺少参数")?)?);
+            }
+            "--frames" => {
+                index += 1;
+                frames = args
+                    .get(index)
+                    .ok_or("--frames 缺少参数")?
+                    .parse()
+                    .map_err(|_| "--frames 需要一个整数".to_string())?;
+            }
+            "--interval" => {
+                index += 1;
+                interval_ms = args
+                    .get(index)
+                    .ok_or("--interval 缺少参数")?
+                    .parse()
+                    .map_err(|_| "--interval 需要毫秒数".to_string())?;
+            }
+            "-o" | "--output" => {
+                index += 1;
+                output = Some(PathBuf::from(args.get(index).ok_or("-o 缺少路径")?));
+            }
+            other => return Err(format!("未知参数 {other}")),
+        }
+        index += 1;
+    }
+
+    let region = region.ok_or("长截屏需要 --region X,Y,W,H 指定可滚动区域")?;
+    if frames < 2 {
+        return Err("--frames 至少为 2".to_string());
+    }
+
+    gdi::prepare();
+    let mut stitcher = Stitcher::new();
+    let mut kept: Vec<Vec<u8>> = Vec::new();
+    let mut frame_height = 0usize;
+
+    eprintln!("开始长截屏：现在滚动页面，将抓取 {frames} 帧（间隔 {interval_ms}ms）…");
+    for _ in 0..frames {
+        let shot = gdi::capture(region)?;
+        frame_height = shot.height as usize;
+        let gray = baobox_image::to_gray(&shot.rgba);
+        let Some(frame) = Frame::from_gray(shot.width as usize, shot.height as usize, &gray) else {
+            continue;
+        };
+        if stitcher.push(frame) {
+            kept.push(shot.rgba);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+    }
+
+    if kept.len() < 2 {
+        return Err(
+            "没有拼接到任何内容。请确认框选的是可滚动区域，并在命令运行期间滚动页面。".to_string(),
+        );
+    }
+
+    let refs: Vec<&[u8]> = kept.iter().map(|f| f.as_slice()).collect();
+    let canvas = compose_rgba(
+        &refs,
+        frame_height,
+        stitcher.placements(),
+        stitcher.width(),
+        stitcher.total_height(),
+    )
+    .ok_or("拼接失败：帧尺寸不一致")?;
+
+    let path = match output {
         Some(path) => path,
         None => default_path()?,
     };
-    baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-    Ok(format!("已保存 {}（{}×{}）", path.display(), shot.width, shot.height))
+    baobox_image::write_rgba(
+        &path,
+        stitcher.width() as u32,
+        stitcher.total_height() as u32,
+        &canvas,
+    )?;
+    Ok(format!(
+        "已保存 {}（{}×{}，由 {} 帧拼成）",
+        path.display(),
+        stitcher.width(),
+        stitcher.total_height(),
+        kept.len()
+    ))
+}
+
+#[cfg(not(windows))]
+fn scroll(_args: &[String]) -> Result<String, String> {
+    Err("本程序只能在 Windows 上运行。".to_string())
 }
 
 #[cfg(not(windows))]
@@ -228,9 +368,7 @@ fn run_daemon(args: &[String]) -> Result<String, String> {
 fn capture_once() -> Result<String, String> {
     let target = interactive_target()?;
     let shot = gdi::capture(target)?;
-    let path = default_path()?;
-    baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-    Ok(format!("已保存 {}（{}×{}）", path.display(), shot.width, shot.height))
+    deliver(&shot, None, true, true)
 }
 
 /// `capture` 的命令行参数。
@@ -239,6 +377,9 @@ struct CaptureOptions {
     region: Option<Rect>,
     window: Option<isize>,
     output: Option<PathBuf>,
+    /// 与 macOS 版默认一致：复制到剪贴板 + 同时落盘
+    copy: bool,
+    save: bool,
 }
 
 fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
@@ -247,6 +388,8 @@ fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
         region: None,
         window: None,
         output: None,
+        copy: true,
+        save: true,
     };
     let mut index = 0;
     while index < args.len() {
@@ -264,6 +407,8 @@ fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
                 index += 1;
                 options.output = Some(PathBuf::from(args.get(index).ok_or("-o 缺少路径")?));
             }
+            "--no-copy" => options.copy = false,
+            "--no-save" => options.save = false,
             other => return Err(format!("未知参数 {other}")),
         }
         index += 1;
