@@ -7,6 +7,9 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac
     steps:
       - uses: actions/checkout@v4
 

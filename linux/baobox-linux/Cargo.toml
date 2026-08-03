@@ -1,0 +1,11 @@
+[package]
+name = "baobox-linux"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox Linux 实现：X11 抓屏与截图 CLI"
+license = "MIT"
+
+[dependencies]
+baobox-core = { path = "../../shared/baobox-core" }
+baobox-image = { path = "../../shared/baobox-image" }
+x11rb = "0.13"

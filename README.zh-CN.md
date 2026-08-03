@@ -205,6 +205,21 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 
 详见[数据与隐私](docs/manual/privacy-and-data.md)。
 
+
+## 仓库结构
+
+本仓库同时容纳三个平台的实现：
+
+```
+mac/       macOS（Swift + SwiftUI/AppKit）—— 完整的 0.0.6
+windows/   Windows（Rust + Win32/GDI）—— 截图，开发中
+linux/     Linux（Rust + X11）—— 截图，开发中
+shared/    三平台共用的 Rust 核心（几何 / 选区 / 标注 / 拼接 / 文件名）
+```
+
+macOS 版是当前唯一完整可用的版本。Windows 与 Linux 刚起步，只覆盖截图且暂为命令行入口，
+详见[多平台架构](docs/multiplatform/ARCHITECTURE.md)。
+
 ## 从源码构建
 
 工程用 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 生成，`project.yml` 里
@@ -213,24 +228,24 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 ```bash
 brew install xcodegen
 git clone https://github.com/qiaob/baobox_mac.git
-cd baobox_mac
+cd baobox_mac/mac
 xcodegen generate
 open Baobox.xcodeproj          # 或 xcodebuild -scheme Baobox build
 ```
 
-`Baobox.xcodeproj` 不入库，拉取后重新 `xcodegen generate` 即可。
+`mac/Baobox.xcodeproj` 不入库，拉取后重新 `xcodegen generate` 即可。
 非沙盒 + Hardened Runtime，bundle id `com.baobox.app`。
 
 校验本地化目录是否合法：
 
 ```bash
-python3 -c "import json;json.load(open('Sources/Resources/Localizable.xcstrings'));print('valid')"
+python3 -c "import json;json.load(open('mac/Sources/Resources/Localizable.xcstrings'));print('valid')"
 ```
 
 ## 项目结构
 
 ```
-Sources/
+mac/Sources/
 ├── App/                    # BaoboxApp、AppDelegate、StatusItemController
 ├── Core/                   # 共享基础设施
 │   ├── ToolModule.swift        # 工具模块协议（框架核心）

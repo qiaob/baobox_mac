@@ -1,0 +1,11 @@
+[package]
+name = "baobox-core"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox 跨平台核心：与操作系统无关的截图逻辑（选区、标注、拼接、文件名、历史）"
+license = "MIT"
+
+[dependencies]
+
+[lints.rust]
+missing_docs = "warn"

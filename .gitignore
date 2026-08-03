@@ -1,14 +1,18 @@
 # XcodeGen 生成物（真正的源是 project.yml，改这些文件会被下次 generate 覆盖）
 *.xcodeproj
 *.xcworkspace
-Sources/Info.plist
-Baobox.entitlements
+mac/Sources/Info.plist
+mac/Baobox.entitlements
 
 # 构建产物
-build/
-DerivedData/
+mac/build/
+mac/DerivedData/
 .DS_Store
 
 # SwiftPM
-.build/
+.mac/build/
 .swiftpm/
+
+# Rust（跨平台核心与 Linux/Windows 实现）
+target/
+Cargo.lock

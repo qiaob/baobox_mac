@@ -242,6 +242,22 @@ both Codex panels ship **unbound** — assign them under Settings → Shortcuts.
 
 See [Data and privacy](docs/manual/en/privacy-and-data.md).
 
+
+## Repository layout
+
+Three platform implementations live side by side:
+
+```
+mac/       macOS (Swift + SwiftUI/AppKit) — the complete 0.0.6
+windows/   Windows (Rust + Win32/GDI) — screenshots, in progress
+linux/     Linux (Rust + X11) — screenshots, in progress
+shared/    Rust core shared by all three (geometry, selection, annotation, stitching, filenames)
+```
+
+macOS is the only complete implementation today. Windows and Linux have just started: they
+cover screenshots through a command-line entry point for now. See
+[multi-platform architecture](docs/multiplatform/ARCHITECTURE.md) (Chinese).
+
 ## Build from source
 
 The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
@@ -251,24 +267,24 @@ the config.
 ```bash
 brew install xcodegen
 git clone https://github.com/qiaob/baobox_mac.git
-cd baobox_mac
+cd baobox_mac/mac
 xcodegen generate
 open Baobox.xcodeproj          # or: xcodebuild -scheme Baobox build
 ```
 
-`Baobox.xcodeproj` is not checked in — re-run `xcodegen generate` after pulling.
+`mac/Baobox.xcodeproj` is not checked in — re-run `xcodegen generate` after pulling.
 Non-sandboxed with Hardened Runtime; bundle id `com.baobox.app`.
 
 Validate the localization catalog:
 
 ```bash
-python3 -c "import json;json.load(open('Sources/Resources/Localizable.xcstrings'));print('valid')"
+python3 -c "import json;json.load(open('mac/Sources/Resources/Localizable.xcstrings'));print('valid')"
 ```
 
 ## Project layout
 
 ```
-Sources/
+mac/Sources/
 ├── App/                    # BaoboxApp, AppDelegate, StatusItemController
 ├── Core/                   # shared infrastructure
 │   ├── ToolModule.swift        # the tool protocol (the heart of the framework)

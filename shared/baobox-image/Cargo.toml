@@ -1,0 +1,9 @@
+[package]
+name = "baobox-image"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox 共享图像层：RGBA 编码为 PNG、灰度转换"
+license = "MIT"
+
+[dependencies]
+png = "0.17"

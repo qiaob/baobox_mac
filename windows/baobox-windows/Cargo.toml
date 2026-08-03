@@ -1,0 +1,20 @@
+[package]
+name = "baobox-windows"
+version = "0.1.0"
+edition = "2021"
+description = "Baobox Windows 实现：GDI 抓屏与截图 CLI"
+license = "MIT"
+
+[dependencies]
+baobox-core = { path = "../../shared/baobox-core" }
+baobox-image = { path = "../../shared/baobox-image" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+]
