@@ -74,11 +74,21 @@ shared/
 | 选区状态机 | ✅ Swift | ✅ 共用 `baobox-core` | ✅ 共用 `baobox-core` |
 | 长截屏拼接 | ✅ Swift | ✅ 共用算法，CLI 已接 | ⬜ 算法已共用，CLI 未接 |
 | 标注模型 | ✅ Swift | ✅ 模型已共用 | ✅ 模型已共用 |
-| **覆盖层 GUI**（拖选、手柄、工具条） | ✅ | ⬜ 未做 | ⬜ 未做 |
+| **交互式覆盖层**（悬停高亮 / 拖选 / 八向手柄 / 方向键 / 尺寸标注） | ✅ | ✅ X11 分层窗 | ✅ WS_EX_LAYERED（**未实测**） |
+| 标注工具条（画笔 / 箭头 / 马赛克…） | ✅ | ⬜ 模型已共用，UI 未做 | ⬜ 同左 |
 | 贴图 / OCR / 录屏 | ✅ | ⬜ | ⬜ |
 | 托盘 / 全局快捷键 | ✅ | ⬜ | ⬜ |
 
-Linux 与 Windows 当前是**命令行入口**，选区靠参数给定；交互式覆盖层是下一步。
+三平台的交互规则**共用同一个状态机**（`baobox_core::selection`），所以
+「单击截窗口 / 拖拽选区域 / ⏎ 全屏 / esc 取消 / 方向键 ±1、Shift ×10」在哪个系统上都一致，
+差别只在怎么把它画出来：
+
+| | 压暗与挖空 | 画法 | 文字 |
+|---|---|---|---|
+| Linux | 32 位 ARGB visual；没有合成器时**降级为只描边不压暗** | X11 核心绘图 | `image_text8`（不引 Xft） |
+| Windows | `WS_EX_LAYERED` + `LWA_COLORKEY \| LWA_ALPHA`，选区涂 color key 即透明 | GDI `FillRect` / `FrameRect` | `TextOutW` |
+
+不带参数直接 `capture` 就进覆盖层，这是默认用法；带 `--full` / `--region` / `--window` 则跳过覆盖层。
 
 ### 其余六个工具
 

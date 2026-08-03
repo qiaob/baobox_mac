@@ -4,6 +4,7 @@
 //! `baobox-core`，差别只在抓屏那一层（这边是 GDI，那边是 X11）。
 //!
 //! ```text
+//! baobox-windows capture                 交互式截图（覆盖层）
 //! baobox-windows capture --full
 //! baobox-windows capture --region X,Y,W,H
 //! baobox-windows capture --window <hwnd>
@@ -12,6 +13,8 @@
 //! ```
 
 mod gdi;
+#[cfg(windows)]
+mod overlay;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
@@ -53,6 +56,7 @@ fn usage() -> String {
     concat!(
         "Baobox Windows —— 截图\n\n",
         "用法：\n",
+        "  baobox-windows capture [-o 输出.png]            交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
         "  baobox-windows capture --full [-o 输出.png]\n",
         "  baobox-windows capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-windows capture --window <hwnd> [-o 输出.png]\n",
@@ -120,7 +124,8 @@ fn capture(args: &[String]) -> Result<String, String> {
             .find(|w| w.id == id)
             .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
             .frame,
-        _ => return Err(format!("请指定 --full / --region / --window\n\n{}", usage())),
+        // 什么都没指定 → 交互式覆盖层，这是默认用法
+        _ => interactive_target()?,
     };
 
     let shot = gdi::capture(target)?;
@@ -137,6 +142,26 @@ fn capture(args: &[String]) -> Result<String, String> {
     // 非 Windows 上仍解析参数，便于在其他平台上跑参数解析的测试
     let _ = parse_capture_args(args)?;
     Err("本程序只能在 Windows 上运行。".to_string())
+}
+
+/// 铺覆盖层让用户选，返回要抓的矩形。
+///
+/// 覆盖层返回前已销毁自身，所以接下来的抓屏不会把它自己截进去。
+#[cfg(windows)]
+fn interactive_target() -> Result<Rect, String> {
+    let screen = gdi::virtual_screen();
+    let window_rects: Vec<Rect> = gdi::windows().into_iter().map(|w| w.frame).collect();
+    let result = overlay::run(screen, window_rects)?;
+    match result.outcome {
+        baobox_core::selection::Outcome::Region(rect) => Ok(rect),
+        baobox_core::selection::Outcome::Window(index) => result
+            .windows
+            .get(index)
+            .copied()
+            .ok_or_else(|| "选中的窗口已消失".to_string()),
+        baobox_core::selection::Outcome::FullScreen => Ok(screen),
+        baobox_core::selection::Outcome::Cancelled => Err("已取消".to_string()),
+    }
 }
 
 /// `capture` 的命令行参数。

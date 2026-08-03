@@ -50,6 +50,8 @@ pub fn is_wayland_session() -> bool {
 pub struct X11Session {
     conn: RustConnection,
     root: Window,
+    /// `conn.setup().roots` 里的下标
+    screen_num: usize,
     /// 整个虚拟屏幕（所有显示器合起来）的范围
     screen: Rect,
 }
@@ -75,6 +77,7 @@ impl X11Session {
         Ok(Self {
             conn,
             root,
+            screen_num,
             screen: rect,
         })
     }
@@ -82,6 +85,16 @@ impl X11Session {
     /// 整个虚拟屏幕的范围。
     pub fn screen_rect(&self) -> Rect {
         self.screen
+    }
+
+    /// 底层连接，供覆盖层复用（不另开一条连接：抓取与覆盖层必须看到同一份服务器状态）。
+    pub fn connection(&self) -> &RustConnection {
+        &self.conn
+    }
+
+    /// 当前屏幕的 setup 信息（覆盖层建窗要用它的 visual 与 colormap）。
+    pub fn screen(&self) -> &x11rb::protocol::xproto::Screen {
+        &self.conn.setup().roots[self.screen_num]
     }
 
     /// 抓一块区域。区域会先裁进屏幕范围 —— 越界的请求在 X11 上会直接报错，

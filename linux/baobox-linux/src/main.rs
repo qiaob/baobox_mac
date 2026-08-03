@@ -5,6 +5,7 @@
 //! 因此行为与 macOS 版一致。
 //!
 //! ```text
+//! baobox-linux capture                   交互式截图（覆盖层：悬停选窗口 / 拖拽选区域）
 //! baobox-linux capture --full            截整个屏幕
 //! baobox-linux capture --region X,Y,W,H  截一块区域
 //! baobox-linux capture --window <id>     截某个窗口
@@ -13,10 +14,12 @@
 //! baobox-linux info                      打印环境诊断
 //! ```
 
+mod overlay;
 mod x11capture;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
+use baobox_core::selection::Outcome;
 use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,6 +60,7 @@ fn usage() -> String {
     concat!(
         "Baobox Linux —— 截图\n\n",
         "用法：\n",
+        "  baobox-linux capture [-o 输出.png]              交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
         "  baobox-linux capture --full [-o 输出.png]\n",
         "  baobox-linux capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-linux capture --window <id> [-o 输出.png]\n",
@@ -172,7 +176,8 @@ fn capture(args: &[String]) -> Result<String, String> {
             .find(|w| w.id == id)
             .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
             .frame,
-        _ => return Err(format!("请指定 --full / --region / --window\n\n{}", usage())),
+        // 什么都没指定 → 交互式覆盖层，这是默认的用法
+        _ => interactive_target(&session)?,
     };
 
     let shot = session.capture(target)?;
@@ -289,6 +294,29 @@ fn scroll(args: &[String]) -> Result<String, String> {
         stitcher.total_height(),
         kept.len()
     ))
+}
+
+/// 铺覆盖层让用户选，返回要抓的矩形。
+///
+/// 覆盖层在返回前已经销毁并 sync 过，所以接下来的抓屏不会把它自己截进去。
+fn interactive_target(session: &X11Session) -> Result<Rect, String> {
+    let window_rects: Vec<Rect> = session.windows()?.into_iter().map(|w| w.frame).collect();
+    let result = overlay::run(
+        session.connection(),
+        session.screen(),
+        session.screen_rect(),
+        window_rects,
+    )?;
+    match result.outcome {
+        Outcome::Region(rect) => Ok(rect),
+        Outcome::Window(index) => result
+            .windows
+            .get(index)
+            .copied()
+            .ok_or_else(|| "选中的窗口已消失".to_string()),
+        Outcome::FullScreen => Ok(session.screen_rect()),
+        Outcome::Cancelled => Err("已取消".to_string()),
+    }
 }
 
 fn parse_region(value: &str) -> Result<Rect, String> {
