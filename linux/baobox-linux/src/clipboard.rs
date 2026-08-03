@@ -72,6 +72,28 @@ impl Atoms {
     }
 }
 
+/// 在后台线程上持有剪贴板，**立刻返回**。
+///
+/// 常驻 App 必须用这个而不是直接调 [`serve`]：X11 的剪贴板要靠本进程持续应答，
+/// 而 [`serve`] 是阻塞的 —— 在 GTK 主线程上调它，整个界面会卡住整整
+/// [`DEFAULT_SERVE`] 那么久（复制一次界面死一分钟，用户只会以为程序崩了）。
+///
+/// 线程自己开一条 X11 连接：主线程那条正忙着跑界面，共用会互相干扰。
+/// 服务时长给 `None`（一直服务），因为常驻进程本来就不会退出；
+/// 下一次复制会让别的程序 / 我们自己接管所有权，旧线程收到 `SelectionClear`
+/// 就自己结束，不会攒起来。
+pub fn serve_detached(payload: Payload) {
+    std::thread::spawn(move || {
+        let Ok(session) = crate::x11capture::X11Session::open() else {
+            return;
+        };
+        let Ok(owner) = session.create_owner_window() else {
+            return;
+        };
+        let _ = serve(session.connection(), owner, &payload, None);
+    });
+}
+
 /// 宣告自己持有剪贴板，并把内容服务出去。
 ///
 /// `serve` 为 `None` 时一直服务（常驻模式）；给了时长则到点返回，

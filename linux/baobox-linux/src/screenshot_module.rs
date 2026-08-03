@@ -215,7 +215,7 @@ impl ScreenshotTool {
         let shot = session.capture(target)?;
 
         if !self.settings.edit {
-            return self.deliver(&session, &shot, self.settings.copy, self.settings.save);
+            return self.deliver(&shot, self.settings.copy, self.settings.save);
         }
 
         let result = editor::run(
@@ -232,11 +232,11 @@ impl ScreenshotTool {
         };
         match result.outcome {
             EditorOutcome::Cancel => Err("已取消".to_string()),
-            EditorOutcome::Copy => self.deliver(&session, &edited, true, false),
-            EditorOutcome::Save => self.deliver(&session, &edited, false, true),
+            EditorOutcome::Copy => self.deliver(&edited, true, false),
+            EditorOutcome::Save => self.deliver(&edited, false, true),
             EditorOutcome::Pin => {
                 // 贴图会占住这个线程直到用户关掉，所以先落盘
-                let note = self.deliver(&session, &edited, false, true)?;
+                let note = self.deliver(&edited, false, true)?;
                 pin::show(
                     session.connection(),
                     session.screen(),
@@ -251,9 +251,11 @@ impl ScreenshotTool {
     }
 
     /// 落盘 / 复制。
+    ///
+    /// 不需要 X11 会话 —— 复制交给后台线程自己开连接去做（见
+    /// [`crate::clipboard::serve_detached`]），这里立刻返回。
     fn deliver(
         &self,
-        session: &X11Session,
         shot: &x11capture::Capture,
         copy: bool,
         save: bool,
@@ -267,15 +269,10 @@ impl ScreenshotTool {
         }
         if copy {
             let png = baobox_image::encode_rgba(shot.width, shot.height, &shot.rgba)?;
-            let owner = session.create_owner_window()?;
+            // 后台线程去持有剪贴板：X11 要本进程持续应答，在主线程上等
+            // 会把整个界面冻住
+            crate::clipboard::serve_detached(crate::clipboard::Payload::Png(png));
             notes.push("已复制到剪贴板".to_string());
-            // X11 的剪贴板要本进程持续服务，这一步会阻塞到超时或别人接管
-            crate::clipboard::serve(
-                session.connection(),
-                owner,
-                &crate::clipboard::Payload::Png(png),
-                Some(crate::clipboard::DEFAULT_SERVE),
-            )?;
         }
         if notes.is_empty() {
             return Err("「复制到剪贴板」与「保存到文件」都关着，截图无处可去".to_string());
@@ -297,14 +294,8 @@ impl ScreenshotTool {
             return Err("这块区域里没识别出文字".to_string());
         }
 
-        let owner = session.create_owner_window()?;
         let preview: String = text.chars().take(40).collect();
-        crate::clipboard::serve(
-            session.connection(),
-            owner,
-            &crate::clipboard::Payload::Text(text),
-            Some(crate::clipboard::DEFAULT_SERVE),
-        )?;
+        crate::clipboard::serve_detached(crate::clipboard::Payload::Text(text));
         Ok(format!("已取字并复制：{preview}…"))
     }
 
