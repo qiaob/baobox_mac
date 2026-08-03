@@ -11,7 +11,7 @@
 
 ## 构建与验证（重要）
 
-- **本仓库在 Linux 开发环境，无法本地编译**；CI 只在 `main` 构建。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
+- **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；三个平台各有一条构建工作流（`.github/workflows/build-{macos,windows,linux}.yml`），手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。Windows 与 Linux 的 Rust 代码在本机就能编译与测试。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
 - Mac 上构建：`brew install xcodegen && xcodegen generate && open Baobox.xcodeproj`（或 `xcodebuild -scheme Baobox build`）。
 - 无法编译时的自查：① 只引用真实存在的类型/方法（先 grep 确认签名）；② 每个 `L()` / `Text()` 的 key 都已入 `Localizable.xcstrings`（可跑下方脚本校验）；③ 所有 `@Published` 只在主线程写；④ `Process` / `NWConnection` / `URLSession` 不在主线程同步等待。
 
@@ -96,7 +96,7 @@ BaoboxApp(@main, Settings scene)
 
 三步全自动，**不需要任何 secrets**（流程 2026-08-02 起生效，v0.0.0-test 实测通过）：
 
-1. `project.yml` 两处版本号（`CFBundleShortVersionString` + `MARKETING_VERSION`）改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。
+1. `project.yml` 里 **只有 `MARKETING_VERSION` 一处**版本号改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。（`CFBundleShortVersionString` / `CFBundleVersion` 现在写的是 `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`，跟着构建设置走 —— 以前写死字面量，导致工作流在命令行上覆盖版本号根本不起作用，v0.0.7 的包里仍写着上一版的号。）
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
 3. `.github/workflows/release.yml` 自动：Release 构建 → **ad-hoc 签名** → zip → 创建 GitHub Release（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。
 

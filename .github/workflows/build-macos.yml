@@ -1,0 +1,62 @@
+name: Build macOS
+
+# 手动触发，或推到 main / claude 分支时自动跑。
+# 产物是一个可以直接下载安装的 .app（ad-hoc 签名）——
+# 首次打开需要右键 →「打开」绕过 Gatekeeper，理由见 release.yml 的说明。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "mac/**"
+      - ".github/workflows/build-macos.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      # ad-hoc 签名（CODE_SIGN_IDENTITY="-"）：CI runner 上没有开发团队的凭据，
+      # 但产物要能真的跑起来，所以不能用 CODE_SIGNING_ALLOWED=NO ——
+      # 那样出来的 .app 在别人机器上一打开就被系统杀掉。
+      #
+      # DEVELOPMENT_TEAM 必须显式清空：project.yml 里写着团队 ID，
+      # 留着的话 Xcode 会去解析该团队的自动签名配置，在没有凭据的 runner 上会失败。
+      - name: Build (Release, ad-hoc signed)
+        run: |
+          xcodebuild -project Baobox.xcodeproj -scheme Baobox -configuration Release \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM="" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/build" \
+            build
+
+      - name: Package
+        run: |
+          cd "$RUNNER_TEMP/build"
+          ditto -c -k --keepParent Baobox.app Baobox-macos.zip
+
+      # 上传 zip 而不是 .app 目录：GitHub 的 artifact 打包会丢掉符号链接与
+      # 可执行位，.app 下载下来就打不开了。自己先 ditto 成 zip 可以避开。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Baobox-macos
+          path: ${{ runner.temp }}/build/Baobox-macos.zip
+          if-no-files-found: error

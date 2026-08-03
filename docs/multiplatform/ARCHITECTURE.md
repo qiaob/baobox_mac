@@ -44,7 +44,12 @@ shared/
 │   ├── ocr          识别结果 → 阅读顺序（分行、排序、按间距补空格）
 │   ├── hotkey       快捷键组合的解析与格式化（三平台同一套文本格式）
 │   ├── filename     模板格式化、**按平台**消毒、重名去重
+│   ├── config       配置文件模型：行级 INI，改一个键只动那一行
 │   └── history      截图历史环形存储 + 索引文件的编解码
+├── baobox-app/      应用框架（只有两个 Rust 平台用；mac 那边是同构的 Swift 版）
+│   ├── ToolModule   工具接入协议 + ToolRegistry（注册顺序 = 菜单顺序）
+│   ├── menu         托盘菜单模型
+│   └── settings     设置的**声明**（开关/下拉/输入框/数字/快捷键）
 ├── baobox-render/   把标注光栅化进 RGBA（三平台逐像素一致）
 │   └── chrome       工具条底板、按钮底色与图标（图标也是画出来的，不用图片资源）
 └── baobox-image/    RGBA → PNG / 内存 PNG、RGBA → 灰度
@@ -53,6 +58,62 @@ shared/
 不共用的是平台层：抓屏、窗口枚举、覆盖层窗口、托盘、全局快捷键、通知、剪贴板。
 这些在三个系统上的形状差异太大，强行抽象只会得到一个谁都不好用的最小公倍数，
 所以 `shared/` 里**没有平台 trait** —— 只有纯函数与纯数据结构，平台层直接调用。
+
+## App 框架：加一个工具 = 加一个模块
+
+`shared/baobox-app` 是 macOS 侧 `Core/ToolModule.swift` + `ToolRegistry.swift` 的
+Rust 对应物，Windows 与 Linux 共用。实现 `ToolModule` 并在平台的 `build_registry()`
+里注册一行，**托盘菜单、全局快捷键、设置窗口的那一页就都有了** —— 框架不认识任何具体工具。
+
+| `ToolModule` 的方法 | 框架拿它干什么 |
+|---|---|
+| `id` / `name` | 配置节名、菜单标题 |
+| `menu_items()` | 建托盘菜单。**不许在这里读磁盘** —— 菜单每次弹出都重建 |
+| `hotkeys()` | 注册全局快捷键。容易冲突的组合出厂留 `None` |
+| `settings_page()` | 设置窗口里的一页 |
+| `activate` / `config_changed` / `will_terminate` | 生命周期（关的时候按注册的**倒序**） |
+| `perform(action)` | 执行菜单项 / 快捷键 |
+
+### 为什么这里可以有 trait，`baobox-core` 里却不能
+
+`ToolModule` 抽象的是「工具怎么接进 App」，不是「系统怎么干活」——
+它每个方法返回的都是平台无关的数据。抓屏、剪贴板那种真正的平台能力，
+形状差异太大，仍然没有 trait。
+
+### 设置是声明出来的，界面是原生的
+
+工具**声明**自己有哪些选项，平台层用各自的原生控件渲染：
+
+| | 设置界面 | 快捷键录制 |
+|---|---|---|
+| Windows | Win32 通用控件，运行期按声明生成（不用 `.rc` 对话框资源 —— 那要编译期写死坐标） | 系统自带的 `msctls_hotkey32`。**录不了 Win 键组合**，是控件本身的限制，可在配置文件里手写 |
+| Linux | GTK3 | 自己抓按键；`Esc` 取消、`Backspace` 解绑 |
+
+于是界面是原生外观，而「有哪些设置、叫什么、默认值多少」只有一份定义。
+两边都**没有「确定 / 取消」**：改完立刻生效、立刻落盘，与 mac 版一致。
+
+### 托盘
+
+| | 怎么实现 | 需要注意 |
+|---|---|---|
+| Windows | `Shell_NotifyIconW` + 运行期生成的 `HMENU` | `TrackPopupMenu` 前必须 `SetForegroundWindow`，否则菜单点向别处不消失 |
+| Linux | **StatusNotifierItem + com.canonical.dbusmenu**（zbus） | 菜单由桌面渲染，所以外观原生；图标像素自己画，不依赖图标主题 |
+
+Linux 这条路引入了 DBus 依赖（`zbus`），这是**唯一的选择** —— 老的 XEmbed systray
+已被 GNOME 移除。而且即便如此，**GNOME 默认仍不显示托盘图标**，用户需要装
+AppIndicator 扩展；这是 GNOME 自己的决定，任何 App 都绕不过。所以报到失败时
+会明确告诉用户装什么，并说明「程序仍在运行，全局快捷键照常可用」——
+不能留下一个「像是没启动」的假象。
+
+### 线程模型
+
+| | |
+|---|---|
+| Windows | **一条线程一个消息循环**。窗口、菜单、热键消息本来就绑定在创建线程上，而我们的动作是模态的 |
+| Linux | 三套事件源各一条：GTK 主循环（跑注册表与设置窗口）、X11 快捷键线程、zbus 线程。之间只传动作 id 字符串 |
+
+Linux 的快捷键线程用 `poll_for_event` + 30ms 轮询而不是阻塞等待 ——
+用户在设置里改了快捷键要立刻生效，而阻塞在 `wait_for_event` 上的线程叫不醒。
 
 ## 移植时踩到的真实差异
 
@@ -88,7 +149,9 @@ shared/
 | 录屏 | ✅ AVFoundation | ✅ 外挂 ffmpeg x11grab | ✅ 外挂 ffmpeg gdigrab |
 | 截图历史（落盘 + 淘汰） | ✅ | ✅ `~/.local/share/baobox/` | ✅ `%APPDATA%\Baobox\` |
 | **全局快捷键 + 常驻** | ✅ | ✅ X11 GrabKey（**未实测**） | ✅ RegisterHotKey + 托盘（**未实测**） |
-| 托盘图标 | ✅ | ⬜ 见下 | ✅（**未实测**） |
+| **托盘图标 + 动态菜单** | ✅ | ✅ SNI/dbusmenu（**未实测**） | ✅ HMENU（**未实测**） |
+| **设置窗口** | ✅ SwiftUI | ✅ GTK3（**未实测**） | ✅ Win32 控件（**未实测**） |
+| **配置文件** | ✅ | ✅ `~/.config/baobox/config.ini` | ✅ `%APPDATA%\Baobox\config.ini` |
 
 三平台的交互规则**共用同一个状态机**（`baobox_core::selection`），所以
 「单击截窗口 / 拖拽选区域 / ⏎ 全屏 / esc 取消 / 方向键 ±1、Shift ×10」在哪个系统上都一致，
@@ -201,13 +264,6 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 （`TextOutW` / X11 核心字体 / Core Text）。X11 侧用 `poly_text8` / `poly_text16`
 而不是 `image_text8` —— 后者会用背景色刷一遍文字盒子，把下面的截图盖掉。
 
-### Linux 的托盘图标
-
-**暂缺，且是有意的**。现代桌面的托盘走 StatusNotifierItem（DBus），传统的 XEmbed
-systray 在 GNOME 上早已移除。要做就得引入 DBus 依赖（如 `zbus`），与当前
-「零运行时依赖」的取舍冲突。`daemon` 前台运行，交给用户自己的 systemd user unit
-或桌面自启项托管 —— 这更符合 Linux 的习惯。
-
 ### 其余五个工具
 
 尚未开始（屏幕取字与录屏已随截图一起做完，不在此列）。按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
@@ -226,8 +282,10 @@ systray 在 GNOME 上早已移除。要做就得引入 DBus 依赖（如 `zbus`�
 # 跨平台核心（任何系统上都能跑）
 cd shared/baobox-core && cargo test
 
-# Linux
+# Linux（设置窗口用 GTK3，要装开发包）
+sudo apt install libgtk-3-dev pkg-config    # Debian/Ubuntu
 cd linux/baobox-linux && cargo build
+./target/debug/baobox-linux                 # 常驻：托盘 + 快捷键 + 设置
 ./target/debug/baobox-linux info            # 环境诊断
 ./target/debug/baobox-linux daemon          # 常驻，按 Ctrl+Shift+S 截图
 ./target/debug/baobox-linux ocr             # 屏幕取字（需 tesseract）
@@ -254,3 +312,21 @@ cd mac && xcodegen generate && xcodebuild -scheme Baobox build
 5. 平台模块里**只有真正碰系统 API 的部分加 `cfg(windows)`**。纯计算（ffmpeg 参数拼装、
    像素通道换算、尺寸检查）放在门外面，它们的测试才能在开发机上跑到 ——
    而那恰恰是最容易写错、又最难在真机上发现的部分。
+6. 加工具：实现 `ToolModule`，在平台的 `build_registry()` 里注册一行。
+   **不要动框架** —— 要动框架才能加工具，说明抽象漏了东西，那才是该改的地方。
+
+## 构建工作流
+
+三个平台各一条，手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载：
+
+| 工作流 | 跑什么 | 产物 |
+|---|---|---|
+| `build-macos.yml` | XcodeGen + Release 构建（ad-hoc 签名） | `Baobox-macos.zip` |
+| `build-windows.yml` | `cargo test` + Release 构建 | `baobox-windows.exe` |
+| `build-linux.yml` | 共享 crate 测试 + `cargo test`（`dbus-run-session` + `xvfb-run`）+ Release 构建 | `baobox-linux` |
+
+Windows 那条最有价值：覆盖层、编辑器、托盘、设置窗口的测试都带 `cfg(windows)`，
+在开发机上只能类型检查，**只有在真 Windows 上才真正跑得起来**。
+
+警告用 `cargo rustc -- -D warnings` 卡，不用 `RUSTFLAGS` —— 后者会一并作用到
+所有第三方依赖，别人代码里的一个 warning 就能把流水线弄红。

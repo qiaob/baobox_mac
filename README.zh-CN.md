@@ -1,6 +1,8 @@
 # Baobox
 
-[![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
+[![macOS](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml)
+[![Windows](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml)
+[![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
 **菜单栏常驻的 macOS 效率工具集** —— 截图、剪贴板、窗口管理、键盘点击、防休眠，
 外加 Claude Code / Codex 两个本地 AI CLI 的仪表盘。一个 App 装下它们，统一入口、

@@ -15,8 +15,10 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Baobox
-        CFBundleShortVersionString: "0.0.6"
-        CFBundleVersion: "1"
+        # 从构建设置取值，别写死 —— 写死的话发版流程在命令行上覆盖
+        # MARKETING_VERSION 就完全不起作用，v0.0.7 的包里仍写着 0.0.6。
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.productivity
         CFBundleIconFile: AppIcon
@@ -37,6 +39,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app
         MARKETING_VERSION: "0.0.6"
+        CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Automatic
         # 固定签名身份：ad-hoc 签名的 cdhash 每次重新编译都会变，macOS TCC 会因此

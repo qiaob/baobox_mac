@@ -1,6 +1,8 @@
 # Baobox
 
-[![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
+[![macOS](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml)
+[![Windows](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml)
+[![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
 **A menu-bar toolbox for macOS** — screenshots, clipboard, window management, keyboard
 clicking, sleep prevention, plus dashboards for the Claude Code and Codex CLIs. One app
