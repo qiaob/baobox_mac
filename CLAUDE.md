@@ -55,6 +55,7 @@ BaoboxApp(@main, Settings scene)
 
 ## docs/ 布局
 
+- `docs/manual/` —— **使用手册**：每个工具、每项功能的完整说明（面向用户，README 里的链接都指向这里）。
 - `docs/REQUIREMENTS.md` / `docs/TECH_DESIGN.md` —— 全局需求与 M1 技术设计（第 6 节是模块规划总表）。
 - `docs/design/ui-design-v1.html` —— UI 设计稿与**设计令牌（配色）**：accent 浅 `#17A398` / 深 `#2BC4B8`，深浅两套变量。
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）+ `RECENT_FILES.md`（最近文件增量）。

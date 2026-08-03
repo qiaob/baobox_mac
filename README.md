@@ -2,138 +2,331 @@
 
 [![CI](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/ci.yml)
 
-A lightweight, menu-bar-resident macOS toolbox that bundles everyday productivity utilities — screenshot, clipboard manager, window manager, and more — into a single native app with one shortcut system and one settings window.
+**A menu-bar toolbox for macOS** — screenshots, clipboard, window management, keyboard
+clicking, sleep prevention, plus dashboards for the Claude Code and Codex CLIs. One app
+instead of five, with one shortcut system and one settings window.
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [User manual (Chinese)](docs/manual/README.md) · [Shortcuts](docs/manual/shortcuts.md)
 
-## Overview
+```
+macOS 14+   ·   Swift 5.9   ·   Zero third-party dependencies   ·   Everything stays local
+```
 
-Most macOS productivity tools ship as separate apps: one for screenshots, one for clipboard history, one for window management — each with its own download, its own background process, its own settings. Baobox takes the opposite approach: a single menu-bar app, built natively in Swift, that houses multiple independent tool modules behind one consistent interface.
+## Contents
 
-- **Native, not Electron** — Swift 5.9, SwiftUI + AppKit, zero third-party dependencies. Resident memory stays under ~50 MB.
-- **Modular by design** — the app shell has no knowledge of individual tools; each one implements a common `ToolModule` protocol and self-registers its menu entry, shortcuts, and settings tab.
-- **Local-first** — all data (clipboard history, screenshots, window layouts) stays on disk, on your Mac. Nothing is uploaded.
-- **macOS 14 (Sonoma) or later**, built against ScreenCaptureKit and other modern system frameworks.
+- [What it is](#what-it-is)
+- [The tools](#the-tools)
+- [Install](#install)
+- [First launch](#first-launch)
+- [Shortcuts](#shortcuts)
+- [Data and privacy](#data-and-privacy)
+- [Build from source](#build-from-source)
+- [Project layout](#project-layout)
+- [Adding a tool](#adding-a-tool)
+- [Documentation](#documentation)
 
-## Features
+## What it is
 
-### Core
-- Menu-bar resident, no Dock icon (`LSUIElement`); the menu is a flat list of tools — one row per tool (icon, name, primary shortcut), with a submenu on hover for actions, history, and per-tool settings.
-- Centralized global hotkey manager (Carbon) with conflict detection, per-tool customization, and persistence.
-- One settings window: General / Shortcuts / one tab per tool / About.
-- Guided permission onboarding with live status.
-- Optional launch at login (`SMAppService`).
+The small utilities you use every day normally mean four or five separate apps — one for
+screenshots, one for clipboard history, one for window management — each sitting in the
+background with its own settings and its own shortcuts. Baobox makes them **modules inside
+one native app**:
 
-### Screenshot (default ⌘⇧2)
-- Single shortcut, intent detected automatically: hover to highlight and capture a window with one click; click-drag (past a ~4pt threshold) for a region capture with eight-way resize handles, arrow-key nudging (⇧ for ×10), and a pixel loupe; ⏎ for a full-screen capture; Esc to cancel.
-- Multi-display support, one overlay per screen.
-- Menus stay in the shot: if a context menu or menu-bar dropdown is open when the shortcut fires, the screen is frozen before the app activates, so the menu is still there in the result.
-- Built on ScreenCaptureKit. Results copy to the clipboard and, optionally, save to a configurable folder with a customizable filename template.
-- In-place annotation editor: rectangle, ellipse, arrow, pen, highlighter, mosaic/blur, text, eraser, undo/redo (⌘Z / ⇧⌘Z), three stroke widths, a seven-color palette.
-- Pin: keep a capture floating on top of every window, draggable, scroll-to-zoom (0.2×–5×), ⌥+scroll for opacity; pin directly from the clipboard.
-- Pixel loupe for precise selection: an 8×-magnified 17×17 grid follows the cursor while hovering, dragging, or resizing a handle, with live coordinates and a hex color readout.
-- Scrolling capture: pick the scrollable area, hit the scrolling-capture button next to Pin, then scroll — consecutive frames are matched by their overlap and stitched into one tall image (copied and saved like any other capture). A floating bar shows the stitched height and finishes or cancels the session.
-- Text capture (OCR): recognize the text inside any selection locally via Vision — from the annotation toolbar, from a dedicated shortcut (unbound by default), or from any screenshot in history / any pinned image. QR and barcodes in the shot are decoded too. The result opens in an editable window so you can fix a misread before copying; recognition languages are configurable and nothing is uploaded.
-- Draw on screen: a transparent canvas over the live screen for demos and walkthroughs — pen, highlighter, arrow, rectangle, ellipse, eraser, undo/redo, seven colors, three widths. Click-through mode keeps the marks on screen while you keep using the app underneath; esc exits, ⌫ clears. Marks are captured by screen recording, which is the point.
-- Screenshot history: every capture is archived automatically (configurable retention, default 20), with a thumbnail menu for copy / re-pin / save-as / delete.
-- Screen recording: reuses the same selection UI (drag a region, click a window, or capture full screen) and exports to MP4 or GIF. Optionally records system audio and/or microphone (mixed down to a single track by default); a red border marks the recording area and a floating control bar supports pause/resume, stop, and cancel.
+- **Native, not Electron** — Swift 5.9 with SwiftUI and AppKit, **zero third-party
+  dependencies**, resident memory under ~50 MB
+- **Modular** — the app shell knows nothing about any specific tool; each module implements
+  the `ToolModule` protocol and registers its own menu, shortcuts, and settings page
+- **Local only** — nothing is uploaded, nothing is collected, there is no account
 
-### Clipboard (default ⌘⇧V)
-- Background monitoring with history for text, rich text, images, file paths, and links. Content marked `org.nspasteboard.TransientType` is never stored; passwords marked `org.nspasteboard.ConcealedType` are skipped by default, with an opt-in switch (behind a confirmation) to record them.
-- Floating history panel: type-to-search, filter by type, arrow-key navigation, ⏎ to paste, ⌥⏎ for a plain-text paste, ⌘P to pin.
-- Selecting an entry auto-pastes into the frontmost app via a simulated ⌘V (requires Accessibility); without that permission, it falls back to copy-only.
-- Configurable history limit with automatic eviction; persists across restarts.
-- Per-app ignore list, automatic expiry (never / 1 / 7 / 30 / 90 days), and per-item delete (⌘⌫ or an inline button); a global ⌘⌥V shortcut pastes the most recent item as plain text.
-- **Encrypted on disk** (on by default, switchable): history text and images are sealed with AES-GCM before they hit `~/Library/Application Support/Baobox/`; the 256-bit key lives in your login keychain, never leaves the Mac and is not synced to iCloud. Flipping the switch converts the existing history either way.
-- **Text tools in the preview pane**: the selected entry is matched against JWT / JSON / XML / timestamps / URLs / Base64, and the pane offers in-place actions — format, minify, escape/unescape, percent decode/encode, Base64 decode/encode, extract a JWT header or payload, and generate a QR code pinned to the screen. Timestamps expand into a conversion table (local, UTC, ISO 8601, seconds, milliseconds, relative) with per-row copy buttons; ⏎ pastes whatever the preview currently shows. JSON is re-indented by an order-preserving scanner, so key order and long integer IDs survive untouched. Press Tab to expand the preview to the full panel width, ⌘1…⌘9 to fire actions, ⌘0 to revert. Every format has its own switch in Settings — the ones you turn off are never run at all.
+No Dock icon (`LSUIElement`); everything lives in the menu bar.
 
-### Text snippets (part of the clipboard)
-- A snippet is simply a favourite you wrote yourself: it never expires, survives Clear History, and shows up under Favourites in the same panel — same search, same ⏎ to paste.
-- Give a snippet a keyword and typing `;keyword` in any text field expands it in place.
-- Keyword expansion is **off by default**. When on, it keeps at most 32 characters in memory for prefix matching, never writes them to disk or to history, skips apps on the ignore list, and never sees password fields (macOS withholds those keystrokes entirely).
+## The tools
 
+| Tool | Default shortcut | In one line |
+|---|---|---|
+| [Screenshot & recording](docs/manual/screenshot.md) | ⌘⇧2 · ⌃⇧R | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, live drawing, history |
+| [Clipboard](docs/manual/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
+| [Window manager](docs/manual/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
+| [Keyboard clicking](docs/manual/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
+| [Keep awake](docs/manual/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
+| [Claude Code assistant](docs/manual/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
+| [Codex assistant](docs/manual/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
 
-### Caffeinate — Sleep Prevention (menu-only)
-- Blocks idle sleep via an IOKit power assertion (`IOPMAssertionCreateWithName`).
-- Enable for 15 minutes / 1 hour / 2 hours / indefinitely from the submenu; the assertion clears automatically on expiry, with a live countdown shown in the menu.
-- Optional "also prevent display sleep"; the assertion is released automatically on quit.
+### The framework itself
 
-### Window Manager (unbound by default)
-- Move and resize the frontmost window via Accessibility: halves, quarters, maximize (non-fullscreen), center, move between displays, and restore to its original position — 13 fully customizable shortcuts (unbound out of the box, since the conventional ⌃⌥ bindings collide with Rectangle; set your own under Settings → Shortcuts).
-- **Layout snapshots**: "Save current layout…" records the position and size of every regular, non-minimized window; restoring re-applies them with title-first matching and an ordering fallback, skipping apps that aren't running.
-- **Multi-display aware** throughout: the target display is whichever one has the largest intersection with the window; layouts are computed against each display's visible frame (avoiding the menu bar and Dock); moving a window between displays scales its relative position and size to fit, clamped to stay on-screen; snapshots store a stable per-display UUID plus a relative position, so restoring works correctly even if resolution or display arrangement changed since the snapshot was taken.
+- Menu-bar resident, no Dock icon; the menu is a plain list of tools, one row each,
+  hover to open its submenu
+- Global hotkey center (Carbon): registration, **conflict detection**, customization,
+  persistence, reset to default
+- One settings window: General / Shortcuts / one page per tool / About
+- First-launch permission onboarding with live status
+- Optional launch at login (`SMAppService`)
+- English and Simplified Chinese, or follow the system
 
+### Screenshot & recording
 
-### Claude Code Assistant (unbound by default)
-- A menu-bar dashboard for the local Claude Code CLI, built entirely from `~/.claude` files — no AI API, no login: live session status (running / awaiting confirmation), the five most recent sessions for one-click terminal resume, the current 5-hour usage window (tokens, estimated cost, reset countdown) and today's estimated spend.
-- **Center window** (Sessions / Usage / Audit): searchable session history with resume, copy-command, Markdown export and delete; a usage report by day / project / model plus an invocation breakdown (skills & slash commands, MCP servers › tools, built-in tools); and a per-day file-change audit that reveals edited files in Finder.
-- **Background helpers** (opt-in): Baobox hooks post a system notification when a task finishes or Claude awaits confirmation, warn at 80% of a token budget, and a dangerous-command guard blocks `rm -rf`, `git push --force`, `git reset --hard`, `DROP TABLE` and friends before they run — feeding the reason back to Claude.
-- **Visualized configuration**: pickers for permission mode / default model / session retention, permission-preset checkboxes, privacy env toggles, Co-Authored-By, CLAUDE.md management, a statusline generator with live preview, an MCP server panel, and disk cleanup / version check — every edit writes the user's JSON safely (unknown keys preserved, `.baobox.bak` backup).
-- Costs are estimates from public pricing and are labelled as such throughout.
+One shortcut figures out what you meant: **hover to highlight a window, click to capture
+it**; **press and drag** (past a ~4 pt threshold) to switch to a region; **⏎** for the whole
+screen; **Esc** to cancel.
 
-### Codex Assistant (menu-only)
-- A local-only companion for the Codex CLI, built entirely from files under `~/.codex` — no AI API, no login. The menu shows a status line (session count + today's estimated spend), your most recent Codex sessions for one-click terminal resume (`codex resume <id>`), and a "Browse sessions / usage…" entry that opens a tabbed center window.
-- **Usage & quota**: aggregates Codex `token_count` events from rollout JSONL into a rolling 5-hour window and a weekly window (rolling 168h by default, or a fixed weekday/hour reset), plus today's totals. The "Usage report…" menu item carries a two-line subtitle (5h + week: used ≈ estimated cost · resets-in countdown). Handles both incremental (`last_token_usage`) and cumulative (`total_token_usage`) token accounting so nothing is double-counted.
-- **Center window**: a **Sessions** tab (search, resume, copy command, delete) and a **Usage** tab (5h / weekly window cards with optional budget bars, by-day / by-project / by-model tables, and built-in-tool / MCP invocation stats). Costs are estimates from a built-in pricing table and labelled as such.
-- **Codex configuration**: visualized pickers for `approval_policy`, `sandbox_mode` (danger tier shown in red) and default `model`, edited line-by-line in `config.toml` so comments and unknown keys survive; values it can't safely edit are detected and the controls disable themselves. Backs up `config.toml.baobox.bak` before every write.
-- **Turn-complete notifications** (opt-in): installs a `notify` hook into `config.toml`; when a Codex turn finishes Baobox posts a system notification with the last-assistant-message summary, and removing it leaves no residue.
-- **Maintenance**: shows `~/.codex/sessions` disk usage and file count, cleans up rollout JSONL older than 30/60/90 days (with confirmation), reports `codex --version`, checks the latest `@openai/codex` on npm, and copies the upgrade command.
-- **MCP (read-only)**: lists `[mcp_servers.*]` from `config.toml` and opens the file for editing.
+- Eight-way handles, **arrow keys nudge by one pixel** (⇧ for ×10), and a pixel loupe that
+  shows live coordinates and the color under the cursor
+- Multi-display, with an independent overlay per screen
+- **Menus can be captured too**: if a context menu or menu-bar dropdown is open when you
+  press the shortcut, the whole screen is frozen before Baobox activates and the menu
+  closes — so the menu is still there in the shot
+- **Annotation**: rectangle, ellipse, arrow, pen, highlighter, mosaic, text, eraser
+  (removes a whole stroke). Undo ⌘Z, redo ⇧⌘Z, copy and finish ⏎, save ⌥⏎
+- **Pinning**: keep an image floating above every window — resize it, change its opacity,
+  run OCR on it, save it. You can also pin whatever image is on the clipboard
+- **Scrolling capture**: frame a scrollable area, scroll the page yourself, and adjacent
+  frames are aligned by their overlap into one tall image; the preview offers save, copy,
+  pin, and OCR
+- **On-screen OCR**: recognized **locally** by the system Vision framework (nothing is
+  uploaded), with selectable language sets. **The result is editable before you copy it**,
+  and QR codes or barcodes in the frame are decoded alongside the text
+- **Recording**: the same selection flow, output as MP4 or GIF; system audio and microphone
+  (a separate second track, optionally mixed down to one); pause, resume, or discard mid-recording
+- **Live drawing**: draw straight onto the screen. In **pass-through mode** the strokes stay
+  put while you keep using the app underneath
+- **History**: the last 20 shots by default — copy, pin, save, or delete any of them
 
-### Network Capture (unbound by default)
-- A native HTTP(S) man-in-the-middle proxy built on Network.framework — no third-party runtime, no SwiftNIO. A single toggle starts a local proxy (default port 9090) and, optionally, points the Mac system proxy at it; turning it off fully stops the listener, restores the system proxy, and frees all buffers (zero cost when off).
-- **HTTPS decryption**: a local root CA (issued via the system's `openssl`) signs per-host leaf certificates on demand; TLS is terminated through an internal loopback listener so plaintext requests/responses are captured. Any MITM failure — untrusted cert, handshake failure, pinning, HTTP/2-only — falls back to a blind TCP tunnel so the proxied device keeps working; those flows are marked "not decrypted".
-- **Phone-friendly**: the window shows every LAN IPv4 + port (one-click copy) and a QR code to a magic domain (`http://baobox.proxy/`) that serves the CA for download; one-click Mac trust install/remove (admin), and one-click ADB proxy set/clear + cert push for Android.
-- **Proxyman-style UI**: a searchable flow list with method/status color coding, a detail pane (Overview / Request / Response / Raw) with JSON pretty-print, gzip/deflate decompression, and inline image preview; method/status filter chips; HAR / cURL / Markdown export.
-- **Local MCP for AI** (separate switch): starts a loopback Streamable-HTTP MCP server exposing `list_flows` / `get_flow` / `search_flows` / `latest_flows` / `clear_flows`, one-click registered into Claude Code / Codex config (auth headers redacted by default); plus "Send to Claude Code" for any flow. Captured content stays in memory only and is never uploaded.
+### Clipboard
 
-> Sparkle-based auto-update is not yet wired up (pending a hosting decision); the "Check for Updates" menu item is currently a disabled placeholder.
+Text, images, files, and links are all recorded. **⌘⇧V** opens the panel with the cursor
+already in the search field; **⏎ pastes straight back** into the app you came from.
 
-## Requirements
+- Type filters (all / text / link / image / file / favorites), favorites pinned to the top,
+  plain-text paste (⌘⌥V)
+- **Text tools in the preview pane**: JSON, JWT, XML, timestamps, URLs, Base64, and curl
+  commands are detected automatically, with in-place actions — format, decode, extract,
+  MD5/SHA, **generate a QR code** — and a one-click revert
+- **Large editor**: monospaced, undo, ⌘F find
+- **Text snippets**: save text you type often, give it a keyword, and typing
+  "prefix + keyword" in any input field expands it in place
+- **Privacy**: content marked by password managers is skipped by default; transient content
+  is always ignored; you can ignore specific apps; auto-cleanup after 1/7/30/90 days
+- **Encryption**: history is written to disk with **AES-GCM** by default. The key is a
+  random 256-bit value in the login keychain — it never leaves the Mac and never syncs to iCloud
 
-- macOS 14 (Sonoma) or later
+### Window manager
 
-## Installation
+All 13 actions are bindable and ship bound to the **⌃⌥** family.
+
+> ⚠️ The ⌃⌥ set collides exactly with Rectangle and Magnet. If you run one of those,
+> rebind one side in Settings.
+
+- Full multi-display support: the target screen is the one with the **largest intersection**;
+  layout is based on each screen's **visible frame** (menu bar and Dock excluded);
+  moving across displays maps position and size proportionally and clips to bounds, so
+  nothing deforms or overflows between different resolutions
+- **Layout snapshots**: save where every window is and restore it later. Matching is by
+  title first, order as fallback; apps that aren't running are skipped. Each entry records a
+  stable per-display UUID and the window's relative position on that display, so a
+  resolution or arrangement change doesn't break it
+- Configurable gap between windows (0 = flush)
+
+### Keyboard clicking
+
+Press **⌘⇧Space** and every clickable element gets a two-letter label; type the letters to
+click it. Elements come from the accessibility tree, so these are **real controls**, and
+clicks prefer `AXPress` — **your actual mouse never moves**.
+
+- **Continuous mode**: labels refresh after each click so you can keep going; Esc or a real
+  mouse click exits
+- **Label scope**: current display only, or all of them
+- **Keyboard scrolling**: j/k to scroll, Space to page — for pages like Chrome that don't
+  expose a scrollbar element
+
+### Keep awake
+
+Built on IOKit power assertions. Pick 15 minutes, 1 hour, 2 hours, or indefinite from the
+menu; it releases itself when the timer runs out and the menu shows the remaining time.
+Optionally keeps the display on too. The assertion is always released on quit.
+
+### Claude Code / Codex assistants
+
+Both bring a local AI coding CLI into the menu bar. **Everything is parsed from local
+files — no AI API calls, no login.**
+
+- **Resume sessions**: the most recent ones are one click away in your terminal, plus a
+  Spotlight-style search panel (in Claude Code, Tab switches to a "recent files" mode that
+  opens the files it last wrote)
+- **Usage and quota**: 5-hour and weekly windows, today's spend, reports by day / project /
+  model, and call statistics
+- **Audit** (Claude Code): files changed per day, revealable in Finder
+- **Notifications**: when a task finishes or Claude is waiting for you, with sound or
+  **spoken** alerts; warnings at 80% of a token budget and when a quota window resets
+- **Dangerous-command guard** (Claude Code): `rm -rf /`, `sudo rm`, `git push --force`,
+  `git reset --hard`, `DROP TABLE`, `mkfs`, `chmod -R 777` and friends are blocked before
+  they run, with the reason handed back to Claude. Custom regex rules are supported
+- **Visual configuration**: permission mode, default model, session retention, permission
+  rules and presets, privacy switches, CLAUDE.md management (Claude Code); approval policy,
+  sandbox mode, default model (Codex)
+- **Statusline builder** (Claude Code): tick the segments, preview live, apply in one click,
+  with a confirmation before overwriting an existing one
+- **MCP**: add and remove user-level servers for Claude Code; read-only listing for Codex
+- **Maintenance**: disk usage, cleanup of old sessions, version check and a copyable
+  upgrade command
+
+> All costs are **estimates** based on public pricing, and labeled as such throughout.
+>
+> **Edits to your files are conservative**: only our own keys are touched, unknown fields
+> and comments are preserved, and a `.baobox.bak` backup is written first. When a value
+> can't be edited safely the control is disabled rather than risk corrupting the file.
+
+## Install
 
 ### Download a release
 
-Grab the latest `.zip` from [Releases](https://github.com/qiaob/baobox_mac/releases), unzip, and drag `Baobox.app` into `/Applications`.
+Grab the latest `.zip` from [Releases](https://github.com/qiaob/baobox_mac/releases),
+unzip it, and drag `Baobox.app` into Applications. If Gatekeeper blocks the first launch,
+allow it under System Settings → Privacy & Security.
 
-Pre-notarization builds are blocked by Gatekeeper on first launch — right-click the app and choose **Open**, or run:
+### Requirements
 
-```bash
-xattr -cr /Applications/Baobox.app
+- macOS 14 (Sonoma) or later
+- Apple silicon and Intel both supported
+
+## First launch
+
+Onboarding asks for two permissions:
+
+| Permission | Used for | Without it |
+|---|---|---|
+| **Screen Recording** | Screenshots, recording, OCR, live drawing | Those features don't work |
+| **Accessibility** | Clipboard paste-back, window management, keyboard clicking, keyword expansion | Clipboard degrades to copy-only; window management and keyboard clicking are unavailable |
+
+> ⚠️ A system quirk: after you tick Screen Recording in System Settings you **must restart
+> Baobox** for it to take effect. Both the onboarding window and the settings page offer a
+> one-click restart.
+
+Skipping is fine — you can grant them later under Settings → General → Permissions.
+Microphone access is only requested if you enable "record microphone" while recording.
+
+## Shortcuts
+
+Bound out of the box:
+
+| Shortcut | Action |
+|---|---|
+| ⌘⇧2 | Smart screenshot |
+| ⌃⇧R | Start / stop recording |
+| ⌘⇧V | Clipboard history panel |
+| ⌘⌥V | Paste last item as plain text |
+| ⌘⇧Space | Keyboard clicking |
+| ⌃⇧Space | Claude Code quick resume |
+| ⌃⌥ ← → ↑ ↓ / U I J K / ⏎ / C / ⌫ | The 13 window actions |
+| ⌃⌥⌘ ← → | Move window across displays |
+
+OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files, and
+both Codex panels ship **unbound** — assign them under Settings → Shortcuts. Full list in
+[Shortcuts](docs/manual/shortcuts.md).
+
+## Data and privacy
+
+**Everything stays on this Mac. Nothing is uploaded, nothing is collected, there is no account.**
+
+```
+~/Library/Application Support/Baobox/<module>/   # one subdirectory per module
+~/Pictures/Baobox/                               # default location for screenshots and recordings
 ```
 
-### Build from source
+- Clipboard history is **AES-GCM encrypted by default**; the key lives in the login
+  keychain and never syncs to iCloud
+- Content marked by password managers is not recorded by default; transient content is
+  always ignored
+- The Claude Code and Codex assistants **store nothing** — they read `~/.claude` and
+  `~/.codex` live
+- The only network access is the version check you trigger yourself (an npm lookup)
 
-The Xcode project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen) and is not checked into git.
+See [Data and privacy](docs/manual/privacy-and-data.md) (Chinese).
+
+## Build from source
+
+The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+`project.yml` globs all of `Sources`, so new `.swift` files are picked up without touching
+the config.
 
 ```bash
 brew install xcodegen
+git clone https://github.com/qiaob/baobox_mac.git
+cd baobox_mac
 xcodegen generate
-open Baobox.xcodeproj
+open Baobox.xcodeproj          # or: xcodebuild -scheme Baobox build
 ```
 
-Select the `Baobox` scheme and run, or use the bundled Makefile:
+`Baobox.xcodeproj` is not checked in — re-run `xcodegen generate` after pulling.
+Non-sandboxed with Hardened Runtime; bundle id `com.baobox.app`.
+
+Validate the localization catalog:
 
 ```bash
-make dev      # Debug build, run without touching /Applications
-make install  # Release build, installed to /Applications and relaunched
+python3 -c "import json;json.load(open('Sources/Resources/Localizable.xcstrings'));print('valid')"
 ```
 
-## Permissions
+## Project layout
 
-Baobox requests permissions on first launch (System Settings → Privacy & Security):
+```
+Sources/
+├── App/                    # BaoboxApp, AppDelegate, StatusItemController
+├── Core/                   # shared infrastructure
+│   ├── ToolModule.swift        # the tool protocol (the heart of the framework)
+│   ├── ToolRegistry.swift      # registration order = menu order
+│   ├── HotkeyCenter.swift      # Carbon global hotkeys
+│   ├── KeyCombo / Permissions / Geometry / L10n / QRCodeGenerator / TextRecognizer …
+├── Modules/                # one directory per tool
+│   ├── Screenshot/  Clipboard/  WindowManager/  KeyboardNav/
+│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/
+├── Settings/               # settings window
+├── Onboarding/             # first-launch permission flow
+└── Resources/              # Localizable.xcstrings, Assets
+```
 
-| Permission | Used for | If denied |
-|---|---|---|
-| Screen Recording | Capturing screen content | The screenshot tool is unavailable |
-| Accessibility | Simulating ⌘V to auto-paste clipboard history; moving/resizing windows | Clipboard falls back to copy-only; Window Manager is unavailable |
-| Microphone | Recording your voice during screen recording (optional, requested only when enabled) | Recording continues without a mic track |
+`NetCapture` (packet capture) is in the repo but **not registered in the current release**.
 
-All permissions are tied to the bundle identifier `com.baobox.app`; changing it requires re-granting access. Granted permissions take effect immediately — no restart required.
+## Adding a tool
 
-## License
+The framework knows nothing about any specific tool. Adding one takes two steps:
 
-Baobox is provided for personal, non-commercial use only. Commercial use in any form — including resale, bundling into a commercial product or service, or commercial redistribution — is prohibited without prior written permission from the author. Contact the author to discuss commercial licensing.
+1. Implement `ToolModule` under `Sources/Modules/<Name>/`:
+
+```swift
+@MainActor
+final class MyTool: ToolModule {
+    let id = "mytool"
+    let name = L("mytool.name")
+    let symbolName = "wand.and.stars"           // SF Symbol
+
+    func submenuItems() -> [NSMenuItem] { … }   // submenu
+    func hotkeys() -> [HotkeyDefinition] { … }  // bindable shortcuts
+    func settingsTab() -> AnyView { … }         // settings page
+    func activate() { … }                       // on launch
+    func willTerminate() { … }                  // cleanup before quit
+}
+```
+
+2. Call `registry.register(MyTool())` in `AppDelegate`.
+
+The menu-bar entry, submenu, settings tab, and hotkey registration and persistence are all
+wired up automatically.
+
+All user-facing strings go through `L("mytool.key")` (AppKit) or `Text("mytool.key")`
+(SwiftUI), with both `en` and `zh-Hans` values added to
+`Sources/Resources/Localizable.xcstrings`.
+
+Conventions are documented in [CLAUDE.md](CLAUDE.md).
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [User manual](docs/manual/README.md) | Every tool and every feature, in detail (Chinese) |
+| [CLAUDE.md](CLAUDE.md) | Architecture overview and code conventions |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Product requirements |
+| [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) | Technical design |
+| [docs/design/](docs/design/) | UI mockups and design tokens |
+| `docs/<feature>/` | Requirements and design per feature |
+
+The workflow for a new feature: write requirements and a technical design under
+`docs/<feature>/` first, then implement it — **the document is the source of truth**.
