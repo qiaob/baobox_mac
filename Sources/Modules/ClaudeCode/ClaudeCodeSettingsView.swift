@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Claude Code 助手 —— 设置 Tab。顶部状态卡 + segmented Picker 分 5 节：
 /// 通知 / 配置 / Statusline / MCP / 维护（TECH_DESIGN 3.9）。
@@ -1266,6 +1267,17 @@ struct ClaudeMaintenanceSection: View {
 struct ClaudeMenuRowSection: View {
     @ObservedObject private var store = SessionRowFormatStore.shared
     @State private var terminalApp = TerminalAppChoice.current
+    /// 各类别当前映射的 App(bundleID);与 UserDefaults 同步维护,驱动界面刷新。
+    @State private var openAppSelections: [ClaudeFileCategory: String] = {
+        var map: [ClaudeFileCategory: String] = [:]
+        for category in ClaudeFileCategory.allCases {
+            if let id = ClaudeFileOpenSettings.appBundleID(for: category) {
+                map[category] = id
+            }
+        }
+        return map
+    }()
+    @AppStorage(ClaudeFileOpenSettings.includeInternalKey) private var includeInternal = false
 
     var body: some View {
         Form {
@@ -1281,6 +1293,21 @@ struct ClaudeMenuRowSection: View {
                 Text("settings.general.terminal.desc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // —— 最近文件:按类别的「打开方式」映射 + 内部文件开关(RECENT_FILES.md 3.3)——
+            SwiftUI.Section("claudecode.settings.files.section") {
+                ForEach(ClaudeFileCategory.allCases) { category in
+                    openAppRow(category)
+                }
+                Text("claudecode.settings.files.desc")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("claudecode.settings.files.includeInternal", isOn: $includeInternal)
+                    .onChange(of: includeInternal) { _, _ in
+                        // 排除在发布阶段做,全部缓存命中,开关即时生效。
+                        ClaudeFileIndex.shared.refresh()
+                    }
             }
 
             SwiftUI.Section("claudecode.settings.rowformat.section") {
@@ -1403,5 +1430,65 @@ struct ClaudeMenuRowSection: View {
         guard scheme.fields.indices.contains(index), scheme.fields.indices.contains(target) else { return }
         scheme.fields.swapAt(index, target)
         store.updateScheme(scheme)
+    }
+
+    // MARK: 最近文件「打开方式」
+
+    /// 一行类别映射:类别名 + 当前 App(未设显示「系统默认」)+ 选择… + 已设时的重置按钮。
+    private func openAppRow(_ category: ClaudeFileCategory) -> some View {
+        HStack(spacing: 8) {
+            Text(verbatim: category.title)
+            Spacer()
+            currentAppLabel(category)
+            Button("claudecode.settings.files.choose") {
+                chooseApp(for: category)
+            }
+            if openAppSelections[category] != nil {
+                Button {
+                    ClaudeFileOpenSettings.setAppBundleID(nil, for: category)
+                    openAppSelections[category] = nil
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .help(Text("claudecode.settings.files.reset"))
+            }
+        }
+    }
+
+    /// 当前映射展示。App 可能已卸载:图标/名称取不到时降级为 bundle id 文本(同剪贴板忽略名单)。
+    @ViewBuilder
+    private func currentAppLabel(_ category: ClaudeFileCategory) -> some View {
+        if let bundleID = openAppSelections[category] {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                    .resizable()
+                    .frame(width: 18, height: 18)
+                Text(verbatim: FileManager.default.displayName(atPath: url.path))
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "questionmark.app")
+                    .frame(width: 18, height: 18)
+                Text(verbatim: bundleID)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("claudecode.settings.files.systemDefault")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func chooseApp(for category: ClaudeFileCategory) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.prompt = L("claudecode.settings.files.choosePrompt")
+        guard panel.runModal() == .OK, let url = panel.url,
+              let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
+        ClaudeFileOpenSettings.setAppBundleID(bundleID, for: category)
+        openAppSelections[category] = bundleID
     }
 }

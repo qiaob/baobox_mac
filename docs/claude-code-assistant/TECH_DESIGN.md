@@ -217,6 +217,7 @@ printf '%s\n' "$out"
 ──────
 最近会话(≤5 条,ClosureMenuItem,图标 clock.arrow.circlepath)
   <proj> — <标题前 30 字>        点击 → TerminalLauncher resume
+最近文件…                         → 快速续接面板文件模式(hotkeyID claudecode.recentfiles,增量设计 RECENT_FILES.md)
 浏览会话历史…                     → 中心窗口 tab .sessions(hotkeyID claudecode.center)
 ──────
 [置灰] 额度窗口:已用 123.4k tok ≈ $2.1 · 2h15m 后重置   ← 或"当前无活跃额度窗口"

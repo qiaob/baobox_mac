@@ -25,12 +25,14 @@ final class ClaudeCodeTool: ToolModule {
         guard ClaudeEnv.isInstalled else { return }
         live.start()
         index.refresh()
+        ClaudeFileIndex.shared.refresh()   // 预热最近文件索引(首次全量在后台)
         usage.startAutoRefresh()
         hooks.refreshState()
     }
 
     func willTerminate() {
         index.flushCache()
+        ClaudeFileIndex.shared.flushCache()
         usage.stopAutoRefresh()
         live.stop()
     }
@@ -49,10 +51,15 @@ final class ClaudeCodeTool: ToolModule {
         items.append(disabled(statusText()))
         items.append(.separator())
 
-        // —— 会话入口:快速续接面板 + 中心窗口(菜单不再平铺最近会话)——
+        // —— 会话入口:快速续接面板 + 最近文件 + 中心窗口(菜单不再平铺最近会话)——
+        // 菜单入口显式指定面板模式;快捷键 toggle 沿用上次模式(见 ClaudePanelMode)。
         items.append(ClosureMenuItem(title: L("claudecode.menu.quickSwitch"),
                                      hotkeyID: "claudecode.quickswitch") {
-            ClaudeQuickSwitchController.shared.toggle()
+            ClaudeQuickSwitchController.shared.toggle(mode: .sessions)
+        })
+        items.append(ClosureMenuItem(title: L("claudecode.menu.recentFiles"),
+                                     hotkeyID: "claudecode.recentfiles") {
+            ClaudeQuickSwitchController.shared.showFiles()
         })
         items.append(ClosureMenuItem(title: L("claudecode.menu.browseSessions"),
                                      hotkeyID: "claudecode.center") {
@@ -101,6 +108,15 @@ final class ClaudeCodeTool: ToolModule {
                 defaultCombo: KeyCombo(keyCode: 0x31, carbonModifiers: KeyCombo.control | KeyCombo.shift)
             ) {
                 ClaudeQuickSwitchController.shared.toggle()
+            },
+            HotkeyDefinition(
+                id: "claudecode.recentfiles",
+                title: L("claudecode.hotkey.recentfiles"),
+                subtitle: L("claudecode.hotkey.recentfiles.subtitle"),
+                // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页自行设置。
+                defaultCombo: nil
+            ) {
+                ClaudeQuickSwitchController.shared.showFiles()
             }
         ]
     }
