@@ -27,6 +27,7 @@ mod screenshot_module;
 mod settings_window;
 mod store;
 mod text;
+mod text_input;
 mod tray;
 mod x11capture;
 

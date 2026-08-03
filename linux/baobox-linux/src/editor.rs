@@ -16,11 +16,18 @@
 //! 这样「屏幕上看到的」和「存进 PNG 的」走的是同一条渲染路径 ——
 //! 如果分成两套（屏幕上用 X11 画字、导出时用别的方式），文字迟早会对不上位置。
 //!
-//! # 已知限制
+//! # 文字输入借 GTK 的输入法栈
 //!
-//! 文字输入**不接 XIM**，所以中文输入法在这里用不了，只能打键盘直接产生的字符。
-//! 接 XIM 需要 libX11 的 C 接口（`Xutf8LookupString`），与本实现「纯 Rust 协议层」
-//! 的取舍冲突。Windows 侧走 `WM_CHAR`，没有这个问题。
+//! X11 只给键码，我们能把它翻成字符 —— 但那只覆盖「按一下出一个字」的键。
+//! 中文要经过输入法组合，而输入法只跟参与了某个输入法协议的应用打交道。
+//! 所以文字工具**不自己收键盘**，改为弹一个 GTK 输入框（见 [`crate::text_input`]），
+//! 借它已有的 im-module 支持拿到组合好的文本。GTK 本来就为设置窗口引进来了，
+//! 不多一份依赖。
+//!
+//! 弹输入框前**必须松开键盘 grab**，否则输入法一个按键都收不到 ——
+//! 漏了这步的现象和根本没接输入法一模一样。
+//!
+//! GTK 起不来时退回「按键直接翻字符」的老路：打不了中文，但 ASCII 还能用。
 
 use crate::text::TextFont;
 use baobox_core::editor::{Editor, EditorKey, EditorOutcome, Modifiers};
@@ -144,7 +151,13 @@ fn event_loop(
             Event::Expose(_) => {}
             Event::MotionNotify(motion) => editor.mouse_moved(to_screen(frame, motion.event_x, motion.event_y)),
             Event::ButtonPress(press) => match press.detail {
-                1 => editor.mouse_down(to_screen(frame, press.event_x, press.event_y)),
+                1 => {
+                    editor.mouse_down(to_screen(frame, press.event_x, press.event_y));
+                    // 文字工具落笔之后交给系统输入框，中文才打得出来
+                    if editor.pending_text().is_some() {
+                        collect_text(conn, window, editor);
+                    }
+                }
                 // 右键取消，与截图覆盖层一致
                 3 => editor.key_down(EditorKey::Escape, Modifiers::NONE),
                 _ => {}
@@ -175,6 +188,47 @@ fn event_loop(
             _ => continue,
         }
         redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth)?;
+    }
+}
+
+/// 弹系统输入框收一段文字，收完塞回编辑器。
+///
+/// **前后要松开 / 重抓键盘**：编辑器为了独占输入抓着键盘，不松开的话
+/// 输入法与输入框都收不到按键 —— 这一步漏了，中文照样打不出来。
+fn collect_text(conn: &RustConnection, window: Window, editor: &mut Editor) {
+    let Some(pending) = editor.pending_text() else {
+        return;
+    };
+    let (x, y) = (pending.origin.0 as i32, pending.origin.1 as i32);
+    let existing = pending.text.clone();
+    let size = editor.width() * baobox_core::editor::TEXT_SIZE_FACTOR;
+
+    let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+    let _ = conn.flush();
+
+    let outcome = crate::text_input::prompt(x, y, size, &existing);
+
+    let _ = conn.grab_keyboard(
+        false,
+        window,
+        x11rb::CURRENT_TIME,
+        GrabMode::ASYNC,
+        GrabMode::ASYNC,
+    );
+    let _ = conn.flush();
+
+    match outcome {
+        crate::text_input::Outcome::Committed(text) => {
+            editor.set_pending_text(&text);
+            // ⏎ 让编辑器把这段文字落定成一笔（空文字会被它自己丢掉）
+            editor.key_down(EditorKey::Enter, Modifiers::NONE);
+        }
+        crate::text_input::Outcome::Cancelled => {
+            // 只丢掉这段文字，不退出编辑器
+            editor.key_down(EditorKey::Escape, Modifiers::NONE);
+        }
+        // GTK 用不了：什么都不做，让事件循环按老路收键盘
+        crate::text_input::Outcome::Unavailable => {}
     }
 }
 

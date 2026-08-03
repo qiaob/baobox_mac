@@ -341,10 +341,21 @@ impl Editor {
         }
     }
 
+    /// 整段替换正在输入的文字。
+    ///
+    /// 给「平台层用系统输入框收文字」的路径用（Linux 侧借 GTK 的输入法栈）：
+    /// 那种情况下拿到的是一整段已经组合好的文本，不是一个个字符。
+    /// 没有正在输入的文字时什么都不做 —— 落笔点是 [`Editor::mouse_down`] 定的。
+    pub fn set_pending_text(&mut self, text: &str) {
+        if let Some(pending) = &mut self.pending_text {
+            pending.text = text.to_string();
+        }
+    }
+
     /// 输入一个字符。只有在文字工具的输入过程中才有效果。
     ///
     /// 平台层把 IME / 键盘布局解出来的**字符**送进来，不要送键码 ——
-    /// 中文输入法与非 US 布局全靠这一层。
+    /// 非 US 布局全靠这一层。整段文本走 [`Editor::set_pending_text`]。
     pub fn type_char(&mut self, character: char) {
         if let Some(text) = &mut self.pending_text {
             if !character.is_control() {
@@ -602,6 +613,28 @@ mod tests {
         e.activate(Item::Tool(Tool::Rect));
         assert!(e.visible_shapes().is_empty());
         assert!(!e.can_undo(), "空文字不该占一层撤销");
+    }
+
+    #[test]
+    fn a_whole_string_can_be_dropped_in_at_once() {
+        // 平台层用系统输入框收中文时拿到的是一整段，不是一个个字符
+        let mut e = editor();
+        e.activate(Item::Tool(Tool::Text));
+        e.mouse_down((300.0, 300.0));
+        e.mouse_up((300.0, 300.0));
+        e.set_pending_text("你好，世界");
+        assert_eq!(e.pending_text().unwrap().text, "你好，世界");
+        e.key_down(EditorKey::Enter, Modifiers::NONE);
+        assert_eq!(e.visible_shapes()[0].text.as_deref(), Some("你好，世界"));
+    }
+
+    #[test]
+    fn dropping_in_text_without_an_active_input_does_nothing() {
+        // 没点过文字工具就塞文本的话，落笔点是未知的，只能忽略
+        let mut e = editor();
+        e.set_pending_text("凭空出现");
+        assert!(e.pending_text().is_none());
+        assert!(e.visible_shapes().is_empty());
     }
 
     #[test]
