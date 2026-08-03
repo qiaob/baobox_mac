@@ -8,7 +8,10 @@ name: Release
 #   自己的 Mac 上优先装本地 Xcode 构建（开发证书签名，授权稳定），此产物主要给分发用。
 # 将来有付费账号后，恢复 git 历史里带证书导入 + notarytool 公证的版本即可。
 #
-# 版本号以标签为唯一事实来源，运行时覆盖 project.yml 里的值，不需要每次发版改文件。
+# 版本号以标签为唯一事实来源：Info.plist 里的 CFBundleShortVersionString /
+# CFBundleVersion 写的是 $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION)，
+# 所以下面在命令行上覆盖这两个构建设置就能真的改到包里的版本号。
+# （写死字面量的话覆盖是不起作用的 —— 这曾经是个真实的 bug。）
 on:
   push:
     tags:
@@ -20,6 +23,9 @@ permissions:
 jobs:
   release:
     runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac
     steps:
       - uses: actions/checkout@v4
 

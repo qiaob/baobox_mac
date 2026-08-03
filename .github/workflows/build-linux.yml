@@ -1,0 +1,66 @@
+name: Build Linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "linux/**"
+      - "shared/**"
+      - ".github/workflows/build-linux.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # GTK 是设置窗口用的（C 库，必须装开发包）。
+      # X11 那边用的是纯 Rust 的 x11rb，不需要 libx11-dev。
+      # Xvfb + dbus 是给测试用的：托盘那条测试要一根真的会话总线。
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev pkg-config xvfb dbus-x11
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            shared/baobox-core
+            shared/baobox-app
+            shared/baobox-render
+            shared/baobox-image
+            linux/baobox-linux
+
+      # 共享层先跑：这几个 crate 三平台共用，坏了三边一起坏，
+      # 所以要第一时间报出来，而不是等平台构建失败才发现。
+      - name: Test shared crates
+        run: |
+          for crate in shared/baobox-core shared/baobox-app shared/baobox-render shared/baobox-image; do
+            echo "== $crate"
+            (cd "$crate" && cargo test --all-targets)
+          done
+
+      # 托盘那条测试要连会话总线。dbus-run-session 现开一根，
+      # 没有它的话那条测试会自己跳过（不算失败，但也就白测了）。
+      - name: Test Linux crate
+        working-directory: linux/baobox-linux
+        run: dbus-run-session -- xvfb-run -a cargo test --all-targets
+
+      # 用 `cargo rustc -- -D warnings` 而不是 `RUSTFLAGS`：
+      # 后者会一并作用到所有第三方依赖上，别人代码里的一个 warning
+      # 就能把我们的流水线弄红，那不是我们该管的事。
+      - name: Build release (warnings are errors)
+        working-directory: linux/baobox-linux
+        run: cargo rustc --release -- -D warnings
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baobox-linux-x86_64
+          path: linux/baobox-linux/target/release/baobox-linux
+          if-no-files-found: error

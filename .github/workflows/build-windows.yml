@@ -1,0 +1,47 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "windows/**"
+      - "shared/**"
+      - ".github/workflows/build-windows.yml"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            shared/baobox-core
+            shared/baobox-app
+            windows/baobox-windows
+
+      # 这一步是这条流水线最有价值的地方：覆盖层、标注编辑器、托盘、
+      # 设置窗口那些测试都带 `cfg(windows)`，在开发机上只能类型检查，
+      # **只有在真 Windows 上才真正跑得起来**。
+      - name: Test
+        working-directory: windows/baobox-windows
+        run: cargo test --all-targets
+
+      # 用 `cargo rustc -- -D warnings` 而不是 `RUSTFLAGS`：
+      # 后者会一并作用到所有第三方依赖上，别人代码里的一个 warning
+      # 就能把我们的流水线弄红。
+      - name: Build release (warnings are errors)
+        working-directory: windows/baobox-windows
+        run: cargo rustc --release -- -D warnings
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baobox-windows-x86_64
+          path: windows/baobox-windows/target/release/baobox-windows.exe
+          if-no-files-found: error
