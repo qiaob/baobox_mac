@@ -156,6 +156,8 @@ final class LanDropServer: ObservableObject {
         listener = nil
         token = ""
         LanDropTransfers.shared.markActiveInterrupted(reason: L("landrop.error.interrupted"))
+        // 停止即清空分享列表：句柄随之失效，手机上残留的页面再点也拿不到任何东西。
+        LanDropShare.shared.clear()
     }
 
     /// `.failed` 是终态展示用的，再次点开关时要能从失败态重新开始。
@@ -239,12 +241,8 @@ final class LanDropServer: ObservableObject {
 
     // MARK: - 访问码
 
-    /// 32 字符 URL-safe 随机串。
+    /// 32 字符 URL-safe 随机串（与分享句柄同一个生成器，字母表只有一份）。
     private static func makeToken() -> String {
-        let alphabet = Array("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-        var generator = SystemRandomNumberGenerator()
-        return String((0..<32).map { _ in
-            alphabet[Int(generator.next(upperBound: UInt64(alphabet.count)))]
-        })
+        LanDropEnv.randomID(length: 32)
     }
 }

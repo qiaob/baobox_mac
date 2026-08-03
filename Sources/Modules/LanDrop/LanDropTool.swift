@@ -61,14 +61,38 @@ final class LanDropTool: ToolModule {
             items.append(.separator())
         }
 
-        // ⑤ 进行中的传输
+        // ⑤ 发送到手机（拖文件进面板才会被分享）
+        items.append(ClosureMenuItem(title: L("landrop.menu.send"), hotkeyID: "landrop.send") {
+            LanDropSendPanel.show()
+        })
+        let shared = LanDropShare.shared.items
+        if !shared.isEmpty {
+            items.append(disabled(L("landrop.menu.sharing \(shared.count)")))
+            for item in shared.prefix(5) {
+                let row = NSMenuItem(title: "\(item.name) · \(LanDropEnv.formatBytes(item.size))",
+                                     action: nil, keyEquivalent: "")
+                let actions = NSMenu()
+                actions.autoenablesItems = true
+                actions.addItem(ClosureMenuItem(title: L("landrop.menu.stopSharing")) {
+                    LanDropShare.shared.remove(id: item.id)
+                })
+                actions.addItem(ClosureMenuItem(title: L("claudecode.audit.reveal")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                })
+                row.submenu = actions
+                items.append(row)
+            }
+        }
+        items.append(.separator())
+
+        // ⑥ 进行中的传输
         let transfers = LanDropTransfers.shared
         if transfers.hasActive {
             items.append(hostingRow(LanDropProgressRow(), height: 38))
             items.append(.separator())
         }
 
-        // ⑥ 最近接收（最多 5 条，点击在访达中显示）
+        // ⑦ 最近接收（最多 5 条，点击在访达中显示）
         let recent = transfers.items.filter { $0.status == .done }.prefix(5)
         if !recent.isEmpty {
             items.append(disabled(L("landrop.menu.recent")))
@@ -85,7 +109,7 @@ final class LanDropTool: ToolModule {
             items.append(.separator())
         }
 
-        // ⑦ 打开保存目录
+        // ⑧ 打开保存目录
         items.append(ClosureMenuItem(title: L("landrop.menu.openFolder")) {
             let dir = LanDropEnv.ensureSaveDirectory() ?? LanDropEnv.saveDirectoryURL
             NSWorkspace.shared.open(dir)
@@ -103,7 +127,15 @@ final class LanDropTool: ToolModule {
                 defaultCombo: nil // 出厂不绑定
             ) {
                 LanDropServer.shared.toggle()
-            }
+            },
+            HotkeyDefinition(
+                id: "landrop.send",
+                title: L("landrop.hotkey.send"),
+                subtitle: L("landrop.hotkey.send.subtitle"),
+                defaultCombo: nil // 出厂不绑定
+            ) {
+                LanDropSendPanel.show()
+            },
         ]
     }
 

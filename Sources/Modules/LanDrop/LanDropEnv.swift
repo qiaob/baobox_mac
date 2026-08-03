@@ -160,6 +160,17 @@ enum LanDropEnv {
         return dir.appendingPathComponent("\(base)-\(UUID().uuidString)\(suffix)")
     }
 
+    // MARK: - 随机串
+
+    /// URL-safe 随机串。访问码与分享句柄共用一套字母表（去掉了 l/I/1、O/0 这类易混字符）。
+    static func randomID(length: Int) -> String {
+        let alphabet = Array("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        var generator = SystemRandomNumberGenerator()
+        return String((0..<length).map { _ in
+            alphabet[Int(generator.next(upperBound: UInt64(alphabet.count)))]
+        })
+    }
+
     // MARK: - 展示辅助
 
     /// 人类可读的字节数（菜单 / 通知 / 网页都用同一套，避免两处不一致）。

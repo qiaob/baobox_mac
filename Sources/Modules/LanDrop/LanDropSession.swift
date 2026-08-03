@@ -68,6 +68,13 @@ final class LanDropSession: @unchecked Sendable {
         var lastReport: Date
     }
 
+    /// 下发中的下载状态（Mac → 手机方向）。
+    private struct Download {
+        let handle: FileHandle
+        var remaining: Int
+        var lastActivityPing: Date
+    }
+
     private let connection: NWConnection
     private let queue: DispatchQueue
     private let config: Config
@@ -75,6 +82,7 @@ final class LanDropSession: @unchecked Sendable {
 
     private var buffer = Data()
     private var upload: Upload?
+    private var download: Download?
     private var finished = false
 
     init(connection: NWConnection, config: Config, registry: LanDropSessionRegistry) {
@@ -114,11 +122,15 @@ final class LanDropSession: @unchecked Sendable {
             }
             if error != nil {
                 self.abortUpload(reason: L("landrop.error.interrupted"))
+                self.endDownload()
                 self.cleanup()
                 return
             }
             if isComplete {
-                // 对端关闭：上传未收满即为中断。
+                // 对端关闭了写端。下发中的话只停止读、继续发完——有的客户端发完请求就半关闭，
+                // 这时 cleanup 会把还没发完的文件截断。
+                if self.download != nil { return }
+                // 上传未收满即为中断。
                 self.abortUpload(reason: L("landrop.error.interrupted"))
                 self.cleanup()
                 return
@@ -169,18 +181,37 @@ final class LanDropSession: @unchecked Sendable {
             respond(status: "404 Not Found", contentType: "text/plain; charset=utf-8", body: Data())
             return
         }
-        Self.onMain { LanDropServer.shared.noteActivity() }
+
+        // 只有「真的在传东西」才算活动。`/ping` 与 `/list` 是网页的被动轮询，
+        // 若也算活动，页面一直开着就永远不会空闲超时，自动关闭形同虚设。
+        if path == "/" || path == "/upload" || path == "/file" {
+            Self.onMain { LanDropServer.shared.noteActivity() }
+        }
 
         switch (method, path) {
         case ("GET", "/"):
             let html = LanDropPage.html(token: config.token,
                                         folderName: config.saveDir.lastPathComponent,
                                         maxFileSize: config.maxFileSize,
+                                        shared: LanDropShareSnapshot.shared.get(),
                                         acceptLanguage: headers["accept-language"])
             respond(status: "200 OK", contentType: "text/html; charset=utf-8", body: Data(html.utf8))
 
         case ("GET", "/ping"):
             respond(status: "200 OK", contentType: "application/json", body: Data(#"{"ok":true}"#.utf8))
+
+        case ("GET", "/list"):
+            // 只回句柄 / 文件名 / 大小 —— 路径一个字都不出去。
+            let items = LanDropShareSnapshot.shared.get().map {
+                ["id": $0.id, "name": $0.name, "size": $0.size] as [String: Any]
+            }
+            let json = (try? JSONSerialization.data(withJSONObject: ["items": items]))
+                ?? Data(#"{"items":[]}"#.utf8)
+            respond(status: "200 OK", contentType: "application/json", body: json)
+
+        case ("GET", "/file"):
+            let id = query.first(where: { $0.name == "id" })?.value ?? ""
+            sendSharedFile(id: id, headers: headers)
 
         case ("POST", "/upload"):
             let rawName = query.first(where: { $0.name == "name" })?.value ?? ""
@@ -189,6 +220,161 @@ final class LanDropSession: @unchecked Sendable {
         default:
             respond(status: "404 Not Found", contentType: "text/plain; charset=utf-8", body: Data())
         }
+    }
+
+    // MARK: - 下发（Mac → 手机）
+
+    /// 按句柄下发一个被显式分享的文件。
+    ///
+    /// **只认句柄，不认路径**：手机传来的 id 在内存分享表里查，查不到就 404。服务端没有任何
+    /// 接受路径输入的入口，所以这个方向上不存在目录穿越或越权读取——能拿到的只有用户拖进面板的东西。
+    private func sendSharedFile(id: String, headers: [String: String]) {
+        guard let item = LanDropShareSnapshot.shared.item(id: id),
+              let handle = try? FileHandle(forReadingFrom: item.url) else {
+            // 句柄失效、或文件在分享期间被删除 / 移走。
+            respond(status: "404 Not Found", contentType: "text/plain; charset=utf-8", body: Data())
+            return
+        }
+
+        let total = (try? handle.seekToEnd()).map { Int($0) } ?? item.size
+        var start = 0
+        var end = max(0, total - 1)
+        var partial = false
+        if let raw = headers["range"], let parsed = Self.parseRange(raw, total: total) {
+            start = parsed.lower
+            end = parsed.upper
+            partial = true
+        }
+        // 越界或畸形的 Range 在 `parseRange` 里已经被判成 nil，此处退化为整文件 200，
+        // 故不需要 416 分支（多回一个状态码不如少一条永不执行的路径）。
+        let length = total == 0 ? 0 : end - start + 1
+        if start > 0 {
+            do { try handle.seek(toOffset: UInt64(start)) } catch {
+                try? handle.close()
+                respond(status: "500 Internal Server Error", contentType: "text/plain; charset=utf-8", body: Data())
+                return
+            }
+        }
+
+        var head = partial ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n"
+        head += "Content-Type: \(Self.mimeType(for: item.name))\r\n"
+        head += "Content-Length: \(length)\r\n"
+        head += "Accept-Ranges: bytes\r\n"
+        if partial { head += "Content-Range: bytes \(start)-\(end)/\(total)\r\n" }
+        head += "Content-Disposition: \(Self.contentDisposition(for: item.name))\r\n"
+        head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+
+        download = Download(handle: handle, remaining: length, lastActivityPing: Date())
+        finished = true   // 不再读这条连接，剩下的事情是把文件发完
+
+        connection.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            guard error == nil else {
+                self.endDownload()
+                self.cleanup()
+                return
+            }
+            self.pumpDownload()
+        })
+    }
+
+    /// 逐块读文件并发出，**发完一块才读下一块**（背压）：4 GB 文件的内存占用等于一块的大小。
+    private func pumpDownload() {
+        guard var current = download else {
+            cleanup()
+            return
+        }
+        guard current.remaining > 0 else {
+            endDownload()
+            cleanup()
+            return
+        }
+        let want = min(Self.chunkSize, current.remaining)
+        guard let chunk = try? current.handle.read(upToCount: want), !chunk.isEmpty else {
+            // 文件在下发途中被截断 / 出错：直接断开，手机侧因 Content-Length 不满而报失败。
+            endDownload()
+            cleanup()
+            return
+        }
+        current.remaining -= chunk.count
+
+        // 下发期间也要刷空闲计时，否则传一个大文件传到一半服务被自动关掉。节流 2 秒。
+        if Date().timeIntervalSince(current.lastActivityPing) >= 2 {
+            current.lastActivityPing = Date()
+            Self.onMain { LanDropServer.shared.noteActivity() }
+        }
+        download = current
+
+        connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            guard error == nil else {
+                self.endDownload()
+                self.cleanup()
+                return
+            }
+            self.pumpDownload()
+        })
+    }
+
+    private func endDownload() {
+        guard let current = download else { return }
+        download = nil
+        try? current.handle.close()
+        Self.onMain { LanDropServer.shared.noteActivity() }
+    }
+
+    /// 解析单段 `Range: bytes=…`。支持 `a-b`、`a-`、`-suffix` 三种写法；多段与非法值返回 nil（退化为整文件 200）。
+    static func parseRange(_ raw: String, total: Int) -> (lower: Int, upper: Int)? {
+        guard total > 0 else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        guard trimmed.hasPrefix("bytes=") else { return nil }
+        let spec = String(trimmed.dropFirst("bytes=".count))
+        guard !spec.contains(",") else { return nil }   // 多段不支持
+        let parts = spec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        let first = String(parts[0]), second = String(parts[1])
+
+        if first.isEmpty {
+            // `-500`：末尾 500 字节
+            guard let suffix = Int(second), suffix > 0 else { return nil }
+            let lower = max(0, total - suffix)
+            return (lower, total - 1)
+        }
+        guard let lower = Int(first), lower >= 0, lower < total else { return nil }
+        if second.isEmpty { return (lower, total - 1) }
+        guard let upper = Int(second), upper >= lower else { return nil }
+        return (lower, min(upper, total - 1))
+    }
+
+    /// 常见类型给准确 MIME，其余一律 octet-stream（浏览器会走下载而不是乱渲染）。
+    static func mimeType(for name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "heic": return "image/heic"
+        case "webp": return "image/webp"
+        case "pdf": return "application/pdf"
+        case "mp4", "m4v": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "mp3": return "audio/mpeg"
+        case "m4a": return "audio/mp4"
+        case "txt", "log", "md": return "text/plain; charset=utf-8"
+        case "json": return "application/json"
+        case "zip": return "application/zip"
+        default: return "application/octet-stream"
+        }
+    }
+
+    /// 图片 / 音视频用 `inline`：iOS Safari 会直接打开，长按即可存进相册——比下载到「文件」App 顺手。
+    /// 其余用 `attachment` 触发下载。文件名同时给 ASCII 回退与 RFC 5987 的 UTF-8 形式。
+    static func contentDisposition(for name: String) -> String {
+        let mime = mimeType(for: name)
+        let kind = mime.hasPrefix("image/") || mime.hasPrefix("video/") || mime.hasPrefix("audio/")
+            ? "inline" : "attachment"
+        let ascii = String(name.unicodeScalars.map { $0.isASCII && $0 != "\"" && $0 != "\\" ? Character($0) : "_" })
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ascii
+        return "\(kind); filename=\"\(ascii)\"; filename*=UTF-8''\(encoded)"
     }
 
     // MARK: - 上传

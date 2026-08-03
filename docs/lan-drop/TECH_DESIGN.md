@@ -10,7 +10,9 @@ Sources/Modules/LanDrop/
 ├── LanDropEnv.swift           # UserDefaults 键与默认值、保存目录、文件名消毒与去重
 ├── LanDropServer.swift        # NWListener 启停、token、空闲自动关闭、@Published 状态（唯一事实源）
 ├── LanDropSession.swift       # 单连接 HTTP 会话：解析请求、路由、**流式落盘**
-├── LanDropPage.swift          # 内嵌上传页（HTML/CSS/JS 全内联，零外链）
+├── LanDropPage.swift          # 内嵌网页（上传 + 下载，HTML/CSS/JS 全内联，零外链）
+├── LanDropShare.swift         # Mac → 手机的分享列表（@MainActor 供 UI + 线程安全快照供会话）
+├── LanDropSendPanel.swift     # 「发送到手机」浮动面板：拖放区 + 二维码 + 分享列表
 ├── LanDropTransfers.swift     # 传输记录 store（@Published，进度 / 完成 / 失败）
 ├── LanDropNotify.swift        # 系统通知封装
 └── LanDropSettingsView.swift  # 设置页
@@ -25,6 +27,8 @@ Sources/Modules/LanDrop/
 |---|---|---|
 | `LanDropServer` | `@MainActor` + `ObservableObject` | 唯一事实源。菜单与设置页都观察它 |
 | `LanDropTransfers` | `@MainActor` + `ObservableObject` | 传输列表，只在主线程写 |
+| `LanDropShare` | `@MainActor` + `ObservableObject` | 分享列表，UI 侧唯一事实源 |
+| `LanDropShareSnapshot` | `@unchecked Sendable`（NSLock） | 上者的只读快照，供会话在连接队列上查句柄。照 `FlowSnapshotStore` 先例 |
 | `LanDropSession` | 非 MainActor，`@unchecked Sendable` | 每连接一个实例，独占自己的串行队列 |
 
 跨线程规则：
@@ -45,9 +49,14 @@ Sources/Modules/LanDrop/
 | `/` | GET | 上传页 HTML。`?k=<token>` 正确才返回 |
 | `/upload` | POST | **原始字节流**上传单个文件。`?k=<token>&name=<URL 编码文件名>` |
 | `/ping` | GET | 网页轮询探活，返回 `{"ok":true}`。用于「服务已关闭」提示 |
+| `/list` | GET | 分享列表（**只有句柄 / 文件名 / 大小，没有路径**），供网页每 5 秒轮询 |
+| `/file` | GET | 按句柄下发一个被分享的文件。`?k=<token>&id=<句柄>`，支持 `Range` |
 | 其他 | * | 404，空体 |
 
 token 不匹配一律 404（不是 401）——不向扫到端口的人暴露这里跑着什么。
+
+**只有 `/`、`/upload`、`/file` 计为「活动」**（刷新空闲计时）。`/ping` 与 `/list` 是网页的
+被动轮询，若也算活动，页面开着就永远不会空闲超时，自动关闭形同虚设。
 
 ### 为什么用原始字节流而不是 multipart/form-data
 
@@ -72,6 +81,28 @@ token 不匹配一律 404（不是 401）——不向扫到端口的人暴露这
 ```
 
 `.baobox-part` 后缀保证半截文件不会被误当成完整文件，且中断后不留垃圾（验收 2）。
+
+## 3.5 下发（Mac → 手机）
+
+**只认句柄，不认路径。** 手机传来的是 `id`，在内存分享表里查；查不到就 404。服务端**没有任何
+接受路径输入的入口**，因此这个方向上不存在目录穿越或越权读取——能取到的只有用户拖进面板的文件。
+
+分享表的生命周期：拖入时加入 → 面板里可单项移除 / 清空 → **服务停止即整表清空**，句柄立即失效。
+文件在分享期间被删除或移走时 `FileHandle(forReadingFrom:)` 失败 → 404，不 crash。
+
+**背压式流式下发**：发完一块才读下一块（`send` 的 `.contentProcessed` 回调里泵下一块），
+4 GB 文件的内存占用等于一块（256 KB）。下发期间节流 2 秒刷一次空闲计时，
+否则传大文件传到一半服务会被自动关掉。
+
+**Range**：支持单段 `bytes=a-b` / `a-` / `-suffix`，回 206 + `Content-Range`；
+多段或畸形值退化为整文件 200（故不需要 416 分支）。iOS Safari 播放音视频依赖这个。
+
+**Content-Disposition**：图片 / 音视频用 `inline`（Safari 直接打开，长按存进相册，比落到
+「文件」App 顺手），其余用 `attachment`。文件名同时给 ASCII 回退与 RFC 5987 的 `filename*`。
+
+**注入防护**：分享列表要嵌进页面的 `<script>`，文件名由用户拖入的文件决定，可能含引号或
+`</script>`。序列化交给 `JSONSerialization`，再把 `<` `>` `&` 转成 `\uXXXX` 形式，
+任何文件名都无法提前闭合脚本标签。
 
 ## 4. 端口与地址
 
@@ -159,3 +190,4 @@ stopped ──start()──▶ starting ──listener ready──▶ running(po
 4. `LanDropSession` → `LanDropServer`
 5. `LanDropTool` + `LanDropSettingsView`
 6. 本地化 key 入表 → `AppDelegate` 注册
+7. Mac → 手机方向：`LanDropShare` → `LanDropSendPanel`（拖放）→ 会话 `/list` `/file` → 网页下载区

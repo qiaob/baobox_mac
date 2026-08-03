@@ -61,11 +61,13 @@ Most macOS productivity tools ship as separate apps: one for screenshots, one fo
 
 
 ### LAN Drop — File Transfer (unbound by default)
-- Turn on a temporary receiver from the menu, scan the QR code with your phone, and send files straight to this Mac — no cable, no cloud sync, and none of AirDrop's Apple-only limits.
+- Turn on a temporary service from the menu, scan the QR code with your phone, and move files **both ways** — no cable, no cloud sync, and none of AirDrop's Apple-only limits.
+- **Phone → Mac**: multi-select, camera capture, drag-and-drop on desktop browsers, per-file progress.
+- **Mac → phone**: open the floating Send panel from the menu and **drag files into it from Finder** — only what you drop becomes available. It appears on the phone within seconds (the page polls itself), one tap to download. Range requests are supported, so audio and video stream while downloading.
 - The phone-side page has **zero external dependencies** (all CSS/JS inlined): multi-select, camera capture, drag-and-drop on desktop browsers, and per-file progress. Chinese or English is chosen from the phone's own language, not the Mac's.
 - Writes are **streamed**: every chunk goes straight into `<target>.baobox-part` and is renamed only once complete — memory stays flat on a 1 GB transfer, and an interrupted upload leaves no half file behind. Saves to `~/Downloads/Baobox` by default; same-name files get a numeric suffix and are never overwritten.
 - A notification when a transfer starts and another when it lands, with live progress and a "Recently received" list (click to reveal in Finder) in the menu.
-- **Security**: off by default; each start mints a new one-time access code embedded in the QR code, and any request without it gets a flat 404. The service only receives — phones can't browse or download anything from this Mac. Auto-stops after 10 idle minutes (configurable), and immediately on sleep, display sleep, or app quit. Per-file size cap is configurable.
+- **Security**: off by default; each start mints a new one-time access code embedded in the QR code, and any request without it gets a flat 404. Downloads are **handle-based, never path-based** — the server has no entry point that accepts a path, so a phone can only reach the files you dropped into the panel, and every handle dies when the service stops. No folder sharing, no directory listing. Auto-stops after 10 idle minutes (configurable), and immediately on sleep, display sleep, or app quit. Per-file size cap is configurable.
 
 ### Claude Code Assistant (unbound by default)
 - A menu-bar dashboard for the local Claude Code CLI, built entirely from `~/.claude` files — no AI API, no login: live session status (running / awaiting confirmation), the five most recent sessions for one-click terminal resume, the current 5-hour usage window (tokens, estimated cost, reset countdown) and today's estimated spend.
