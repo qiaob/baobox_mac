@@ -53,7 +53,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, EN_CHANGE, ES_AUTOHSCROLL,
     GWLP_USERDATA, IDC_ARROW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_SETFONT, WNDCLASSW,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 
 /// 设置窗口类名。
@@ -124,7 +124,10 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
             Default::default(),
             CLASS_NAME,
             w!("Baobox 设置"),
-            WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+            // 不加 WS_VSCROLL：滚动要自己处理 WM_VSCROLL 与偏移，
+            // 挂个滚不动的滚动条比没有更糟。窗口按内容定高，
+            // 内容真的超过一屏时（工具多起来之后）再来补滚动。
+            WS_OVERLAPPEDWINDOW,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             WINDOW_WIDTH,

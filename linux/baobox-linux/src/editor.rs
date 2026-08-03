@@ -87,7 +87,7 @@ pub fn run(
 
     let outcome = event_loop(
         conn, window, pixmap, gc, &mut editor, &frame, &rgba, image, font.as_ref(), &keymap,
-        msb_first,
+        msb_first, depth,
     );
 
     // 先撤掉窗口，再导出 —— 导出走的是离屏 Pixmap，与窗口无关，
@@ -130,8 +130,9 @@ fn event_loop(
     font: Option<&TextFont>,
     keymap: &KeyMap,
     msb_first: bool,
+    depth: u8,
 ) -> Result<EditorOutcome, String> {
-    redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first)?;
+    redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth)?;
     loop {
         if let Some(outcome) = editor.outcome() {
             return Ok(outcome);
@@ -159,18 +160,21 @@ fn event_loop(
                     shift: key.state.contains(xproto::KeyButMask::SHIFT),
                 };
                 let keysym = keymap.keysym(key.detail, modifiers.shift);
-                if let Some(mapped) = named_key(keysym) {
-                    editor.key_down(mapped, modifiers);
-                } else if !modifiers.ctrl {
-                    // 带 Ctrl 的是快捷键，不该当成打字
-                    if let Some(character) = keysym.and_then(character_for) {
-                        editor.type_char(character);
+                match command_for(keysym, modifiers.ctrl, editor.pending_text().is_some()) {
+                    Some(mapped) => editor.key_down(mapped, modifiers),
+                    None => {
+                        // 带 Ctrl 的是快捷键，不是打字
+                        if !modifiers.ctrl {
+                            if let Some(character) = keysym.and_then(character_for) {
+                                editor.type_char(character);
+                            }
+                        }
                     }
                 }
             }
             _ => continue,
         }
-        redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first)?;
+        redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth)?;
     }
 }
 
@@ -192,12 +196,12 @@ fn redraw(
     image: Rect,
     font: Option<&TextFont>,
     msb_first: bool,
+    depth: u8,
 ) -> Result<(), String> {
     let (fw, fh) = (frame.w.round() as usize, frame.h.round() as usize);
     let mut pixels = compose(frame, base, image);
     let texts = draw_annotations(&mut pixels, fw, fh, editor, frame, true);
 
-    let depth = conn.setup().roots[0].root_depth;
     upload_rgba(conn, pixmap, gc, fw, fh, &pixels, msb_first, depth)?;
     if let Some(font) = font {
         for text in &texts {
@@ -495,20 +499,42 @@ fn ungrab_input(conn: &RustConnection) {
     let _ = conn.ungrab_keyboard(x11rb::CURRENT_TIME);
 }
 
-/// keysym → 编辑器认得的功能键。返回 `None` 表示「这是个普通字符」。
-fn named_key(keysym: Option<u32>) -> Option<EditorKey> {
-    match keysym? {
+/// 这一下按键算不算命令。返回 `None` 表示「当成一个字符打进去」。
+///
+/// # 为什么不能只看 keysym
+///
+/// `z` 既是「Ctrl+Z 撤销」的一半，也是一个能打进文字标注里的字母。
+/// 只按 keysym 判断的话，用户在文字工具里永远打不出 z / y / c / s / `[` / `]`
+/// —— 按下去被当成命令吃掉，而那些命令在没有 Ctrl 时又什么都不做。
+///
+/// 所以要看两个上下文：
+///
+/// - 按着 Ctrl：一律当命令（Ctrl+Z / Ctrl+C 之类）
+/// - 正在输入文字：只有 Esc / ⏎ / 退格是命令，其余全是字符
+/// - 没在输入文字：整套命令都生效（`[` `]` 调线宽等）
+fn command_for(keysym: Option<u32>, ctrl: bool, typing: bool) -> Option<EditorKey> {
+    let key = keysym?;
+    // 这三个在任何状态下都是命令 —— 它们本来也打不出字符
+    let always = match key {
         0xff1b => Some(EditorKey::Escape),
         0xff0d | 0xff8d => Some(EditorKey::Enter),
         0xff08 => Some(EditorKey::Backspace),
-        // 字母键只有在配合 Ctrl 时才是快捷键，但 keysym 层分不出来，
-        // 交给调用方看修饰键决定是当快捷键还是当打字
+        _ => None,
+    };
+    if always.is_some() {
+        return always;
+    }
+    if typing && !ctrl {
+        return None;
+    }
+    match key {
         0x7a | 0x5a => Some(EditorKey::Z),
         0x79 | 0x59 => Some(EditorKey::Y),
         0x63 | 0x43 => Some(EditorKey::C),
         0x73 | 0x53 => Some(EditorKey::S),
-        0x5b => Some(EditorKey::BracketLeft),
-        0x5d => Some(EditorKey::BracketRight),
+        // `[` `]` 调线宽，只在没打字时有意义
+        0x5b if !typing => Some(EditorKey::BracketLeft),
+        0x5d if !typing => Some(EditorKey::BracketRight),
         _ => None,
     }
 }
@@ -583,13 +609,34 @@ mod tests {
     }
 
     #[test]
-    fn named_keys_are_recognised_and_letters_fall_through() {
-        assert_eq!(named_key(Some(0xff1b)), Some(EditorKey::Escape));
-        assert_eq!(named_key(Some(0xff08)), Some(EditorKey::Backspace));
-        assert_eq!(named_key(Some(0x7a)), Some(EditorKey::Z));
-        assert_eq!(named_key(Some(0x5a)), Some(EditorKey::Z), "大写也算");
-        assert_eq!(named_key(Some(0x61)), None, "'a' 不是功能键");
-        assert_eq!(named_key(None), None);
+    fn commands_are_recognised_when_nothing_is_being_typed() {
+        let idle = |k: u32| command_for(Some(k), false, false);
+        assert_eq!(idle(0xff1b), Some(EditorKey::Escape));
+        assert_eq!(idle(0xff08), Some(EditorKey::Backspace));
+        assert_eq!(idle(0x7a), Some(EditorKey::Z));
+        assert_eq!(idle(0x5a), Some(EditorKey::Z), "大写也算");
+        assert_eq!(idle(0x5b), Some(EditorKey::BracketLeft));
+        assert_eq!(idle(0x61), None, "'a' 不是功能键");
+        assert_eq!(command_for(None, false, false), None);
+    }
+
+    #[test]
+    fn typing_a_letter_that_is_also_a_shortcut_still_types_it() {
+        // 这是个真实存在过的 bug：文字标注里打不出 z / y / c / s / [ / ]，
+        // 因为它们被当成命令吃掉了，而那些命令没有 Ctrl 时又什么都不做
+        for key in [0x7a, 0x79, 0x63, 0x73, 0x5b, 0x5d] {
+            assert_eq!(
+                command_for(Some(key), false, true),
+                None,
+                "正在打字时 0x{key:x} 应当是个字符，不是命令"
+            );
+        }
+        // 但按着 Ctrl 时仍然是快捷键 —— 打字途中也要能撤销
+        assert_eq!(command_for(Some(0x7a), true, true), Some(EditorKey::Z));
+        // Esc / ⏎ / 退格在打字时仍是命令，否则文字没法落定也没法删字
+        assert_eq!(command_for(Some(0xff1b), false, true), Some(EditorKey::Escape));
+        assert_eq!(command_for(Some(0xff0d), false, true), Some(EditorKey::Enter));
+        assert_eq!(command_for(Some(0xff08), false, true), Some(EditorKey::Backspace));
     }
 
     #[test]

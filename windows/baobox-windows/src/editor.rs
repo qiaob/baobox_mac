@@ -363,7 +363,8 @@ unsafe extern "system" fn wndproc(
         }
         WM_KEYDOWN => {
             let modifiers = current_modifiers();
-            if let Some(key) = translate_key(wparam.0 as u32) {
+            let typing = state.editor.pending_text().is_some();
+            if let Some(key) = translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
                 state.editor.key_down(key, modifiers);
                 if state.editor.outcome().is_some() {
                     PostQuitMessage(0);
@@ -503,8 +504,15 @@ fn current_modifiers() -> Modifiers {
     }
 }
 
-/// 虚拟键码 → 编辑器认得的键。
-fn translate_key(virtual_key: u32) -> Option<EditorKey> {
+/// 虚拟键码 → 编辑器认得的命令。返回 `None` 表示「交给 `WM_CHAR` 当字符处理」。
+///
+/// # 为什么要看正在不正在打字
+///
+/// Windows 会把一次按键拆成 `WM_KEYDOWN` + `WM_CHAR` 两条消息，所以字母键
+/// 不会像 Linux 那边一样被吃掉。但 `[` / `]` 会：它们既是调线宽的命令，
+/// 又是能打进文字标注里的字符 —— 不加判断的话，用户在文字里打一个 `[`
+/// 会顺手把画笔变粗。
+fn translate_key(virtual_key: u32, ctrl: bool, typing: bool) -> Option<EditorKey> {
     const VK_BACK: u32 = 0x08;
     const VK_RETURN: u32 = 0x0D;
     const VK_ESCAPE: u32 = 0x1B;
@@ -515,15 +523,18 @@ fn translate_key(virtual_key: u32) -> Option<EditorKey> {
     const VK_OEM_4: u32 = 0xDB; // [
     const VK_OEM_6: u32 = 0xDD; // ]
     match virtual_key {
+        // 这三个在任何状态下都是命令 —— 它们本来也打不出字符
         VK_ESCAPE => Some(EditorKey::Escape),
         VK_RETURN => Some(EditorKey::Enter),
         VK_BACK => Some(EditorKey::Backspace),
-        VK_Z => Some(EditorKey::Z),
-        VK_Y => Some(EditorKey::Y),
-        VK_C => Some(EditorKey::C),
-        VK_S => Some(EditorKey::S),
-        VK_OEM_4 => Some(EditorKey::BracketLeft),
-        VK_OEM_6 => Some(EditorKey::BracketRight),
+        // 字母键只有配合 Ctrl 才是快捷键；单按时 WM_CHAR 会把它打进去
+        VK_Z if ctrl => Some(EditorKey::Z),
+        VK_Y if ctrl => Some(EditorKey::Y),
+        VK_C if ctrl => Some(EditorKey::C),
+        VK_S if ctrl => Some(EditorKey::S),
+        // 调线宽，只在没打字时有意义
+        VK_OEM_4 if !typing => Some(EditorKey::BracketLeft),
+        VK_OEM_6 if !typing => Some(EditorKey::BracketRight),
         _ => None,
     }
 }
@@ -552,13 +563,26 @@ mod tests {
 
     #[test]
     fn editor_keys_map_from_virtual_key_codes() {
-        assert_eq!(translate_key(0x1B), Some(EditorKey::Escape));
-        assert_eq!(translate_key(0x08), Some(EditorKey::Backspace));
-        assert_eq!(translate_key(0x5A), Some(EditorKey::Z));
-        assert_eq!(translate_key(0xDB), Some(EditorKey::BracketLeft));
-        assert_eq!(translate_key(0xDD), Some(EditorKey::BracketRight));
+        let idle = |k: u32| translate_key(k, false, false);
+        assert_eq!(idle(0x1B), Some(EditorKey::Escape));
+        assert_eq!(idle(0x08), Some(EditorKey::Backspace));
+        assert_eq!(idle(0xDB), Some(EditorKey::BracketLeft));
+        assert_eq!(idle(0xDD), Some(EditorKey::BracketRight));
         // 普通字母交给 WM_CHAR 处理，不该在这里被吃掉
-        assert_eq!(translate_key(0x41), None);
+        assert_eq!(idle(0x41), None);
+        assert_eq!(idle(0x5A), None, "单按 Z 是打字，不是撤销");
+        assert_eq!(translate_key(0x5A, true, false), Some(EditorKey::Z));
+    }
+
+    #[test]
+    fn typing_a_bracket_does_not_also_change_the_pen_width() {
+        // `[` 既是调线宽的命令又是一个字符；打字时必须让位给 WM_CHAR
+        assert_eq!(translate_key(0xDB, false, true), None);
+        assert_eq!(translate_key(0xDD, false, true), None);
+        // 但打字途中仍要能撤销、能落定、能删字
+        assert_eq!(translate_key(0x5A, true, true), Some(EditorKey::Z));
+        assert_eq!(translate_key(0x1B, false, true), Some(EditorKey::Escape));
+        assert_eq!(translate_key(0x08, false, true), Some(EditorKey::Backspace));
     }
 
     #[test]

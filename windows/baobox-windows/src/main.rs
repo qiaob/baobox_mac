@@ -226,10 +226,10 @@ fn deliver(
     if save || output.is_some() {
         let path = match output {
             Some(path) => path,
-            None => default_path()?,
+            None => default_path("")?,
         };
         baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-        store::remember(&path, shot.width, shot.height, now_seconds());
+        store::remember(&path, shot.width, shot.height, now_seconds(), None);
         notes.push(format!("已保存 {}", path.display()));
     }
     if copy {
@@ -317,7 +317,7 @@ fn run_record(args: &[String]) -> Result<String, String> {
     };
     let path = match output {
         Some(path) => path,
-        None => default_path()?.with_extension("mp4"),
+        None => default_path("")?.with_extension("mp4"),
     };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
@@ -453,7 +453,7 @@ fn scroll(args: &[String]) -> Result<String, String> {
 
     let path = match output {
         Some(path) => path,
-        None => default_path()?,
+        None => default_path("")?,
     };
     baobox_image::write_rgba(
         &path,
@@ -590,11 +590,16 @@ fn parse_window_id(value: &str) -> Result<isize, String> {
 }
 
 /// 默认保存位置：`%USERPROFILE%\Pictures\Baobox\<模板>.png`。
-pub fn default_path() -> Result<PathBuf, String> {
+///
+/// `save_dir` 非空时改存到那里 —— 设置里的「保存到」就是靠它生效的。
+pub fn default_path(save_dir: &str) -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "%USERPROFILE% 未设置".to_string())?;
-    let dir = Path::new(&home).join("Pictures").join("Baobox");
+    let dir = match save_dir.trim() {
+        "" => Path::new(&home).join("Pictures").join("Baobox"),
+        custom => PathBuf::from(custom),
+    };
     let stem = format_template(DEFAULT_TEMPLATE, now_parts());
     // 走 Windows 规则：非法字符更多，另有 CON/PRN/NUL 等保留名
     let safe = sanitize(&stem, Platform::Windows, "screenshot");

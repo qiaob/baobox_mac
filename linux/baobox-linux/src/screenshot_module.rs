@@ -55,6 +55,8 @@ struct Settings {
     edit: bool,
     langs: String,
     fps: i64,
+    save_dir: String,
+    history_limit: usize,
 }
 
 impl Settings {
@@ -65,6 +67,8 @@ impl Settings {
             edit: config.bool_or(ID, "annotate_before_saving", true),
             langs: config.string_or(ID, "ocr_languages", ocr::DEFAULT_LANGS),
             fps: config.usize_or(ID, "record_fps", record::DEFAULT_FPS as usize) as i64,
+            save_dir: config.string_or(ID, "save_dir", ""),
+            history_limit: config.usize_or(ID, "history_limit", 20),
         }
     }
 }
@@ -262,9 +266,15 @@ impl ScreenshotTool {
     ) -> Result<String, String> {
         let mut notes = Vec::new();
         if save {
-            let path = crate::default_path()?;
+            let path = crate::default_path(&self.settings.save_dir)?;
             baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-            store::remember(&path, shot.width, shot.height, crate::now_seconds());
+            store::remember(
+                &path,
+                shot.width,
+                shot.height,
+                crate::now_seconds(),
+                Some(self.settings.history_limit),
+            );
             notes.push(format!("已保存 {}", path.display()));
         }
         if copy {
@@ -312,7 +322,7 @@ impl ScreenshotTool {
 
         let session = X11Session::open()?;
         let target = interactive_target(&session)?;
-        let path = crate::default_path()?.with_extension("mp4");
+        let path = crate::default_path(&self.settings.save_dir)?.with_extension("mp4");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
         }
@@ -447,6 +457,26 @@ mod tests {
             path: PathBuf::from("/tmp/x.mp4"),
         });
         assert!(label(&tool).contains("停止"));
+    }
+
+
+    #[test]
+    fn every_declared_setting_is_actually_read_somewhere() {
+        // 声明了却没人读 = 用户在设置里改了却什么都不会发生，
+        // 那比干脆不给这个选项更糟。这条测试盯着两者不走散。
+        let page = ScreenshotTool::new().settings_page().unwrap();
+        let source = include_str!("screenshot_module.rs");
+        for key in baobox_app::settings::declared_keys(&page) {
+            // 声明处出现一次，读取处再出现一次 —— 少于两次就说明只声明没读。
+            // 不去匹配具体的调用形状（`config.string_or(ID, "k", …)` 之类），
+            // 那种模式换个写法就失效，反而变成一条空转的测试
+            let mentions = source.matches(&format!("\"{key}\"")).count();
+            assert!(
+                mentions >= 2,
+                "{key} 在设置里声明了却没人读它（源码里只出现 {mentions} 次）—— \
+                 用户改了会什么都不发生，比不给这个选项更糟"
+            );
+        }
     }
 
     #[test]

@@ -15,4 +15,7 @@ mac/DerivedData/
 
 # Rust（跨平台核心与 Linux/Windows 实现）
 target/
-Cargo.lock
+# Cargo.lock **不要**忽略：linux/ 与 windows/ 是二进制 crate，
+# 提交锁文件才能让 CI 和用户构建出同一套依赖版本。忽略掉的话，
+# 某个依赖发一个补丁版就可能让流水线莫名其妙地红，而我们一行代码都没改。
+# （shared/ 里是库 crate，它们的锁文件不参与解析，留着也无害。）

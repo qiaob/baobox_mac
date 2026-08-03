@@ -92,9 +92,10 @@ pub fn save(history: &History) -> Result<(), String> {
 ///
 /// 只删历史目录里的副本 —— 用户自己 `-o` 指定的文件不归历史管，
 /// 悄悄删掉别人指定路径的文件是不可接受的。
-pub fn remember(path: &Path, width: u32, height: u32, created_at: i64) {
+/// `limit` 为 `None` 时用默认上限（命令行下没有配置可读）。
+pub fn remember(path: &Path, width: u32, height: u32, created_at: i64, limit: Option<usize>) {
     let Some(dir) = dir() else { return };
-    let mut history = load(History::DEFAULT_LIMIT);
+    let mut history = load(limit.unwrap_or(History::DEFAULT_LIMIT));
     let entry = Entry {
         id: format!("{created_at}-{width}x{height}"),
         path: path.to_string_lossy().to_string(),

@@ -318,3 +318,16 @@ mod tests {
         assert!(Field::toggle("y", "另一个", true).help.is_none());
     }
 }
+
+/// 一份工具的设置声明与它实际读的键对不对得上。
+///
+/// # 为什么需要这个
+///
+/// 设置项是**声明**在一处、**读取**在另一处的，两边很容易走散：
+/// 声明了却没人读 = 用户改了没反应（比不给这个选项更糟）；
+/// 读了却没声明 = 一个只能手改配置文件才能碰到的隐藏开关。
+///
+/// 两个平台各自的测试用它对着自己的 `Settings::read` 核一遍。
+pub fn declared_keys(page: &SettingsPage) -> Vec<&str> {
+    page.fields.iter().map(|field| field.key.as_str()).collect()
+}
