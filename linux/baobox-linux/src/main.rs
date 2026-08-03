@@ -17,12 +17,19 @@
 
 mod clipboard;
 mod daemon;
+mod editor;
+mod ocr;
 mod overlay;
+mod pin;
+mod record;
+mod store;
+mod text;
 mod x11capture;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
 use baobox_core::hotkey::KeyCombo;
+use baobox_core::editor::EditorOutcome;
 use baobox_core::selection::Outcome;
 use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
 use std::path::{Path, PathBuf};
@@ -52,6 +59,9 @@ fn main() {
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
         Some("capture") => capture(&args[1..]),
+        Some("ocr") => run_ocr(&args[1..]),
+        Some("record") => run_record(&args[1..]),
+        Some("history") => history(&args[1..]),
         Some("scroll") => scroll(&args[1..]),
         Some("daemon") => run_daemon(&args[1..]),
         Some("windows") => list_windows(),
@@ -66,10 +76,15 @@ fn usage() -> String {
         "Baobox Linux —— 截图\n\n",
         "用法：\n",
         "  baobox-linux capture [-o 输出.png]              交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
+        "      截完自动进标注编辑器：画框 / 箭头 / 打码 / 写字，再按工具条上的按钮决定去向\n",
+        "      --no-edit 跳过编辑，截完直接出图\n",
         "  baobox-linux capture --full [-o 输出.png]\n",
         "  baobox-linux capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-linux capture --window <id> [-o 输出.png]\n",
         "      默认复制到剪贴板并保存；--no-copy / --no-save 可分别关掉\n",
+        "  baobox-linux ocr [--region X,Y,W,H] [--lang chi_sim+eng]      屏幕取字（需要 tesseract）\n",
+        "  baobox-linux record [--region X,Y,W,H] [--fps 15] [-o 输出.mp4]  录屏（需要 ffmpeg，⏎ 停止）\n",
+        "  baobox-linux history [--clear]                                 最近的截图\n",
         "  baobox-linux scroll --region X,Y,W,H [--frames N] [--interval MS] [-o 输出.png]\n",
         "  baobox-linux daemon [--hotkey Ctrl+Shift+S]\n",
         "  baobox-linux windows\n",
@@ -138,6 +153,7 @@ fn capture(args: &[String]) -> Result<String, String> {
     // 与 macOS 版默认一致：复制到剪贴板 + 同时落盘
     let mut copy = true;
     let mut save = true;
+    let mut edit = true;
 
     let mut index = 0;
     while index < args.len() {
@@ -159,6 +175,7 @@ fn capture(args: &[String]) -> Result<String, String> {
             }
             "--no-copy" => copy = false,
             "--no-save" => save = false,
+            "--no-edit" => edit = false,
             other => return Err(format!("未知参数 {other}")),
         }
         index += 1;
@@ -172,7 +189,8 @@ fn capture(args: &[String]) -> Result<String, String> {
     // --full 直接走 capture_screen；其余先解析出目标区域再抓
     if full {
         let shot = session.capture_screen()?;
-        return deliver(&session, &shot, output, copy, save);
+        let at = session.screen_rect();
+        return finish(&session, at, shot, output, copy, save, edit);
     }
 
     let target = match (region, window) {
@@ -188,7 +206,59 @@ fn capture(args: &[String]) -> Result<String, String> {
     };
 
     let shot = session.capture(target)?;
-    deliver(&session, &shot, output, copy, save)
+    finish(&session, target, shot, output, copy, save, edit)
+}
+
+/// 截完图之后的去向：先（可选地）进标注编辑器，再按结果收尾。
+///
+/// **开着编辑器时，出口由用户按的那个按钮决定**，`--no-copy` / `--no-save` 不再生效 ——
+/// 都已经点了「保存」还要被命令行参数否掉，那才叫莫名其妙。`-o` 仍然管用，
+/// 它指定的是「保存到哪」而不是「要不要保存」。
+fn finish(
+    session: &X11Session,
+    at: Rect,
+    shot: x11capture::Capture,
+    output: Option<PathBuf>,
+    copy: bool,
+    save: bool,
+    edit: bool,
+) -> Result<String, String> {
+    if !edit {
+        return deliver(session, &shot, output, copy, save);
+    }
+
+    let result = editor::run(
+        session.connection(),
+        session.screen(),
+        session.screen_rect(),
+        at,
+        shot.rgba,
+    )?;
+    let edited = x11capture::Capture {
+        width: result.width,
+        height: result.height,
+        rgba: result.rgba,
+    };
+    match result.outcome {
+        EditorOutcome::Cancel => Err("已取消".to_string()),
+        EditorOutcome::Copy => deliver(session, &edited, output, true, false),
+        EditorOutcome::Save => deliver(session, &edited, output, false, true),
+        EditorOutcome::Pin => {
+            // 贴图会一直占着这个进程，所以先把图落盘再钉上去 ——
+            // 否则用户关掉贴图窗口时图就没了
+            let note = deliver(session, &edited, output, false, true)?;
+            println!("{note}，已钉在屏幕上（拖动可挪位置，任意键 / 右键关闭）");
+            pin::show(
+                session.connection(),
+                session.screen(),
+                at,
+                &edited.rgba,
+                edited.width,
+                edited.height,
+            )?;
+            Ok(String::new())
+        }
+    }
 }
 
 /// 截图的收尾：按需复制到剪贴板、按需落盘，返回给用户看的一行话。
@@ -210,6 +280,7 @@ fn deliver(
             None => default_path()?,
         };
         baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+        store::remember(&path, shot.width, shot.height, now_seconds());
         notes.push(format!("已保存 {}", path.display()));
     }
 
@@ -222,10 +293,10 @@ fn deliver(
         ));
         println!("{}（{}×{}）", notes.join("，"), shot.width, shot.height);
         // X11 剪贴板必须由本进程持续服务，所以这一步会阻塞
-        clipboard::serve_png(
+        clipboard::serve(
             session.connection(),
             owner,
-            &png,
+            &clipboard::Payload::Png(png),
             Some(clipboard::DEFAULT_SERVE),
         )?;
         return Ok(String::new());
@@ -242,6 +313,139 @@ fn deliver(
     ))
 }
 
+
+/// 屏幕取字：框一块区域，把里面的文字识别出来。
+///
+/// 结果同时**打印到标准输出**和**放进剪贴板** —— 取字的目的十有八九是拿去粘贴。
+fn run_ocr(args: &[String]) -> Result<String, String> {
+    let mut region: Option<Rect> = None;
+    let mut langs = ocr::DEFAULT_LANGS.to_string();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--region" => {
+                index += 1;
+                region = Some(parse_region(args.get(index).ok_or("--region 缺少参数")?)?);
+            }
+            "--lang" => {
+                index += 1;
+                langs = args.get(index).ok_or("--lang 缺少参数")?.clone();
+            }
+            other => return Err(format!("未知参数 {other}")),
+        }
+        index += 1;
+    }
+
+    let session = X11Session::open()?;
+    let target = match region {
+        Some(rect) => rect,
+        None => interactive_target(&session)?,
+    };
+    let shot = session.capture(target)?;
+
+    // tesseract 只认文件，所以先落一个临时 PNG，用完就删
+    let temp = std::env::temp_dir().join(format!("baobox-ocr-{}.png", std::process::id()));
+    baobox_image::write_rgba(&temp, shot.width, shot.height, &shot.rgba)?;
+    let result = ocr::recognize(&temp, &langs);
+    let _ = std::fs::remove_file(&temp);
+    let text = result?;
+
+    if text.trim().is_empty() {
+        return Err("这块区域里没识别出文字。".to_string());
+    }
+    println!("{text}");
+    let owner = session.create_owner_window()?;
+    println!(
+        "（已复制到剪贴板，持有 {} 秒）",
+        clipboard::DEFAULT_SERVE.as_secs()
+    );
+    clipboard::serve(
+        session.connection(),
+        owner,
+        &clipboard::Payload::Text(text),
+        Some(clipboard::DEFAULT_SERVE),
+    )?;
+    Ok(String::new())
+}
+
+/// 录屏：框一块区域，录到用户按下 ⏎ 为止。
+fn run_record(args: &[String]) -> Result<String, String> {
+    let mut region: Option<Rect> = None;
+    let mut fps = record::DEFAULT_FPS;
+    let mut output: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--region" => {
+                index += 1;
+                region = Some(parse_region(args.get(index).ok_or("--region 缺少参数")?)?);
+            }
+            "--fps" => {
+                index += 1;
+                fps = args
+                    .get(index)
+                    .ok_or("--fps 缺少参数")?
+                    .parse()
+                    .map_err(|_| "--fps 需要一个整数".to_string())?;
+            }
+            "-o" | "--output" => {
+                index += 1;
+                output = Some(PathBuf::from(args.get(index).ok_or("-o 缺少路径")?));
+            }
+            other => return Err(format!("未知参数 {other}")),
+        }
+        index += 1;
+    }
+
+    let target = match region {
+        Some(rect) => rect,
+        None => {
+            let session = X11Session::open()?;
+            interactive_target(&session)?
+        }
+    };
+    let path = match output {
+        Some(path) => path,
+        None => default_path()?.with_extension("mp4"),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+
+    let recording = record::start(target, fps, &path)?;
+    println!("正在录制 {}×{} → {}，按 ⏎ 停止。", target.w as i64, target.h as i64, path.display());
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    recording.stop()?;
+    Ok(format!("已保存 {}", path.display()))
+}
+
+/// 最近的截图。
+fn history(args: &[String]) -> Result<String, String> {
+    let mut clear = false;
+    for arg in args {
+        match arg.as_str() {
+            "--clear" => clear = true,
+            other => return Err(format!("未知参数 {other}")),
+        }
+    }
+    let mut history = store::load(baobox_core::history::History::DEFAULT_LIMIT);
+    if clear {
+        let dropped = history.clear();
+        // 只删历史目录里的副本；用户自己 -o 指定的文件不动
+        if let Some(dir) = store::dir() {
+            for entry in &dropped {
+                let path = Path::new(&entry.path);
+                if path.starts_with(&dir) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        store::save(&history)?;
+        return Ok(format!("已清空 {} 条历史。", dropped.len()));
+    }
+    Ok(store::describe(&history))
+}
 
 /// 长截屏：定时抓同一块区域，按重叠自动对齐拼成长图。
 ///
@@ -398,14 +602,7 @@ fn run_daemon(args: &[String]) -> Result<String, String> {
 fn capture_interactively(session: &X11Session) -> Result<String, String> {
     let target = interactive_target(session)?;
     let shot = session.capture(target)?;
-    let path = default_path()?;
-    baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-    Ok(format!(
-        "已保存 {}（{}×{}）",
-        path.display(),
-        shot.width,
-        shot.height
-    ))
+    finish(session, target, shot, None, true, true, true)
 }
 
 /// 铺覆盖层让用户选，返回要抓的矩形。
@@ -476,11 +673,15 @@ fn default_path() -> Result<PathBuf, String> {
 /// 就多一份供应链与体积。时区取 `TZ` 之外的系统偏移暂不处理，用 UTC，
 /// 并在文档里写明 —— 含糊的本地时间比明确的 UTC 更糟。
 fn now_parts() -> DateParts {
-    let secs = SystemTime::now()
+    civil_from_unix(now_seconds())
+}
+
+/// 当前 Unix 秒。
+fn now_seconds() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    civil_from_unix(secs)
+        .unwrap_or(0)
 }
 
 /// Unix 秒 → 年月日时分秒（UTC）。用 Howard Hinnant 的 civil_from_days 算法。

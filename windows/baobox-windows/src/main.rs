@@ -20,7 +20,14 @@ mod clipboard;
 #[cfg(windows)]
 mod daemon;
 #[cfg(windows)]
+mod editor;
+mod ocr;
+#[cfg(windows)]
 mod overlay;
+#[cfg(windows)]
+mod pin;
+mod record;
+mod store;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
@@ -52,6 +59,9 @@ fn main() {
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
         Some("capture") => capture(&args[1..]),
+        Some("ocr") => run_ocr(&args[1..]),
+        Some("record") => run_record(&args[1..]),
+        Some("history") => history(&args[1..]),
         Some("daemon") => run_daemon(&args[1..]),
         Some("scroll") => scroll(&args[1..]),
         Some("windows") => list_windows(),
@@ -66,10 +76,15 @@ fn usage() -> String {
         "Baobox Windows —— 截图\n\n",
         "用法：\n",
         "  baobox-windows capture [-o 输出.png]            交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
+        "      截完自动进标注编辑器：画框 / 箭头 / 打码 / 写字，再按工具条上的按钮决定去向\n",
+        "      --no-edit 跳过编辑，截完直接出图\n",
         "  baobox-windows capture --full [-o 输出.png]\n",
         "  baobox-windows capture --region X,Y,W,H [-o 输出.png]\n",
         "  baobox-windows capture --window <hwnd> [-o 输出.png]\n",
         "      默认复制到剪贴板并保存；--no-copy / --no-save 可分别关掉\n",
+        "  baobox-windows ocr [--region X,Y,W,H]                          屏幕取字（用系统自带的识别引擎）\n",
+        "  baobox-windows record [--region X,Y,W,H] [--fps 15] [-o 输出.mp4]  录屏（需要 ffmpeg，⏎ 停止）\n",
+        "  baobox-windows history [--clear]                               最近的截图\n",
         "  baobox-windows scroll --region X,Y,W,H [--frames N] [--interval MS]\n",
         "  baobox-windows daemon [--hotkey Ctrl+Shift+S]\n",
         "  baobox-windows windows\n",
@@ -141,7 +156,49 @@ fn capture(args: &[String]) -> Result<String, String> {
     };
 
     let shot = gdi::capture(target)?;
-    deliver(&shot, options.output, options.copy, options.save)
+    finish(target, shot, options.output, options.copy, options.save, options.edit)
+}
+
+/// 截完图之后的去向：先（可选地）进标注编辑器，再按结果收尾。
+///
+/// **开着编辑器时出口由用户按的按钮决定**，`--no-copy` / `--no-save` 不再生效；
+/// `-o` 仍然管用 —— 它说的是「存到哪」，不是「要不要存」。与 Linux 版规则一致。
+#[cfg(windows)]
+fn finish(
+    at: Rect,
+    shot: gdi::Capture,
+    output: Option<PathBuf>,
+    copy: bool,
+    save: bool,
+    edit: bool,
+) -> Result<String, String> {
+    if !edit {
+        return deliver(&shot, output, copy, save);
+    }
+
+    let result = editor::run(gdi::virtual_screen(), at, shot.rgba)?;
+    let edited = gdi::Capture {
+        width: result.width,
+        height: result.height,
+        rgba: result.rgba,
+    };
+    match result.outcome {
+        baobox_core::editor::EditorOutcome::Cancel => Err("已取消".to_string()),
+        baobox_core::editor::EditorOutcome::Copy => deliver(&edited, output, true, false),
+        baobox_core::editor::EditorOutcome::Save => deliver(&edited, output, false, true),
+        baobox_core::editor::EditorOutcome::Pin => {
+            // 贴图会占住这个进程直到用户关掉，所以先落盘 —— 否则关掉贴图图就没了
+            let note = deliver(&edited, output, false, true)?;
+            println!("{note}，已钉在屏幕上（拖动可挪位置，任意键 / 右键 / 双击关闭）");
+            pin::show(
+                (at.x as i32, at.y as i32),
+                &edited.rgba,
+                edited.width,
+                edited.height,
+            )?;
+            Ok(String::new())
+        }
+    }
 }
 
 /// 截图的收尾：按需复制到剪贴板、按需落盘。
@@ -163,6 +220,7 @@ fn deliver(
             None => default_path()?,
         };
         baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+        store::remember(&path, shot.width, shot.height, now_seconds());
         notes.push(format!("已保存 {}", path.display()));
     }
     if copy {
@@ -173,6 +231,131 @@ fn deliver(
         return Err("--no-copy 与 --no-save 同时给了，什么都不会发生".to_string());
     }
     Ok(format!("{}（{}×{}）", notes.join("，"), shot.width, shot.height))
+}
+
+/// 屏幕取字：框一块区域，把里面的文字识别出来。
+///
+/// 结果同时打印到标准输出并放进剪贴板 —— 取字十有八九是为了粘贴。
+#[cfg(windows)]
+fn run_ocr(args: &[String]) -> Result<String, String> {
+    let mut region: Option<Rect> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--region" => {
+                index += 1;
+                region = Some(parse_region(args.get(index).ok_or("--region 缺少参数")?)?);
+            }
+            other => return Err(format!("未知参数 {other}")),
+        }
+        index += 1;
+    }
+
+    gdi::prepare();
+    let target = match region {
+        Some(rect) => rect,
+        None => interactive_target()?,
+    };
+    let shot = gdi::capture(target)?;
+    let text = ocr::recognize(&shot.rgba, shot.width, shot.height)?;
+    if text.trim().is_empty() {
+        return Err("这块区域里没识别出文字。".to_string());
+    }
+    println!("{text}");
+    clipboard::copy_text(&text)?;
+    Ok("（已复制到剪贴板）".to_string())
+}
+
+#[cfg(not(windows))]
+fn run_ocr(_args: &[String]) -> Result<String, String> {
+    Err("本程序只能在 Windows 上运行。".to_string())
+}
+
+/// 录屏：框一块区域，录到用户按下 ⏎ 为止。
+#[cfg(windows)]
+fn run_record(args: &[String]) -> Result<String, String> {
+    let mut region: Option<Rect> = None;
+    let mut fps = record::DEFAULT_FPS;
+    let mut output: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--region" => {
+                index += 1;
+                region = Some(parse_region(args.get(index).ok_or("--region 缺少参数")?)?);
+            }
+            "--fps" => {
+                index += 1;
+                fps = args
+                    .get(index)
+                    .ok_or("--fps 缺少参数")?
+                    .parse()
+                    .map_err(|_| "--fps 需要一个整数".to_string())?;
+            }
+            "-o" | "--output" => {
+                index += 1;
+                output = Some(PathBuf::from(args.get(index).ok_or("-o 缺少路径")?));
+            }
+            other => return Err(format!("未知参数 {other}")),
+        }
+        index += 1;
+    }
+
+    gdi::prepare();
+    let target = match region {
+        Some(rect) => rect,
+        None => interactive_target()?,
+    };
+    let path = match output {
+        Some(path) => path,
+        None => default_path()?.with_extension("mp4"),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+
+    let recording = record::start(target, fps, &path)?;
+    println!(
+        "正在录制 {}×{} → {}，按 ⏎ 停止。",
+        target.w as i64,
+        target.h as i64,
+        path.display()
+    );
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    recording.stop()?;
+    Ok(format!("已保存 {}", path.display()))
+}
+
+#[cfg(not(windows))]
+fn run_record(_args: &[String]) -> Result<String, String> {
+    Err("本程序只能在 Windows 上运行。".to_string())
+}
+
+/// 最近的截图。与 Linux 版同一套索引格式。
+fn history(args: &[String]) -> Result<String, String> {
+    let mut clear = false;
+    for arg in args {
+        match arg.as_str() {
+            "--clear" => clear = true,
+            other => return Err(format!("未知参数 {other}")),
+        }
+    }
+    let mut history = store::load(baobox_core::history::History::DEFAULT_LIMIT);
+    if clear {
+        let dropped = history.clear();
+        if let Some(dir) = store::dir() {
+            for entry in &dropped {
+                let path = Path::new(&entry.path);
+                if path.starts_with(&dir) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        store::save(&history)?;
+        return Ok(format!("已清空 {} 条历史。", dropped.len()));
+    }
+    Ok(store::describe(&history))
 }
 
 /// 长截屏：定时抓同一块区域，按重叠自动对齐拼成长图。
@@ -368,7 +551,7 @@ fn run_daemon(args: &[String]) -> Result<String, String> {
 fn capture_once() -> Result<String, String> {
     let target = interactive_target()?;
     let shot = gdi::capture(target)?;
-    deliver(&shot, None, true, true)
+    finish(target, shot, None, true, true, true)
 }
 
 /// `capture` 的命令行参数。
@@ -380,6 +563,8 @@ struct CaptureOptions {
     /// 与 macOS 版默认一致：复制到剪贴板 + 同时落盘
     copy: bool,
     save: bool,
+    /// 截完先进标注编辑器
+    edit: bool,
 }
 
 fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
@@ -390,6 +575,7 @@ fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
         output: None,
         copy: true,
         save: true,
+        edit: true,
     };
     let mut index = 0;
     while index < args.len() {
@@ -409,6 +595,7 @@ fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
             }
             "--no-copy" => options.copy = false,
             "--no-save" => options.save = false,
+            "--no-edit" => options.edit = false,
             other => return Err(format!("未知参数 {other}")),
         }
         index += 1;
@@ -459,11 +646,15 @@ fn default_path() -> Result<PathBuf, String> {
 }
 
 fn now_parts() -> DateParts {
-    let secs = SystemTime::now()
+    civil_from_unix(now_seconds())
+}
+
+/// 当前 Unix 秒。
+fn now_seconds() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    civil_from_unix(secs)
+        .unwrap_or(0)
 }
 
 /// Unix 秒 → 年月日时分秒（UTC）。与 Linux 版同一实现，保证两边文件名一致。

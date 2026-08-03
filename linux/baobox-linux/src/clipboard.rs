@@ -10,7 +10,8 @@
 //! 这里的做法是复制完继续服务一段时间（常驻模式下则一直服务），
 //! 直到别的程序接管所有权或超时。
 //!
-//! 提供的格式是 `image/png` —— GIMP、Firefox、LibreOffice、各类聊天软件都认。
+//! 提供两种内容：截图给 `image/png`（GIMP、Firefox、LibreOffice、各类聊天软件都认），
+//! 屏幕取字给 `UTF8_STRING` + `TEXT` + `STRING`。同一套服务循环，只是能答的 target 不同。
 
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
@@ -25,12 +26,30 @@ use x11rb::wrapper::ConnectionExt as _;
 /// 所有权丢失前最多服务多久（一次性命令用；常驻模式传 `None` 一直服务）。
 pub const DEFAULT_SERVE: Duration = Duration::from_secs(60);
 
+/// 放进剪贴板的东西。
+pub enum Payload {
+    /// 一张 PNG
+    Png(Vec<u8>),
+    /// 一段文字
+    Text(String),
+}
+
+impl Payload {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Payload::Png(data) => data,
+            Payload::Text(text) => text.as_bytes(),
+        }
+    }
+}
+
 /// 剪贴板服务需要的几个 atom。
 struct Atoms {
     clipboard: Atom,
     targets: Atom,
     png: Atom,
     utf8: Atom,
+    text: Atom,
 }
 
 impl Atoms {
@@ -48,18 +67,19 @@ impl Atoms {
             targets: intern("TARGETS")?,
             png: intern("image/png")?,
             utf8: intern("UTF8_STRING")?,
+            text: intern("TEXT")?,
         })
     }
 }
 
-/// 宣告自己持有剪贴板，并把 PNG 数据服务出去。
+/// 宣告自己持有剪贴板，并把内容服务出去。
 ///
 /// `serve` 为 `None` 时一直服务（常驻模式）；给了时长则到点返回，
 /// 期间别的程序接管所有权也会提前返回。
-pub fn serve_png(
+pub fn serve(
     conn: &RustConnection,
     owner: Window,
-    png: &[u8],
+    payload: &Payload,
     serve: Option<Duration>,
 ) -> Result<(), String> {
     let atoms = Atoms::load(conn)?;
@@ -91,7 +111,7 @@ pub fn serve_png(
         // 用 poll 而不是 wait，才能在超时后退出
         match conn.poll_for_event().map_err(|e| e.to_string())? {
             Some(Event::SelectionRequest(request)) => {
-                answer(conn, &atoms, &request, png);
+                answer(conn, &atoms, &request, payload);
             }
             // 别的程序接管了剪贴板 —— 我们的数据已经不需要了
             Some(Event::SelectionClear(_)) => return Ok(()),
@@ -105,36 +125,50 @@ pub fn serve_png(
 ///
 /// 请求方给不了合适的属性（`property == 0`，老客户端的写法）时，
 /// 按惯例把 target 当作属性名用。
-fn answer(conn: &RustConnection, atoms: &Atoms, request: &SelectionRequestEvent, png: &[u8]) {
+fn answer(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    request: &SelectionRequestEvent,
+    payload: &Payload,
+) {
     let property = if request.property == x11rb::NONE {
         request.target
     } else {
         request.property
     };
 
+    // 能答哪些 target 取决于放进来的是图还是字
+    let offered: Vec<Atom> = match payload {
+        Payload::Png(_) => vec![atoms.targets, atoms.png],
+        Payload::Text(_) => vec![
+            atoms.targets,
+            atoms.utf8,
+            atoms.text,
+            AtomEnum::STRING.into(),
+        ],
+    };
+
     let handled = if request.target == atoms.targets {
         // 告诉对方我们能提供什么
-        let targets = [atoms.targets, atoms.png];
         conn.change_property32(
             PropMode::REPLACE,
             request.requestor,
             property,
             AtomEnum::ATOM,
-            &targets,
+            &offered,
         )
         .is_ok()
-    } else if request.target == atoms.png {
+    } else if offered.contains(&request.target) {
         conn.change_property8(
             PropMode::REPLACE,
             request.requestor,
             property,
-            atoms.png,
-            png,
+            request.target,
+            payload.bytes(),
         )
         .is_ok()
     } else {
-        // 不支持的格式（比如有人来要 UTF8_STRING）→ 明确拒绝
-        let _ = atoms.utf8;
+        // 不支持的格式（比如向一张图要 UTF8_STRING）→ 明确拒绝
         false
     };
 
@@ -155,6 +189,12 @@ fn answer(conn: &RustConnection, atoms: &Atoms, request: &SelectionRequestEvent,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_payload_hands_out_its_own_bytes() {
+        assert_eq!(Payload::Png(vec![1, 2, 3]).bytes(), &[1, 2, 3]);
+        assert_eq!(Payload::Text("hi".into()).bytes(), b"hi");
+    }
 
     #[test]
     fn default_serve_window_is_long_enough_to_paste_but_not_forever() {

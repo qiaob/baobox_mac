@@ -17,6 +17,48 @@ use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM
 /// `CF_DIB` 的剪贴板格式号。
 const CF_DIB: u32 = 8;
 
+/// `CF_UNICODETEXT` 的剪贴板格式号。
+///
+/// 不用 `CF_TEXT`：那是 ANSI 代码页，中文在非中文系统上会变成问号。
+const CF_UNICODETEXT: u32 = 13;
+
+/// 把一段文字放进剪贴板（屏幕取字用）。
+pub fn copy_text(text: &str) -> Result<(), String> {
+    // Windows 要求以 NUL 结尾的 UTF-16
+    let mut encoded: Vec<u16> = text.encode_utf16().collect();
+    encoded.push(0);
+    let bytes = encoded.len() * 2;
+
+    unsafe {
+        let handle: HGLOBAL =
+            GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| format!("分配剪贴板内存失败：{e}"))?;
+        let pointer = GlobalLock(handle);
+        if pointer.is_null() {
+            let _ = GlobalFree(handle);
+            return Err("锁定剪贴板内存失败".to_string());
+        }
+        std::ptr::copy_nonoverlapping(encoded.as_ptr(), pointer as *mut u16, encoded.len());
+        let _ = GlobalUnlock(handle);
+
+        if OpenClipboard(None).is_err() {
+            let _ = GlobalFree(handle);
+            return Err("无法打开剪贴板（可能被其他程序占用）".to_string());
+        }
+        let _ = EmptyClipboard();
+        let result = SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0));
+        let _ = CloseClipboard();
+
+        match result {
+            // 成功即交出所有权，绝不能再 GlobalFree
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = GlobalFree(handle);
+                Err(format!("写入剪贴板失败：{e}"))
+            }
+        }
+    }
+}
+
 /// 把 RGBA 图像放进剪贴板。
 pub fn copy_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let expected = width as usize * height as usize * 4;

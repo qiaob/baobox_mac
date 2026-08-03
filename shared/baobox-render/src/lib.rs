@@ -10,7 +10,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chrome;
+
 use baobox_core::annotation::{Color, Shape, Tool};
+use baobox_core::geometry::Rect;
 
 /// 一块可写的 RGBA8 画布。
 pub struct Canvas<'a> {
@@ -164,6 +167,19 @@ pub fn line(canvas: &mut Canvas<'_>, from: (f64, f64), to: (f64, f64), width: f6
     }
 }
 
+/// 填满一个矩形。工具条的底板、按钮底色、色块都用它。
+pub fn fill_rect(canvas: &mut Canvas<'_>, rect: &Rect, color: Color) {
+    let left = rect.x.round() as i64;
+    let top = rect.y.round() as i64;
+    let right = rect.right().round() as i64;
+    let bottom = rect.bottom().round() as i64;
+    for y in top..bottom {
+        for x in left..right {
+            canvas.blend(x, y, color);
+        }
+    }
+}
+
 fn brush(canvas: &mut Canvas<'_>, cx: i64, cy: i64, half: f64, color: Color) {
     let radius = half.ceil() as i64;
     for y in -radius..=radius {
@@ -191,9 +207,13 @@ fn stroke_polyline(canvas: &mut Canvas<'_>, shape: &Shape, color: Color) {
 }
 
 fn stroke_rect(canvas: &mut Canvas<'_>, shape: &Shape) {
-    let bounds = shape.bounds();
-    let (left, top) = (bounds.x, bounds.y);
-    let (right, bottom) = (bounds.right(), bounds.bottom());
+    stroke_rect_in(canvas, &shape.bounds(), shape.width, shape.color);
+}
+
+/// 画空心矩形。工具条图标也用它，所以按矩形而不是按 [`Shape`] 取参。
+pub fn stroke_rect_in(canvas: &mut Canvas<'_>, rect: &Rect, width: f64, color: Color) {
+    let (left, top) = (rect.x, rect.y);
+    let (right, bottom) = (rect.right(), rect.bottom());
     let corners = [
         ((left, top), (right, top)),
         ((right, top), (right, bottom)),
@@ -201,29 +221,33 @@ fn stroke_rect(canvas: &mut Canvas<'_>, shape: &Shape) {
         ((left, bottom), (left, top)),
     ];
     for (from, to) in corners {
-        line(canvas, from, to, shape.width, shape.color);
+        line(canvas, from, to, width, color);
     }
 }
 
-/// 画空心椭圆。中点椭圆算法的对称四象限版本。
 fn stroke_ellipse(canvas: &mut Canvas<'_>, shape: &Shape) {
-    let bounds = shape.bounds();
-    let rx = bounds.w / 2.0;
-    let ry = bounds.h / 2.0;
+    stroke_ellipse_in(canvas, &shape.bounds(), shape.width, shape.color);
+}
+
+/// 画空心椭圆：沿参数方程采样，每个采样点盖一个笔刷。
+///
+/// 采样点数按周长估 —— 固定点数在长轴很长时会画成虚线。
+pub fn stroke_ellipse_in(canvas: &mut Canvas<'_>, rect: &Rect, width: f64, color: Color) {
+    let rx = rect.w / 2.0;
+    let ry = rect.h / 2.0;
     if rx < 0.5 || ry < 0.5 {
         return;
     }
-    let cx = bounds.x + rx;
-    let cy = bounds.y + ry;
-    let half = (shape.width / 2.0).max(0.5);
+    let cx = rect.x + rx;
+    let cy = rect.y + ry;
+    let half = (width / 2.0).max(0.5);
 
-    // 按周长估采样点数，保证长轴很长时也不出现断点
     let steps = ((rx + ry) * 4.0).max(32.0) as usize;
     for step in 0..steps {
         let angle = step as f64 / steps as f64 * std::f64::consts::TAU;
         let x = cx + rx * angle.cos();
         let y = cy + ry * angle.sin();
-        brush(canvas, x.round() as i64, y.round() as i64, half, shape.color);
+        brush(canvas, x.round() as i64, y.round() as i64, half, color);
     }
 }
 

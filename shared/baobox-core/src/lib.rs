@@ -19,10 +19,12 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod editor;
 pub mod filename;
 pub mod geometry;
 pub mod hotkey;
 pub mod history;
+pub mod ocr;
 pub mod selection;
 pub mod stitch;
 pub mod toolbar;

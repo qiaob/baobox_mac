@@ -4,7 +4,7 @@
 //! 于是「工具条在选区下方、贴不下就翻到上方、再贴不下就压进选区内部」这条规则
 //! 三平台一致，不必各写一遍（也就不会各错一遍）。
 
-use crate::annotation::Tool;
+use crate::annotation::{Color, Tool};
 use crate::geometry::Rect;
 
 /// 工具条上的一项。
@@ -12,6 +12,8 @@ use crate::geometry::Rect;
 pub enum Item {
     /// 切换到某个标注工具
     Tool(Tool),
+    /// 切换画笔颜色（下标指向 [`PALETTE`]）
+    Color(usize),
     /// 撤销
     Undo,
     /// 重做
@@ -25,6 +27,19 @@ pub enum Item {
     /// 取消
     Cancel,
 }
+
+/// 可选颜色。红打头 —— 截图标注里红色用得最多，出厂默认就是它。
+pub const PALETTE: [Color; 6] = [
+    Color::rgb(0xE5, 0x3E, 0x3E), // 红
+    Color::rgb(0xF5, 0xA6, 0x23), // 橙
+    Color::rgb(0x17, 0xA3, 0x98), // Baobox accent 青
+    Color::rgb(0x2D, 0x7F, 0xF9), // 蓝
+    Color::rgb(0x1A, 0x1A, 0x1A), // 近黑
+    Color::rgb(0xFF, 0xFF, 0xFF), // 白（深色截图上用）
+];
+
+/// 出厂默认颜色在 [`PALETTE`] 里的下标。
+pub const DEFAULT_COLOR: usize = 0;
 
 /// 按钮边长（正方形）。
 pub const BUTTON_SIZE: f64 = 28.0;
@@ -51,6 +66,13 @@ const LAYOUT: &[Option<Item>] = &[
     Some(Item::Tool(Tool::Mosaic)),
     Some(Item::Tool(Tool::Text)),
     Some(Item::Tool(Tool::Eraser)),
+    None,
+    Some(Item::Color(0)),
+    Some(Item::Color(1)),
+    Some(Item::Color(2)),
+    Some(Item::Color(3)),
+    Some(Item::Color(4)),
+    Some(Item::Color(5)),
     None,
     Some(Item::Undo),
     Some(Item::Redo),
@@ -137,17 +159,12 @@ impl Toolbar {
     /// 工具条里按钮区域的总宽（不含左右内边距）。
     fn content_width() -> f64 {
         let mut width = 0.0;
-        let mut buttons = 0usize;
         for slot in LAYOUT {
             match slot {
-                Some(_) => {
-                    width += BUTTON_SIZE + BUTTON_GAP;
-                    buttons += 1;
-                }
+                Some(_) => width += BUTTON_SIZE + BUTTON_GAP,
                 None => width += GROUP_GAP,
             }
         }
-        let _ = buttons;
         // 最后一个按钮后面不需要间距
         (width - BUTTON_GAP).max(0.0)
     }
@@ -258,12 +275,34 @@ mod tests {
     #[test]
     fn clicks_in_the_group_gaps_hit_nothing() {
         let bar = Toolbar::layout(&Rect::new(100.0, 100.0, 800.0, 400.0), &screen());
-        // 第八个按钮（橡皮）与第九个（撤销）之间是分组间隙
+        // 第八个按钮（橡皮）与第九个（第一个色块）之间是分组间隙
         let eraser = bar.buttons[7];
-        let undo = bar.buttons[8];
-        let gap_x = (eraser.frame.right() + undo.frame.x) / 2.0;
+        let first_color = bar.buttons[8];
+        let gap_x = (eraser.frame.right() + first_color.frame.x) / 2.0;
         let gap_y = eraser.frame.y + eraser.frame.h / 2.0;
         assert_eq!(bar.hit((gap_x, gap_y)), None, "分组间隙不该命中按钮");
         assert!(bar.contains((gap_x, gap_y)), "但它仍在工具条范围内");
+    }
+
+    #[test]
+    fn every_colour_swatch_points_at_a_real_palette_entry() {
+        // 下标写错的话平台层取色会越界 —— 与其运行期兜底，不如在这里锁死
+        for slot in LAYOUT.iter().flatten() {
+            if let Item::Color(index) = slot {
+                assert!(*index < PALETTE.len(), "色块下标 {index} 越界");
+            }
+        }
+        // 六个色块都在，且互不重复
+        let mut seen: Vec<usize> = LAYOUT
+            .iter()
+            .flatten()
+            .filter_map(|item| match item {
+                Item::Color(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..PALETTE.len()).collect::<Vec<_>>());
+        assert!(DEFAULT_COLOR < PALETTE.len());
     }
 }

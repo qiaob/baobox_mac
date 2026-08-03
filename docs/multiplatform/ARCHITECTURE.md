@@ -37,13 +37,16 @@ shared/
 ├── baobox-core/     纯逻辑，零依赖，forbid(unsafe_code)
 │   ├── geometry     矩形运算、八向手柄、跨屏等比映射、边界裁剪
 │   ├── selection    选区状态机（悬停窗口 / 拖拽区域 / 手柄微调 / 方向键 / Esc）
+│   ├── editor       标注编辑器状态机（工具切换 / 落笔 / 文字输入 / 撤销 / 四个出口）
 │   ├── annotation   标注图形模型、撤销重做、橡皮「点删整笔」
 │   ├── stitch       长截屏重叠对齐 + RGBA 合成
-│   ├── toolbar      标注工具条的布局与命中测试
+│   ├── toolbar      标注工具条的布局、调色板与命中测试
+│   ├── ocr          识别结果 → 阅读顺序（分行、排序、按间距补空格）
 │   ├── hotkey       快捷键组合的解析与格式化（三平台同一套文本格式）
 │   ├── filename     模板格式化、**按平台**消毒、重名去重
-│   └── history      截图历史环形存储
+│   └── history      截图历史环形存储 + 索引文件的编解码
 ├── baobox-render/   把标注光栅化进 RGBA（三平台逐像素一致）
+│   └── chrome       工具条底板、按钮底色与图标（图标也是画出来的，不用图片资源）
 └── baobox-image/    RGBA → PNG / 内存 PNG、RGBA → 灰度
 ```
 
@@ -79,10 +82,11 @@ shared/
 | **复制到剪贴板** | ✅ | ✅ X11 selection（**未实测**） | ✅ CF_DIB（**未实测**） |
 | 标注模型 + 光栅化 + 工具条布局 | ✅ Swift | ✅ 共用 `baobox-render` / `toolbar` | ✅ 同左 |
 | **交互式覆盖层**（悬停高亮 / 拖选 / 八向手柄 / 方向键 / 尺寸标注） | ✅ | ✅ X11 分层窗 | ✅ WS_EX_LAYERED（**未实测**） |
-| 标注**窗口 UI**（把工具条画出来、接鼠标） | ✅ | ⬜ | ⬜ |
-| 贴图窗口 | ✅ | ⬜ | ⬜ |
-| 屏幕取字（OCR） | ✅ Vision | ⬜ 需外部 tesseract | ⬜ 可用 Windows.Media.Ocr |
-| 录屏 | ✅ | ⬜ 需编码器 | ⬜ 需 Media Foundation |
+| **标注编辑器窗口**（工具条 / 落笔 / 文字 / 撤销 / 四个出口） | ✅ | ✅ X11 Pixmap（**未实测**） | ✅ DIB section（**未实测**） |
+| 贴图窗口 | ✅ | ✅ override-redirect（**未实测**） | ✅ `WM_NCHITTEST`（**未实测**） |
+| 屏幕取字（OCR） | ✅ Vision | ✅ 外挂 tesseract | ✅ Windows.Media.Ocr（系统自带） |
+| 录屏 | ✅ AVFoundation | ✅ 外挂 ffmpeg x11grab | ✅ 外挂 ffmpeg gdigrab |
+| 截图历史（落盘 + 淘汰） | ✅ | ✅ `~/.local/share/baobox/` | ✅ `%APPDATA%\Baobox\` |
 | **全局快捷键 + 常驻** | ✅ | ✅ X11 GrabKey（**未实测**） | ✅ RegisterHotKey + 托盘（**未实测**） |
 | 托盘图标 | ✅ | ⬜ 见下 | ✅（**未实测**） |
 
@@ -113,6 +117,54 @@ shared/
 - **Windows**：`RegisterHotKey` 必须带 `MOD_NOREPEAT`，否则按住不放会连续触发；
   托盘菜单弹出前必须 `SetForegroundWindow`，否则点向别处时菜单不消失。
 
+### 标注编辑器：一块像素，既是看到的也是保存的
+
+截完图默认进编辑器（`--no-edit` 跳过）。交互规则全在 `baobox_core::editor`，
+两个平台各写各的窗口，规则不会漂：
+
+- 点工具条**永远不落笔**（漏了这条就会「点按钮的同时画一道」）
+- 一次拖拽只压**一层**撤销（否则拖完要按几百下 Ctrl+Z）
+- 原地点一下不留退化图形；空文字不占撤销栈
+- Esc 的两段语义：正在打字时只丢这段文字，否则才退出编辑器
+- 四个出口：复制 / 保存 / 贴图 / 取消
+
+**渲染路径只有一条**：合成底图 → 光栅化标注 → 交给平台画文字 → 输出。
+屏幕上显示与存进 PNG 走的是同一条，只是导出时不画工具条。分成两套的话，
+文字位置迟早会对不上。
+
+| | 缓冲 | 显示 | 导出 |
+|---|---|---|---|
+| Linux | X11 `Pixmap`，`PutImage` **必须分片**（单请求长度有上限，一整屏 4K 远超） | `CopyArea` 到窗口 | 同一条路径再走一遍，`GetImage` 读回 |
+| Windows | DIB section（`biHeight` **取负** = 自上而下），像素指针我们直接持有 | `BitBlt` 到窗口 | 同一块内存直接读，不必 `GetDIBits` |
+
+文字输入两边有真实差距，已写进代码注释：Windows 走 `WM_CHAR`，
+拿到的是**经过输入法之后**的字符，中文可用；Linux 侧不接 XIM
+（那要 libX11 的 `Xutf8LookupString`，与「纯 Rust 协议层」冲突），
+只能打键盘直接产生的字符。
+
+### 屏幕取字与录屏：系统给不给，差别很大
+
+| | 屏幕取字 | 录屏 |
+|---|---|---|
+| macOS | Vision，系统自带 | AVFoundation，系统自带 |
+| Windows | `Windows.Media.Ocr`，**系统自带**，语言跟随系统首选语言 | 外挂 ffmpeg `gdigrab` |
+| Linux | 外挂 tesseract | 外挂 ffmpeg `x11grab` |
+
+Linux 之所以外挂，是因为**发行版里没有系统级 OCR**，而自带识别引擎要么引入
+一串 C 依赖，要么把几十 MB 模型塞进截图工具里，语言包最后还是要用户自己下 ——
+绕一圈还是「让用户装东西」。录屏同理：自己编码要引 x264/libvpx（GPL 与专利各一堆）。
+**没装时给一句能直接照做的安装命令**，与 macOS 侧「未安装即降级」是同一条约定。
+
+两个刻意的细节：
+
+- 取字**不用**各引擎自带的 `Text()` / 排好版的纯文本，而是只取「词 + 位置」，
+  交给 `baobox_core::ocr::assemble` 拼 —— 否则同一张图会复制出三种排版。
+  tesseract 因此要 TSV 输出而不是纯文本。
+- 录屏参数里 `-video_size` 必须是**偶数**（H.264 的 4:2:0 不接受奇数宽高，
+  而用户框出 801×601 是常事），`-pix_fmt yuv420p` 必须显式给（默认的 yuv444p
+  很多播放器与浏览器放不了）。停止要往 stdin 写 `q` 让 ffmpeg 自己写文件尾，
+  直接杀进程会留下没有 moov box 的 mp4。
+
 ### 剪贴板：两个平台是完全不同的模型
 
 | | 模型 | 后果 |
@@ -123,9 +175,14 @@ shared/
 所以 Linux 侧复制完会继续服务 60 秒（常驻模式下一直服务），期间可以粘贴；
 到点或别的程序接管所有权就退出。这不是偷懒，是 X11 的剪贴板就长这样。
 
-格式给的是 `image/png`（GIMP / Firefox / LibreOffice / 聊天软件都认）；
+图给的是 `image/png`（GIMP / Firefox / LibreOffice / 聊天软件都认）；
 Windows 给 `CF_DIB` 而不是带 alpha 的 `CF_DIBV5` —— 后者各程序对 alpha 的处理不一，
-截图本来就不透明，为此冒兼容性风险不值。
+截图本来就不透明，为此冒兼容性风险不值。屏幕取字复制的是文字：
+X11 侧答 `UTF8_STRING` / `TEXT` / `STRING`，Windows 侧用 `CF_UNICODETEXT`
+（不用 `CF_TEXT` —— 那是 ANSI 代码页，中文在非中文系统上会变问号）。
+
+Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存归系统，
+**绝不能再 `GlobalFree`**；只有失败时所有权还在自己手上才要还回去。
 
 ### 标注：为什么自己光栅化
 
@@ -134,8 +191,15 @@ Windows 给 `CF_DIB` 而不是带 alpha 的 `CF_DIBV5` —— 后者各程序对
 `baobox-render` 自己光栅化，输出逐像素一致，并有 11 条测试固定行为
 （矩形是空心的、荧光笔半透明而画笔不透明、马赛克把棋盘压成均匀灰、越界不 panic…）。
 
+工具条的**图标**也是画出来的（`baobox_render::chrome`），不是图片资源：
+换成图片要维护三套不同 DPI 的资源，换成系统图标库（SF Symbols / Segoe Fluent）
+在 Linux 上根本没有对应物，而这些图标本来就全是直线、方框和椭圆。
+有一条测试盯着「每个图标都画出了东西，且一个像素都没溢出按钮」。
+
 **文字是唯一的例外**：字形栅格化要字体引擎，自带一份既臃肿又覆盖不了中文。
-`render()` 把文字连同位置和颜色交回给平台层，用系统 API 画上去。
+`render()` 把文字连同位置和颜色交回给平台层，用系统 API 画上去
+（`TextOutW` / X11 核心字体 / Core Text）。X11 侧用 `poly_text8` / `poly_text16`
+而不是 `image_text8` —— 后者会用背景色刷一遍文字盒子，把下面的截图盖掉。
 
 ### Linux 的托盘图标
 
@@ -144,9 +208,9 @@ systray 在 GNOME 上早已移除。要做就得引入 DBus 依赖（如 `zbus`�
 「零运行时依赖」的取舍冲突。`daemon` 前台运行，交给用户自己的 systemd user unit
 或桌面自启项托管 —— 这更符合 Linux 的习惯。
 
-### 其余六个工具
+### 其余五个工具
 
-尚未开始。按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
+尚未开始（屏幕取字与录屏已随截图一起做完，不在此列）。按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
 
 | 工具 | 难度 | 关键点 |
 |---|---|---|
@@ -154,7 +218,6 @@ systray 在 GNOME 上早已移除。要做就得引入 DBus 依赖（如 `zbus`�
 | 防休眠 | 🟢 | Windows `SetThreadExecutionState`；Linux DBus inhibit |
 | 窗口管理 | 🟡 | Win32 `SetWindowPos`；Linux EWMH `_NET_WM_STATE` |
 | 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI |
-| 屏幕取字 | 🟡 | Windows `Windows.Media.Ocr`；Linux 需外部 OCR |
 | 剪贴板 | 🟠 | 剪贴板本身好办，但 macOS 的 `org.nspasteboard.*` 隐私标记约定**别处没有对应物**，隐私过滤要重新设计 |
 
 ## 怎么构建
@@ -167,6 +230,9 @@ cd shared/baobox-core && cargo test
 cd linux/baobox-linux && cargo build
 ./target/debug/baobox-linux info            # 环境诊断
 ./target/debug/baobox-linux daemon          # 常驻，按 Ctrl+Shift+S 截图
+./target/debug/baobox-linux ocr             # 屏幕取字（需 tesseract）
+./target/debug/baobox-linux record          # 录屏（需 ffmpeg）
+./target/debug/baobox-linux history         # 最近的截图
 
 # Windows（在 Windows 上）
 cd windows/baobox-windows && cargo build --release
@@ -185,3 +251,6 @@ cd mac && xcodegen generate && xcodebuild -scheme Baobox build
 2. `shared/` 里**不引入平台依赖**，也不写 `unsafe`（两个 crate 都开了 `forbid(unsafe_code)`）。
 3. 平台层只做三件事：拿到像素、拿到窗口信息、把结果交出去。业务判断留在 `shared/`。
 4. 行为差异**必须在文档里写明**（如上表），不能让用户自己去发现。
+5. 平台模块里**只有真正碰系统 API 的部分加 `cfg(windows)`**。纯计算（ffmpeg 参数拼装、
+   像素通道换算、尺寸检查）放在门外面，它们的测试才能在开发机上跑到 ——
+   而那恰恰是最容易写错、又最难在真机上发现的部分。

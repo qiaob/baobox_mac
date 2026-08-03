@@ -78,6 +78,72 @@ impl History {
     }
 }
 
+/// 索引文件的字段分隔符。制表符不可能出现在路径或 id 里，用它比逗号安全。
+const FIELD: char = '\t';
+
+/// 把历史编码成一段文本，供平台层落盘。
+///
+/// # 为什么不是 JSON
+///
+/// 这个 crate 是零依赖的，为了一个只有五个字段的索引引进 serde 不划算；
+/// 手写 JSON 转义又容易在路径里带引号时出错。一行一条、制表符分隔的格式
+/// 写起来不会错，坏了一行也只丢一条记录（见 [`decode_index`]）。
+pub fn encode_index(history: &History) -> String {
+    let mut out = String::new();
+    for entry in history.entries() {
+        // 含制表符或换行的路径会撑破格式；这种路径极罕见，跳过比写出坏文件好
+        if [entry.id.as_str(), entry.path.as_str()]
+            .iter()
+            .any(|field| field.contains(FIELD) || field.contains('\n'))
+        {
+            continue;
+        }
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\n",
+            entry.id, entry.path, entry.width, entry.height, entry.created_at
+        ));
+    }
+    out
+}
+
+/// 从文本读回历史。
+///
+/// **坏行只跳过，不报错**：索引是缓存，为了一条读不懂的记录让整个历史消失
+/// 是最糟的选择（用户会以为截图全丢了）。
+pub fn decode_index(text: &str, limit: usize) -> History {
+    let mut history = History::new(limit);
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split(FIELD).collect();
+        if fields.len() != 5 {
+            continue;
+        }
+        let (Ok(width), Ok(height), Ok(created_at)) = (
+            fields[2].parse::<u32>(),
+            fields[3].parse::<u32>(),
+            fields[4].parse::<i64>(),
+        ) else {
+            continue;
+        };
+        if fields[0].is_empty() || fields[1].is_empty() {
+            continue;
+        }
+        entries.push(Entry {
+            id: fields[0].to_string(),
+            path: fields[1].to_string(),
+            width,
+            height,
+            created_at,
+        });
+    }
+    // 文件里已经是「最新在前」，按原顺序追加
+    entries.reverse();
+    for entry in entries {
+        history.push(entry);
+    }
+    history
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +190,59 @@ mod tests {
         // 留下的是最新的两条
         assert_eq!(h.entries()[0].id, "d");
         assert_eq!(h.entries()[1].id, "c");
+    }
+
+    #[test]
+    fn an_index_survives_a_round_trip_with_order_intact() {
+        let mut h = History::new(5);
+        for id in ["a", "b", "c"] {
+            h.push(entry(id));
+        }
+        let restored = decode_index(&encode_index(&h), 5);
+        assert_eq!(restored.entries().len(), 3);
+        // 最新的仍在最前
+        assert_eq!(restored.entries()[0].id, "c");
+        assert_eq!(restored.entries()[2].id, "a");
+        assert_eq!(restored.entries()[0], h.entries()[0]);
+    }
+
+    #[test]
+    fn a_corrupt_line_costs_one_record_not_the_whole_history() {
+        let text = "a\t/tmp/a.png\t100\t100\t0\n\
+                    这一行是垃圾\n\
+                    b\t/tmp/b.png\t不是数字\t100\t0\n\
+                    c\t/tmp/c.png\t100\t100\t0\n";
+        let restored = decode_index(text, 10);
+        let ids: Vec<&str> = restored.entries().iter().map(|e| e.id.as_str()).collect();
+        // 文件里是「最新在前」，所以 a 比 c 新；中间两行坏掉的被跳过
+        assert_eq!(ids, vec!["a", "c"], "坏行跳过，好行照读");
+    }
+
+    #[test]
+    fn decoding_still_honours_the_limit() {
+        let mut h = History::new(100);
+        for id in ["a", "b", "c", "d", "e"] {
+            h.push(entry(id));
+        }
+        let restored = decode_index(&encode_index(&h), 2);
+        assert_eq!(restored.entries().len(), 2);
+        assert_eq!(restored.entries()[0].id, "e", "留下的应是最新的");
+    }
+
+    #[test]
+    fn a_path_with_a_tab_is_skipped_rather_than_corrupting_the_file() {
+        let mut h = History::new(5);
+        h.push(Entry {
+            id: "bad".to_string(),
+            path: "/tmp/a\tb.png".to_string(),
+            width: 1,
+            height: 1,
+            created_at: 0,
+        });
+        h.push(entry("good"));
+        let text = encode_index(&h);
+        assert!(!text.contains("bad"));
+        assert_eq!(decode_index(&text, 5).entries().len(), 1);
     }
 
     #[test]

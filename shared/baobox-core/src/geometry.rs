@@ -92,6 +92,20 @@ impl Rect {
     pub fn offset(&self, dx: f64, dy: f64) -> Rect {
         Rect::new(self.x + dx, self.y + dy, self.w, self.h)
     }
+
+    /// 能同时装下两个矩形的最小矩形。
+    ///
+    /// 标注编辑器用它算窗口大小 —— 窗口要同时盖住图像和它下面的工具条。
+    pub fn union(&self, other: &Rect) -> Rect {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        Rect::new(
+            x,
+            y,
+            self.right().max(other.right()) - x,
+            self.bottom().max(other.bottom()) - y,
+        )
+    }
 }
 
 /// 八个方向的缩放手柄。
@@ -254,6 +268,19 @@ mod tests {
         assert_eq!(Rect::from_points(40.0, 60.0, 10.0, 20.0), expected);
         assert_eq!(Rect::from_points(40.0, 20.0, 10.0, 60.0), expected);
         assert_eq!(Rect::from_points(10.0, 60.0, 40.0, 20.0), expected);
+    }
+
+    #[test]
+    fn union_covers_both_rects_even_when_they_are_far_apart() {
+        let image = Rect::new(100.0, 100.0, 200.0, 150.0);
+        let toolbar = Rect::new(80.0, 300.0, 400.0, 40.0);
+        let both = image.union(&toolbar);
+        assert_eq!(both, Rect::new(80.0, 100.0, 400.0, 240.0));
+        // 包含关系下并集就是大的那个
+        let big = Rect::new(0.0, 0.0, 1000.0, 1000.0);
+        assert_eq!(big.union(&image), big);
+        // 交换律
+        assert_eq!(image.union(&toolbar), toolbar.union(&image));
     }
 
     #[test]

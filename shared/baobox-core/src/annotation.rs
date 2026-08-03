@@ -32,6 +32,20 @@ impl Tool {
         matches!(self, Tool::Rect | Tool::Ellipse | Tool::Arrow)
     }
 
+    /// 该工具是否用「按下 → 拖 → 松开」一次画成，只需记首尾两点。
+    ///
+    /// 比 [`Tool::is_two_point`] 多一个马赛克：马赛克的形状也是拖出来的矩形，
+    /// 只是它不画边框而是就地打码。分开两个判断是因为
+    /// 「几何上由两点定义」与「交互上一次拖拽画成」并不总是同一件事。
+    pub fn is_drag(&self) -> bool {
+        self.is_two_point() || matches!(self, Tool::Mosaic)
+    }
+
+    /// 该工具是否用自由折线记录轨迹（画笔 / 荧光笔）。
+    pub fn is_freehand(&self) -> bool {
+        matches!(self, Tool::Pen | Tool::Highlighter)
+    }
+
     /// 橡皮不产生图形，只删别人。
     pub fn draws(&self) -> bool {
         !matches!(self, Tool::Eraser)
@@ -311,5 +325,17 @@ mod tests {
         assert!(!Tool::Pen.is_two_point());
         assert!(!Tool::Eraser.draws());
         assert!(Tool::Mosaic.draws());
+    }
+
+    #[test]
+    fn mosaic_is_dragged_like_a_box_but_is_not_a_two_point_shape() {
+        // 交互上和矩形一样拖出来，几何上却不是「两点定义的图形」
+        assert!(Tool::Mosaic.is_drag());
+        assert!(!Tool::Mosaic.is_two_point());
+        assert!(Tool::Rect.is_drag());
+        assert!(!Tool::Pen.is_drag());
+        assert!(Tool::Pen.is_freehand());
+        assert!(Tool::Highlighter.is_freehand());
+        assert!(!Tool::Text.is_freehand());
     }
 }

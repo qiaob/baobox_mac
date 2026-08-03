@@ -8,4 +8,5 @@ license = "MIT"
 [dependencies]
 baobox-core = { path = "../../shared/baobox-core" }
 baobox-image = { path = "../../shared/baobox-image" }
+baobox-render = { path = "../../shared/baobox-render" }
 x11rb = "0.13"
