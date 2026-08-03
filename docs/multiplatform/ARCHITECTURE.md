@@ -39,6 +39,7 @@ shared/
 │   ├── selection    选区状态机（悬停窗口 / 拖拽区域 / 手柄微调 / 方向键 / Esc）
 │   ├── annotation   标注图形模型、撤销重做、橡皮「点删整笔」
 │   ├── stitch       长截屏重叠对齐 + RGBA 合成
+│   ├── hotkey       快捷键组合的解析与格式化（三平台同一套文本格式）
 │   ├── filename     模板格式化、**按平台**消毒、重名去重
 │   └── history      截图历史环形存储
 └── baobox-image/    RGBA → PNG、RGBA → 灰度
@@ -77,7 +78,8 @@ shared/
 | **交互式覆盖层**（悬停高亮 / 拖选 / 八向手柄 / 方向键 / 尺寸标注） | ✅ | ✅ X11 分层窗 | ✅ WS_EX_LAYERED（**未实测**） |
 | 标注工具条（画笔 / 箭头 / 马赛克…） | ✅ | ⬜ 模型已共用，UI 未做 | ⬜ 同左 |
 | 贴图 / OCR / 录屏 | ✅ | ⬜ | ⬜ |
-| 托盘 / 全局快捷键 | ✅ | ⬜ | ⬜ |
+| **全局快捷键 + 常驻** | ✅ | ✅ X11 GrabKey（**未实测**） | ✅ RegisterHotKey + 托盘（**未实测**） |
+| 托盘图标 | ✅ | ⬜ 见下 | ✅（**未实测**） |
 
 三平台的交互规则**共用同一个状态机**（`baobox_core::selection`），所以
 「单击截窗口 / 拖拽选区域 / ⏎ 全屏 / esc 取消 / 方向键 ±1、Shift ×10」在哪个系统上都一致，
@@ -89,6 +91,29 @@ shared/
 | Windows | `WS_EX_LAYERED` + `LWA_COLORKEY \| LWA_ALPHA`，选区涂 color key 即透明 | GDI `FillRect` / `FrameRect` | `TextOutW` |
 
 不带参数直接 `capture` 就进覆盖层，这是默认用法；带 `--full` / `--region` / `--window` 则跳过覆盖层。
+
+### 全局快捷键
+
+`daemon` 子命令常驻，按快捷键即唤起覆盖层。快捷键文本格式由 `baobox_core::hotkey`
+统一（`Ctrl+Shift+S`，修饰键别名 Cmd/Win/Super/Meta 与 Alt/Opt/Option 都认），
+所以同一份配置在三个平台上都读得懂。**不带修饰键的组合会被拒绝** ——
+那会把该键从所有 App 手里抢走（PrintScreen 例外，它本来就是系统级功能键）。
+
+两个平台各自的坑：
+
+- **X11**：`GrabKey` 匹配**精确的**修饰键掩码。用户开着 NumLock 时事件里多一个 Mod2，
+  grab 就不匹配了 —— 表现为「快捷键有时灵有时不灵」，而用户根本想不到是 NumLock 的锅。
+  必须把 CapsLock / NumLock / ScrollLock 的**全部 8 种组合**各 grab 一遍。
+  另外 grab 要 `.check()` 取回执，否则「已被别的程序占用」会静默失败。
+- **Windows**：`RegisterHotKey` 必须带 `MOD_NOREPEAT`，否则按住不放会连续触发；
+  托盘菜单弹出前必须 `SetForegroundWindow`，否则点向别处时菜单不消失。
+
+### Linux 的托盘图标
+
+**暂缺，且是有意的**。现代桌面的托盘走 StatusNotifierItem（DBus），传统的 XEmbed
+systray 在 GNOME 上早已移除。要做就得引入 DBus 依赖（如 `zbus`），与当前
+「零运行时依赖」的取舍冲突。`daemon` 前台运行，交给用户自己的 systemd user unit
+或桌面自启项托管 —— 这更符合 Linux 的习惯。
 
 ### 其余六个工具
 
@@ -110,7 +135,9 @@ shared/
 cd shared/baobox-core && cargo test
 
 # Linux
-cd linux/baobox-linux && cargo build && ./target/debug/baobox-linux info
+cd linux/baobox-linux && cargo build
+./target/debug/baobox-linux info            # 环境诊断
+./target/debug/baobox-linux daemon          # 常驻，按 Ctrl+Shift+S 截图
 
 # Windows（在 Windows 上）
 cd windows/baobox-windows && cargo build --release
