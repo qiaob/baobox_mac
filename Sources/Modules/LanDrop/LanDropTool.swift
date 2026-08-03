@@ -48,9 +48,26 @@ final class LanDropTool: ToolModule {
                 })
             }
 
-            // ③ 内嵌二维码 + 扫码提示
-            items.append(disabled(L("landrop.menu.scanHint")))
-            items.append(hostingRow(LanDropMenuQR(), height: 152))
+            // ③ 内嵌二维码（带一次性配对码）+ 扫码提示
+            if server.shareURL != nil {
+                items.append(disabled(L("landrop.menu.scanHint")))
+                items.append(hostingRow(LanDropMenuQR(), height: 152))
+            } else {
+                // 配对码已过期：不显示一个扫了也没用的码。
+                items.append(disabled(L("landrop.menu.pairExpired")))
+            }
+            items.append(ClosureMenuItem(title: L("landrop.menu.rotatePair")) {
+                LanDropServer.shared.rotatePairCode()
+            })
+
+            // 已配对设备
+            let devices = LanDropAccess.shared.devices
+            if !devices.isEmpty {
+                items.append(disabled(L("landrop.menu.devices \(devices.count)")))
+                items.append(ClosureMenuItem(title: L("landrop.menu.disconnectAll")) {
+                    LanDropServer.shared.disconnectAllDevices()
+                })
+            }
 
             // ④ 自动关闭剩余时间
             if let deadline = server.autoStopAt {
@@ -218,10 +235,12 @@ struct LanDropProgressRow: View {
 
 // MARK: - 菜单内嵌二维码
 
-/// 手机扫这个码即可打开上传页。内容含一次性访问码，故每次构建按当前 URL 现生成
-/// （QR 生成是纯 CPU，开销很小）。
+/// 手机扫这个码即可配对并打开页面。内容是**一次性配对码**，扫过一次即换新，
+/// 故每次构建按当前 URL 现生成（QR 生成是纯 CPU，开销很小）。
 struct LanDropMenuQR: View {
     @ObservedObject private var server = LanDropServer.shared
+    /// 配对码被消费 / 换新时要重画（内容变了）。
+    @ObservedObject private var access = LanDropAccess.shared
 
     var body: some View {
         VStack(spacing: 0) {

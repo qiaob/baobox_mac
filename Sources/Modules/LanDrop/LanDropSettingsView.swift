@@ -11,6 +11,7 @@ struct LanDropSettingsView: View {
     @AppStorage(LanDropEnv.Keys.notifyStart) private var notifyStart = true
     @AppStorage(LanDropEnv.Keys.notifyDone) private var notifyDone = true
     @AppStorage(LanDropEnv.Keys.notifySound) private var notifySound = true
+    @AppStorage(LanDropEnv.Keys.bindDevice) private var bindDevice = true
 
     @ObservedObject private var server = LanDropServer.shared
 
@@ -68,6 +69,11 @@ struct LanDropSettingsView: View {
                     Text("landrop.settings.size.16g").tag(16 * Self.gb)
                     Text("landrop.settings.size.unlimited").tag(0)
                 }
+
+                Toggle("landrop.settings.bindDevice", isOn: $bindDevice)
+                Text("landrop.settings.bindDeviceHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 Text("landrop.settings.tokenHelp")
                     .font(.caption)

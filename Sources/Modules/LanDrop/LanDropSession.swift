@@ -41,11 +41,14 @@ final class LanDropSessionRegistry: @unchecked Sendable {
 final class LanDropSession: @unchecked Sendable {
 
     /// 构造时注入的不可变配置，避免会话反向读主线程状态。
+    /// 访问凭证不在这里——它随时可能被换码 / 断开设备改变，统一走 `LanDropAccessStore`。
     struct Config: Sendable {
-        let token: String
         let saveDir: URL
         let maxFileSize: Int
     }
+
+    /// 设备凭证 cookie 名。
+    static let cookieName = "bxdev"
 
     /// 请求头最大字节数：超过即断开，防恶意客户端只发头不发空行把内存撑爆。
     private static let maxHeaderBytes = 32 * 1024
@@ -174,10 +177,26 @@ final class LanDropSession: @unchecked Sendable {
         let components = URLComponents(string: "http://localhost" + target)
         let path = components?.path ?? "/"
         let query = components?.queryItems ?? []
-        let token = query.first(where: { $0.name == "k" })?.value ?? ""
+        let clientIP = Self.clientIP(of: connection)
 
-        // 访问码不对 → 一律 404（不是 401）：不向扫到端口的人暴露这里跑着什么。
-        guard Self.constantTimeEqual(token, config.token) else {
+        // ① 配对：二维码里带的是一次性配对码，拿它换一张绑定本设备的凭证。
+        //    换完 302 到 `/?k=<凭证>` —— 这样手机上刷新页面不会再打到已作废的配对码上。
+        if path == "/", let pair = query.first(where: { $0.name == "p" })?.value, !pair.isEmpty {
+            guard let device = LanDropAccessStore.shared.consumePair(code: pair, ip: clientIP) else {
+                respond(status: "404 Not Found", contentType: "text/plain; charset=utf-8", body: Data())
+                return
+            }
+            Self.onMain { LanDropServer.shared.noteActivity() }
+            redirectToPaired(device: device)
+            return
+        }
+
+        // ② 其余请求认设备凭证（URL 参数或 cookie），并按设置校验来源 IP。
+        //    不通过 → 一律 404（不是 401）：不向扫到端口的人暴露这里跑着什么。
+        let token = query.first(where: { $0.name == "k" })?.value
+            ?? Self.cookieValue(named: Self.cookieName, in: headers["cookie"])
+            ?? ""
+        guard LanDropAccessStore.shared.authorize(token: token, ip: clientIP) else {
             respond(status: "404 Not Found", contentType: "text/plain; charset=utf-8", body: Data())
             return
         }
@@ -190,7 +209,7 @@ final class LanDropSession: @unchecked Sendable {
 
         switch (method, path) {
         case ("GET", "/"):
-            let html = LanDropPage.html(token: config.token,
+            let html = LanDropPage.html(token: token,
                                         folderName: config.saveDir.lastPathComponent,
                                         maxFileSize: config.maxFileSize,
                                         shared: LanDropShareSnapshot.shared.get(),
@@ -550,14 +569,50 @@ final class LanDropSession: @unchecked Sendable {
 
     // MARK: - 工具
 
-    /// 全量比较（不短路），避免按前缀逐字节试探 token 的时序侧信道。
-    private static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
-        let a = Array(lhs.utf8)
-        let b = Array(rhs.utf8)
-        guard a.count == b.count else { return false }
-        var diff: UInt8 = 0
-        for index in a.indices { diff |= a[index] ^ b[index] }
-        return diff == 0
+    /// 配对成功：下发设备凭证并跳到带凭证的地址。
+    ///
+    /// 同时写 cookie 与 URL 参数两份：cookie 让后续请求不必带参数，URL 参数保证 cookie 被
+    /// 浏览器策略挡掉时页面里的下载链接照样能用。凭证是纯字母数字，不需要转义。
+    private func redirectToPaired(device: String) {
+        var head = "HTTP/1.1 302 Found\r\n"
+        head += "Location: /?k=\(device)\r\n"
+        head += "Set-Cookie: \(Self.cookieName)=\(device); Path=/; Max-Age=86400; SameSite=Strict\r\n"
+        head += "Content-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        finished = true
+        connection.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] _ in
+            self?.cleanup()
+        })
+    }
+
+    /// 从 `Cookie:` 头里取一个值。
+    static func cookieValue(named name: String, in header: String?) -> String? {
+        guard let header else { return nil }
+        for part in header.split(separator: ";") {
+            let pair = part.split(separator: "=", maxSplits: 1)
+            guard pair.count == 2 else { continue }
+            if pair[0].trimmingCharacters(in: .whitespaces) == name {
+                let value = pair[1].trimmingCharacters(in: .whitespaces)
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
+    }
+
+    /// 取来源设备 IP（与 `ProxyConnection.captureClientIP` 同法：去 IPv6 作用域后缀、去 v4-mapped 前缀）。
+    static func clientIP(of connection: NWConnection) -> String? {
+        guard let endpoint = connection.currentPath?.remoteEndpoint,
+              case let .hostPort(host, _) = endpoint else { return nil }
+        let raw: String
+        switch host {
+        case .ipv4(let addr): raw = "\(addr)"
+        case .ipv6(let addr): raw = "\(addr)"
+        case .name(let name, _): raw = name
+        @unknown default: return nil
+        }
+        var out = raw
+        if let percent = out.firstIndex(of: "%") { out = String(out[out.startIndex..<percent]) }
+        if out.lowercased().hasPrefix("::ffff:") { out = String(out.dropFirst("::ffff:".count)) }
+        return out.isEmpty ? nil : out
     }
 
     private static func onMain(_ work: @escaping @MainActor () -> Void) {

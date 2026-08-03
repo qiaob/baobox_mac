@@ -17,6 +17,7 @@ enum LanDropEnv {
         static let notifyStart = "landrop.notifyStart"
         static let notifyDone = "landrop.notifyDone"
         static let notifySound = "landrop.notifySound"
+        static let bindDevice = "landrop.bindDevice"
     }
 
     /// 默认保存目录（展示用的原始串，含 `~`）。
@@ -66,6 +67,12 @@ enum LanDropEnv {
             return defaultMaxFileSize
         }
         return max(0, value)
+    }
+
+    /// 把设备凭证绑定到配对时的来源 IP（默认开）。
+    /// 手机换网 / DHCP 续租导致 IP 变化时会需要重新扫码——这是刻意的取舍。
+    static var bindDevice: Bool {
+        UserDefaults.standard.object(forKey: Keys.bindDevice) as? Bool ?? true
     }
 
     static var notifyStart: Bool {

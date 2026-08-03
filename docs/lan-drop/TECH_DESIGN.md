@@ -11,6 +11,7 @@ Sources/Modules/LanDrop/
 ├── LanDropServer.swift        # NWListener 启停、token、空闲自动关闭、@Published 状态（唯一事实源）
 ├── LanDropSession.swift       # 单连接 HTTP 会话：解析请求、路由、**流式落盘**
 ├── LanDropPage.swift          # 内嵌网页（上传 + 下载，HTML/CSS/JS 全内联，零外链）
+├── LanDropAccess.swift        # 配对码与设备凭证（权威状态加锁，UI 侧只读镜像）
 ├── LanDropShare.swift         # Mac → 手机的分享列表（@MainActor 供 UI + 线程安全快照供会话）
 ├── LanDropSendPanel.swift     # 「发送到手机」浮动面板：拖放区 + 二维码 + 分享列表
 ├── LanDropTransfers.swift     # 传输记录 store（@Published，进度 / 完成 / 失败）
@@ -46,14 +47,14 @@ Sources/Modules/LanDrop/
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| `/` | GET | 上传页 HTML。`?k=<token>` 正确才返回 |
-| `/upload` | POST | **原始字节流**上传单个文件。`?k=<token>&name=<URL 编码文件名>` |
+| `/` | GET | `?p=<配对码>` → 消费配对码，302 到 `/?k=<凭证>`；`?k=<凭证>` 或 cookie → 返回页面 |
+| `/upload` | POST | **原始字节流**上传单个文件。`?k=<凭证>&name=<URL 编码文件名>` |
 | `/ping` | GET | 网页轮询探活，返回 `{"ok":true}`。用于「服务已关闭」提示 |
 | `/list` | GET | 分享列表（**只有句柄 / 文件名 / 大小，没有路径**），供网页每 5 秒轮询 |
 | `/file` | GET | 按句柄下发一个被分享的文件。`?k=<token>&id=<句柄>`，支持 `Range` |
 | 其他 | * | 404，空体 |
 
-token 不匹配一律 404（不是 401）——不向扫到端口的人暴露这里跑着什么。
+凭证 / 配对码不对一律 404（不是 401）——不向扫到端口的人暴露这里跑着什么。
 
 **只有 `/`、`/upload`、`/file` 计为「活动」**（刷新空闲计时）。`/ping` 与 `/list` 是网页的
 被动轮询，若也算活动，页面开着就永远不会空闲超时，自动关闭形同虚设。
@@ -112,11 +113,49 @@ token 不匹配一律 404（不是 401）——不向扫到端口的人暴露这
 - 绑所有接口（不设 `requiredLocalEndpoint`），手机才连得上；地址展示用
   `NetworkInterfaces.primaryIP()`（默认路由出口网卡，已排除 utun/bridge/awdl 等虚拟接口）。
 
-## 5. token
+## 5. 访问控制：配对制（`LanDropAccess.swift`）
 
-- 开启时生成：32 个 URL-safe 字符，取自 `SystemRandomNumberGenerator`。
-- 只存在内存里，**不落盘**；停止即失效，重开换新的。
-- 校验用逐字符全量比较（不短路），避免时序侧信道。局域网场景下更多是洁癖，但成本为零。
+### 为什么不是「二维码里放一个长期访问码」
+
+长期码只要服务还开着就一直有效：二维码被拍照、被转发、被人瞟一眼记下，之后随时能用。
+**往 URL 里多塞几个参数并不解决这件事**——参数多寡与强度无关，能防住的只有「码本身会失效」。
+
+### 流程
+
+```
+二维码  →  http://ip:port/?p=<配对码>        配对码：一次性、120 秒内有效
+         ↓ 首次访问
+      校验 → 作废该码 → 颁发设备凭证 → 302 到 /?k=<凭证> + Set-Cookie → 立刻签发新的配对码
+         ↓
+之后所有请求  →  ?k=<凭证> 或 cookie，并（默认）校验来源 IP 与配对时一致
+```
+
+于是：
+
+| 威胁 | 结果 |
+|---|---|
+| 局域网扫端口，直接访问 `http://ip:8787/` | 404（没有配对码） |
+| 二维码被拍照，事后再扫 | 已被用过 → 404 |
+| 拍下但没人用 | 120 秒后作废 → 404 |
+| 拿到别人的设备凭证 | IP 对不上 → 404 |
+| 想立刻掐断 | 「换一个配对码」/「断开所有设备」 |
+
+**用掉即换新码**：否则第二台设备就没码可扫了。所以「一次性」不牺牲多设备。
+
+**302 而不是直接回页面**：手机上刷新页面时浏览器会重发地址栏里的 URL，若那里还是配对码，
+刷新就会 404。跳到 `/?k=<凭证>` 之后刷新才正常。cookie 与 URL 参数两份都写：
+cookie 让后续请求不必带参数，URL 参数保证 cookie 被浏览器策略挡掉时页面里的链接照样能用。
+
+**IP 绑定**（`landrop.bindDevice`，默认开）：手机换网 / DHCP 续租导致 IP 变化时需要重新扫码，
+这是刻意的取舍。配对时没取到 IP 的极少数情况下不因此把用户挡在门外。
+
+**新设备配对时发系统通知，且不受任何通知开关控制**——万一扫码的不是你，这是唯一能立刻发现的途径。
+
+### 并发
+
+会话要在自己的连接队列上**同步**校验，所以权威状态放在 `NSLock` 保护的 `LanDropAccessStore`
+（照 `FlowSnapshotStore` 先例），`LanDropAccess` 是给 UI 的只读镜像，由服务在变化回调里刷新。
+校验用逐字符全量比较（不短路），避免时序侧信道。
 
 ## 6. 自动关闭
 
@@ -157,6 +196,7 @@ stopped ──start()──▶ starting ──listener ready──▶ running(po
 | `landrop.notifyStart` | true | 开始接收通知 |
 | `landrop.notifyDone` | true | 完成通知 |
 | `landrop.notifySound` | true | 通知提示音 |
+| `landrop.bindDevice` | true | 设备凭证绑定配对时的来源 IP |
 
 ## 9. 文件名消毒
 

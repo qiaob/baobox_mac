@@ -23,9 +23,6 @@ final class LanDropServer: ObservableObject {
     private let queue = DispatchQueue(label: "com.baobox.landrop.listener")
     private let registry = LanDropSessionRegistry()
 
-    /// 本次会话的访问码；停止即作废。只驻内存，不落盘。
-    private(set) var token: String = ""
-
     private var lastActivity = Date()
     /// 排程代次：stop / restart 后旧的到期检查凭此失效。
     private var generation = 0
@@ -46,10 +43,11 @@ final class LanDropServer: ObservableObject {
         return nil
     }
 
-    /// 手机要访问的地址（含访问码）。未运行返回 nil。
+    /// 二维码 / 分享链接：带的是**一次性配对码**，不是长期凭证。
+    /// 配对码过期或未运行返回 nil（菜单据此提示重新出码）。
     var shareURL: String? {
-        guard let port = runningPort else { return nil }
-        return "http://\(NetworkInterfaces.primaryIP()):\(port)/?k=\(token)"
+        guard let port = runningPort, let pair = LanDropAccessStore.shared.currentPairCode else { return nil }
+        return "http://\(NetworkInterfaces.primaryIP()):\(port)/?p=\(pair)"
     }
 
     /// 不含访问码的地址，仅供展示 / 复制排查用。
@@ -84,9 +82,10 @@ final class LanDropServer: ObservableObject {
             return
         }
 
-        token = Self.makeToken()
         state = .starting
         LanDropNotify.requestAuthorizationIfNeeded()
+        installAccessBridge()
+        LanDropAccessStore.shared.start(bindIP: LanDropEnv.bindDevice)
 
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -104,8 +103,7 @@ final class LanDropServer: ObservableObject {
         }
         self.listener = listener
 
-        let config = LanDropSession.Config(token: token,
-                                           saveDir: LanDropEnv.saveDirectoryURL,
+        let config = LanDropSession.Config(saveDir: LanDropEnv.saveDirectoryURL,
                                            maxFileSize: LanDropEnv.maxFileSize)
         listener.newConnectionHandler = { [registry] connection in
             LanDropSession(connection: connection, config: config, registry: registry).start()
@@ -154,7 +152,8 @@ final class LanDropServer: ObservableObject {
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
-        token = ""
+        LanDropAccessStore.shared.stop()
+        LanDropAccess.shared.refresh()
         LanDropTransfers.shared.markActiveInterrupted(reason: L("landrop.error.interrupted"))
         // 停止即清空分享列表：句柄随之失效，手机上残留的页面再点也拿不到任何东西。
         LanDropShare.shared.clear()
@@ -239,10 +238,33 @@ final class LanDropServer: ObservableObject {
         sleepObservers.removeAll()
     }
 
-    // MARK: - 访问码
+    // MARK: - 访问控制桥接
 
-    /// 32 字符 URL-safe 随机串（与分享句柄同一个生成器，字母表只有一份）。
-    private static func makeToken() -> String {
-        LanDropEnv.randomID(length: 32)
+    /// 把权威存储（任意线程）的变化接到主线程：刷新 UI 镜像，新设备配对时发一条通知。
+    ///
+    /// 通知不是可选项——万一扫码的不是你，这条通知是唯一能立刻发现的途径。
+    private func installAccessBridge() {
+        LanDropAccessStore.shared.onChange = { pairedIP in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    LanDropAccess.shared.refresh()
+                    if let pairedIP {
+                        LanDropNotify.postDevicePaired(ip: pairedIP)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 手动换一个配对码：旧二维码立即作废。
+    func rotatePairCode() {
+        LanDropAccessStore.shared.rotatePairCode()
+        LanDropAccess.shared.refresh()
+    }
+
+    /// 断开所有已配对设备：凭证立即失效，手机需重新扫码。
+    func disconnectAllDevices() {
+        LanDropAccessStore.shared.disconnectAll()
+        LanDropAccess.shared.refresh()
     }
 }

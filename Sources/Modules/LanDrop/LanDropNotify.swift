@@ -36,6 +36,12 @@ enum LanDropNotify {
         post(title: L("landrop.notify.failed.title"), body: "\(name) · \(reason)")
     }
 
+    /// 新设备配对成功。**不受任何通知开关控制**——万一扫码的不是你，这条是唯一能立刻发现的途径。
+    static func postDevicePaired(ip: String) {
+        let source = ip.isEmpty ? L("common.unknown") : ip
+        post(title: L("landrop.notify.paired.title"), body: L("landrop.notify.paired.body \(source)"))
+    }
+
     private static func post(title: String, body: String?) {
         let content = UNMutableNotificationContent()
         content.title = title

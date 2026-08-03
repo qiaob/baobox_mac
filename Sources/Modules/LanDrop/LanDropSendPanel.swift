@@ -112,6 +112,7 @@ struct LanDropSendPanelView: View {
     @ObservedObject var dropState: LanDropDropState
     @ObservedObject private var share = LanDropShare.shared
     @ObservedObject private var server = LanDropServer.shared
+    @ObservedObject private var access = LanDropAccess.shared
 
     var body: some View {
         VStack(spacing: 14) {
@@ -215,6 +216,20 @@ struct LanDropSendPanelView: View {
                 Text("landrop.send.scanToDownload")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("landrop.send.rotate") { LanDropServer.shared.rotatePairCode() }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+        } else if server.isRunning {
+            // 配对码是一次性的，用掉或过期后这里会变成一个按钮而不是一个失效的码。
+            VStack(spacing: 6) {
+                Text("landrop.send.pairExpired")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("landrop.send.rotate") { LanDropServer.shared.rotatePairCode() }
+                    .buttonStyle(.link)
+                    .font(.caption)
             }
         } else {
             Text("landrop.send.starting")
