@@ -1,5 +1,7 @@
 # 防休眠
 
+简体中文 · [English](en/caffeinate.md)
+
 菜单栏 → **防休眠**。临时阻止 Mac 自动进入睡眠，适合跑构建、跑测试、下载大文件等挂机场景。
 
 基于 IOKit 电源管理断言（`IOPMAssertionCreateWithName`），不调用外部命令，不常驻进程。

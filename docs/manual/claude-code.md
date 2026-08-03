@@ -1,5 +1,7 @@
 # Claude Code 助手
 
+简体中文 · [English](en/claude-code.md)
+
 菜单栏 → **Claude Code**。为本地 Claude Code CLI 做的菜单栏仪表盘。
 
 **数据全部来自 `~/.claude` 下的本地文件——不调用任何 AI API、不需要登录、不联网**

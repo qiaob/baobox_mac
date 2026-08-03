@@ -6,7 +6,7 @@
 clicking, sleep prevention, plus dashboards for the Claude Code and Codex CLIs. One app
 instead of five, with one shortcut system and one settings window.
 
-[简体中文](README.zh-CN.md) · [User manual (Chinese)](docs/manual/README.md) · [Shortcuts](docs/manual/shortcuts.md)
+[简体中文](README.zh-CN.md) · [User manual](docs/manual/en/README.md) · [Shortcuts](docs/manual/en/shortcuts.md)
 
 ```
 macOS 14+   ·   Swift 5.9   ·   Zero third-party dependencies   ·   Everything stays local
@@ -44,13 +44,13 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 
 | Tool | Default shortcut | In one line |
 |---|---|---|
-| [Screenshot & recording](docs/manual/screenshot.md) | ⌘⇧2 · ⌃⇧R | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, live drawing, history |
-| [Clipboard](docs/manual/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
-| [Window manager](docs/manual/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
-| [Keyboard clicking](docs/manual/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
-| [Keep awake](docs/manual/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
-| [Claude Code assistant](docs/manual/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
-| [Codex assistant](docs/manual/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
+| [Screenshot & recording](docs/manual/en/screenshot.md) | ⌘⇧2 · ⌃⇧R | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, live drawing, history |
+| [Clipboard](docs/manual/en/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
+| [Window manager](docs/manual/en/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
+| [Keyboard clicking](docs/manual/en/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
+| [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
+| [Claude Code assistant](docs/manual/en/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
+| [Codex assistant](docs/manual/en/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
 
 ### The framework itself
 
@@ -221,7 +221,7 @@ Bound out of the box:
 
 OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files, and
 both Codex panels ship **unbound** — assign them under Settings → Shortcuts. Full list in
-[Shortcuts](docs/manual/shortcuts.md).
+[Shortcuts](docs/manual/en/shortcuts.md).
 
 ## Data and privacy
 
@@ -240,7 +240,7 @@ both Codex panels ship **unbound** — assign them under Settings → Shortcuts.
   `~/.codex` live
 - The only network access is the version check you trigger yourself (an npm lookup)
 
-See [Data and privacy](docs/manual/privacy-and-data.md) (Chinese).
+See [Data and privacy](docs/manual/en/privacy-and-data.md).
 
 ## Build from source
 
@@ -321,7 +321,7 @@ Conventions are documented in [CLAUDE.md](CLAUDE.md).
 
 | Document | Contents |
 |---|---|
-| [User manual](docs/manual/README.md) | Every tool and every feature, in detail (Chinese) |
+| [User manual](docs/manual/en/README.md) | Every tool and every feature, in detail ([中文](docs/manual/README.md)) |
 | [CLAUDE.md](CLAUDE.md) | Architecture overview and code conventions |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Product requirements |
 | [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) | Technical design |

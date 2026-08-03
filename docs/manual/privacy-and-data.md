@@ -1,5 +1,7 @@
 # 数据与隐私
 
+简体中文 · [English](en/privacy-and-data.md)
+
 一句话：**所有数据都只存在这台 Mac 上，Baobox 不上传任何东西，也没有账号体系。**
 
 ## 需要哪些权限

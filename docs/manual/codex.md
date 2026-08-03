@@ -1,5 +1,7 @@
 # Codex 助手
 
+简体中文 · [English](en/codex.md)
+
 菜单栏 → **Codex 助手**。为本地 Codex CLI 做的助手，结构与 [Claude Code 助手](claude-code.md)
 对齐，但**独立实现、互不影响**。
 

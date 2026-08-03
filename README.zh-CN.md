@@ -281,7 +281,7 @@ final class MyTool: ToolModule {
 
 | 文档 | 内容 |
 |---|---|
-| [使用手册](docs/manual/README.md) | 每个工具、每项功能的完整说明 |
+| [使用手册](docs/manual/README.md) | 每个工具、每项功能的完整说明（[English](docs/manual/en/README.md)） |
 | [CLAUDE.md](CLAUDE.md) | 架构速览与代码约定（写代码前必读） |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 全局需求 |
 | [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) | 技术设计 |
