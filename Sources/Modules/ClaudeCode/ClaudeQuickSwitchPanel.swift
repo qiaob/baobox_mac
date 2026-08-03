@@ -99,6 +99,15 @@ final class ClaudeQuickSwitchViewModel: ObservableObject {
         selectedIndex = 0
     }
 
+    /// ←→ 循环切换类别筛选：全部 → 文档 → 网页 → 代码 → 配置 → 其他 → 全部。
+    func cycleCategory(_ delta: Int) {
+        let choices: [ClaudeFileCategory?] = [nil] + ClaudeFileCategory.allCases
+        let current = choices.firstIndex(where: { $0 == categoryFilter }) ?? 0
+        let count = choices.count
+        let next = ((current + delta) % count + count) % count
+        setCategory(choices[next])
+    }
+
     func moveSelection(_ delta: Int) {
         let count = currentCount
         guard count > 0 else { return }
@@ -222,6 +231,14 @@ final class ClaudeQuickSwitchController: NSObject {
         case 0x30: // Tab → 会话/文件模式切换(消费掉,不触发 SwiftUI 焦点遍历)
             viewModel.toggleMode()
             return true
+        case 0x7B where viewModel.mode == .files: // ← 切换类型筛选。搜索框有内容时不拦 —— 留给光标移动(同剪贴板面板)。
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleCategory(-1)
+            return true
+        case 0x7C where viewModel.mode == .files: // → 同上
+            guard viewModel.query.isEmpty else { return false }
+            viewModel.cycleCategory(1)
+            return true
         case 0x24, 0x4C: // Return / Enter → 会话:续接;文件:打开(⌘⏎ 访达显示)
             switch viewModel.mode {
             case .sessions:
@@ -288,13 +305,15 @@ final class ClaudeQuickSwitchController: NSObject {
     }
 
     private func openFile(_ file: ClaudeRecentFile) {
-        hide()
+        // 先发起打开再收面板：hide() 会释放面板与承载视图,若从视图手势里调用,
+        // 放在打开之后可避免在同一次事件派发中边拆窗口边发起打开。
         ClaudeFileOpener.open(file)
+        hide()
     }
 
     private func revealFile(_ file: ClaudeRecentFile) {
-        hide()
         ClaudeFileOpener.reveal(file)
+        hide()
     }
 
     private func copyPath(_ file: ClaudeRecentFile) {
@@ -362,6 +381,8 @@ struct ClaudeQuickSwitchView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
+            // 不可获得键盘焦点:否则鼠标点过分段控件后,←→ 会被它吃掉去切分段(而不是切类型筛选)。
+            .focusable(false)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -473,8 +494,11 @@ struct ClaudeQuickSwitchView: View {
                             fileRow(file: file, selected: index == viewModel.selectedIndex)
                                 .id(file.id)
                                 .contentShape(Rectangle())
-                                .onTapGesture(count: 2) { onOpenFile(file) }
-                                .onTapGesture { viewModel.selectedIndex = index }
+                                // 文件模式单击即打开(Spotlight / Raycast 惯例);会话模式仍是单击选中、双击续接。
+                                .onTapGesture {
+                                    viewModel.selectedIndex = index
+                                    onOpenFile(file)
+                                }
                         }
                     }
                     .padding(8)
@@ -565,6 +589,7 @@ struct ClaudeQuickSwitchView: View {
                 hint("⌘C", L("claudecode.quickswitch.hint.copy"))
             case .files:
                 // 空间所限省略 ↑↓(与会话模式一致,无需重复教学)。
+                hint("←→", L("claudecode.files.hint.filter"))
                 hint("⏎", L("claudecode.files.hint.open"))
                 hint("⌘⏎", L("claudecode.files.hint.reveal"))
                 hint("⌘C", L("claudecode.files.hint.copyPath"))

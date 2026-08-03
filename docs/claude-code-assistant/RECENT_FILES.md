@@ -47,10 +47,13 @@
 - 文件模式在搜索栏下方多一行**类型筛选 chips**：全部 / 文档 / 网页 / 代码 / 配置 / 其他，
   各带计数（对「当前搜索词过滤后」的集合计数）；点击切换，选中态 accent 填充。
 - 文件行：类型图标（按扩展名的 UTType 图标，静态字典 memoize，零磁盘 stat）+ 文件名 +
-  「项目名 · 全路径」（中间截断）+ 尾部相对时间。单击选中，双击打开。
+  「项目名 · 全路径」（中间截断）+ 尾部相对时间。**单击即打开**（Spotlight / Raycast 惯例；
+  会话模式仍是单击选中、双击续接）。
 - 搜索匹配：文件名 / 全路径 / 项目名（小写子串，与会话模式同规则）。
-- 键位（文件模式）：`⏎` 按类别偏好应用打开（先关面板）、`⌘⏎` 访达显示、`⌘C` 复制绝对路径、
-  `esc` 关闭；`↑↓` 选择不变。footer 提示随模式切换，左侧计数为「N 个文件」。
+- 键位（文件模式）：`←→` 循环切换类别筛选（全部→文档→网页→代码→配置→其他，**搜索框有内容时
+  放行给光标移动**，同剪贴板面板惯例）、`⏎` 按类别偏好应用打开、`⌘⏎` 访达显示、
+  `⌘C` 复制绝对路径、`esc` 关闭；`↑↓` 选择不变。footer 提示随模式切换，左侧计数为「N 个文件」。
+- 分段控件设 `.focusable(false)`：否则鼠标点过它之后，`←→` 会被它吃掉去切分段而不是切类别。
 - **模式记忆**：菜单入口显式指定（快速续接… → 会话；最近文件… → 文件）；快捷键 toggle 沿用
   上次模式（进程内记忆，重启回到会话模式）。
 - 首次索引未完成时（`isRefreshing && files.isEmpty`）显示 ProgressView + 「正在索引会话…」。
@@ -152,7 +155,12 @@ struct FileCacheRecord: Codable {
 - `ClaudeFileOpener`（@MainActor）：
   - `open(_:)`：类别 → bundleID → `urlForApplication(withBundleIdentifier:)`；命中则
     `NSWorkspace.open([url], withApplicationAt:configuration:)`（同 `TerminalLauncher.run`
-    的 document 分支）；未配置 / 已卸载回退 `NSWorkspace.open(url)` 系统默认。**永不报错**。
+    的 document 分支）；未配置 / 已卸载回退系统默认。**永不报错**。
+  - ⚠️ **必须显式 `OpenConfiguration.activates = true`**：本 App 是无 Dock 图标的后台
+    LSUIElement，面板又是非激活面板，用不带配置的旧式 `NSWorkspace.open(url)` 时目标 App
+    拿不到激活权——文件其实打开了、窗口却留在后台，表现为「按了没反应」（实测确认，见 §7.1）。
+  - 调用顺序是**先发起打开、再 `hide()` 收面板**：避免在同一次事件派发里边拆窗口边发起打开。
+  - 指定 App 打开失败（版本不兼容 / 已损坏）时在完成回调里兜底系统默认，不让用户白按一次。
   - `reveal(_:)` = `activateFileViewerSelecting`；`copyPath(_:)` = 写 NSPasteboard。
 - 图标：`NSWorkspace.icon(for: UTType)` 按小写扩展名静态字典缓存（实际不同扩展名 ~15 个），
   无扩展名用 `.data` 泛型图标。
@@ -178,8 +186,9 @@ struct FileCacheRecord: Codable {
 | `claudecode.files.category.config` | 配置 | Config |
 | `claudecode.files.category.other` | 其他 | Other |
 | `claudecode.files.hint.open` | 打开 | Open |
-| `claudecode.files.hint.reveal` | 访达显示 | Reveal in Finder |
-| `claudecode.files.hint.copyPath` | 复制路径 | Copy path |
+| `claudecode.files.hint.filter` | 筛选 | Filter |
+| `claudecode.files.hint.reveal` | 访达 | Reveal |
+| `claudecode.files.hint.copyPath` | 路径 | Copy path |
 | `claudecode.settings.files.section` | 最近文件 | Recent Files |
 | `claudecode.settings.files.desc` | 最近文件面板按分类用所选应用打开文件；未设置的分类用系统默认应用。 | Files in the Recent Files panel open with the app chosen per category; unset categories use the system default. |
 | `claudecode.settings.files.systemDefault` | 系统默认 | System default |
@@ -201,6 +210,32 @@ struct FileCacheRecord: Codable {
 6. 磁盘上删除一个已列出文件后重开面板该行消失；会话模式与改造前行为完全一致。
 7. `~/.claude` 不存在时菜单仍是既有置灰引导，无崩溃。
 
-## 7. 实现状态（as-built）
+## 7. 实现状态（as-built，2026-08-03 真机验证）
 
-> 实现完成后补记本节（对照上文设计的落地差异），惯例同 `WEEKLY_QUOTA.md` §7。
+### 7.1 首版两处缺陷与根因（已修）
+
+真机试用暴露两个问题，均已修复并有运行时日志佐证：
+
+1. **`←→` 不能切换类型筛选** —— 首版压根没实现方向键切类别（只能点 chips）。已补
+   `cycleCategory(±1)`，并对齐剪贴板面板惯例：搜索框有内容时放行给光标移动。同时给分段
+   控件加 `.focusable(false)`，避免鼠标点过它后 `←→` 被它抢去切分段。
+
+2. **回车 / 点击「打不开文件」** —— 根因**不是**没触发，而是**打开了但窗口没到前台**。
+   首版用旧式 `NSWorkspace.shared.open(url)`（无 OpenConfiguration），而本 App 是后台
+   LSUIElement + 非激活面板，目标 App 拿不到激活权，文件在后台被打开、用户完全看不见。
+   改用 `OpenConfiguration.activates = true` 的现代 API 后，实测日志：
+   `open[default] /tmp/pr52_review.md` → `open ok: abnerworks.Typora`，Typora 正常到前台。
+   另把「先 hide 再 open」调整为「先 open 再 hide」。
+
+   > 排查手记：本机 `log show` / `log stream` 取不到任何进程的统一日志（返回 0 行），
+   > 诊断改为临时往 `supportDir/debug-recentfiles.log` 追加轨迹，定位后已移除；
+   > 仅保留打开失败时的 `Logger.error`。
+
+3. 顺带按用户预期把文件模式改为**单击即打开**（原为单击选中 / 双击打开）。
+
+### 7.2 落地事实
+
+- 真机数据：125 个 jsonl / 316MB，全量首建约 9s（后台 + 加载态），去重 1886 → 排除内部
+  1646 → 磁盘尚存 1330；发布上限 500，故面板显示 500 条，筛「文档」后 72 条。
+- 缓存文件 `~/Library/Application Support/Baobox/ClaudeCode/file-index-cache-v1.json`（428KB）。
+- 面板模式记忆生效：菜单项显式指定模式，快捷键沿用上次模式。

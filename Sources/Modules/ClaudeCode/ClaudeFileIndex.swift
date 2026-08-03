@@ -1,4 +1,5 @@
 import AppKit
+import os
 import UniformTypeIdentifiers
 
 /// Claude Code 助手 —— 最近文件索引：从会话 JSONL 提取 Write/Edit 等工具写过的文件。
@@ -122,15 +123,35 @@ enum ClaudeFileOpenSettings {
 @MainActor
 enum ClaudeFileOpener {
 
+    /// 打开失败时的诊断（`log stream --predicate 'subsystem == "com.baobox.app"'`）。
+    private static let log = Logger(subsystem: "com.baobox.app", category: "recentfiles")
+
     /// 按类别偏好应用打开；未配置或 App 已卸载回退系统默认。永不报错。
+    ///
+    /// 关键点：本 App 是后台 LSUIElement，面板又是非激活面板，此时目标 App 默认可能拿不到
+    /// 激活权——文件其实打开了、窗口却留在后台，看起来像「没反应」。故显式用带
+    /// `activates = true` 的 OpenConfiguration，并在完成回调里记录失败原因。
     static func open(_ file: ClaudeRecentFile) {
         let url = URL(fileURLWithPath: file.filePath)
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+
         if let bundleID = ClaudeFileOpenSettings.appBundleID(for: file.category),
            let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            NSWorkspace.shared.open([url], withApplicationAt: appURL,
-                                    configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config) { _, error in
+                guard let error else { return }
+                log.error("open with app failed: \(error.localizedDescription, privacy: .public)")
+                // 指定 App 打不开（版本不兼容 / 已损坏等）时兜底系统默认，不让用户白按一次。
+                DispatchQueue.main.async {
+                    NSWorkspace.shared.open(url, configuration: config, completionHandler: nil)
+                }
+            }
         } else {
-            NSWorkspace.shared.open(url)
+            NSWorkspace.shared.open(url, configuration: config) { _, error in
+                if let error {
+                    log.error("open failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         }
     }
 
