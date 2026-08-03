@@ -21,6 +21,7 @@
 pub mod annotation;
 pub mod filename;
 pub mod geometry;
+pub mod hotkey;
 pub mod history;
 pub mod selection;
 pub mod stitch;
