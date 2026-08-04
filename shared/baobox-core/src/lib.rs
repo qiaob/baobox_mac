@@ -18,6 +18,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aisession;
+pub mod aiusage;
 pub mod annotation;
 pub mod caffeinate;
 pub mod clipboard;
@@ -26,6 +28,7 @@ pub mod editor;
 pub mod filename;
 pub mod geometry;
 pub mod hotkey;
+pub mod json;
 pub mod layout;
 pub mod history;
 pub mod ocr;

@@ -6,7 +6,8 @@
 ## 这是什么
 
 `windows/baobox-windows/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**四个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**、
+**Claude Code 助手**、**Codex 助手**六个工具。
 
 ```
 baobox-windows                  常驻：托盘 + 快捷键 + 设置
@@ -67,6 +68,9 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
 | `windowmanager.rs` | 窗口管理：前台窗口 / `rcWork` / `SetWindowPos` |
 | `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
+| `assistant.rs` | AI 助手：找日志、扫目录（与 Linux 逐字相同） |
+| `assistant_module.rs` | 两个助手工具的 `ToolModule` 适配层（同上） |
+| `terminal.rs` | 开终端跑命令（`wt.exe` → `cmd /K`） |
 | `store.rs` | 配置与历史的落盘位置 |
 
 ## 这个平台上最容易踩的十个坑
