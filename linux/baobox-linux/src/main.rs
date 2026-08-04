@@ -17,6 +17,11 @@
 
 mod app;
 mod clipboard;
+mod clipboard_module;
+mod clipboard_panel;
+mod clipboard_read;
+mod clipboard_store;
+mod paste;
 mod editor;
 mod hotkeys;
 mod ocr;

@@ -6,7 +6,7 @@
 ## 这是什么
 
 `windows/baobox-windows/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前只实现了截图这一个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**与**剪贴板**两个工具。
 
 ```
 baobox-windows                  常驻：托盘 + 快捷键 + 设置
@@ -55,12 +55,17 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `tray.rs` | 托盘图标 + 运行期生成的 `HMENU`；也提供消息专用窗口 |
 | `settings_window.rs` | Win32 通用控件的设置窗口 |
 | `hotkeys.rs` | 多快捷键中心 |
-| `clipboard.rs` | `CF_DIB` / `CF_UNICODETEXT` |
+| `clipboard.rs` | 写剪贴板：`CF_DIB` / `CF_UNICODETEXT` |
+| `clipboard_read.rs` | 监听 `WM_CLIPBOARDUPDATE` 并读回内容；DIB → RGBA |
+| `clipboard_panel.rs` | 剪贴板面板（两层：条目 / 文本工具） |
+| `clipboard_store.rs` | 剪贴板历史落盘 + DPAPI 加密 |
+| `clipboard_module.rs` | 剪贴板工具的 `ToolModule` 适配层 |
+| `paste.rs` | 回填粘贴（`SendInput` 合成 Ctrl+V） |
 | `ocr.rs` | `Windows.Media.Ocr`（系统自带，不需要用户装东西） |
 | `record.rs` | 外挂 ffmpeg `gdigrab` |
 | `store.rs` | 配置与历史的落盘位置 |
 
-## 这个平台上最容易踩的七个坑
+## 这个平台上最容易踩的九个坑
 
 1. **`SetClipboardData` 成功后所有权归系统，绝不能再 `GlobalFree`**。
    只有失败时所有权还在自己手上才要还回去。
@@ -75,6 +80,11 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 6. **`GetWindowRect` 从 Win10 起包含不可见的阴影边距**，直接拿去截图会多一圈背景。
    要用 DWM 的 `DWMWA_EXTENDED_FRAME_BOUNDS`。
 7. **虚拟屏幕的原点不一定是 (0,0)**：副屏摆在主屏左边时 `SM_XVIRTUALSCREEN` 是负数。
+8. **`OpenClipboard` 之后一定要 `CloseClipboard`**。剪贴板是全局独占的，开着不关会让
+   整个系统的复制粘贴都卡住；而且 `GetClipboardData` 的句柄不归我们，
+   `CloseClipboard` 之后就作废 —— 必须在关之前把内容拷出来。
+9. **`SendInput` 少发一条 `KEYEVENTF_KEYUP`**，那个修饰键就会一直卡在按下状态，
+   用户还没法自己解开（他手上那个键本来就没按下去过）。
 
 ## 线程模型：一条线程，一个消息循环
 
@@ -85,6 +95,12 @@ Win32 的窗口、菜单、热键消息都绑定在**创建它们的那条线程
 代价是执行动作期间消息循环会停住。截图是模态操作，用户本来也不会同时去点托盘。
 
 自定义消息一律排在 `WM_APP` 之后，并且互不撞号（有测试盯着）。
+
+剪贴板监听也搭在这条线程上：`AddClipboardFormatListener` 把 `WM_CLIPBOARDUPDATE`
+送到 `clipboard_module` 自建的消息窗口，**连模态操作期间也不会漏** ——
+覆盖层、编辑器、面板跑的都是嵌套的消息循环，同一条线程上的消息照样派发。
+代价是窗口过程拿不到 `&mut self`，所以读出来的内容先进一个全局队列，
+主线程在用 Store 之前 `drain()` 收走。
 
 ## 键盘：`WM_KEYDOWN` 与 `WM_CHAR` 各管一段
 
@@ -105,15 +121,17 @@ Windows 把一次按键拆成两条消息，所以**字母键不会像 Linux 那
 - 快捷键用系统自带的 `msctls_hotkey32`。它**录不了 Win 键组合**（`HOTKEYF_*` 里没有 Win），
   这是控件本身的限制；用户可以直接在配置文件里写 `Super+…`，注册那一层是支持的。
 
-窗口目前**没有滚动**：内容超过一屏就够不着。工具只有一个时排得下，
-加到第三、四个工具时要么补 `WM_VSCROLL` 处理，要么改成左侧页签（与 Linux 版一致）。
+窗口目前**没有滚动**：内容超过一屏就够不着。两个工具（截图 + 剪贴板）还排得下
+（窗口按内容定高，上限 720px），**再加一个工具就该动手了** ——
+要么补 `WM_VSCROLL` 处理，要么改成左侧页签（与 Linux 版一致）。
 
 ## 目录
 
 | | 位置 |
 |---|---|
 | 配置 | `%APPDATA%\Baobox\config.ini` |
-| 历史 | `%APPDATA%\Baobox\screenshot\` |
+| 截图历史 | `%APPDATA%\Baobox\screenshot\` |
+| 剪贴板历史 | `%APPDATA%\Baobox\clipboard\`（`clipboard.dat` + `images\`） |
 | 截图默认存放 | `%USERPROFILE%\Pictures\Baobox\`，可被设置里的「保存到」覆盖 |
 
 用 `%APPDATA%` 而不是 `%LOCALAPPDATA%`：这些是用户数据，在域账号的漫游配置里跟着走是合理的。

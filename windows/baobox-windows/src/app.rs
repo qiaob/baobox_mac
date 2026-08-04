@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{hotkeys, screenshot_module, settings_window, store, tray};
+use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -33,6 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
+    registry.register(Box::new(clipboard_module::ClipboardTool::new()));
     registry
 }
 
@@ -113,6 +114,16 @@ impl App {
 /// 配置变更的自定义消息。
 const WM_RELOAD_CONFIG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
 
+/// 定时器 id：给工具喂 `tick`。
+const TIMER_TICK: usize = 1;
+
+/// 多久喂一次。
+///
+/// 剪贴板监听把内容攒在一个全局队列里，靠这一下并进工具自己的状态。
+/// 200ms 对「复制完托盘菜单里的计数就对了」来说足够快，
+/// 而空跑一次只是看一眼空队列，代价可以忽略。
+const TICK_MS: u32 = 200;
+
 /// 跑起来，直到用户从托盘菜单退出。
 pub fn run() -> Result<String, String> {
     let mut registry = build_registry();
@@ -154,11 +165,16 @@ pub fn run() -> Result<String, String> {
             app.as_mut() as *mut App as isize,
         );
 
+        // 有后台数据源的工具（剪贴板监听）靠这个定时器把队列并进自己的状态
+        windows::Win32::UI::WindowsAndMessaging::SetTimer(hwnd, TIMER_TICK, TICK_MS, None);
+
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+
+        let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(hwnd, TIMER_TICK);
 
         windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
             hwnd,
@@ -210,6 +226,12 @@ unsafe extern "system" fn wndproc(
         }
         m if m == WM_RELOAD_CONFIG => {
             app.reload_config();
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam.0 == TIMER_TICK => {
+            // 托盘菜单是弹出时才建的（`menuNeedsUpdate` 那一套），
+            // 所以这里不必因为「变了」去重建什么 —— 收进来就够了
+            let _ = app.registry.tick_all();
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -281,10 +303,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_registry_ships_with_the_screenshot_tool() {
+    fn the_registry_ships_with_the_screenshot_and_clipboard_tools() {
+        // 注册顺序 = 菜单顺序，三个平台一致
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID]);
+        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
     }
 
     #[test]
@@ -306,10 +329,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_capture_hotkey_ships_bound() {
+    fn only_two_hotkeys_ship_bound() {
         let resolved = resolve_hotkeys(&build_registry(), &Config::new());
-        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 1);
-        assert!(resolved.len() > 1, "其余规格仍要列出来，设置里才看得到");
+        // 出厂绑定的：截图与剪贴板面板各一个。其余易冲突的组合留给用户自设
+        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 2);
+        assert!(resolved.len() > 2, "其余规格仍要列出来，设置里才看得到");
     }
 
     #[test]
@@ -317,6 +341,13 @@ mod tests {
         use windows::Win32::UI::WindowsAndMessaging::WM_APP;
         assert!(WM_RELOAD_CONFIG > WM_APP);
         assert_ne!(WM_RELOAD_CONFIG, tray::WM_TRAY);
+    }
+
+    #[test]
+    fn the_tick_timer_is_frequent_enough_to_feel_live_but_not_a_spin() {
+        // 复制完托盘菜单里的计数就该是对的；但也不能一秒跑几十遍
+        assert!(TICK_MS >= 50);
+        assert!(TICK_MS <= 1000);
     }
 
     #[test]
@@ -340,6 +371,7 @@ mod tests {
                 screenshot_module::CAPTURE_FULL,
                 screenshot_module::OCR,
                 screenshot_module::RECORD,
+                clipboard_module::PANEL,
             ]
         );
     }

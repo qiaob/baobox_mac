@@ -12,5 +12,6 @@ baobox-image = { path = "../../shared/baobox-image" }
 baobox-render = { path = "../../shared/baobox-render" }
 gtk = "0.18"
 glib = "0.18"
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["xfixes", "xtest"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+aes-gcm = { version = "0.11.0", default-features = false, features = ["aes", "alloc"] }

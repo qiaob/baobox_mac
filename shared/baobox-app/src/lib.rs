@@ -103,6 +103,26 @@ pub trait ToolModule {
     /// App 退出前调一次：停后台服务、落盘。
     fn will_terminate(&mut self) {}
 
+    /// 平台层定期调（几十到几百毫秒一次），让工具把**后台线程攒下的东西
+    /// 并进自己的状态**。默认什么都不做。
+    ///
+    /// # 为什么框架得管这件事
+    ///
+    /// `menu_items()` 只有 `&self`，`perform()` 又只在用户点了什么时才调 ——
+    /// 于是一个有后台数据源的工具（剪贴板监听就是）没有任何时机把队列排空：
+    /// 菜单里的计数会一直是旧的，队列还会一直涨（剪贴板里的图片是按字节
+    /// 攒在内存里的）。
+    ///
+    /// **必须便宜**：空跑一次的代价要低到可以一秒调几十次，
+    /// 所以这里不许读磁盘，只许动内存。
+    ///
+    /// 返回 `true` 表示「菜单里的东西变了」，平台层据此重建托盘菜单。
+    /// 每次都回 `true` 的话，托盘菜单会被一秒重建几十次 —— 在 Linux 上
+    /// 那是几十次 DBus 往返，所以**没变就一定要回 `false`**。
+    fn tick(&mut self) -> bool {
+        false
+    }
+
     /// 执行一个菜单动作 / 快捷键。`action` 是 [`MenuItem`] 或
     /// [`HotkeySpec`] 里的 id。
     ///
@@ -180,6 +200,19 @@ impl ToolRegistry {
         }
     }
 
+    /// 逐个 `tick`。平台层在自己的主循环里定期调。
+    ///
+    /// 返回 `true` 表示有工具的菜单内容变了，平台层该重建托盘菜单。
+    /// **不能用 `any()` 短路** —— 那样第一个返回 `true` 的工具会让
+    /// 后面的工具这一轮根本轮不到。
+    pub fn tick_all(&mut self) -> bool {
+        let mut changed = false;
+        for tool in &mut self.tools {
+            changed |= tool.tick();
+        }
+        changed
+    }
+
     /// 逐个 `will_terminate`，**按注册的倒序** —— 后注册的可能依赖先注册的，
     /// 倒着关与依赖方向一致。
     pub fn terminate_all(&mut self) {
@@ -214,6 +247,10 @@ mod tests {
         activated: bool,
         terminated: bool,
         performed: Vec<String>,
+        /// 被 `tick` 到几次。放在外面数，因为 trait 对象拿不回具体类型
+        ticks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// `tick` 要不要报告「变了」
+        reports_change: bool,
     }
 
     impl Fake {
@@ -223,7 +260,17 @@ mod tests {
                 activated: false,
                 terminated: false,
                 performed: Vec::new(),
+                ticks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                reports_change: false,
             })
+        }
+
+        /// 一个会报告「变了」的工具，外加一个能从外面读的计数器。
+        fn counted(id: &str, reports_change: bool) -> (Box<Fake>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+            let mut fake = Fake::new(id);
+            fake.reports_change = reports_change;
+            let counter = std::sync::Arc::clone(&fake.ticks);
+            (fake, counter)
         }
     }
 
@@ -250,10 +297,44 @@ mod tests {
         fn will_terminate(&mut self) {
             self.terminated = true;
         }
+        fn tick(&mut self) -> bool {
+            self.ticks
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.reports_change
+        }
         fn perform(&mut self, action: &str) -> Result<String, String> {
             self.performed.push(action.to_string());
             Ok(format!("做了 {action}"))
         }
+    }
+
+    #[test]
+    fn every_tool_gets_ticked_even_when_an_earlier_one_reports_a_change() {
+        // 用 any() 短路的话，第一个报「变了」的工具会让后面的这一轮轮不到 ——
+        // 表现是「有时候复制的东西要过好几秒才进历史」，极难查
+        use std::sync::atomic::Ordering;
+        let mut registry = ToolRegistry::new();
+        let (first, first_ticks) = Fake::counted("first", true);
+        let (second, second_ticks) = Fake::counted("second", false);
+        registry.register(first);
+        registry.register(second);
+
+        assert!(registry.tick_all(), "有工具报了变化就该返回 true");
+        assert_eq!(first_ticks.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            second_ticks.load(Ordering::Relaxed),
+            1,
+            "前一个报了变化，后一个照样要被调到"
+        );
+    }
+
+    #[test]
+    fn a_tool_that_changed_nothing_does_not_ask_for_a_menu_rebuild() {
+        // 每次都回 true 的话，托盘菜单会被一秒重建几十次 ——
+        // 在 Linux 上那是几十次 DBus 往返
+        let mut registry = ToolRegistry::new();
+        registry.register(Fake::new("quiet"));
+        assert!(!registry.tick_all());
     }
 
     #[test]

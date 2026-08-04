@@ -13,6 +13,7 @@
 //! 提供两种内容：截图给 `image/png`（GIMP、Firefox、LibreOffice、各类聊天软件都认），
 //! 屏幕取字给 `UTF8_STRING` + `TEXT` + `STRING`。同一套服务循环，只是能答的 target 不同。
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -90,8 +91,38 @@ pub fn serve_detached(payload: Payload) {
         let Ok(owner) = session.create_owner_window() else {
             return;
         };
+        // 记下这个窗口，好让剪贴板监听认出「这次变化是我们自己弄的」
+        remember_ours(owner);
         let _ = serve(session.connection(), owner, &payload, None);
+        forget_ours(owner);
     });
+}
+
+/// 我们自己持有过剪贴板的那些窗口。
+///
+/// 窗口 id 在 X 服务器上是全局的，所以另一条连接上的监听也能拿它比对。
+static OURS: Mutex<Vec<Window>> = Mutex::new(Vec::new());
+
+/// 这个剪贴板所有者是我们自己吗。
+///
+/// 自己刚放进去的东西不该再被自己记一遍 —— 否则「从历史里粘贴」会把那一条
+/// 重新推到最前，看着像是程序在跟自己较劲。
+pub fn is_ours(window: Window) -> bool {
+    OURS.lock()
+        .map(|ours| ours.contains(&window))
+        .unwrap_or(false)
+}
+
+fn remember_ours(window: Window) {
+    if let Ok(mut ours) = OURS.lock() {
+        ours.push(window);
+    }
+}
+
+fn forget_ours(window: Window) {
+    if let Ok(mut ours) = OURS.lock() {
+        ours.retain(|w| *w != window);
+    }
 }
 
 /// 宣告自己持有剪贴板，并把内容服务出去。
@@ -216,6 +247,30 @@ mod tests {
     fn a_payload_hands_out_its_own_bytes() {
         assert_eq!(Payload::Png(vec![1, 2, 3]).bytes(), &[1, 2, 3]);
         assert_eq!(Payload::Text("hi".into()).bytes(), b"hi");
+    }
+
+    #[test]
+    fn a_window_we_serve_from_is_recognised_as_ours_and_forgotten_afterwards() {
+        // 认不出「这次变化是我们自己弄的」的话，从历史里粘贴会把那一条
+        // 重新推到最前，看着像是程序在跟自己较劲
+        let window: Window = 0x0140_0007;
+        assert!(!is_ours(window), "还没服务过的窗口不该算我们的");
+        remember_ours(window);
+        assert!(is_ours(window));
+        forget_ours(window);
+        assert!(!is_ours(window), "服务结束就要忘掉，否则列表会一直涨");
+    }
+
+    #[test]
+    fn several_serving_windows_can_be_recognised_at_once() {
+        // 连着复制两次时，旧线程还没退出、新线程已经起来了
+        let (a, b): (Window, Window) = (0x0AAA_0001, 0x0BBB_0002);
+        remember_ours(a);
+        remember_ours(b);
+        assert!(is_ours(a) && is_ours(b));
+        forget_ours(a);
+        assert!(!is_ours(a) && is_ours(b), "忘掉一个不该连累另一个");
+        forget_ours(b);
     }
 
     #[test]
