@@ -100,6 +100,8 @@ pub struct ClipboardTool {
     protection: clipboard_store::Protection,
     /// 收 `WM_CLIPBOARDUPDATE` 的消息窗口
     monitor: Option<HWND>,
+    /// `activate` 过了吗。没有的话 Store 是空的，绝不能落盘
+    loaded: bool,
 }
 
 impl Default for ClipboardTool {
@@ -116,18 +118,21 @@ impl ClipboardTool {
             store: Store::new(Store::DEFAULT_LIMIT),
             protection: clipboard_store::Protection::PlainText,
             monitor: None,
+            loaded: false,
         }
     }
 
     /// 把监听窗口捞到的东西收进历史。主线程每次要用 Store 之前调一下。
-    pub fn drain(&mut self) {
+    ///
+    /// 返回 `true` 表示真收进了东西（菜单里的计数得跟着变）。
+    pub fn drain(&mut self) -> bool {
         let caught: Vec<Caught> = match INBOX.lock() {
             Ok(mut inbox) => std::mem::take(&mut *inbox),
             // 锁毒了（窗口过程里 panic 过）也要接着干活，历史不该因此停摆
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
         };
         if caught.is_empty() {
-            return;
+            return false;
         }
         let now = crate::now_seconds();
         for one in caught {
@@ -162,6 +167,7 @@ impl ClipboardTool {
             }
         }
         self.persist();
+        true
     }
 
     /// DIB 存成 PNG 文件，返回文件名。
@@ -187,7 +193,13 @@ impl ClipboardTool {
         }
     }
 
+    /// 落盘。**没 `activate` 过就不写** —— 那时 Store 还是空的，
+    /// 写下去等于把用户磁盘上那份历史清掉。命令行子命令与单元测试都不
+    /// `activate`，这条守卫拦的正是它们。
     fn persist(&mut self) {
+        if !self.loaded {
+            return;
+        }
         match clipboard_store::save(&self.store) {
             Ok(level) => self.protection = level,
             Err(why) => eprintln!("剪贴板历史存不下来：{why}"),
@@ -196,7 +208,7 @@ impl ClipboardTool {
 
     /// 打开面板，按用户的选择收尾。
     fn open_panel(&mut self) -> Result<String, String> {
-        self.drain();
+        let _ = self.drain();
         match clipboard_panel::open(&self.store) {
             clipboard_panel::Outcome::Cancelled => Ok(String::new()),
             clipboard_panel::Outcome::TogglePin(id) => {
@@ -420,6 +432,7 @@ impl ToolModule for ClipboardTool {
         let (store, protection) = clipboard_store::load(self.settings.limit);
         self.store = store;
         self.protection = protection;
+        self.loaded = true;
         // 启动时先按配置清一次过期的
         let expired = self
             .store
@@ -449,6 +462,13 @@ impl ToolModule for ClipboardTool {
         self.persist();
     }
 
+    fn tick(&mut self) -> bool {
+        // 监听是随时在收东西的，而 `perform` 只在用户点了什么时才调 ——
+        // 不定期排空的话，菜单里的计数一直是旧的，队列还会一直涨
+        // （图片是按字节攒在内存里的）
+        self.drain()
+    }
+
     fn will_terminate(&mut self) {
         if let Some(hwnd) = self.monitor.take() {
             clipboard_read::unlisten(hwnd);
@@ -456,12 +476,12 @@ impl ToolModule for ClipboardTool {
                 let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
             }
         }
-        self.drain();
+        let _ = self.drain();
         self.persist();
     }
 
     fn perform(&mut self, action: &str) -> Result<String, String> {
-        self.drain();
+        let _ = self.drain();
         match action {
             PANEL => self.open_panel(),
             CLEAR => {
@@ -561,6 +581,16 @@ mod tests {
             tool.store.items().iter().all(|e| !e.concealed),
             "关掉开关之后不能还留着敏感条目"
         );
+    }
+
+#[test]
+    fn a_tool_that_never_activated_refuses_to_write_to_disk() {
+        // 没 activate 过时 Store 是空的，落盘等于把用户磁盘上那份历史清掉。
+        // 命令行子命令与这些单元测试走的都是这条路
+        let mut tool = ClipboardTool::new();
+        assert!(!tool.loaded, "新建出来就不该允许落盘");
+        tool.persist();
+        assert!(!tool.loaded, "persist 不该顺手把这个开关打开");
     }
 
     #[test]

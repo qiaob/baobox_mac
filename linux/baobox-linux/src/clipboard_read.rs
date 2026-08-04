@@ -143,19 +143,22 @@ impl Reader {
             if notify.selection == self.atoms.clipboard)
     }
 
-    /// 当前剪贴板的所有者是不是我们自己。
+    /// 现在是谁持有剪贴板。
     ///
-    /// 自己写进去的东西不该再被自己记一遍 —— 否则「从历史里粘贴」
-    /// 会把那一条重新推到最前，看着像是自己在跟自己较劲。
-    pub fn owned_by_us(&self, conn: &RustConnection, ours: &[Window]) -> bool {
-        let Ok(reply) = conn
+    /// 调用方拿它去问 `clipboard::is_ours` —— 自己写进去的东西不该再被自己
+    /// 记一遍，否则「从历史里粘贴」会把那一条重新推到最前，
+    /// 看着像是程序在跟自己较劲。
+    pub fn current_owner(&self, conn: &RustConnection) -> Option<Window> {
+        let owner = conn
             .get_selection_owner(self.atoms.clipboard)
-            .and_then(|c| Ok(c.reply()))
-        else {
-            return false;
-        };
-        let Ok(reply) = reply else { return false };
-        ours.contains(&reply.owner)
+            .ok()?
+            .reply()
+            .ok()?
+            .owner;
+        if owner == x11rb::NONE {
+            return None;
+        }
+        Some(owner)
     }
 
     /// 把剪贴板内容读出来。
@@ -322,8 +325,11 @@ pub fn parse_uri_list(text: &str) -> Vec<String> {
 }
 
 /// 路径里的百分号编码要还原，否则带空格或中文的文件名会是一串 `%20`。
+///
+/// 用 `percent_decode_path` 而不是 `percent_decode`：后者把 `+` 当成空格
+/// （那是 query 的规矩），拿去解 `c++.txt` 会得到一个不存在的文件名。
 fn percent_decode_path(path: &str) -> String {
-    baobox_core::textformat::percent_decode(path)
+    baobox_core::textformat::percent_decode_path(path)
 }
 
 #[cfg(test)]
@@ -350,6 +356,13 @@ mod tests {
             parse_uri_list("file:///home/me/%E4%B8%AD%E6%96%87.txt"),
             vec!["/home/me/中文.txt"]
         );
+    }
+
+    #[test]
+    fn a_plus_in_a_filename_stays_a_plus() {
+        // `+` 代表空格是 query 的规矩，路径里不是 ——
+        // 弄错的话 c++.txt 会变成一个根本不存在的文件
+        assert_eq!(parse_uri_list("file:///home/me/c++.txt"), vec!["/home/me/c++.txt"]);
     }
 
     #[test]

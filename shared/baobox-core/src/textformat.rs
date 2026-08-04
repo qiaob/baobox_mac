@@ -816,6 +816,19 @@ fn decode_base64_with(text: &str, url_safe: bool) -> Option<Vec<u8>> {
 
 /// 百分号解码，顺带把 `+` 还原成空格（query 里的惯例）。
 pub fn percent_decode(text: &str) -> String {
+    decode_percent(text, true)
+}
+
+/// 百分号解码，但 **`+` 就是加号本身**。
+///
+/// `+` 代表空格是 `application/x-www-form-urlencoded` 的规矩，只在 query 里成立。
+/// 路径里不是 —— 拿它去解 `file:///home/me/c++.txt` 会得到 `c  .txt`，
+/// 一个根本不存在的文件。剪贴板里的 `text/uri-list` 走的就是这条。
+pub fn percent_decode_path(text: &str) -> String {
+    decode_percent(text, false)
+}
+
+fn decode_percent(text: &str, plus_is_space: bool) -> String {
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -835,7 +848,7 @@ pub fn percent_decode(text: &str) -> String {
                     }
                 }
             }
-            b'+' => {
+            b'+' if plus_is_space => {
                 out.push(b' ');
                 index += 1;
             }
@@ -1149,6 +1162,16 @@ mod tests {
     fn empty_and_whitespace_input_produces_nothing() {
         assert!(detect("").is_empty());
         assert!(detect("   \n  ").is_empty());
+    }
+
+    #[test]
+    fn plus_means_space_in_a_query_but_not_in_a_path() {
+        // 同一个字节，两种含义 —— 分不清的话文件名会被解坏
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode_path("a+b"), "a+b");
+        // 百分号那部分两边一样
+        assert_eq!(percent_decode_path("/home/me/my%20file.txt"), "/home/me/my file.txt");
+        assert_eq!(percent_decode_path("%E4%B8%AD"), "中");
     }
 
     #[test]

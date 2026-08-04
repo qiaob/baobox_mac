@@ -78,6 +78,8 @@ pub struct ClipboardTool {
     inbox: Option<Receiver<Caught>>,
     /// 让监听线程停下来
     stop: Arc<Mutex<bool>>,
+    /// `activate` 过了吗。没有的话 Store 是空的，绝不能落盘
+    loaded: bool,
 }
 
 impl Default for ClipboardTool {
@@ -95,19 +97,22 @@ impl ClipboardTool {
             protection: clipboard_store::Protection::PlainText,
             inbox: None,
             stop: Arc::new(Mutex::new(false)),
+            loaded: false,
         }
     }
 
     /// 把监听线程送来的东西收进历史。主线程每次要用 Store 之前调一下。
-    pub fn drain(&mut self) {
-        let Some(inbox) = &self.inbox else { return };
+    ///
+    /// 返回 `true` 表示真收进了东西（菜单里的计数得跟着变）。
+    pub fn drain(&mut self) -> bool {
+        let Some(inbox) = &self.inbox else { return false };
         let caught: Vec<Caught> = inbox.try_iter().collect();
         if caught.is_empty() {
-            return;
+            return false;
         }
         let now = crate::now_seconds();
         for one in caught {
-            let mut item = match one {
+            let item = match one {
                 Caught::Text(text) => {
                     // 敏感内容默认根本不入库
                     let sensitive = privacy::classify(&text, false);
@@ -133,12 +138,12 @@ impl ClipboardTool {
                     item
                 }
             };
-            item.source = String::new();
             for evicted in self.store.add(item) {
                 self.delete_image(&evicted);
             }
         }
         self.persist();
+        true
     }
 
     /// 图片存成文件，返回文件名。
@@ -160,7 +165,13 @@ impl ClipboardTool {
         }
     }
 
+    /// 落盘。**没 `activate` 过就不写** —— 那时 Store 还是空的，
+    /// 写下去等于把用户磁盘上那份历史清掉。命令行子命令与单元测试都不
+    /// `activate`，这条守卫拦的正是它们。
     fn persist(&mut self) {
+        if !self.loaded {
+            return;
+        }
         match clipboard_store::save(&self.store) {
             Ok(level) => self.protection = level,
             Err(why) => eprintln!("剪贴板历史存不下来：{why}"),
@@ -169,7 +180,7 @@ impl ClipboardTool {
 
     /// 打开面板，按用户的选择收尾。
     fn open_panel(&mut self) -> Result<String, String> {
-        self.drain();
+        let _ = self.drain();
         let outcome = clipboard_panel::open(&self.store);
         match outcome {
             clipboard_panel::Outcome::Cancelled => Ok(String::new()),
@@ -263,9 +274,6 @@ fn monitor_loop(tx: Sender<Caught>, stop: Arc<Mutex<bool>>) {
         eprintln!("剪贴板监听起不来（XFIXES 不可用？），历史不会更新。");
         return;
     };
-    // 我们自己持有剪贴板时用的是别的连接上的窗口，这里记下本连接见过的
-    let owned: Vec<u32> = Vec::new();
-
     loop {
         if *stop.lock().unwrap_or_else(|e| e.into_inner()) {
             return;
@@ -277,7 +285,7 @@ fn monitor_loop(tx: Sender<Caught>, stop: Arc<Mutex<bool>>) {
                 }
                 // 自己刚放进去的东西不该再被自己记一遍 —— 否则「从历史里粘贴」
                 // 会把那一条重新推到最前，看着像是自己在跟自己较劲
-                if reader.owned_by_us(conn, &owned) {
+                if reader.current_owner(conn).is_some_and(clipboard::is_ours) {
                     continue;
                 }
                 let caught = match reader.read(conn) {
@@ -355,6 +363,7 @@ impl ToolModule for ClipboardTool {
         let (store, protection) = clipboard_store::load(self.settings.limit);
         self.store = store;
         self.protection = protection;
+        self.loaded = true;
         // 启动时先按配置清一次过期的
         let expired = self
             .store
@@ -384,16 +393,23 @@ impl ToolModule for ClipboardTool {
         self.persist();
     }
 
+    fn tick(&mut self) -> bool {
+        // 监听是随时在收东西的，而 `perform` 只在用户点了什么时才调 ——
+        // 不定期排空的话，菜单里的计数一直是旧的，队列还会一直涨
+        // （图片是按字节攒在内存里的）
+        self.drain()
+    }
+
     fn will_terminate(&mut self) {
         if let Ok(mut stop) = self.stop.lock() {
             *stop = true;
         }
-        self.drain();
+        let _ = self.drain();
         self.persist();
     }
 
     fn perform(&mut self, action: &str) -> Result<String, String> {
-        self.drain();
+        let _ = self.drain();
         match action {
             PANEL => self.open_panel(),
             CLEAR => {
@@ -496,6 +512,16 @@ mod tests {
             tool.store.items().iter().all(|e| !e.concealed),
             "关掉开关之后不能还留着敏感条目"
         );
+    }
+
+#[test]
+    fn a_tool_that_never_activated_refuses_to_write_to_disk() {
+        // 没 activate 过时 Store 是空的，落盘等于把用户磁盘上那份历史清掉。
+        // 命令行子命令与这些单元测试走的都是这条路
+        let mut tool = ClipboardTool::new();
+        assert!(!tool.loaded, "新建出来就不该允许落盘");
+        tool.persist();
+        assert!(!tool.loaded, "persist 不该顺手把这个开关打开");
     }
 
     #[test]

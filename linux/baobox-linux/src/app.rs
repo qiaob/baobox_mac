@@ -268,7 +268,7 @@ fn spawn_hotkey_thread(shared: Arc<Shared>, tx: Sender<String>) {
     });
 }
 
-/// 让 GTK 主循环定时来排空动作队列。
+/// 让 GTK 主循环定时来排空动作队列，顺带给工具一个 `tick`。
 fn pump(state: Rc<RefCell<AppState>>, rx: Receiver<String>) {
     glib::timeout_add_local(DRAIN, move || {
         // 一次排空所有攒下的动作。按住快捷键连按时会攒好几个，
@@ -280,6 +280,14 @@ fn pump(state: Rc<RefCell<AppState>>, rx: Receiver<String>) {
             } else {
                 state.dispatch(&action);
             }
+        }
+        // 有后台数据源的工具（剪贴板监听）靠这一下把队列并进自己的状态。
+        // 不给它这个时机的话，菜单里的计数会一直是旧的，队列还会一直涨
+        let mut state = state.borrow_mut();
+        if state.registry.tick_all() {
+            // 只在真的变了时重建 —— 托盘菜单在 Linux 上是一串 DBus 往返，
+            // 每 50ms 重建一次会把桌面的菜单服务打满
+            state.refresh_menu();
         }
         glib::ControlFlow::Continue
     });

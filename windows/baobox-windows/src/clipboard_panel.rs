@@ -537,7 +537,9 @@ mod imp {
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as i32;
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                if id == ID_SEARCH && code == EN_CHANGE {
+                // 第二层不参与搜索：那一层就十来行，重建一遍只会把
+                // 用户刚选好的那一行重置掉
+                if id == ID_SEARCH && code == EN_CHANGE && matches!(state.mode, Mode::Browse) {
                     let needle = window_text(state.search);
                     state.refill(&needle);
                 } else if id == ID_LIST && code == LBN_DBLCLK {
