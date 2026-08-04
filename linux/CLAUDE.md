@@ -6,7 +6,7 @@
 ## 这是什么
 
 `linux/baobox-linux/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**与**剪贴板**两个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**三个工具。
 
 ```
 baobox-linux                    常驻：托盘 + 快捷键 + 设置
@@ -54,6 +54,8 @@ dbus-run-session -- xvfb-run -a cargo test
 | `clipboard_module.rs` | 剪贴板工具的 `ToolModule` 适配层 |
 | `paste.rs` | 回填粘贴（XTEST 合成 Ctrl+V） |
 | `ocr.rs` / `record.rs` | 外挂 tesseract / ffmpeg |
+| `caffeinate.rs` | 防休眠：login1 + 屏保两家 DBus inhibit |
+| `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
 | `store.rs` | 配置与历史的落盘位置 |
 
 ## 这个平台上最容易踩的九个坑

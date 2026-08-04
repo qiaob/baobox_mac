@@ -20,6 +20,10 @@ mod app;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod caffeinate;
+#[cfg(windows)]
+mod caffeinate_module;
+#[cfg(windows)]
 mod clipboard_module;
 mod clipboard_panel;
 #[cfg(windows)]

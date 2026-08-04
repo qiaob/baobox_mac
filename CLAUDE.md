@@ -19,14 +19,14 @@
 
 ```
 mac/       macOS 实现（Swift + SwiftUI/AppKit）—— 下文说的一切都在这里
-windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板
-linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板
+windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠
+linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠
 shared/    三平台共用的 Rust 库：baobox-core（纯逻辑）、baobox-image（PNG/灰度）
 docs/      产品文档与使用手册
 ```
 
 **改 macOS 代码请进 `mac/`**；跨平台的纯逻辑（几何、选区状态机、标注模型、长截屏拼接、
-文件名规则、剪贴板历史、敏感内容识别、文本格式识别）放 `shared/baobox-core`，三边共用一份实现与测试。详见
+文件名规则、剪贴板历史、敏感内容识别、文本格式识别、窗口布局几何）放 `shared/baobox-core`，三边共用一份实现与测试。详见
 `docs/multiplatform/ARCHITECTURE.md`。
 
 ## 架构（框架先行，加工具 = 加模块）

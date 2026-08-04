@@ -23,7 +23,7 @@
 //! `poll_for_event` + 30ms 睡眠，每圈看一眼「要不要重新注册」的标志位 ——
 //! 每秒三十次空转的代价，换来「改完立刻生效」。
 
-use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, x11capture};
+use crate::{caffeinate_module, clipboard_module, hotkeys, screenshot_module, settings_window, store, x11capture};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -50,6 +50,7 @@ pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
     registry.register(Box::new(clipboard_module::ClipboardTool::new()));
+    registry.register(Box::new(caffeinate_module::CaffeinateTool::new()));
     registry
 }
 
@@ -331,7 +332,10 @@ mod tests {
     fn the_registry_ships_with_the_screenshot_tool() {
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
+        assert_eq!(
+            ids,
+            vec![screenshot_module::ID, clipboard_module::ID, caffeinate_module::ID]
+        );
     }
 
     #[test]

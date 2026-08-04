@@ -19,12 +19,14 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod caffeinate;
 pub mod clipboard;
 pub mod config;
 pub mod editor;
 pub mod filename;
 pub mod geometry;
 pub mod hotkey;
+pub mod layout;
 pub mod history;
 pub mod ocr;
 pub mod privacy;

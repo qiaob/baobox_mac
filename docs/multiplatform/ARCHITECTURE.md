@@ -13,7 +13,7 @@ shared/       三平台共用的 Rust 库
 docs/         产品文档与使用手册（面向用户，不分平台）
 ```
 
-`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前覆盖**截图**与**剪贴板**两个工具。
+`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前覆盖**截图**、**剪贴板**、**防休眠**三个工具。
 
 ## 为什么 Windows / Linux 选 Rust
 
@@ -49,7 +49,9 @@ shared/
 │   ├── clipboard    剪贴板历史模型：去重、收藏豁免、过期清理、索引编解码
 │   ├── privacy      敏感内容识别（密码 / 私钥 / 令牌 / 银行卡号，Luhn 校验）
 │   ├── textformat   文本格式识别（JSON / JWT / XML / URL / 时间戳 / Base64）与转换动作
-│   └── snippet      文本片段的关键字展开匹配
+│   ├── snippet      文本片段的关键字展开匹配
+│   ├── caffeinate   防休眠的时长预设、到期判定、状态文案
+│   └── layout       窗口布局的纯几何（半屏 / 四分屏 / 居中 / 间距 / 跨屏）
 ├── baobox-app/      应用框架（只有两个 Rust 平台用；mac 那边是同构的 Swift 版）
 │   ├── ToolModule   工具接入协议 + ToolRegistry（注册顺序 = 菜单顺序）
 │   ├── menu         托盘菜单模型
@@ -96,8 +98,8 @@ Rust 对应物，Windows 与 Linux 共用。实现 `ToolModule` 并在平台的 
 
 | | 设置界面 | 快捷键录制 |
 |---|---|---|
-| Windows | Win32 通用控件，运行期按声明生成（不用 `.rc` 对话框资源 —— 那要编译期写死坐标） | 系统自带的 `msctls_hotkey32`。**录不了 Win 键组合**，是控件本身的限制，可在配置文件里手写 |
-| Linux | GTK3 | 自己抓按键；`Esc` 取消、`Backspace` 解绑 |
+| Windows | Win32 通用控件，运行期按声明生成（不用 `.rc` 对话框资源 —— 那要编译期写死坐标）。三个工具就超过一屏了，所以自己实现了 `WM_VSCROLL`：记下每个控件设计时的 (x, y)，滚动时逐个 `SetWindowPos` | 系统自带的 `msctls_hotkey32`。**录不了 Win 键组合**，是控件本身的限制，可在配置文件里手写 |
+| Linux | GTK3 Notebook，每页套一个 `ScrolledWindow`（滚动是白拿的） | 自己抓按键；`Esc` 取消、`Backspace` 解绑 |
 
 于是界面是原生外观，而「有哪些设置、叫什么、默认值多少」只有一份定义。
 两边都**没有「确定 / 取消」**：改完立刻生效、立刻落盘，与 mac 版一致。
@@ -289,6 +291,32 @@ Linux 之所以外挂，是因为**发行版里没有系统级 OCR**，而自带
 缺的只是喂给它按键的那一层。与其在设置里摆一个打开了也不生效的开关 ——
 那比不给这个选项更糟 —— 不如先不给。
 
+### 防休眠
+
+第三个工具。时长预设、到期判定、状态文案在 `baobox_core::caffeinate`；
+「怎么让系统别睡」三个平台差别很大：
+
+| | 怎么实现 | 靠什么维持 |
+|---|---|---|
+| macOS | `IOPMAssertionCreateWithName` | 一个 assertion id，要显式 release |
+| Windows | `SetThreadExecutionState` | **调用线程活着**就一直有效 |
+| Linux | `login1.Manager.Inhibit` + `org.freedesktop.ScreenSaver.Inhibit` | 一个**文件描述符**加一个 cookie |
+
+三处值得记的差异：
+
+- **Linux 要跟两家打招呼**。「谁负责让机器睡」在这个平台上是两拨人：systemd
+  管系统挂起与空闲，屏保（GNOME / KDE 各自的）管锁屏与关显示器。只跟一家说，
+  另一家照样把机器弄睡。一家都联系不上时**报错而不是假装开好了** ——
+  用户按了防休眠、机器照睡不误、而他毫不知情，是最糟的结果。
+- **Windows 的状态按线程记**。`SetThreadExecutionState` 设的是调用线程的状态，
+  线程一退出就自动失效；在另一条线程上「关」是关不掉的，而且没有任何报错。
+  好在这个平台的 App 本来就只有一条线程。
+- **`ES_CONTINUOUS` 是「持续」不是「一次」**。不带它的调用只是重置一下空闲计时器；
+  关掉的方法是再调一次、只给 `ES_CONTINUOUS` —— 没有专门的取消函数，
+  忘了这一步系统就再也不睡了。
+
+「15 分钟后自动关掉」不另起定时线程，用的是框架的 `tick`（做剪贴板时补的那个）。
+
 ### 剪贴板底层：两个平台是完全不同的模型
 
 | | 模型 | 后果 |
@@ -325,17 +353,20 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 （`TextOutW` / X11 核心字体 / Core Text）。X11 侧用 `poly_text8` / `poly_text16`
 而不是 `image_text8` —— 后者会用背景色刷一遍文字盒子，把下面的截图盖掉。
 
-### 其余四个工具
+### 其余三个工具
 
-尚未开始（屏幕取字与录屏已随截图一起做完，剪贴板已完成，均不在此列）。
+尚未开始（屏幕取字与录屏已随截图一起做完，剪贴板与防休眠已完成，均不在此列）。
 按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
 
-| 工具 | 难度 | 关键点 |
-|---|---|---|
-| Claude Code / Codex 助手 | 🟢 | 纯读本地文件，几乎无平台耦合 |
-| 防休眠 | 🟢 | Windows `SetThreadExecutionState`；Linux DBus inhibit |
-| 窗口管理 | 🟡 | Win32 `SetWindowPos`；Linux EWMH `_NET_WM_STATE` |
-| 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI |
+| 工具 | 难度 | 关键点 | 状态 |
+|---|---|---|---|
+| 窗口管理 | 🟡 | Win32 `SetWindowPos`；Linux EWMH `_NET_MOVERESIZE_WINDOW` | **几何已下沉到 `baobox_core::layout`**，平台层未接 |
+| Claude Code / Codex 助手 | 🟢 | 纯读本地文件，几乎无平台耦合 | 未开始 |
+| 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI | 未开始 |
+
+窗口管理的纯几何（半屏 / 四分屏 / 最大化 / 居中 / 跨屏 / 间距）已经写好并测过
+（`layout.rs`，12 条测试）。**坐标系与 mac 那份 Swift 是反的** —— `shared` 一律
+左上原点，所以这边 `Top` 是**较小**的 y，照抄 `WindowLayout.swift` 的坐标会上下颠倒。
 
 剪贴板移植时那条「macOS 的 `org.nspasteboard.*` 隐私标记约定别处没有对应物」的
 预判是对的：两个平台改成**按内容识别**（`baobox_core::privacy`：令牌前缀、

@@ -30,6 +30,16 @@
 //! 不设字体的话 Win32 控件会用上世纪的系统字体（粗糙的 System），
 //! 与整个系统格格不入。必须显式取 `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
 //! 里的 `lfMessageFont` 并 `WM_SETFONT` 给每个控件。
+//!
+//! # 滚动是自己挪控件，不是 `ScrollWindowEx`
+//!
+//! 工具一多，设置项就超过一屏了（三个工具已经 700 多像素，而 768 高的
+//! 笔记本上扣掉任务栏根本摆不下）。**挂一个滚不动的滚动条比没有更糟**，
+//! 所以这里真的实现了 `WM_VSCROLL`。
+//!
+//! 做法是记下每个控件「设计时的 y」，滚动时按偏移量逐个 `SetWindowPos`。
+//! 比 `ScrollWindowEx` 省心：后者滚的是像素，子控件的逻辑位置没变，
+//! 点击命中、焦点框、重绘都要另外圆场。控件总共几十个，挪一遍毫无压力。
 
 #![cfg(windows)]
 
@@ -43,7 +53,7 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, DeleteObject, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, HKM_GETHOTKEY, HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL,
+    SetScrollInfo, BST_CHECKED, BST_UNCHECKED, HKM_GETHOTKEY, HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL,
     HOTKEYF_SHIFT, UDM_SETPOS32, UDM_SETRANGE32, UDS_SETBUDDYINT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -51,9 +61,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextW, LoadCursorW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
     ShowWindow, SystemParametersInfoW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE,
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, EN_CHANGE, ES_AUTOHSCROLL,
-    GWLP_USERDATA, IDC_ARROW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_SETFONT, WNDCLASSW,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    EnumChildWindows, GetClientRect, GWLP_USERDATA, IDC_ARROW, NONCLIENTMETRICSW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SPI_GETNONCLIENTMETRICS,
+    SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_MOUSEWHEEL, WM_SETFONT,
+    WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 /// 设置窗口类名。
@@ -98,7 +112,20 @@ struct SettingsState {
     config: RefCell<Config>,
     on_change: OnChange,
     font: HFONT,
+    /// 每个子控件与它**设计时**的 (x, y)。滚动就是照着这个重新摆一遍。
+    ///
+    /// x 也要记：`SetWindowPos` 即便带 `SWP_NOSIZE`，位置也是两个坐标
+    /// **一起**生效的 —— 只算 y、x 随手传 0 的话，一滚动所有控件会齐刷刷
+    /// 贴到窗口左边
+    children: Vec<(HWND, i32, i32)>,
+    /// 已经往下滚了多少像素
+    scroll_y: i32,
+    /// 内容总高
+    content_height: i32,
 }
+
+/// 滚一「行」多少像素。
+const SCROLL_STEP: i32 = 30;
 
 /// 打开设置窗口。必须在有消息循环的线程上调用。
 pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Result<HWND, String> {
@@ -119,19 +146,20 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         };
         RegisterClassW(&class);
 
-        let height = window_height(&pages);
+        let content_height = window_height(&pages);
+        // 窗口本身不超过 640 —— 再高的话 768 的笔记本上扣掉任务栏就摆不下了。
+        // 超出的部分交给滚动条
+        let height = content_height.min(640);
         let hwnd = CreateWindowExW(
             Default::default(),
             CLASS_NAME,
             w!("Baobox 设置"),
-            // 不加 WS_VSCROLL：滚动要自己处理 WM_VSCROLL 与偏移，
-            // 挂个滚不动的滚动条比没有更糟。窗口按内容定高，
-            // 内容真的超过一屏时（工具多起来之后）再来补滚动。
-            WS_OVERLAPPEDWINDOW,
+            // WS_VSCROLL 与 WM_VSCROLL 的处理是配套的 —— 见模块文档
+            WS_OVERLAPPEDWINDOW | WS_VSCROLL,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             WINDOW_WIDTH,
-            height.min(720),
+            height,
             None,
             None,
             instance,
@@ -145,13 +173,16 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
             config: RefCell::new(config),
             on_change,
             font,
+            children: Vec::new(),
+            scroll_y: 0,
+            content_height,
         });
         build(hwnd, instance, &pages, &mut state);
-        SetWindowLongPtrW(
-            hwnd,
-            GWLP_USERDATA,
-            Box::into_raw(state) as isize,
-        );
+        // 建完再收一遍子窗口，省得给每个 control() 调用都串一个「记下来」的参数
+        state.children = collect_children(hwnd);
+        let raw = Box::into_raw(state);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
+        configure_scrollbar(hwnd, &*raw);
 
         let _ = ShowWindow(hwnd, SW_SHOW);
         Ok(hwnd)
@@ -459,6 +490,91 @@ fn key_name(key: u8) -> Option<String> {
     }
 }
 
+/// 收一遍子窗口，记下每个的**设计时 y**（客户区坐标）。
+///
+/// 滚动时照着它重新摆。之所以建完再收、而不是在每个 `control()` 里顺手记下来：
+/// 那要给六七个建控件的辅助函数都串一个参数，而这件事只做一次。
+unsafe fn collect_children(parent: HWND) -> Vec<(HWND, i32, i32)> {
+    let mut found: Vec<(HWND, i32, i32)> = Vec::new();
+    let _ = EnumChildWindows(
+        parent,
+        Some(collect_one),
+        LPARAM(&mut found as *mut Vec<(HWND, i32, i32)> as isize),
+    );
+    found
+}
+
+unsafe extern "system" fn collect_one(child: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+    use windows::Win32::Foundation::{POINT, RECT, TRUE};
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::WindowsAndMessaging::{GetParent, GetWindowRect};
+
+    let found = &mut *(lparam.0 as *mut Vec<(HWND, i32, i32)>);
+    let mut rect = RECT::default();
+    if GetWindowRect(child, &mut rect).is_ok() {
+        let mut point = POINT {
+            x: rect.left,
+            y: rect.top,
+        };
+        if let Ok(parent) = GetParent(child) {
+            let _ = ScreenToClient(parent, &mut point);
+        }
+        found.push((child, point.x, point.y));
+    }
+    TRUE
+}
+
+/// 客户区有多高。
+unsafe fn client_height(hwnd: HWND) -> i32 {
+    use windows::Win32::Foundation::RECT;
+    let mut rect = RECT::default();
+    if GetClientRect(hwnd, &mut rect).is_ok() {
+        rect.bottom - rect.top
+    } else {
+        0
+    }
+}
+
+/// 按当前内容高与客户区高设好滚动条。
+///
+/// `nPage` 给的是「一屏能看到多少」——**必须设**，否则滑块会是一条细线，
+/// 而且 `SB_PAGEDOWN` 一次翻整个范围。
+unsafe fn configure_scrollbar(hwnd: HWND, state: &SettingsState) {
+    let page = client_height(hwnd).max(1);
+    let info = SCROLLINFO {
+        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        nMin: 0,
+        nMax: state.content_height.max(0),
+        nPage: page as u32,
+        nPos: state.scroll_y,
+        nTrackPos: 0,
+    };
+    SetScrollInfo(hwnd, SB_VERT, &info, true);
+}
+
+/// 滚到某个位置（会被夹进合法范围），然后把控件挪过去。
+unsafe fn scroll_to(hwnd: HWND, state: &mut SettingsState, target: i32) {
+    let max = (state.content_height - client_height(hwnd)).max(0);
+    let clamped = target.clamp(0, max);
+    if clamped == state.scroll_y {
+        return;
+    }
+    state.scroll_y = clamped;
+    for (child, design_x, design_y) in &state.children {
+        let _ = SetWindowPos(
+            *child,
+            None,
+            *design_x,
+            design_y - state.scroll_y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    configure_scrollbar(hwnd, state);
+}
+
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
     message: u32,
@@ -476,6 +592,40 @@ unsafe extern "system" fn wndproc(
             let id = (wparam.0 & 0xFFFF) as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
             handle_command(state, id, code);
+            LRESULT(0)
+        }
+        WM_VSCROLL => {
+            let request = (wparam.0 & 0xFFFF) as i32;
+            let page = client_height(hwnd).max(1);
+            let target = match request {
+                r if r == SB_LINEUP.0 => state.scroll_y - SCROLL_STEP,
+                r if r == SB_LINEDOWN.0 => state.scroll_y + SCROLL_STEP,
+                r if r == SB_PAGEUP.0 => state.scroll_y - page,
+                r if r == SB_PAGEDOWN.0 => state.scroll_y + page,
+                r if r == SB_TOP.0 => 0,
+                r if r == SB_BOTTOM.0 => state.content_height,
+                // 拖滑块：位置在 wParam 的高 16 位。用它而不是 GetScrollInfo，
+                // 少一次往返；设置窗口不可能高到超过 65535 像素
+                r if r == SB_THUMBTRACK.0 || r == SB_THUMBPOSITION.0 => {
+                    ((wparam.0 >> 16) & 0xFFFF) as i32
+                }
+                _ => state.scroll_y,
+            };
+            scroll_to(hwnd, state, target);
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            // 高 16 位是有符号的滚动量，一「格」是 120
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
+            let lines = -(delta as i32) / 120;
+            scroll_to(hwnd, state, state.scroll_y + lines * SCROLL_STEP);
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            // 窗口被拉高了：能看到的更多，滚动范围就该变小，
+            // 而且可能要把已经滚过头的位置收回来
+            configure_scrollbar(hwnd, state);
+            scroll_to(hwnd, state, state.scroll_y);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -648,6 +798,31 @@ mod tests {
         assert_eq!(wide(""), vec![0]);
         // 中文按 UTF-16 编，不是按字节
         assert_eq!(wide("中").len(), 2);
+    }
+
+    #[test]
+    fn three_tools_worth_of_settings_no_longer_fit_in_one_screen() {
+        // 这条测试记的是「为什么会有滚动条」：三个工具已经超过 640，
+        // 而 768 高的笔记本扣掉任务栏就摆不下更高的窗口了
+        let many: Vec<SettingsPage> = (0..3)
+            .map(|n| {
+                SettingsPage::new(
+                    "s",
+                    "页",
+                    (0..4)
+                        .map(|m| Field::toggle(&format!("k{n}{m}"), "开关", true).with_help("说明"))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert!(window_height(&many) > 640, "超过一屏就必须能滚");
+    }
+
+    #[test]
+    fn scrolling_one_step_is_about_one_row() {
+        // 一格滚半行会看着像卡住，滚三行会晕
+        assert!(SCROLL_STEP > 0);
+        assert!(SCROLL_STEP <= ROW_HEIGHT);
     }
 
     #[test]

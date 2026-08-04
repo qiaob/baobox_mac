@@ -16,6 +16,8 @@
 //! ```
 
 mod app;
+mod caffeinate;
+mod caffeinate_module;
 mod clipboard;
 mod clipboard_module;
 mod clipboard_panel;

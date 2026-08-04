@@ -6,7 +6,7 @@
 ## 这是什么
 
 `windows/baobox-windows/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**与**剪贴板**两个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**三个工具。
 
 ```
 baobox-windows                  常驻：托盘 + 快捷键 + 设置
@@ -63,6 +63,8 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `paste.rs` | 回填粘贴（`SendInput` 合成 Ctrl+V） |
 | `ocr.rs` | `Windows.Media.Ocr`（系统自带，不需要用户装东西） |
 | `record.rs` | 外挂 ffmpeg `gdigrab` |
+| `caffeinate.rs` | 防休眠：`SetThreadExecutionState` |
+| `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
 | `store.rs` | 配置与历史的落盘位置 |
 
 ## 这个平台上最容易踩的九个坑
@@ -121,9 +123,13 @@ Windows 把一次按键拆成两条消息，所以**字母键不会像 Linux 那
 - 快捷键用系统自带的 `msctls_hotkey32`。它**录不了 Win 键组合**（`HOTKEYF_*` 里没有 Win），
   这是控件本身的限制；用户可以直接在配置文件里写 `Super+…`，注册那一层是支持的。
 
-窗口目前**没有滚动**：内容超过一屏就够不着。两个工具（截图 + 剪贴板）还排得下
-（窗口按内容定高，上限 720px），**再加一个工具就该动手了** ——
-要么补 `WM_VSCROLL` 处理，要么改成左侧页签（与 Linux 版一致）。
+**滚动是自己挪控件的**。三个工具的设置项加起来 700 多像素，早超过一屏
+（而 768 高的笔记本扣掉任务栏根本摆不下那么高的窗口），所以窗口封顶 640 +
+真的实现了 `WM_VSCROLL`：记下每个控件**设计时的 (x, y)**，滚动时逐个
+`SetWindowPos`。
+
+⚠️ `SetWindowPos` 即便带 `SWP_NOSIZE`，**位置也是两个坐标一起生效的** ——
+只算 y、x 随手传 0 的话，一滚动所有控件会齐刷刷贴到窗口左边。所以 x 必须一起记。
 
 ## 目录
 
