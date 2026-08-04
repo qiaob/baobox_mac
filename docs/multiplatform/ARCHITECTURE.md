@@ -13,7 +13,7 @@ shared/       三平台共用的 Rust 库
 docs/         产品文档与使用手册（面向用户，不分平台）
 ```
 
-`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前覆盖**截图**、**剪贴板**、**防休眠**三个工具。
+`mac/` 里是完整可用的 0.0.6；`windows/` 与 `linux/` 是新起的实现，当前覆盖**截图**、**剪贴板**、**防休眠**、**窗口管理**四个工具。
 
 ## 为什么 Windows / Linux 选 Rust
 
@@ -317,6 +317,44 @@ Linux 之所以外挂，是因为**发行版里没有系统级 OCR**，而自带
 
 「15 分钟后自动关掉」不另起定时线程，用的是框架的 `tick`（做剪贴板时补的那个）。
 
+### 窗口管理
+
+第四个工具。几何全在 `baobox_core::layout`（半屏 / 四分屏 / 最大化 / 居中 /
+间距 / 跨屏取邻居 / 显示器排序），平台层只做四件事：找到当前窗口、
+算出每块屏的可用区域、取消最大化、把窗口挪过去。
+
+| | Linux | Windows |
+|---|---|---|
+| 当前窗口 | `_NET_ACTIVE_WINDOW` | `GetForegroundWindow` |
+| 显示器 | RandR 1.5 `GetMonitors` | `EnumDisplayMonitors` |
+| 可用区域 | 显示器矩形**自己减 strut** | `MONITORINFO.rcWork`，系统直接给 |
+| 摆放 | `_NET_MOVERESIZE_WINDOW` 客户消息 | `SetWindowPos` |
+| 取消最大化 | `_NET_WM_STATE` 去掉 MAXIMIZED_* | `ShowWindow(SW_RESTORE)` |
+
+四处踩到的真实差异：
+
+- **坐标系是反的**。mac 那份 `WindowLayout.swift` 用 AppKit 的左下原点，
+  所以那边 `.top` 是**较大**的 y；`shared` 一律左上原点，这边 `Top` 是
+  **较小**的 y。照抄那份代码的坐标会上下颠倒，`layout.rs` 里有一条测试盯着。
+- **Linux 得自己算可用区域**。`_NET_WORKAREA` 给的是**整个桌面**的一块矩形，
+  多屏时是所有屏的并集 —— 拿它当「这块屏的可用区域」，副屏上的窗口会被摆到
+  主屏去。所以逐屏算：显示器矩形减去**真的压在它身上**的那些 strut。
+  判断依据是 `_NET_WM_STRUT_PARTIAL` 里沿边的起止范围 —— 只看厚度的话，
+  主屏底部的任务栏会把每一块屏的底部都削掉一截。
+- **两边都要补一圈看不见的东西，但方向相反**。X11 的
+  `_NET_MOVERESIZE_WINDOW` 坐标指的是**客户区**，而用户看到的是带标题栏的
+  一整块，所以要**减**去 `_NET_FRAME_EXTENTS`；Windows 的 `GetWindowRect`
+  含一圈**不可见的阴影**，所以要**加**上 `DWMWA_EXTENDED_FRAME_BOUNDS` 的差。
+  两边漏掉这一步的表现都一样：两个半屏窗口中间多出一条缝，或者互相压着。
+- **摆窗口要发消息，不能直接 `ConfigureWindow`**。直接改是绕过窗口管理器的，
+  WM 记的位置还是旧的，它下次自己重排（换工作区、插拔显示器）就把窗口弹回去。
+
+出厂**一个快捷键都不绑**：`Ctrl+Alt+方向键` 这类组合在每个桌面环境里都已经
+被占了，绑上去要么冲突要么静默失效。13 个规格全部列在设置里，用户自己挑。
+
+「恢复原位」**只记一步**，而且按窗口分别记。存一整摞的话，用户按第二次
+「恢复」会跳到一个他早就忘了的位置。
+
 ### 剪贴板底层：两个平台是完全不同的模型
 
 | | 模型 | 后果 |
@@ -353,20 +391,18 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 （`TextOutW` / X11 核心字体 / Core Text）。X11 侧用 `poly_text8` / `poly_text16`
 而不是 `image_text8` —— 后者会用背景色刷一遍文字盒子，把下面的截图盖掉。
 
-### 其余三个工具
+### 其余两个工具
 
-尚未开始（屏幕取字与录屏已随截图一起做完，剪贴板与防休眠已完成，均不在此列）。
-按移植难度排序（详见 `docs/distribution/ASSESSMENT.md` 的同类分析）：
+尚未开始（屏幕取字与录屏已随截图一起做完，剪贴板、防休眠、窗口管理已完成，
+均不在此列）。按移植难度排序：
 
-| 工具 | 难度 | 关键点 | 状态 |
-|---|---|---|---|
-| 窗口管理 | 🟡 | Win32 `SetWindowPos`；Linux EWMH `_NET_MOVERESIZE_WINDOW` | **几何已下沉到 `baobox_core::layout`**，平台层未接 |
-| Claude Code / Codex 助手 | 🟢 | 纯读本地文件，几乎无平台耦合 | 未开始 |
-| 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI | 未开始 |
+| 工具 | 难度 | 关键点 |
+|---|---|---|
+| Claude Code / Codex 助手 | 🟢 | 纯读本地文件，几乎无平台耦合 |
+| 键盘点击 | 🟡 | Windows UI Automation；Linux AT-SPI |
 
-窗口管理的纯几何（半屏 / 四分屏 / 最大化 / 居中 / 跨屏 / 间距）已经写好并测过
-（`layout.rs`，12 条测试）。**坐标系与 mac 那份 Swift 是反的** —— `shared` 一律
-左上原点，所以这边 `Top` 是**较小**的 y，照抄 `WindowLayout.swift` 的坐标会上下颠倒。
+窗口管理里 mac 有而这两边**还没有**的：布局快照（一次记下所有窗口的位置，
+之后整套恢复）。当前只做到「恢复上一步」。
 
 剪贴板移植时那条「macOS 的 `org.nspasteboard.*` 隐私标记约定别处没有对应物」的
 预判是对的：两个平台改成**按内容识别**（`baobox_core::privacy`：令牌前缀、

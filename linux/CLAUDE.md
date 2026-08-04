@@ -6,7 +6,7 @@
 ## 这是什么
 
 `linux/baobox-linux/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**三个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**四个工具。
 
 ```
 baobox-linux                    常驻：托盘 + 快捷键 + 设置
@@ -56,9 +56,11 @@ dbus-run-session -- xvfb-run -a cargo test
 | `ocr.rs` / `record.rs` | 外挂 tesseract / ffmpeg |
 | `caffeinate.rs` | 防休眠：login1 + 屏保两家 DBus inhibit |
 | `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
+| `windowmanager.rs` | 窗口管理：EWMH（活动窗口 / strut / 摆放） |
+| `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
 | `store.rs` | 配置与历史的落盘位置 |
 
-## 这个平台上最容易踩的九个坑
+## 这个平台上最容易踩的十一个坑
 
 1. **X11 剪贴板要本进程持续应答**。`serve` 是阻塞的 —— 常驻模式下**必须**用
    `serve_detached`，否则复制一次界面冻 60 秒。命令行下用阻塞版才对（进程本来就要退出）。
@@ -78,6 +80,12 @@ dbus-run-session -- xvfb-run -a cargo test
    用户接下来打的每个字都带着 Ctrl，而他手上那个键本来就没按下去过，自己解不开。
 9. **回填粘贴的三步顺序不能错**：先关面板（否则 Ctrl+V 打到自己身上）→
    等焦点回位（`FOCUS_SETTLE`）→ 放剪贴板 → 合成按键。
+10. **摆窗口要发 `_NET_MOVERESIZE_WINDOW`，不能直接 `ConfigureWindow`**。
+    直接改是绕过窗口管理器的，WM 记的位置还是旧的，它下次自己重排就把窗口弹回去。
+    而且那条消息里的坐标指的是**客户区**，要减掉 `_NET_FRAME_EXTENTS`。
+11. **`_NET_WORKAREA` 在多屏下不能用**。它给的是整个桌面的一块矩形（所有屏的并集），
+    拿它当「这块屏的可用区域」，副屏上的窗口会被摆到主屏去。要逐屏减 strut，
+    而且只减**真的压在这块屏上**的（看 `_NET_WM_STRUT_PARTIAL` 的沿边起止）。
 
 ## 线程模型
 

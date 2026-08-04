@@ -6,7 +6,7 @@
 ## 这是什么
 
 `windows/baobox-windows/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**三个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**四个工具。
 
 ```
 baobox-windows                  常驻：托盘 + 快捷键 + 设置
@@ -65,9 +65,11 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `record.rs` | 外挂 ffmpeg `gdigrab` |
 | `caffeinate.rs` | 防休眠：`SetThreadExecutionState` |
 | `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
+| `windowmanager.rs` | 窗口管理：前台窗口 / `rcWork` / `SetWindowPos` |
+| `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
 | `store.rs` | 配置与历史的落盘位置 |
 
-## 这个平台上最容易踩的九个坑
+## 这个平台上最容易踩的十个坑
 
 1. **`SetClipboardData` 成功后所有权归系统，绝不能再 `GlobalFree`**。
    只有失败时所有权还在自己手上才要还回去。
@@ -87,6 +89,10 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
    `CloseClipboard` 之后就作废 —— 必须在关之前把内容拷出来。
 9. **`SendInput` 少发一条 `KEYEVENTF_KEYUP`**，那个修饰键就会一直卡在按下状态，
    用户还没法自己解开（他手上那个键本来就没按下去过）。
+10. **摆窗口前要把阴影补回去**。第 6 条说的那圈不可见边距在这里是反方向的坑：
+    直接拿算好的矩形去 `SetWindowPos`，用户看到的窗口会比预期**小一圈**，
+    两个半屏窗口中间还会多一条缝。要拿 `GetWindowRect` 与
+    `DWMWA_EXTENDED_FRAME_BOUNDS` 作差，把目标矩形**外扩**这么多。
 
 ## 线程模型：一条线程，一个消息循环
 

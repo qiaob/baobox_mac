@@ -19,8 +19,8 @@
 
 ```
 mac/       macOS 实现（Swift + SwiftUI/AppKit）—— 下文说的一切都在这里
-windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠
-linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠
+windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理
+linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理
 shared/    三平台共用的 Rust 库：baobox-core（纯逻辑）、baobox-image（PNG/灰度）
 docs/      产品文档与使用手册
 ```

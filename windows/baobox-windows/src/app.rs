@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{caffeinate_module, clipboard_module, hotkeys, screenshot_module, settings_window, store, tray};
+use crate::{caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -35,6 +35,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
     registry.register(Box::new(clipboard_module::ClipboardTool::new()));
     registry.register(Box::new(caffeinate_module::CaffeinateTool::new()));
+    registry.register(Box::new(windowmanager_module::WindowManagerTool::new()));
     registry
 }
 
@@ -313,7 +314,8 @@ mod tests {
             vec![
                 screenshot_module::ID,
                 clipboard_module::ID,
-                caffeinate_module::ID
+                caffeinate_module::ID,
+                windowmanager_module::ID
             ]
         );
     }
@@ -372,15 +374,31 @@ mod tests {
         // 在另一个系统上会失效
         let registry = build_registry();
         let ids: Vec<String> = registry.hotkeys().into_iter().map(|spec| spec.id).collect();
+        // 窗口管理那 13 个由 layout::ALL 生成，另有一条测试盯着
         assert_eq!(
-            ids,
+            &ids[..5],
             vec![
                 screenshot_module::CAPTURE,
                 screenshot_module::CAPTURE_FULL,
                 screenshot_module::OCR,
                 screenshot_module::RECORD,
                 clipboard_module::PANEL,
-            ]
+            ],
+            "前面这几个是逐字写死的 —— 它们是用户配置里的键名，改了等于让绑定失效"
         );
+    }
+
+    #[test]
+    fn the_window_layout_actions_are_generated_from_the_shared_list() {
+        // 两个平台的这一串都是从 baobox_core::layout::ALL 生成的，
+        // 所以天然对得齐 —— 这条测试盯着「别哪天手写了一份」
+        let registry = build_registry();
+        let ids: Vec<String> = registry.hotkeys().into_iter().map(|spec| spec.id).collect();
+        let expected: Vec<String> = baobox_core::layout::ALL
+            .iter()
+            .map(|l| windowmanager_module::action_for(*l))
+            .collect();
+        let tail = &ids[ids.len() - expected.len()..];
+        assert_eq!(tail, expected.as_slice());
     }
 }

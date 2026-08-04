@@ -237,6 +237,12 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, param: LPARAM) -> BOOL {
 ///
 /// 优先 DWM 的 `DWMWA_EXTENDED_FRAME_BOUNDS`：Win10 起 `GetWindowRect` 返回的矩形
 /// **包含不可见的阴影边距**，直接拿去截图会在四周多出一圈背景。
+///
+/// 窗口管理也要它 —— 那边是拿它和 `GetWindowRect` 作差，算出阴影有多厚。
+pub fn visible_frame(hwnd: HWND) -> Option<Rect> {
+    unsafe { window_frame(hwnd) }
+}
+
 unsafe fn window_frame(hwnd: HWND) -> Option<Rect> {
     let mut rect = RECT::default();
     let ok = DwmGetWindowAttribute(

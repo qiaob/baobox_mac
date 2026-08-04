@@ -45,6 +45,10 @@ mod screenshot_module;
 #[cfg(windows)]
 mod settings_window;
 #[cfg(windows)]
+mod windowmanager;
+#[cfg(windows)]
+mod windowmanager_module;
+#[cfg(windows)]
 mod tray;
 mod record;
 mod store;
