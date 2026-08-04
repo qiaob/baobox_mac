@@ -50,6 +50,12 @@ mod screenshot_module;
 #[cfg(windows)]
 mod settings_window;
 #[cfg(windows)]
+mod hint_overlay;
+#[cfg(windows)]
+mod keyboardnav;
+#[cfg(windows)]
+mod keyboardnav_module;
+#[cfg(windows)]
 mod windowmanager;
 #[cfg(windows)]
 mod windowmanager_module;

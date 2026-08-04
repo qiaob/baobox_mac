@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{assistant_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
+use crate::{assistant_module, keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -43,6 +43,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(assistant_module::AssistantTool::new(
         baobox_core::aisession::Flavor::Codex,
     )));
+    registry.register(Box::new(keyboardnav_module::KeyboardNavTool::new()));
     registry
 }
 
@@ -324,7 +325,8 @@ mod tests {
                 caffeinate_module::ID,
                 windowmanager_module::ID,
                 assistant_module::CLAUDE_ID,
-                assistant_module::CODEX_ID
+                assistant_module::CODEX_ID,
+                keyboardnav_module::ID
             ]
         );
     }

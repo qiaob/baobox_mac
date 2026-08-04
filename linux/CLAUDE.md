@@ -7,7 +7,7 @@
 
 `linux/baobox-linux/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
 设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**、
-**Claude Code 助手**、**Codex 助手**六个工具。
+**Claude Code 助手**、**Codex 助手**、**键盘点击**七个工具。
 
 ```
 baobox-linux                    常驻：托盘 + 快捷键 + 设置
@@ -62,6 +62,9 @@ dbus-run-session -- xvfb-run -a cargo test
 | `assistant.rs` | AI 助手：找日志、扫目录（与 Windows 逐字相同） |
 | `assistant_module.rs` | 两个助手工具的 `ToolModule` 适配层（同上） |
 | `terminal.rs` | 开终端跑命令（一张候选表挨个试） |
+| `keyboardnav.rs` | 键盘点击：AT-SPI 枚举元素 + XTEST 点击 |
+| `keyboardnav_module.rs` | 键盘点击的 `ToolModule` 适配层 |
+| `hint_overlay.rs` | 标签覆盖层（GTK 透明窗 + cairo） |
 | `store.rs` | 配置与历史的落盘位置 |
 
 ## 这个平台上最容易踩的十一个坑

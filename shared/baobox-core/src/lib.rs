@@ -30,6 +30,7 @@ pub mod geometry;
 pub mod hotkey;
 pub mod json;
 pub mod layout;
+pub mod hints;
 pub mod history;
 pub mod ocr;
 pub mod privacy;
