@@ -19,9 +19,6 @@ mod gdi;
 mod app;
 #[cfg(windows)]
 mod clipboard;
-mod assistant;
-#[cfg(windows)]
-mod assistant_module;
 #[cfg(windows)]
 mod terminal;
 #[cfg(windows)]

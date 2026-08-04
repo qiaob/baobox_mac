@@ -26,8 +26,10 @@ use baobox_core::hints::Target;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
+use windows::core::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Descendants, UIA_ButtonControlTypeId,
+    CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
+    TreeScope_Descendants, UIA_ButtonControlTypeId,
     UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_EditControlTypeId,
     UIA_HyperlinkControlTypeId, UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId,
     UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TreeItemControlTypeId,
@@ -79,11 +81,11 @@ pub fn scan() -> Result<Vec<Target>, String> {
             .ElementFromHandle(hwnd)
             .map_err(|e| format!("读不到这个窗口的界面树：{e}"))?;
 
-        // 只问「可见的控件」这一类条件，把过滤交给 UIA 自己做 ——
-        // 全量取回来再在我们这边筛，跨进程往返的次数会多一个数量级
-        let condition = automation
-            .CreateTrueCondition()
-            .map_err(|e| format!("构造查询条件失败：{e}"))?;
+        // 把过滤**真的**交给 UIA：按控件类型 OR 出一个条件，让它在目标进程
+        // 那边筛完再回来。用 `CreateTrueCondition` 的话会把整棵树取回来，
+        // 再对每个元素调一次 `CurrentControlType` —— 那是每个元素一次
+        // 跨进程往返，浏览器上就是上万次，点一下要等好几秒
+        let condition = clickable_condition(&automation)?;
         let found = root
             .FindAll(TreeScope_Descendants, &condition)
             .map_err(|e| format!("枚举界面元素失败：{e}"))?;
@@ -105,12 +107,33 @@ pub fn scan() -> Result<Vec<Target>, String> {
     }
 }
 
+/// 「是这些控件类型之一」的查询条件。
+///
+/// UIA 会拿它在**目标进程**那边筛，返回的就已经只有可点的元素了。
+unsafe fn clickable_condition(
+    automation: &IUIAutomation,
+) -> Result<IUIAutomationCondition, String> {
+    use windows::Win32::UI::Accessibility::UIA_ControlTypePropertyId;
+    // 两两 OR 折起来，而不是 `CreateOrConditionFromArray` —— 后者要一个
+    // `SAFEARRAY`，为几个条件手工造一个 COM 数组不值得
+    let mut combined: Option<IUIAutomationCondition> = None;
+    for kind in CLICKABLE {
+        let one = automation
+            .CreatePropertyCondition(UIA_ControlTypePropertyId, &VARIANT::from(kind))
+            .map_err(|e| format!("构造查询条件失败：{e}"))?;
+        combined = Some(match combined {
+            None => one,
+            Some(previous) => automation
+                .CreateOrCondition(&previous, &one)
+                .map_err(|e| format!("合并查询条件失败：{e}"))?,
+        });
+    }
+    combined.ok_or_else(|| "可点控件类型表是空的".to_string())
+}
+
 /// 一个元素该不该标、标在哪。
 unsafe fn target_of(element: &IUIAutomationElement) -> Option<Target> {
-    let kind = element.CurrentControlType().ok()?;
-    if !CLICKABLE.contains(&kind.0) {
-        return None;
-    }
+    // 控件类型已经由查询条件筛过了，这里不必再问一遍（那是一次跨进程往返）
     // 看不见的、被折叠起来的一律不标 —— 标了会点到一个用户根本没看到的东西
     if element.CurrentIsOffscreen().ok()?.as_bool() {
         return None;

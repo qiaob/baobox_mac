@@ -16,6 +16,12 @@
 //! Qt 看 `QT_ACCESSIBILITY`）。**没开的时候一个元素都扫不到** ——
 //! 这时必须明说，而不是显示「这个窗口里没有可点的东西」让用户以为是自己的错。
 //!
+//! # 只扫**活动窗口**那一棵树
+//!
+//! 一开始这里遍历了所有程序的整棵树 —— 那既慢（每下一层都是一轮 DBus
+//! 往返，几十个程序加起来要好几秒），又会给用户**根本看不见的窗口**
+//! 打上标签。改成先按 AT-SPI 的 `ACTIVE` 状态找出活动窗口，只下探它。
+//!
 //! # 为什么不用 `AtspiAction` 去「按」它
 //!
 //! AT-SPI 有 `Action` 接口能直接触发按钮。但很多程序只实现了「报告」
@@ -73,17 +79,62 @@ pub fn scan() -> Result<Vec<Target>, String> {
         return Err(NOT_ENABLED.to_string());
     }
 
+    // 只找活动窗口那一棵。遍历所有程序既慢（几十个程序 × 几十层
+    // DBus 往返）又会给用户看不见的窗口打标签
+    let Some((bus, path)) = active_window(&conn, &apps) else {
+        return Err("没找到活动窗口（焦点可能在桌面上）".to_string());
+    };
     let mut targets = Vec::new();
-    for (bus, path) in apps {
-        if targets.len() >= MAX_TARGETS {
-            break;
-        }
-        collect(&conn, &bus, path.as_str(), 0, &mut targets);
-    }
+    collect(&conn, &bus, &path, 0, &mut targets);
     if targets.is_empty() {
         return Err(NOT_ENABLED.to_string());
     }
     Ok(targets)
+}
+
+/// AT-SPI 状态位：`ACTIVE`。
+///
+/// 状态集是一个 64 位位图，拆成两个 u32 传过来；`ACTIVE` 是第 1 位。
+const STATE_ACTIVE: u32 = 1;
+
+/// 在所有程序里找出那个**活动**窗口。
+///
+/// 逐个程序问它的顶层窗口，谁带 `ACTIVE` 就是它。找不到返回 `None` ——
+/// 焦点在桌面上时确实没有活动窗口，那时该明说而不是随便挑一个。
+fn active_window(
+    conn: &Connection,
+    apps: &[(String, OwnedObjectPath)],
+) -> Option<(String, String)> {
+    for (bus, path) in apps {
+        let Ok(app) = Proxy::new(conn, bus.as_str(), path.as_str(), "org.a11y.atspi.Accessible") else {
+            continue;
+        };
+        let Ok(windows) = app.call::<_, _, Vec<(String, OwnedObjectPath)>>("GetChildren", &())
+        else {
+            continue;
+        };
+        for (window_bus, window_path) in windows {
+            let Ok(window) =
+                Proxy::new(conn, window_bus.as_str(), window_path.as_str(), "org.a11y.atspi.Accessible")
+            else {
+                continue;
+            };
+            let Ok(states) = window.call::<_, _, Vec<u32>>("GetState", &()) else {
+                continue;
+            };
+            if is_active(&states) {
+                return Some((window_bus.clone(), window_path.as_str().to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// 状态集里带 `ACTIVE` 吗。
+///
+/// 低 32 位在 `states[0]`。数组短了就是没有 —— 不能索引越界。
+pub fn is_active(states: &[u32]) -> bool {
+    states.first().map(|low| low & (1 << STATE_ACTIVE) != 0).unwrap_or(false)
 }
 
 /// 无障碍没开时说什么。
@@ -212,6 +263,16 @@ mod tests {
         assert!(NOT_ENABLED.contains("无障碍"));
         assert!(NOT_ENABLED.contains("toolkit-accessibility"), "要给能照做的命令");
         assert!(NOT_ENABLED.contains("QT_ACCESSIBILITY"), "Qt 程序也要覆盖到");
+    }
+
+    #[test]
+    fn the_active_state_bit_is_read_from_the_low_word() {
+        // 状态集是 64 位拆成两个 u32；读错一半的话永远找不到活动窗口
+        assert!(is_active(&[1 << STATE_ACTIVE, 0]));
+        assert!(!is_active(&[0, 1 << STATE_ACTIVE]), "高位那半不是 ACTIVE");
+        assert!(!is_active(&[0, 0]));
+        // 数组短了就是没有，不能索引越界
+        assert!(!is_active(&[]));
     }
 
     #[test]

@@ -68,9 +68,7 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
 | `windowmanager.rs` | 窗口管理：前台窗口 / `rcWork` / `SetWindowPos` |
 | `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
-| `assistant.rs` | AI 助手：找日志、扫目录（与 Linux 逐字相同） |
-| `assistant_module.rs` | 两个助手工具的 `ToolModule` 适配层（同上） |
-| `terminal.rs` | 开终端跑命令（`wt.exe` → `cmd /K`） |
+| `terminal.rs` | 开终端跑命令（交给 `baobox_app::assistant_tool` 用）（`wt.exe` → `cmd /K`） |
 | `keyboardnav.rs` | 键盘点击：UI Automation 枚举元素 + `SendInput` 点击 |
 | `keyboardnav_module.rs` | 键盘点击的 `ToolModule` 适配层 |
 | `hint_overlay.rs` | 标签覆盖层（分层窗口 + color key） |

@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assistant;
+pub mod assistant_tool;
 pub mod menu;
 pub mod settings;
 

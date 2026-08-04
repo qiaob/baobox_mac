@@ -58,6 +58,8 @@ shared/
 │   └── hints        键盘点击：标签发号（互不为前缀）与输入状态机
 ├── baobox-app/      应用框架（只有两个 Rust 平台用；mac 那边是同构的 Swift 版）
 │   ├── ToolModule   工具接入协议 + ToolRegistry（注册顺序 = 菜单顺序）
+│   ├── assistant    AI 助手：找日志、扫目录（纯 std::fs，没有平台耦合）
+│   ├── assistant_tool  两个助手工具的 ToolModule 实现（终端打开器由平台传入）
 │   ├── menu         托盘菜单模型
 │   └── settings     设置的**声明**（开关/下拉/输入框/数字/快捷键）
 ├── baobox-render/   把标注光栅化进 RGBA（三平台逐像素一致）
@@ -401,9 +403,13 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 菜单结构完全一样，只有「读哪个目录、用什么命令续接」不同，
 所以是一个带 `Flavor` 的结构体注册两次。
 
-这也是几个工具里**唯一完全没有平台耦合**的：只用 `std::fs`，
-`assistant.rs` 与 `assistant_module.rs` 在两个平台上是逐字相同的文件，
-只有 `terminal.rs`（开哪个终端）不同。因此它的测试在开发机上**全都真跑**。
+这也是几个工具里**唯一完全没有平台耦合**的，所以它整个住在
+`baobox-app` 里而不是在两个平台各放一份 —— 与平台唯一的接触面是
+「开哪个终端」，那一个函数由平台层在注册时传进来（`OpenTerminal` 函数指针）。
+因此它的测试在开发机上**全都真跑**。
+
+> 一开始它确实是两个平台各一份拷贝（888 行），review 时收掉了：
+> 那违反本文档第 1 条约定，而且必然会漂。
 
 | | Linux | Windows |
 |---|---|---|
@@ -430,7 +436,7 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
 
 | | Linux | Windows |
 |---|---|---|
-| 枚举可点元素 | AT-SPI（无障碍总线，走 DBus） | UI Automation（COM） |
+| 枚举可点元素 | AT-SPI（无障碍总线，走 DBus），**只扫活动窗口那一棵树** | UI Automation（COM），**按控件类型在目标进程那边筛** |
 | 覆盖层 | GTK 透明窗 + cairo 画文字 | `WS_EX_LAYERED` + color key + GDI |
 | 点下去 | XTEST `warp_pointer` + 按钮 1 | `SendInput` 绝对坐标鼠标事件 |
 
@@ -448,6 +454,11 @@ Windows 还有一条**所有权规则**：`SetClipboardData` 成功之后内存�
   找错了地方，然后反复按快捷键。
 - **扫描要在覆盖层出现之前**。反过来的话，Linux 上覆盖层自己会被扫进去
   （它也是一个有元素的窗口），Windows 上它会成为前台窗口而里面什么都没有。
+- **过滤要在对面做，不能取回来再筛**。这两处 review 时都返过工：Windows 原本
+  用 `CreateTrueCondition` 把整棵树取回来、再对每个元素调一次
+  `CurrentControlType`（每个元素一次跨进程往返，浏览器上上万次）；
+  Linux 原本遍历**所有程序**的整棵树（几十个程序 × 几十层 DBus 往返），
+  还会给用户看不见的窗口打标签。
 
 **键盘滚动（j/k 滚页面）没有做**：它要一个「只收滚动键、别的都放行」的全局
 键盘监听 —— 与关键字展开是同一类代码，也是同一个理由没做。键位映射

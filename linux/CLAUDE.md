@@ -59,9 +59,7 @@ dbus-run-session -- xvfb-run -a cargo test
 | `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
 | `windowmanager.rs` | 窗口管理：EWMH（活动窗口 / strut / 摆放） |
 | `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
-| `assistant.rs` | AI 助手：找日志、扫目录（与 Windows 逐字相同） |
-| `assistant_module.rs` | 两个助手工具的 `ToolModule` 适配层（同上） |
-| `terminal.rs` | 开终端跑命令（一张候选表挨个试） |
+| `terminal.rs` | 开终端跑命令（交给 `baobox_app::assistant_tool` 用）（一张候选表挨个试） |
 | `keyboardnav.rs` | 键盘点击：AT-SPI 枚举元素 + XTEST 点击 |
 | `keyboardnav_module.rs` | 键盘点击的 `ToolModule` 适配层 |
 | `hint_overlay.rs` | 标签覆盖层（GTK 透明窗 + cairo） |

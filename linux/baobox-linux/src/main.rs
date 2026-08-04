@@ -16,8 +16,6 @@
 //! ```
 
 mod app;
-mod assistant;
-mod assistant_module;
 mod terminal;
 mod caffeinate;
 mod caffeinate_module;

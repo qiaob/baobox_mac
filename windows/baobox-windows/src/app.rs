@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{assistant_module, keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
+use crate::{keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -37,11 +37,13 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(caffeinate_module::CaffeinateTool::new()));
     registry.register(Box::new(windowmanager_module::WindowManagerTool::new()));
     // 两个助手是同一份实现，只有读哪个目录 / 用什么命令续接不同
-    registry.register(Box::new(assistant_module::AssistantTool::new(
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
         baobox_core::aisession::Flavor::ClaudeCode,
+        crate::terminal::open,
     )));
-    registry.register(Box::new(assistant_module::AssistantTool::new(
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
         baobox_core::aisession::Flavor::Codex,
+        crate::terminal::open,
     )));
     registry.register(Box::new(keyboardnav_module::KeyboardNavTool::new()));
     registry
@@ -324,8 +326,8 @@ mod tests {
                 clipboard_module::ID,
                 caffeinate_module::ID,
                 windowmanager_module::ID,
-                assistant_module::CLAUDE_ID,
-                assistant_module::CODEX_ID,
+                baobox_app::assistant_tool::CLAUDE_ID,
+                baobox_app::assistant_tool::CODEX_ID,
                 keyboardnav_module::ID
             ]
         );

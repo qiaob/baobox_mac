@@ -1,5 +1,9 @@
 //! AI 助手工具接进 App 框架。
 //!
+//! **住在共享层**：两个 Rust 平台的这份适配层曾经是两份逐字相同的拷贝，
+//! review 时收掉了 —— 它与平台唯一的接触面是「开哪个终端」，
+//! 那一个函数由平台层在构造时传进来（[`AssistantTool::new`]）。
+//!
 //! **一份代码带出两个工具**：Claude Code 与 Codex 的日志形状一样、
 //! 用量算法一样、菜单一样，只有「读哪个目录、用什么命令续接」不同。
 //! 所以这里是一个带 [`Flavor`] 的结构体，注册两次。
@@ -17,7 +21,7 @@
 //! 用哪个终端由用户在设置里选（与 macOS 侧 `TerminalAppPreference` 同一个思路）。
 
 use crate::assistant;
-use baobox_app::{Field, HotkeySpec, MenuItem, SettingsPage, ToolModule};
+use crate::{Field, HotkeySpec, MenuItem, SettingsPage, ToolModule};
 use baobox_core::aisession::Flavor;
 use baobox_core::aiusage::{self, Window};
 use baobox_core::config::Config;
@@ -34,6 +38,16 @@ const REPORT: &str = "report";
 const REFRESH: &str = "refresh";
 /// 动作前缀：续接某个会话，后面接会话 id。
 const RESUME: &str = "resume.";
+
+/// 当前 Unix 秒。
+///
+/// 平台层各有一份同名函数，但为了让这个模块自足，这里直接问系统。
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// 这个工具的 id。
 fn id_of(flavor: Flavor) -> &'static str {
@@ -77,9 +91,17 @@ impl Settings {
     }
 }
 
+/// 「开一个终端，在这个目录里跑这条命令」。
+///
+/// 这是这个工具与平台**唯一**的接触面 —— Linux 要挨个试一张候选表，
+/// Windows 用 `wt.exe` / `cmd /K`。用函数指针而不是 trait：
+/// 只有一个方法、没有状态，为它造一个 trait 是白添一层。
+pub type OpenTerminal = fn(preferred: &str, cwd: &str, command: &str) -> Result<(), String>;
+
 /// 一个 AI 助手工具。
 pub struct AssistantTool {
     flavor: Flavor,
+    open_terminal: OpenTerminal,
     settings: Settings,
     snapshot: assistant::Snapshot,
     /// 后台扫描的结果从这里回来
@@ -92,10 +114,11 @@ pub struct AssistantTool {
 }
 
 impl AssistantTool {
-    /// 造一个。
-    pub fn new(flavor: Flavor) -> Self {
+    /// 造一个。`open_terminal` 由平台层给。
+    pub fn new(flavor: Flavor, open_terminal: OpenTerminal) -> Self {
         Self {
             flavor,
+            open_terminal,
             settings: Settings::read(&Config::new(), id_of(flavor)),
             snapshot: assistant::Snapshot::default(),
             inbox: None,
@@ -111,7 +134,7 @@ impl AssistantTool {
             return;
         }
         self.scanning = true;
-        self.scanned_at = crate::now_seconds();
+        self.scanned_at = now_seconds();
         let (tx, rx) = channel();
         self.inbox = Some(rx);
         let flavor = self.flavor;
@@ -126,13 +149,13 @@ impl AssistantTool {
         aiusage::last_active_block(
             &self.snapshot.entries,
             aiusage::FIVE_HOUR,
-            crate::now_seconds(),
+            now_seconds(),
         )
     }
 
     /// 当前的周窗口。固定锚点与滚动块是两条路。
     fn weekly(&self) -> Option<Window> {
-        let now = crate::now_seconds();
+        let now = now_seconds();
         if self.settings.weekly_fixed {
             let start = aiusage::week_anchor_before(
                 now,
@@ -146,7 +169,7 @@ impl AssistantTool {
 
     /// 一个窗口在菜单里显示成一行。
     fn window_line(&self, label: &str, window: Option<&Window>, budget: i64) -> String {
-        let now = crate::now_seconds();
+        let now = now_seconds();
         let Some(window) = window else {
             return format!("{label}：这段时间还没用过");
         };
@@ -177,7 +200,7 @@ impl AssistantTool {
             Flavor::ClaudeCode => format!("claude --resume {}", shell_quote(&session.id)),
             Flavor::Codex => format!("codex resume {}", shell_quote(&session.id)),
         };
-        crate::terminal::open(&self.settings.terminal, &session.cwd, &command)?;
+        (self.open_terminal)(&self.settings.terminal, &session.cwd, &command)?;
         Ok(format!("已在终端里续接「{}」", session.display_title()))
     }
 }
@@ -300,7 +323,7 @@ impl ToolModule for AssistantTool {
         // 到点了再扫一遍
         if self.installed
             && !self.scanning
-            && crate::now_seconds() - self.scanned_at >= RESCAN_SECONDS
+            && now_seconds() - self.scanned_at >= RESCAN_SECONDS
         {
             self.start_scan();
         }
@@ -367,8 +390,13 @@ mod tests {
     use super::*;
     use baobox_core::aiusage::Entry;
 
+    /// 测试用的假终端：什么都不做，只说「成功了」。
+    fn fake_terminal(_: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     fn tool(flavor: Flavor) -> AssistantTool {
-        AssistantTool::new(flavor)
+        AssistantTool::new(flavor, fake_terminal)
     }
 
     #[test]
@@ -407,8 +435,8 @@ mod tests {
     #[test]
     fn every_declared_setting_is_actually_read_somewhere() {
         let page = tool(Flavor::ClaudeCode).settings_page().unwrap();
-        let source = include_str!("assistant_module.rs");
-        for key in baobox_app::settings::declared_keys(&page) {
+        let source = include_str!("assistant_tool.rs");
+        for key in crate::settings::declared_keys(&page) {
             let mentions = source.matches(&format!("\"{key}\"")).count();
             assert!(
                 mentions >= 2,
@@ -443,7 +471,7 @@ mod tests {
     #[test]
     fn a_window_line_reports_tokens_cost_and_the_countdown() {
         let mut t = tool(Flavor::ClaudeCode);
-        let now = crate::now_seconds();
+        let now = now_seconds();
         t.snapshot.entries = vec![Entry {
             timestamp: now,
             input: 1_000_000,
@@ -464,7 +492,7 @@ mod tests {
     fn an_unpriced_model_makes_the_cost_show_a_plus_sign() {
         // 不标的话用户会以为费用就这么点
         let mut t = tool(Flavor::ClaudeCode);
-        let now = crate::now_seconds();
+        let now = now_seconds();
         t.snapshot.entries = vec![Entry {
             timestamp: now,
             input: 1_000_000,
@@ -486,7 +514,7 @@ mod tests {
     #[test]
     fn a_budget_turns_on_the_percentage() {
         let mut t = tool(Flavor::ClaudeCode);
-        let now = crate::now_seconds();
+        let now = now_seconds();
         t.snapshot.entries = vec![Entry {
             timestamp: now,
             input: 500,
