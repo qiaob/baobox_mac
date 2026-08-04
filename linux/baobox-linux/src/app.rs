@@ -389,6 +389,28 @@ mod tests {
     }
 
     #[test]
+    fn the_window_layout_actions_are_generated_from_the_shared_list() {
+        // 两个平台的这一串都是从 baobox_core::layout::ALL 生成的，
+        // 所以天然对得齐 —— 这条测试盯着「别哪天手写了一份」。
+        //
+        // **按前缀挑出来比，不按位置**：原本取的是 ids 的末尾 13 个，
+        // 那假设了「窗口管理排在最后」；后来键盘点击加在它后面，
+        // 这条测试就红了 —— 而它测的东西其实一点没变。
+        let registry = build_registry();
+        let mine: Vec<String> = registry
+            .hotkeys()
+            .into_iter()
+            .map(|spec| spec.id)
+            .filter(|id| id.starts_with(windowmanager_module::ACTION_PREFIX))
+            .collect();
+        let expected: Vec<String> = baobox_core::layout::ALL
+            .iter()
+            .map(|l| windowmanager_module::action_for(*l))
+            .collect();
+        assert_eq!(mine, expected);
+    }
+
+    #[test]
     fn unbound_hotkeys_resolve_to_nothing_and_are_simply_skipped() {
         let registry = build_registry();
         let config = Config::new();
