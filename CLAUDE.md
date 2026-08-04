@@ -19,14 +19,14 @@
 
 ```
 mac/       macOS 实现（Swift + SwiftUI/AppKit）—— 下文说的一切都在这里
-windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板
-linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板
+windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击
+linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击
 shared/    三平台共用的 Rust 库：baobox-core（纯逻辑）、baobox-image（PNG/灰度）
 docs/      产品文档与使用手册
 ```
 
 **改 macOS 代码请进 `mac/`**；跨平台的纯逻辑（几何、选区状态机、标注模型、长截屏拼接、
-文件名规则、剪贴板历史、敏感内容识别、文本格式识别）放 `shared/baobox-core`，三边共用一份实现与测试。详见
+文件名规则、剪贴板历史、敏感内容识别、文本格式识别、窗口布局几何、AI 用量与会话日志）放 `shared/baobox-core`，三边共用一份实现与测试。详见
 `docs/multiplatform/ARCHITECTURE.md`。
 
 ## 架构（框架先行，加工具 = 加模块）
@@ -53,6 +53,7 @@ BaoboxApp(@main, Settings scene)
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
+| KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）

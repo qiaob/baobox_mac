@@ -6,7 +6,8 @@
 ## 这是什么
 
 `windows/baobox-windows/` —— 一个 Rust 二进制。不带参数就是**常驻 App**（托盘 + 全局快捷键 +
-设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**与**剪贴板**两个工具。
+设置窗口）；带子命令则是一次性的命令行工具。目前实现了**截图**、**剪贴板**、**防休眠**、**窗口管理**、
+**Claude Code 助手**、**Codex 助手**、**键盘点击**七个工具。
 
 ```
 baobox-windows                  常驻：托盘 + 快捷键 + 设置
@@ -63,9 +64,17 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
 | `paste.rs` | 回填粘贴（`SendInput` 合成 Ctrl+V） |
 | `ocr.rs` | `Windows.Media.Ocr`（系统自带，不需要用户装东西） |
 | `record.rs` | 外挂 ffmpeg `gdigrab` |
+| `caffeinate.rs` | 防休眠：`SetThreadExecutionState` |
+| `caffeinate_module.rs` | 防休眠工具的 `ToolModule` 适配层 |
+| `windowmanager.rs` | 窗口管理：前台窗口 / `rcWork` / `SetWindowPos` |
+| `windowmanager_module.rs` | 窗口管理的 `ToolModule` 适配层 |
+| `terminal.rs` | 开终端跑命令（交给 `baobox_app::assistant_tool` 用）（`wt.exe` → `cmd /K`） |
+| `keyboardnav.rs` | 键盘点击：UI Automation 枚举元素 + `SendInput` 点击 |
+| `keyboardnav_module.rs` | 键盘点击的 `ToolModule` 适配层 |
+| `hint_overlay.rs` | 标签覆盖层（分层窗口 + color key） |
 | `store.rs` | 配置与历史的落盘位置 |
 
-## 这个平台上最容易踩的九个坑
+## 这个平台上最容易踩的十个坑
 
 1. **`SetClipboardData` 成功后所有权归系统，绝不能再 `GlobalFree`**。
    只有失败时所有权还在自己手上才要还回去。
@@ -85,6 +94,10 @@ cargo check --target x86_64-pc-windows-gnu --all-targets    # --all-targets 会�
    `CloseClipboard` 之后就作废 —— 必须在关之前把内容拷出来。
 9. **`SendInput` 少发一条 `KEYEVENTF_KEYUP`**，那个修饰键就会一直卡在按下状态，
    用户还没法自己解开（他手上那个键本来就没按下去过）。
+10. **摆窗口前要把阴影补回去**。第 6 条说的那圈不可见边距在这里是反方向的坑：
+    直接拿算好的矩形去 `SetWindowPos`，用户看到的窗口会比预期**小一圈**，
+    两个半屏窗口中间还会多一条缝。要拿 `GetWindowRect` 与
+    `DWMWA_EXTENDED_FRAME_BOUNDS` 作差，把目标矩形**外扩**这么多。
 
 ## 线程模型：一条线程，一个消息循环
 
@@ -121,9 +134,13 @@ Windows 把一次按键拆成两条消息，所以**字母键不会像 Linux 那
 - 快捷键用系统自带的 `msctls_hotkey32`。它**录不了 Win 键组合**（`HOTKEYF_*` 里没有 Win），
   这是控件本身的限制；用户可以直接在配置文件里写 `Super+…`，注册那一层是支持的。
 
-窗口目前**没有滚动**：内容超过一屏就够不着。两个工具（截图 + 剪贴板）还排得下
-（窗口按内容定高，上限 720px），**再加一个工具就该动手了** ——
-要么补 `WM_VSCROLL` 处理，要么改成左侧页签（与 Linux 版一致）。
+**滚动是自己挪控件的**。三个工具的设置项加起来 700 多像素，早超过一屏
+（而 768 高的笔记本扣掉任务栏根本摆不下那么高的窗口），所以窗口封顶 640 +
+真的实现了 `WM_VSCROLL`：记下每个控件**设计时的 (x, y)**，滚动时逐个
+`SetWindowPos`。
+
+⚠️ `SetWindowPos` 即便带 `SWP_NOSIZE`，**位置也是两个坐标一起生效的** ——
+只算 y、x 随手传 0 的话，一滚动所有控件会齐刷刷贴到窗口左边。所以 x 必须一起记。
 
 ## 目录
 

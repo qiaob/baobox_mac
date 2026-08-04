@@ -23,7 +23,7 @@
 //! `poll_for_event` + 30ms 睡眠，每圈看一眼「要不要重新注册」的标志位 ——
 //! 每秒三十次空转的代价，换来「改完立刻生效」。
 
-use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, x11capture};
+use crate::{keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, x11capture};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -50,6 +50,18 @@ pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
     registry.register(Box::new(clipboard_module::ClipboardTool::new()));
+    registry.register(Box::new(caffeinate_module::CaffeinateTool::new()));
+    registry.register(Box::new(windowmanager_module::WindowManagerTool::new()));
+    // 两个助手是同一份实现，只有读哪个目录 / 用什么命令续接不同
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
+        baobox_core::aisession::Flavor::ClaudeCode,
+        crate::terminal::open,
+    )));
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
+        baobox_core::aisession::Flavor::Codex,
+        crate::terminal::open,
+    )));
+    registry.register(Box::new(keyboardnav_module::KeyboardNavTool::new()));
     registry
 }
 
@@ -331,7 +343,18 @@ mod tests {
     fn the_registry_ships_with_the_screenshot_tool() {
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
+        assert_eq!(
+            ids,
+            vec![
+                screenshot_module::ID,
+                clipboard_module::ID,
+                caffeinate_module::ID,
+                windowmanager_module::ID,
+                baobox_app::assistant_tool::CLAUDE_ID,
+                baobox_app::assistant_tool::CODEX_ID,
+                keyboardnav_module::ID
+            ]
+        );
     }
 
     #[test]
@@ -363,6 +386,28 @@ mod tests {
             .find(|(spec, _)| spec.id == screenshot_module::CAPTURE)
             .unwrap();
         assert_eq!(capture.1.as_ref().unwrap().to_string(), "Ctrl+Alt+P");
+    }
+
+    #[test]
+    fn the_window_layout_actions_are_generated_from_the_shared_list() {
+        // 两个平台的这一串都是从 baobox_core::layout::ALL 生成的，
+        // 所以天然对得齐 —— 这条测试盯着「别哪天手写了一份」。
+        //
+        // **按前缀挑出来比，不按位置**：原本取的是 ids 的末尾 13 个，
+        // 那假设了「窗口管理排在最后」；后来键盘点击加在它后面，
+        // 这条测试就红了 —— 而它测的东西其实一点没变。
+        let registry = build_registry();
+        let mine: Vec<String> = registry
+            .hotkeys()
+            .into_iter()
+            .map(|spec| spec.id)
+            .filter(|id| id.starts_with(windowmanager_module::ACTION_PREFIX))
+            .collect();
+        let expected: Vec<String> = baobox_core::layout::ALL
+            .iter()
+            .map(|l| windowmanager_module::action_for(*l))
+            .collect();
+        assert_eq!(mine, expected);
     }
 
     #[test]

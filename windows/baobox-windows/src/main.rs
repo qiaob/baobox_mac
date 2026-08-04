@@ -20,6 +20,12 @@ mod app;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod terminal;
+#[cfg(windows)]
+mod caffeinate;
+#[cfg(windows)]
+mod caffeinate_module;
+#[cfg(windows)]
 mod clipboard_module;
 mod clipboard_panel;
 #[cfg(windows)]
@@ -40,6 +46,16 @@ mod pin;
 mod screenshot_module;
 #[cfg(windows)]
 mod settings_window;
+#[cfg(windows)]
+mod hint_overlay;
+#[cfg(windows)]
+mod keyboardnav;
+#[cfg(windows)]
+mod keyboardnav_module;
+#[cfg(windows)]
+mod windowmanager;
+#[cfg(windows)]
+mod windowmanager_module;
 #[cfg(windows)]
 mod tray;
 mod record;
@@ -629,28 +645,12 @@ pub fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// Unix 秒 → 年月日时分秒（UTC）。与 Linux 版同一实现，保证两边文件名一致。
+/// Unix 秒 → 年月日时分秒（UTC）。
+///
+/// 实现在 `baobox_core::filename` —— 两个平台以前各抄了一份，
+/// 而「同一时刻在两个系统上算出不同的文件名」是这个仓库最不该出的错。
 fn civil_from_unix(secs: i64) -> DateParts {
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m <= 2 { y + 1 } else { y };
-    DateParts {
-        year: year as u32,
-        month: m as u32,
-        day: d as u32,
-        hour: (rem / 3600) as u32,
-        minute: ((rem % 3600) / 60) as u32,
-        second: (rem % 60) as u32,
-    }
+    DateParts::from_unix(secs)
 }
 
 #[cfg(test)]

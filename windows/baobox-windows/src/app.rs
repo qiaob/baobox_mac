@@ -16,7 +16,7 @@
 
 #![cfg(windows)]
 
-use crate::{clipboard_module, hotkeys, screenshot_module, settings_window, store, tray};
+use crate::{keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -34,6 +34,18 @@ pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(screenshot_module::ScreenshotTool::new()));
     registry.register(Box::new(clipboard_module::ClipboardTool::new()));
+    registry.register(Box::new(caffeinate_module::CaffeinateTool::new()));
+    registry.register(Box::new(windowmanager_module::WindowManagerTool::new()));
+    // 两个助手是同一份实现，只有读哪个目录 / 用什么命令续接不同
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
+        baobox_core::aisession::Flavor::ClaudeCode,
+        crate::terminal::open,
+    )));
+    registry.register(Box::new(baobox_app::assistant_tool::AssistantTool::new(
+        baobox_core::aisession::Flavor::Codex,
+        crate::terminal::open,
+    )));
+    registry.register(Box::new(keyboardnav_module::KeyboardNavTool::new()));
     registry
 }
 
@@ -303,11 +315,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_registry_ships_with_the_screenshot_and_clipboard_tools() {
+    fn the_registry_ships_with_every_tool_in_menu_order() {
         // 注册顺序 = 菜单顺序，三个平台一致
         let registry = build_registry();
         let ids: Vec<&str> = registry.tools().iter().map(|tool| tool.id()).collect();
-        assert_eq!(ids, vec![screenshot_module::ID, clipboard_module::ID]);
+        assert_eq!(
+            ids,
+            vec![
+                screenshot_module::ID,
+                clipboard_module::ID,
+                caffeinate_module::ID,
+                windowmanager_module::ID,
+                baobox_app::assistant_tool::CLAUDE_ID,
+                baobox_app::assistant_tool::CODEX_ID,
+                keyboardnav_module::ID
+            ]
+        );
     }
 
     #[test]
@@ -364,15 +387,39 @@ mod tests {
         // 在另一个系统上会失效
         let registry = build_registry();
         let ids: Vec<String> = registry.hotkeys().into_iter().map(|spec| spec.id).collect();
+        // 窗口管理那 13 个由 layout::ALL 生成，另有一条测试盯着
         assert_eq!(
-            ids,
+            &ids[..5],
             vec![
                 screenshot_module::CAPTURE,
                 screenshot_module::CAPTURE_FULL,
                 screenshot_module::OCR,
                 screenshot_module::RECORD,
                 clipboard_module::PANEL,
-            ]
+            ],
+            "前面这几个是逐字写死的 —— 它们是用户配置里的键名，改了等于让绑定失效"
         );
+    }
+
+    #[test]
+    fn the_window_layout_actions_are_generated_from_the_shared_list() {
+        // 两个平台的这一串都是从 baobox_core::layout::ALL 生成的，
+        // 所以天然对得齐 —— 这条测试盯着「别哪天手写了一份」。
+        //
+        // **按前缀挑出来比，不按位置**：原本取的是 ids 的末尾 13 个，
+        // 那假设了「窗口管理排在最后」；后来键盘点击加在它后面，
+        // 这条测试就红了 —— 而它测的东西其实一点没变。
+        let registry = build_registry();
+        let mine: Vec<String> = registry
+            .hotkeys()
+            .into_iter()
+            .map(|spec| spec.id)
+            .filter(|id| id.starts_with(windowmanager_module::ACTION_PREFIX))
+            .collect();
+        let expected: Vec<String> = baobox_core::layout::ALL
+            .iter()
+            .map(|l| windowmanager_module::action_for(*l))
+            .collect();
+        assert_eq!(mine, expected);
     }
 }

@@ -168,6 +168,38 @@ pub struct DateParts {
     /// 秒 0-59
     pub second: u32,
 }
+impl DateParts {
+    /// Unix 秒 → 年月日时分秒（UTC）。
+    ///
+    /// 用的是 Howard Hinnant 那套 civil_from_days 算法：纯整数运算，
+    /// 没有查表也没有闰年特判，负数（1970 以前）一样成立。
+    ///
+    /// 放在这里而不是各平台的 `main.rs` 里 —— 之前两个平台各抄了一份，
+    /// 而「同一时刻在两个系统上算出不同的文件名」是这个仓库最不该出的错。
+    pub fn from_unix(seconds: i64) -> DateParts {
+        let days = seconds.div_euclid(86_400);
+        let rem = seconds.rem_euclid(86_400);
+        // 把纪元挪到 0000-03-01，闰年规则在这个起点上是周期的
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        DateParts {
+            year: (if m <= 2 { y + 1 } else { y }) as u32,
+            month: m as u32,
+            day: d as u32,
+            hour: (rem / 3600) as u32,
+            minute: ((rem % 3600) / 60) as u32,
+            second: (rem % 60) as u32,
+        }
+    }
+}
+
 
 /// 按模板生成文件名主体（不含扩展名）。
 pub fn format_template(template: &str, date: DateParts) -> String {
@@ -210,6 +242,33 @@ pub fn format_template(template: &str, date: DateParts) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_seconds_become_the_right_calendar_date() {
+        let d = DateParts::from_unix(1_785_760_496);
+        assert_eq!((d.year, d.month, d.day), (2026, 8, 3));
+        assert_eq!((d.hour, d.minute, d.second), (12, 34, 56));
+        // 纪元本身
+        let epoch = DateParts::from_unix(0);
+        assert_eq!((epoch.year, epoch.month, epoch.day), (1970, 1, 1));
+    }
+
+    #[test]
+    fn leap_days_and_century_rules_come_out_right() {
+        // 2000 是闰年（能被 400 整除），1900 不是
+        let leap = DateParts::from_unix(951_782_400); // 2000-02-29
+        assert_eq!((leap.year, leap.month, leap.day), (2000, 2, 29));
+        let after = DateParts::from_unix(951_782_400 + 86_400);
+        assert_eq!((after.year, after.month, after.day), (2000, 3, 1));
+    }
+
+    #[test]
+    fn dates_before_the_epoch_do_not_go_haywire() {
+        // 系统时钟被调到 1970 以前是会发生的事，不能算出负的月份
+        let d = DateParts::from_unix(-86_400);
+        assert_eq!((d.year, d.month, d.day), (1969, 12, 31));
+    }
+
 
     #[test]
     fn path_traversal_is_impossible_on_every_platform() {

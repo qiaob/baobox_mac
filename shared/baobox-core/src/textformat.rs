@@ -16,6 +16,7 @@
 //! 菜单 / 按钮，闭包既不好存也不好传。改成「动作只有 id 和标题，
 //! 执行走 [`apply`]」—— 平台层拿到 id 原样交回来即可，也更好测。
 
+use crate::json::{self, Json};
 use std::fmt::Write as _;
 
 /// 表格里的一行（时间转换表、URL query、JWT 声明）。
@@ -190,7 +191,7 @@ fn detect_json(text: &str) -> Option<Match> {
     if first != '{' && first != '[' {
         return None;
     }
-    let value = parse_json(text)?;
+    let value = json::parse(text)?;
     let (objects, arrays, depth) = json_shape(&value, 1);
     Some(Match {
         id: "json",
@@ -206,184 +207,6 @@ fn detect_json(text: &str) -> Option<Match> {
             Action::new("json.minify", "压缩"),
         ],
     })
-}
-
-/// 极简 JSON 值。只为「验证是不是合法 JSON」与「重新排版」而存在，
-/// 不追求完整的数值语义（数字原样保留字符串形式，避免浮点往返丢精度）。
-#[derive(Debug, Clone, PartialEq)]
-enum Json {
-    Null,
-    Bool(bool),
-    /// 原样保留文本形式：`1e400` 与 `1.0` 重新输出时不该被改写
-    Number(String),
-    Str(String),
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
-}
-
-fn parse_json(text: &str) -> Option<Json> {
-    let bytes: Vec<char> = text.chars().collect();
-    let mut at = 0usize;
-    let value = parse_value(&bytes, &mut at, 0)?;
-    skip_space(&bytes, &mut at);
-    if at != bytes.len() {
-        return None;
-    }
-    Some(value)
-}
-
-/// 嵌套层数上限。没有它的话，一串 `[[[[…` 能把解析器递归到爆栈 ——
-/// 而剪贴板内容是完全不可信的输入。
-const MAX_DEPTH: usize = 128;
-
-fn parse_value(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    skip_space(chars, at);
-    match chars.get(*at)? {
-        '{' => parse_object(chars, at, depth),
-        '[' => parse_array(chars, at, depth),
-        '"' => parse_string(chars, at).map(Json::Str),
-        't' => literal(chars, at, "true").map(|_| Json::Bool(true)),
-        'f' => literal(chars, at, "false").map(|_| Json::Bool(false)),
-        'n' => literal(chars, at, "null").map(|_| Json::Null),
-        _ => parse_number(chars, at),
-    }
-}
-
-fn parse_object(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
-    *at += 1; // {
-    let mut entries = Vec::new();
-    skip_space(chars, at);
-    if chars.get(*at) == Some(&'}') {
-        *at += 1;
-        return Some(Json::Object(entries));
-    }
-    loop {
-        skip_space(chars, at);
-        let key = parse_string(chars, at)?;
-        skip_space(chars, at);
-        if chars.get(*at) != Some(&':') {
-            return None;
-        }
-        *at += 1;
-        let value = parse_value(chars, at, depth + 1)?;
-        entries.push((key, value));
-        skip_space(chars, at);
-        match chars.get(*at)? {
-            ',' => *at += 1,
-            '}' => {
-                *at += 1;
-                return Some(Json::Object(entries));
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn parse_array(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
-    *at += 1; // [
-    let mut items = Vec::new();
-    skip_space(chars, at);
-    if chars.get(*at) == Some(&']') {
-        *at += 1;
-        return Some(Json::Array(items));
-    }
-    loop {
-        items.push(parse_value(chars, at, depth + 1)?);
-        skip_space(chars, at);
-        match chars.get(*at)? {
-            ',' => *at += 1,
-            ']' => {
-                *at += 1;
-                return Some(Json::Array(items));
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn parse_string(chars: &[char], at: &mut usize) -> Option<String> {
-    if chars.get(*at) != Some(&'"') {
-        return None;
-    }
-    *at += 1;
-    let mut out = String::new();
-    loop {
-        let c = *chars.get(*at)?;
-        *at += 1;
-        match c {
-            '"' => return Some(out),
-            '\\' => {
-                let escaped = *chars.get(*at)?;
-                *at += 1;
-                match escaped {
-                    'n' => out.push('\n'),
-                    't' => out.push('\t'),
-                    'r' => out.push('\r'),
-                    'b' => out.push('\u{8}'),
-                    'f' => out.push('\u{c}'),
-                    'u' => {
-                        let mut code = 0u32;
-                        for _ in 0..4 {
-                            code = code * 16 + (*chars.get(*at)?).to_digit(16)?;
-                            *at += 1;
-                        }
-                        out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
-                    }
-                    other => out.push(other),
-                }
-            }
-            other => out.push(other),
-        }
-    }
-}
-
-fn parse_number(chars: &[char], at: &mut usize) -> Option<Json> {
-    let start = *at;
-    if chars.get(*at) == Some(&'-') {
-        *at += 1;
-    }
-    let digits = *at;
-    while matches!(chars.get(*at), Some(c) if c.is_ascii_digit()) {
-        *at += 1;
-    }
-    if *at == digits {
-        return None;
-    }
-    if chars.get(*at) == Some(&'.') {
-        *at += 1;
-        while matches!(chars.get(*at), Some(c) if c.is_ascii_digit()) {
-            *at += 1;
-        }
-    }
-    if matches!(chars.get(*at), Some('e') | Some('E')) {
-        *at += 1;
-        if matches!(chars.get(*at), Some('+') | Some('-')) {
-            *at += 1;
-        }
-        while matches!(chars.get(*at), Some(c) if c.is_ascii_digit()) {
-            *at += 1;
-        }
-    }
-    Some(Json::Number(chars[start..*at].iter().collect()))
-}
-
-fn literal(chars: &[char], at: &mut usize, word: &str) -> Option<()> {
-    for expected in word.chars() {
-        if chars.get(*at) != Some(&expected) {
-            return None;
-        }
-        *at += 1;
-    }
-    Some(())
-}
-
-fn skip_space(chars: &[char], at: &mut usize) {
-    while matches!(chars.get(*at), Some(c) if c.is_whitespace()) {
-        *at += 1;
-    }
 }
 
 fn json_shape(value: &Json, depth: usize) -> (usize, usize, usize) {
@@ -417,14 +240,14 @@ fn json_shape(value: &Json, depth: usize) -> (usize, usize, usize) {
 }
 
 fn pretty_json(text: &str) -> Option<String> {
-    let value = parse_json(text.trim())?;
+    let value = json::parse(text.trim())?;
     let mut out = String::new();
     write_json(&value, 0, true, &mut out);
     Some(out)
 }
 
 fn minify_json(text: &str) -> Option<String> {
-    let value = parse_json(text.trim())?;
+    let value = json::parse(text.trim())?;
     let mut out = String::new();
     write_json(&value, 0, false, &mut out);
     Some(out)
@@ -511,7 +334,7 @@ fn detect_jwt(text: &str) -> Option<Match> {
     let header = decode_jwt_part(parts[0])?;
     let payload = decode_jwt_part(parts[1])?;
     // 头部必须是带 alg 的 JSON —— 光「三段 base64」会把很多别的东西认成 JWT
-    let header_json = parse_json(&header)?;
+    let header_json = json::parse(&header)?;
     let Json::Object(fields) = &header_json else {
         return None;
     };
@@ -523,7 +346,7 @@ fn detect_jwt(text: &str) -> Option<Match> {
     if let Some(Json::Str(alg)) = fields.iter().find(|(k, _)| k == "alg").map(|(_, v)| v) {
         rows.push(Row::new("算法", alg.clone()));
     }
-    if let Ok(payload_json) = parse_json(&payload).ok_or(()) {
+    if let Ok(payload_json) = json::parse(&payload).ok_or(()) {
         if let Json::Object(claims) = payload_json {
             for (key, value) in &claims {
                 let text = json_scalar(value);
