@@ -1,17 +1,21 @@
-//! Windows 交互式截图覆盖层（分层窗口 + GDI）。
+//! Windows 交互式截图覆盖层（冻结底图 + GDI 双缓冲）。
 //!
 //! 与 Linux 的 `overlay.rs` 是同一件事的两种画法，**交互规则完全共用**
 //! `baobox_core::selection::Selection` —— 悬停高亮窗口、拖拽拉选区、八向手柄、
 //! 方向键微调、⏎ 确认、Esc / 右键取消。
 //!
-//! # 压暗与「挖空」
+//! # 为什么是「冻结底图」而不是透明分层窗口
 //!
-//! 用 `WS_EX_LAYERED` + `LWA_COLORKEY | LWA_ALPHA`：整窗统一半透明，
-//! 但涂成 color key 的像素**完全透明**。于是把选区内部填成 color key，
-//! 就得到「背景压暗、选区透亮」的效果，不需要逐像素 alpha（`UpdateLayeredWindow`）。
+//! 第一版用 `WS_EX_LAYERED` + `LWA_COLORKEY` 把选区内部涂成 color key 挖空。
+//! 但 Windows 对分层窗口的命中测试**跟着透明走**：涂成 color key 的像素连鼠标
+//! 消息一起放过去，直接打到底下的应用上。悬停高亮会把光标所在的整个窗口区域
+//! 挖空，于是覆盖层从此收不到任何鼠标按下 / 移动 —— 表现就是「屏幕像定住了，
+//! 拖动也拉不出选区」。
 //!
-//! color key 取一个几乎不会与 UI 撞色的值；万一撞了也只是那块跟着透明，
-//! 而覆盖层本身只画压暗层与边框，不存在误伤。
+//! 所以改用截图工具的标准做法：开覆盖层**之前**先把整块屏幕抓下来当冻结底图。
+//! 覆盖窗完全不透明（所有输入都归它），每帧自己画「压暗的底图 + 原亮度的选区」，
+//! 再整帧 BitBlt 上屏（双缓冲，不闪）。选区里看到的是底图里的画面 ——
+//! 反正确认后抓的就是同一屏内容，两者不会对不上。
 
 #![cfg(windows)]
 
@@ -20,28 +24,27 @@ use baobox_core::selection::{Key, Outcome, Phase, Selection};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, FrameRect, InvalidateRect,
-    SetBkMode, SetTextColor, TextOutW, HBRUSH, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, FrameRect, GetDC, InvalidateRect, ReleaseDC, SelectObject,
+    SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    HBITMAP, HBRUSH, HDC, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
-    LoadCursorW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
     ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS,
-    LWA_ALPHA, LWA_COLORKEY, MSG, SW_SHOW, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    MSG, SW_SHOW, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// 覆盖层窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxCaptureOverlay");
 
-/// 「挖空」用的 color key —— 涂上它的像素完全透明。
-const TRANSPARENT_KEY: u32 = 0x00FF_00FF; // 洋红，BGR 顺序下同值
-
-/// 压暗层的不透明度（0-255）。
-const DIM_ALPHA: u8 = 0x66;
+/// 压暗层保留的亮度（x/255）。153/255 ≈ 60%，等效于旧版压一层 alpha 0x66 的黑。
+const DIM_KEEP: u32 = 153;
 
 /// 选区边框色（Baobox accent，GDI 是 BGR 顺序）。
 const ACCENT_BGR: u32 = 0x0098_A317;
@@ -57,12 +60,130 @@ pub struct OverlayResult {
     pub windows: Vec<Rect>,
 }
 
+/// 一块 32 位自上而下的 DIB 及其内存 DC。
+///
+/// `Drop` 里把 DC 与位图都还回去 —— GDI 对象泄漏在常驻进程里会一路累积到系统上限。
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: windows::Win32::Graphics::Gdi::HGDIOBJ,
+    bits: *mut u8,
+    width: i32,
+    height: i32,
+}
+
+impl Surface {
+    unsafe fn new(width: i32, height: i32) -> Result<Self, String> {
+        if width <= 0 || height <= 0 {
+            return Err("覆盖层尺寸为零".to_string());
+        }
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(screen);
+        ReleaseDC(None, screen);
+        if dc.is_invalid() {
+            return Err("无法创建内存 DC".to_string());
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                // 负数 = 自上而下
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0)
+            .map_err(|e| format!("创建 DIB 失败：{e}"))?;
+        if bits.is_null() {
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(dc);
+            return Err("DIB 没有回传像素指针".to_string());
+        }
+        let previous = SelectObject(dc, bitmap);
+        Ok(Self {
+            dc,
+            bitmap,
+            previous,
+            bits: bits.cast(),
+            width,
+            height,
+        })
+    }
+
+    /// 像素缓冲。布局是 **BGRA**（Windows 的 32 位 DIB 就是这个顺序）。
+    fn bgra(&mut self) -> &mut [u8] {
+        // SAFETY: CreateDIBSection 保证这块内存至少有 width*height*4 字节，
+        // 且它的生命周期与 self.bitmap 绑定，由 Drop 负责释放。
+        unsafe {
+            std::slice::from_raw_parts_mut(self.bits, self.width as usize * self.height as usize * 4)
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.previous);
+            let _ = DeleteObject(self.bitmap);
+            let _ = DeleteDC(self.dc);
+        }
+    }
+}
+
+/// 冻结底图的两个版本 + 合成用的后备缓冲。
+struct Frozen {
+    /// 原亮度（选区内部露出它）
+    bright: Surface,
+    /// 压暗版（选区之外铺它）
+    dim: Surface,
+    /// 每帧在这里合成，再整帧上屏
+    back: Surface,
+}
+
+impl Frozen {
+    /// 把抓下来的整屏 RGBA 一次性铺进 bright / dim 两块 DIB。
+    unsafe fn from_capture(width: i32, height: i32, rgba: &[u8]) -> Result<Self, String> {
+        let mut bright = Surface::new(width, height)?;
+        let mut dim = Surface::new(width, height)?;
+        let back = Surface::new(width, height)?;
+        {
+            let bright_px = bright.bgra();
+            let dim_px = dim.bgra();
+            let count = (bright_px.len() / 4).min(rgba.len() / 4);
+            for index in 0..count {
+                let at = index * 4;
+                let (r, g, b) = (rgba[at], rgba[at + 1], rgba[at + 2]);
+                bright_px[at] = b;
+                bright_px[at + 1] = g;
+                bright_px[at + 2] = r;
+                bright_px[at + 3] = 0xFF;
+                dim_px[at] = dim_channel(b);
+                dim_px[at + 1] = dim_channel(g);
+                dim_px[at + 2] = dim_channel(r);
+                dim_px[at + 3] = 0xFF;
+            }
+        }
+        Ok(Self { bright, dim, back })
+    }
+}
+
+/// 单个通道压暗到 60%。
+fn dim_channel(value: u8) -> u8 {
+    ((value as u32 * DIM_KEEP) / 255) as u8
+}
+
 /// 挂在窗口上的可变状态。窗口过程通过 `GWLP_USERDATA` 拿到它。
 struct OverlayState {
     selection: Selection,
     /// 覆盖窗左上角在屏幕坐标里的位置 —— 窗口消息给的是**客户区坐标**，
     /// 而状态机用的是屏幕坐标，两者要来回换算
     origin: (f64, f64),
+    frozen: Frozen,
 }
 
 impl OverlayState {
@@ -83,6 +204,10 @@ impl OverlayState {
 /// 铺覆盖层并跑消息循环，直到用户确认或取消。
 pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
     unsafe {
+        // 先抓整屏当冻结底图 —— 必须在建窗之前，否则会把覆盖层自己抓进去
+        let shot = crate::gdi::capture(screen)?;
+        let frozen = Frozen::from_capture(shot.width as i32, shot.height as i32, &shot.rgba)?;
+
         let instance: HINSTANCE = GetModuleHandleW(None)
             .map_err(|e| format!("GetModuleHandle 失败：{e}"))?
             .into();
@@ -101,10 +226,11 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
         let mut state = Box::new(OverlayState {
             selection: Selection::new(screen, windows.clone()),
             origin: (screen.x, screen.y),
+            frozen,
         });
 
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             CLASS_NAME,
             w!("Baobox"),
             WS_POPUP | WS_VISIBLE,
@@ -121,16 +247,10 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut OverlayState as isize);
 
-        // 统一半透明 + color key 挖空
-        SetLayeredWindowAttributes(
-            hwnd,
-            COLORREF(TRANSPARENT_KEY),
-            DIM_ALPHA,
-            LWA_COLORKEY | LWA_ALPHA,
-        )
-        .map_err(|e| format!("设置分层属性失败：{e}"))?;
-
         let _ = ShowWindow(hwnd, SW_SHOW);
+        // 快捷键唤起时前台还是别的应用；不抢过来的话 Esc / ⏎ / 方向键全打不进覆盖层
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(hwnd);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -204,6 +324,8 @@ unsafe extern "system" fn wndproc(
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
+        // 背景由 WM_PAINT 整帧覆盖，这里什么都不擦，免得闪
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             paint(hwnd, state);
             LRESULT(0)
@@ -247,23 +369,34 @@ fn lparam_to_point(lparam: LPARAM) -> (i32, i32) {
 unsafe fn paint(hwnd: HWND, state: &OverlayState) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
+    let frozen = &state.frozen;
+    let (w, h) = (frozen.back.width, frozen.back.height);
 
-    // 整窗铺一层黑（分层属性会把它变成半透明的压暗层）
-    let dim = CreateSolidBrush(COLORREF(0x0000_0000));
-    FillRect(hdc, &ps.rcPaint, dim);
-    let _ = DeleteObject(dim);
+    // 后备缓冲上合成：压暗底图打底
+    let _ = BitBlt(frozen.back.dc, 0, 0, w, h, frozen.dim.dc, 0, 0, SRCCOPY);
 
     if let Some(rect) = state.selection.current_rect() {
         let client = state.to_client(&rect);
 
-        // 选区内部涂成 color key → 完全透明，用户看得清自己框的是什么
-        let hole = CreateSolidBrush(COLORREF(TRANSPARENT_KEY));
-        FillRect(hdc, &client, hole);
-        let _ = DeleteObject(hole);
+        // 选区内部露出原亮度的底图，用户看得清自己框的是什么
+        let (cw, ch) = (client.right - client.left, client.bottom - client.top);
+        if cw > 0 && ch > 0 {
+            let _ = BitBlt(
+                frozen.back.dc,
+                client.left,
+                client.top,
+                cw,
+                ch,
+                frozen.bright.dc,
+                client.left,
+                client.top,
+                SRCCOPY,
+            );
+        }
 
         // 边框
         let accent: HBRUSH = CreateSolidBrush(COLORREF(ACCENT_BGR));
-        FrameRect(hdc, &client, accent);
+        FrameRect(frozen.back.dc, &client, accent);
 
         // 选区成形后才画手柄；悬停高亮窗口时画手柄会误导
         if matches!(state.selection.phase(), Phase::Adjusting { .. }) {
@@ -277,19 +410,21 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
                     right: cx + HANDLE_SIZE / 2,
                     bottom: cy + HANDLE_SIZE / 2,
                 };
-                FillRect(hdc, &box_rect, accent);
+                FillRect(frozen.back.dc, &box_rect, accent);
             }
         }
         let _ = DeleteObject(accent);
 
-        draw_size_label(hdc, &client, &rect);
+        draw_size_label(frozen.back.dc, &client, &rect);
     }
 
+    // 整帧上屏
+    let _ = BitBlt(hdc, 0, 0, w, h, frozen.back.dc, 0, 0, SRCCOPY);
     let _ = EndPaint(hwnd, &ps);
 }
 
 /// 在选区左上角上方标出尺寸。
-unsafe fn draw_size_label(hdc: windows::Win32::Graphics::Gdi::HDC, client: &RECT, rect: &Rect) {
+unsafe fn draw_size_label(hdc: HDC, client: &RECT, rect: &Rect) {
     let label: Vec<u16> = format!("{} × {}", rect.w as i64, rect.h as i64)
         .encode_utf16()
         .collect();
@@ -323,5 +458,13 @@ mod tests {
         assert_eq!(translate_key(0x0D), Some(Key::Enter));
         assert_eq!(translate_key(0x25), Some(Key::Left));
         assert_eq!(translate_key(0x41), None, "字母键不该被覆盖层吃掉");
+    }
+
+    #[test]
+    fn dimming_keeps_sixty_percent_brightness() {
+        assert_eq!(dim_channel(0), 0);
+        assert_eq!(dim_channel(255), 153);
+        // 单调不减，不会因整数除法出现反转
+        assert!(dim_channel(128) <= dim_channel(129));
     }
 }

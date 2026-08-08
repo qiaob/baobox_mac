@@ -14,6 +14,10 @@
 //! baobox-windows info
 //! ```
 
+// GUI 子系统：常驻运行（托盘）时不再弹出一个黑色控制台窗口。
+// 命令行用法靠 main() 里的 AttachConsole 接回父控制台，输出照常可见。
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod gdi;
 #[cfg(windows)]
 mod app;
@@ -71,6 +75,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_TEMPLATE: &str = "Screenshot {yyyy}-{MM}-{dd} {HH}.{mm}.{ss}";
 
 fn main() {
+    // 必须在第一次 print 之前调用，否则 Rust 会缓存住无效的标准输出句柄
+    attach_parent_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match run(&args) {
         Ok(message) => {
@@ -86,6 +92,20 @@ fn main() {
     };
     std::process::exit(code);
 }
+
+/// GUI 子系统的进程默认没有控制台。从 cmd / PowerShell 启动时把父进程的
+/// 控制台接回来，`capture` / `info` 这些子命令的输出才看得见；
+/// 从资源管理器 / 开始菜单启动时没有父控制台，失败是常态，忽略即可。
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
 
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {

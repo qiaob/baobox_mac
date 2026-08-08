@@ -43,7 +43,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow,
     TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS, MSG,
     SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
@@ -273,6 +274,8 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut EditorState as isize);
         let _ = ShowWindow(hwnd, SW_SHOW);
+        // 从快捷键唤起时前台还是别的应用；不抢过来的话工具切换 / 打字全打不进编辑器
+        let _ = SetForegroundWindow(hwnd);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
