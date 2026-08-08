@@ -384,8 +384,9 @@ fn draw_annotations(
             &mut canvas,
             &toolbar,
             &ToolbarState {
-                tool: editor.tool(),
+                tool: Some(editor.tool()),
                 color_index: editor.color_index(),
+                size_index: editor.size_index(),
                 can_undo: editor.can_undo(),
                 can_redo: editor.can_redo(),
                 hovered: editor.toolbar().hit(editor.cursor()),

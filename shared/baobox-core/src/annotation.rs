@@ -46,6 +46,13 @@ impl Tool {
         matches!(self, Tool::Pen | Tool::Highlighter)
     }
 
+    /// 选中该工具时参数行（粗细 + 颜色）要不要展开。
+    /// 与 mac 一致：橡皮、马赛克不需要样式，其余都要
+    /// （见 docs/screenshot-parity/MAC_ALIGNMENT.md §2.3）。
+    pub fn wants_style_row(&self) -> bool {
+        !matches!(self, Tool::Eraser | Tool::Mosaic)
+    }
+
     /// 橡皮不产生图形，只删别人。
     pub fn draws(&self) -> bool {
         !matches!(self, Tool::Eraser)

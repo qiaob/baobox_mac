@@ -22,10 +22,10 @@
 
 use crate::annotation::{Color, Document, Shape, Tool};
 use crate::geometry::Rect;
-use crate::toolbar::{Item, Toolbar, DEFAULT_COLOR, PALETTE};
+use crate::toolbar::{Item, Toolbar, DEFAULT_COLOR, PALETTE, STROKE_SIZES, TEXT_SIZES};
 
-/// 默认线宽。
-pub const DEFAULT_WIDTH: f64 = 4.0;
+/// 默认线宽（= 粗细中档，见 `toolbar::STROKE_SIZES`，与 mac 一致）。
+pub const DEFAULT_WIDTH: f64 = 3.0;
 
 /// 线宽可调范围。
 pub const MIN_WIDTH: f64 = 1.0;
@@ -111,6 +111,8 @@ pub struct PendingText {
 pub struct Editor {
     document: Document,
     toolbar: Toolbar,
+    /// 屏幕范围 —— 切工具时参数行显隐会改变工具条高度，要重新摆位
+    screen: Rect,
     /// 图像在屏幕坐标里的位置与尺寸；落笔点会被夹进这个范围
     image: Rect,
     tool: Tool,
@@ -130,7 +132,9 @@ impl Editor {
     pub fn new(image: Rect, screen: Rect) -> Self {
         Self {
             document: Document::new(),
-            toolbar: Toolbar::layout(&image, &screen),
+            // 初始工具是矩形（要样式），参数行展开
+            toolbar: Toolbar::layout_with_style_row(&image, &screen, Tool::Rect.wants_style_row()),
+            screen,
             image,
             tool: Tool::Rect,
             color_index: DEFAULT_COLOR,
@@ -370,6 +374,16 @@ impl Editor {
             Item::Tool(tool) => {
                 self.commit_text();
                 self.tool = tool;
+                // 参数行按工具显隐，工具条高度会变 —— 与 mac 一样实时重摆
+                self.toolbar = Toolbar::layout_with_style_row(
+                    &self.image,
+                    &self.screen,
+                    tool.wants_style_row(),
+                );
+            }
+            Item::Size(index) => {
+                let index = index.min(STROKE_SIZES.len() - 1);
+                self.width = STROKE_SIZES[index];
             }
             Item::Color(index) => {
                 self.color_index = index.min(PALETTE.len() - 1);
@@ -409,6 +423,21 @@ impl Editor {
         self.width = width.clamp(MIN_WIDTH, MAX_WIDTH);
     }
 
+    /// 当前线宽对应粗细三档里的哪一档（取最近的，供工具条高亮）。
+    pub fn size_index(&self) -> usize {
+        STROKE_SIZES
+            .iter()
+            .enumerate()
+            .min_by(|a, b| {
+                (a.1 - self.width)
+                    .abs()
+                    .partial_cmp(&(b.1 - self.width).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(crate::toolbar::DEFAULT_SIZE)
+    }
+
     /// 把正在输入的文字落定成一笔。空文字直接丢弃 —— 点一下没打字就走开是常见操作。
     fn commit_text(&mut self) {
         let Some(text) = self.pending_text.take() else {
@@ -426,7 +455,8 @@ impl Editor {
             tool: Tool::Text,
             points: vec![text.origin],
             color: self.color(),
-            width: self.width * TEXT_SIZE_FACTOR,
+            // 字号跟着粗细档走（14/18/24），与 mac 一致
+            width: TEXT_SIZES[self.size_index()],
             text: Some(text.text.clone()),
         }
     }

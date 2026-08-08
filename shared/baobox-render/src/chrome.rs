@@ -9,38 +9,43 @@
 //!
 //! 布局不在这里，在 `baobox_core::toolbar`：那边算矩形，这边照着画。
 
-use crate::{fill_rect, line, stroke_ellipse_in, stroke_rect_in, Canvas};
+use crate::{fill_circle, fill_rect, fill_round_rect, line, stroke_ellipse_in, stroke_rect_in, Canvas};
 use baobox_core::annotation::{Color, Tool};
 use baobox_core::geometry::Rect;
 use baobox_core::toolbar::{Item, Toolbar, PALETTE};
 
-/// 工具条底板色（近黑，略透明，压在截图上仍看得见下面一点内容）。
+/// 工具条底板色：mac 是 `white 0.13 @ 0.96` ≈ #212121 @96%
+/// （见 docs/screenshot-parity/MAC_ALIGNMENT.md §2.1）。
 pub const PANEL: Color = Color {
-    r: 0x23,
-    g: 0x25,
-    b: 0x28,
-    a: 0xEE,
+    r: 0x21,
+    g: 0x21,
+    b: 0x21,
+    a: 0xF5,
 };
 
-/// 选中项的底色（Baobox accent）。
-pub const ACTIVE: Color = Color::rgb(0x17, 0xA3, 0x98);
+/// 底板圆角（mac 是 9）。
+pub const PANEL_RADIUS: f64 = 9.0;
 
-/// 鼠标悬停时的底色。
-pub const HOVER: Color = Color {
-    r: 0xFF,
-    g: 0xFF,
-    b: 0xFF,
-    a: 0x22,
-};
+/// 选中项的图标色（accent 深档 #2BC4B8）。
+/// mac 的选中态**只染图标色，没有背景块**（MAC_ALIGNMENT.md §2.5）。
+pub const ACCENT: Color = Color::rgb(0x2B, 0xC4, 0xB8);
 
-/// 图标常规色。
-pub const ICON: Color = Color::rgb(0xE6, 0xE8, 0xEA);
+/// 图标常规色（mac `white 0.92` ≈ #EBEBEB）。
+pub const ICON: Color = Color::rgb(0xEB, 0xEB, 0xEB);
+
+/// 粗细档未选中时的色（mac `white 0.75`，刻意比工具按钮更暗）。
+pub const SIZE_IDLE: Color = Color::rgb(0xBF, 0xBF, 0xBF);
 
 /// 不可用时的图标色（撤销栈空了的撤销按钮）。
 pub const ICON_DISABLED: Color = Color::rgb(0x6A, 0x6E, 0x74);
 
-/// 取消按钮的图标色 —— 唯一一个提前提示「这一下会丢东西」的按钮。
-pub const ICON_DANGER: Color = Color::rgb(0xE5, 0x6B, 0x6B);
+/// 分隔竖线色（mac `white @ 0.22`）。
+pub const SEPARATOR: Color = Color {
+    r: 0xFF,
+    g: 0xFF,
+    b: 0xFF,
+    a: 0x38,
+};
 
 /// 图标线宽。
 const STROKE: f64 = 1.6;
@@ -48,18 +53,23 @@ const STROKE: f64 = 1.6;
 /// 图标相对按钮的内缩。
 const INSET: f64 = 7.0;
 
+/// 粗细三档的圆点直径（mac circle.fill pointSize 4.5 / 6.5 / 9）。
+const SIZE_DOTS: [f64; 3] = [4.5, 6.5, 9.0];
+
 /// 画工具条时需要知道的当前状态。
 #[derive(Debug, Clone, Copy)]
 pub struct ToolbarState {
-    /// 当前工具
-    pub tool: Tool,
+    /// 当前工具。选区调整阶段还没选工具，是 `None`（mac 无默认工具）
+    pub tool: Option<Tool>,
     /// 当前颜色在 [`PALETTE`] 里的下标
     pub color_index: usize,
+    /// 当前粗细档
+    pub size_index: usize,
     /// 撤销可用吗
     pub can_undo: bool,
     /// 重做可用吗
     pub can_redo: bool,
-    /// 鼠标悬停在哪一项上
+    /// 鼠标悬停在哪一项上。mac 没有 hover 视觉，这里保留字段但不画
     pub hovered: Option<Item>,
 }
 
@@ -67,34 +77,48 @@ pub struct ToolbarState {
 ///
 /// 坐标是**画布坐标** —— 调用方先把工具条矩形从屏幕坐标平移过来。
 pub fn draw_toolbar(canvas: &mut Canvas<'_>, toolbar: &Toolbar, state: &ToolbarState) {
-    fill_rect(canvas, &toolbar.frame, PANEL);
+    fill_round_rect(canvas, &toolbar.frame, PANEL_RADIUS, PANEL);
+    for separator in &toolbar.separators {
+        fill_rect(canvas, separator, SEPARATOR);
+    }
     for button in &toolbar.buttons {
         draw_button(canvas, &button.frame, button.item, state);
     }
 }
 
 fn draw_button(canvas: &mut Canvas<'_>, frame: &Rect, item: Item, state: &ToolbarState) {
-    if is_active(item, state) {
-        fill_rect(canvas, frame, ACTIVE);
-    } else if state.hovered == Some(item) {
-        fill_rect(canvas, frame, HOVER);
-    }
+    // mac 的选中态没有背景块、也没有 hover 底色 —— 只换图标颜色
     draw_icon(canvas, frame, item, icon_color(item, state));
+    // 颜色选中效果 = 色点最外圈一道白环（MAC_ALIGNMENT.md §2.4）
+    if let Item::Color(index) = item {
+        if index == state.color_index {
+            let ring = 18.0;
+            let ring_rect = Rect::new(
+                frame.x + (frame.w - ring) / 2.0 + 0.5,
+                frame.y + (frame.h - ring) / 2.0 + 0.5,
+                ring - 1.0,
+                ring - 1.0,
+            );
+            stroke_ellipse_in(canvas, &ring_rect, 1.5, Color::rgb(0xFF, 0xFF, 0xFF));
+        }
+    }
 }
 
 fn is_active(item: Item, state: &ToolbarState) -> bool {
     match item {
-        Item::Tool(tool) => tool == state.tool,
-        Item::Color(index) => index == state.color_index,
+        Item::Tool(tool) => Some(tool) == state.tool,
+        Item::Size(index) => index == state.size_index,
         _ => false,
     }
 }
 
 fn icon_color(item: Item, state: &ToolbarState) -> Color {
     match item {
+        _ if is_active(item, state) => ACCENT,
+        Item::Size(_) => SIZE_IDLE,
         Item::Undo if !state.can_undo => ICON_DISABLED,
         Item::Redo if !state.can_redo => ICON_DISABLED,
-        Item::Cancel => ICON_DANGER,
+        // 取消按钮与其他出口一样是常规色 —— mac 没有红色警示态
         _ => ICON,
     }
 }
@@ -182,11 +206,27 @@ pub fn draw_icon(canvas: &mut Canvas<'_>, frame: &Rect, item: Item, color: Color
             }
         }
         Item::Color(index) => {
-            // 色块本身就是图标；用调色板里的颜色填满，忽略传进来的 color
+            // 圆形色点（mac：18 画布里 inset 3 的圆 = 直径 12），忽略传进来的 color
             let swatch = PALETTE[index.min(PALETTE.len() - 1)];
-            fill_rect(canvas, &box_rect, swatch);
-            // 白色块在深色底板上会糊掉，描一圈边
-            stroke_rect_in(canvas, &box_rect, 1.0, Color::rgb(0x33, 0x36, 0x3A));
+            fill_circle(canvas, (cx, cy), 6.0, swatch);
+            // 常态描边 white 0.35 —— 白色点在深色底板上不描边会糊掉
+            let outline = Rect::new(cx - 6.0, cy - 6.0, 12.0, 12.0);
+            stroke_ellipse_in(
+                canvas,
+                &outline,
+                1.0,
+                Color {
+                    r: 0xFF,
+                    g: 0xFF,
+                    b: 0xFF,
+                    a: 0x59,
+                },
+            );
+        }
+        Item::Size(index) => {
+            // 粗细档 = 实心圆点，直径按档位走
+            let diameter = SIZE_DOTS[index.min(SIZE_DOTS.len() - 1)];
+            fill_circle(canvas, (cx, cy), diameter / 2.0, color);
         }
         Item::Undo | Item::Redo => {
             // 一条横线加一个箭头，方向按撤销 / 重做分开
@@ -272,8 +312,9 @@ mod tests {
 
     fn state() -> ToolbarState {
         ToolbarState {
-            tool: Tool::Rect,
+            tool: Some(Tool::Rect),
             color_index: 0,
+            size_index: 1,
             can_undo: false,
             can_redo: false,
             hovered: None,
@@ -305,6 +346,8 @@ mod tests {
             Item::Tool(Tool::Text),
             Item::Tool(Tool::Eraser),
             Item::Color(2),
+            Item::Size(0),
+            Item::Size(2),
             Item::Undo,
             Item::Redo,
             Item::Copy,
@@ -337,19 +380,24 @@ mod tests {
     }
 
     #[test]
-    fn the_active_tool_gets_a_highlighted_background() {
-        let frame = Rect::new(4.0, 4.0, 28.0, 28.0);
-        let mut active_pixels = blank(36, 36);
-        let mut active = Canvas::new(36, 36, &mut active_pixels).unwrap();
-        draw_button(&mut active, &frame, Item::Tool(Tool::Rect), &state());
+    fn selection_tints_the_icon_and_never_paints_a_background_block() {
+        // mac 的选中态只染图标色（MAC_ALIGNMENT.md §2.5）
+        assert_eq!(icon_color(Item::Tool(Tool::Rect), &state()), ACCENT);
+        assert_eq!(icon_color(Item::Tool(Tool::Arrow), &state()), ICON);
+        assert_eq!(icon_color(Item::Size(1), &state()), ACCENT);
+        assert_eq!(icon_color(Item::Size(0), &state()), SIZE_IDLE, "未选中档更暗");
 
-        let mut idle_pixels = blank(36, 36);
-        let mut idle = Canvas::new(36, 36, &mut idle_pixels).unwrap();
-        draw_button(&mut idle, &frame, Item::Tool(Tool::Arrow), &state());
+        // 没有背景块：按钮框的四角保持空白（图标画不到那里）
+        let frame = Rect::new(4.0, 4.0, 28.0, 26.0);
+        let mut pixels = blank(36, 36);
+        let mut canvas = Canvas::new(36, 36, &mut pixels).unwrap();
+        draw_button(&mut canvas, &frame, Item::Tool(Tool::Rect), &state());
+        assert_eq!(canvas.get(5, 5).unwrap()[3], 0, "选中态不该再有底色块");
 
-        // 选中的那个按钮四角被底色填上，没选中的四角还是空的
-        assert_ne!(active.get(5, 5).unwrap()[3], 0, "选中项应有底色");
-        assert_eq!(idle.get(5, 5).unwrap()[3], 0, "未选中项不该有底色");
+        // 选区阶段还没选工具（None）：谁都不该被染成 accent
+        let mut none = state();
+        none.tool = None;
+        assert_eq!(icon_color(Item::Tool(Tool::Rect), &none), ICON);
     }
 
     #[test]
@@ -359,8 +407,21 @@ mod tests {
         assert_eq!(icon_color(Item::Undo, &empty), ICON_DISABLED);
         empty.can_undo = true;
         assert_eq!(icon_color(Item::Undo, &empty), ICON);
-        // 取消永远是警示色
-        assert_eq!(icon_color(Item::Cancel, &empty), ICON_DANGER);
+        // 取消与其他出口同色 —— mac 没有红色警示态
+        assert_eq!(icon_color(Item::Cancel, &empty), ICON);
+    }
+
+    #[test]
+    fn the_selected_swatch_gets_a_white_ring() {
+        let frame = Rect::new(4.0, 4.0, 28.0, 26.0);
+        let mut pixels = blank(36, 36);
+        let mut canvas = Canvas::new(36, 36, &mut pixels).unwrap();
+        // color_index = 0 → 选中
+        draw_button(&mut canvas, &frame, Item::Color(0), &state());
+        // 环在色点（直径 12）之外、按钮框之内 —— 检查环半径附近有白色像素
+        let (cx, cy) = (4.0 + 14.0, 4.0 + 13.0);
+        let probe = canvas.get((cx + 8.0) as i64, cy as i64).unwrap();
+        assert!(probe[3] != 0, "选中色块外圈应有白环");
     }
 
     #[test]
@@ -399,10 +460,10 @@ mod tests {
         let mut canvas = Canvas::new(width, height, &mut pixels).unwrap();
         draw_toolbar(&mut canvas, &toolbar, &state());
 
-        // 底板四角都被填上
+        // 底板铺满（避开圆角，取内缩 12 的点）
         for (x, y) in [
-            (toolbar.frame.x + 1.0, toolbar.frame.y + 1.0),
-            (toolbar.frame.right() - 2.0, toolbar.frame.bottom() - 2.0),
+            (toolbar.frame.x + 12.0, toolbar.frame.y + 12.0),
+            (toolbar.frame.right() - 12.0, toolbar.frame.bottom() - 12.0),
         ] {
             assert_ne!(
                 canvas.get(x as i64, y as i64).unwrap()[3],
@@ -410,6 +471,14 @@ mod tests {
                 "底板应铺满整个 frame"
             );
         }
+        // 圆角：四个角尖上的像素被削掉
+        assert_eq!(
+            canvas
+                .get(toolbar.frame.x as i64, toolbar.frame.y as i64)
+                .unwrap()[3],
+            0,
+            "圆角处不该有底板"
+        );
         // 底板之外没被碰过
         assert_eq!(
             canvas.get(toolbar.frame.x as i64 - 3, toolbar.frame.y as i64).unwrap()[3],

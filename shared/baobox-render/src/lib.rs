@@ -180,6 +180,47 @@ pub fn fill_rect(canvas: &mut Canvas<'_>, rect: &Rect, color: Color) {
     }
 }
 
+/// 填一个圆角矩形。工具条底板用（mac 圆角 9）。
+pub fn fill_round_rect(canvas: &mut Canvas<'_>, rect: &Rect, radius: f64, color: Color) {
+    let radius = radius.max(0.0).min(rect.w / 2.0).min(rect.h / 2.0);
+    let left = rect.x.round() as i64;
+    let top = rect.y.round() as i64;
+    let right = rect.right().round() as i64;
+    let bottom = rect.bottom().round() as i64;
+    for y in top..bottom {
+        for x in left..right {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            // 距离最近圆角圆心超过半径的像素属于被削掉的角
+            let cx = px.clamp(rect.x + radius, rect.right() - radius);
+            let cy = py.clamp(rect.y + radius, rect.bottom() - radius);
+            let dx = px - cx;
+            let dy = py - cy;
+            if dx * dx + dy * dy <= radius * radius + 0.25 {
+                canvas.blend(x, y, color);
+            }
+        }
+    }
+}
+
+/// 填一个圆。色盘的色点用它。
+pub fn fill_circle(canvas: &mut Canvas<'_>, center: (f64, f64), radius: f64, color: Color) {
+    let r = radius.max(0.0);
+    let left = (center.0 - r).floor() as i64;
+    let right = (center.0 + r).ceil() as i64;
+    let top = (center.1 - r).floor() as i64;
+    let bottom = (center.1 + r).ceil() as i64;
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f64 + 0.5 - center.0;
+            let dy = y as f64 + 0.5 - center.1;
+            if dx * dx + dy * dy <= r * r {
+                canvas.blend(x, y, color);
+            }
+        }
+    }
+}
+
 fn brush(canvas: &mut Canvas<'_>, cx: i64, cy: i64, half: f64, color: Color) {
     let radius = half.ceil() as i64;
     for y in -radius..=radius {

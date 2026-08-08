@@ -34,23 +34,27 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_SHIF
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
     LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW,
+    ShowWindow, TranslateMessage, UnregisterClassW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW,
     GWLP_USERDATA, IDC_CROSS, MSG, SW_SHOW, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 /// 覆盖层窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxCaptureOverlay");
 
-/// 压暗层保留的亮度（x/255）。153/255 ≈ 60%，等效于旧版压一层 alpha 0x66 的黑。
-const DIM_KEEP: u32 = 153;
+/// 压暗层保留的亮度（x/255）。mac 压 45% 的黑（MAC_ALIGNMENT.md §1）
+/// → 保留 55% ≈ 140/255。
+const DIM_KEEP: u32 = 140;
 
-/// 选区边框色（Baobox accent，GDI 是 BGR 顺序）。
-const ACCENT_BGR: u32 = 0x0098_A317;
+/// 选区边框与手柄的颜色：mac 是**纯白**（1.5pt 边框 + 6pt 实心方块手柄）。
+const BORDER_BGR: u32 = 0x00FF_FFFF;
 
-/// 手柄边长。
-const HANDLE_SIZE: i32 = 8;
+/// 手柄边长（mac 是 6）。
+const HANDLE_SIZE: i32 = 6;
+
+/// 尺寸标签背板色（mac `white 0.11` ≈ #1C1C1C，BGR 同值）。
+const BADGE_BGR: u32 = 0x001C_1C1C;
 
 /// 覆盖层的用途，决定「拖完选区之后」的交互。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -247,7 +251,8 @@ pub fn run(screen: Rect, windows: Vec<Rect>, mode: Mode) -> Result<OverlayResult
             .into();
 
         let class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
+            // CS_DBLCLKS：不加的话收不到 WM_LBUTTONDBLCLK（双击 = 复制并完成）
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(wndproc),
             hInstance: instance,
             lpszClassName: CLASS_NAME,
@@ -394,8 +399,34 @@ unsafe extern "system" fn wndproc(
         WM_KEYDOWN => {
             let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
             if let Some(key) = translate_key(wparam.0 as u32) {
-                // 同上：出结果靠 run() 循环里的检查退出，不发 WM_QUIT
-                state.selection.key_down(key, shift);
+                // mac 语义：调整阶段按 ⏎ = 「复制并完成」，不是进编辑器
+                if key == Key::Enter
+                    && state.mode == Mode::Capture
+                    && matches!(state.selection.phase(), Phase::Adjusting { .. })
+                {
+                    confirm_as_copy(state);
+                } else {
+                    // 出结果靠 run() 循环里的检查退出，不发 WM_QUIT
+                    state.selection.key_down(key, shift);
+                }
+            }
+            let _ = InvalidateRect(hwnd, None, false);
+            LRESULT(0)
+        }
+        WM_LBUTTONDBLCLK => {
+            // mac：双击选区内部 = 复制并完成
+            let (x, y) = lparam_to_point(lparam);
+            let point = state.to_screen(x, y);
+            let inside = state.mode == Mode::Capture
+                && matches!(state.selection.phase(), Phase::Adjusting { .. })
+                && state
+                    .selection
+                    .current_rect()
+                    .is_some_and(|rect| rect.contains(point.0, point.1));
+            if inside {
+                confirm_as_copy(state);
+            } else {
+                state.selection.mouse_down(point);
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
@@ -470,9 +501,16 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
             );
         }
 
-        // 边框
-        let accent: HBRUSH = CreateSolidBrush(COLORREF(ACCENT_BGR));
+        // 边框：mac 是 1.5pt 纯白，这里取 2px（两圈 1px）
+        let accent: HBRUSH = CreateSolidBrush(COLORREF(BORDER_BGR));
         FrameRect(frozen.back.dc, &client, accent);
+        let inner = RECT {
+            left: client.left + 1,
+            top: client.top + 1,
+            right: client.right - 1,
+            bottom: client.bottom - 1,
+        };
+        FrameRect(frozen.back.dc, &inner, accent);
 
         // 选区成形后才画手柄；悬停高亮窗口时画手柄会误导
         let adjusting = matches!(state.selection.phase(), Phase::Adjusting { .. });
@@ -497,12 +535,33 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
             draw_action_toolbar(state);
         }
 
-        draw_size_label(frozen.back.dc, &client, &rect);
+        // mac 的 size badge 在选区下方右对齐；工具栏也在下方时挪到选区上方,
+        // 免得叠在一起
+        let toolbar_below = adjusting && state.mode == Mode::Capture;
+        draw_size_label(frozen.back.dc, &client, &rect, !toolbar_below);
     }
 
     // 整帧上屏
     let _ = BitBlt(hdc, 0, 0, w, h, frozen.back.dc, 0, 0, SRCCOPY);
     let _ = EndPaint(hwnd, &ps);
+}
+
+/// ⏎ / 双击选区 = 「复制并完成」（mac 同义）：等价于点工具栏上的复制按钮，
+/// 由编辑器的同一套点击逻辑收尾（不开窗直接复制）。
+fn confirm_as_copy(state: &mut OverlayState) {
+    if let Some(toolbar) = state.toolbar() {
+        if let Some(button) = toolbar
+            .buttons
+            .iter()
+            .find(|b| b.item == baobox_core::toolbar::Item::Copy)
+        {
+            state.toolbar_click = Some((
+                button.frame.x + button.frame.w / 2.0,
+                button.frame.y + button.frame.h / 2.0,
+            ));
+        }
+    }
+    state.selection.key_down(Key::Enter, false);
 }
 
 /// 把与编辑器同款的完整工具栏画到后备缓冲上。
@@ -532,9 +591,10 @@ unsafe fn draw_action_toolbar(state: &OverlayState) {
             &mut canvas,
             &local,
             &baobox_render::chrome::ToolbarState {
-                // 定稿后编辑器的初始状态就是这些默认值，两边显示一致
-                tool: baobox_core::annotation::Tool::Rect,
+                // 与 mac 一致：选区阶段还没选工具，谁都不高亮
+                tool: None,
                 color_index: baobox_core::toolbar::DEFAULT_COLOR,
+                size_index: baobox_core::toolbar::DEFAULT_SIZE,
                 can_undo: false,
                 can_redo: false,
                 hovered: None,
@@ -608,20 +668,35 @@ unsafe fn write_rgba_into_back(
     }
 }
 
-/// 在选区左上角上方标出尺寸。
-unsafe fn draw_size_label(hdc: HDC, client: &RECT, rect: &Rect) {
-    let label: Vec<u16> = format!("{} × {}", rect.w as i64, rect.h as i64)
-        .encode_utf16()
-        .collect();
+/// 尺寸标签，mac 样式：`{W} × {H}`、深底白字、**右对齐选区右缘**
+/// （MAC_ALIGNMENT.md §1）。`below` = 放选区下方，否则放上方（给工具栏让位）。
+unsafe fn draw_size_label(hdc: HDC, client: &RECT, rect: &Rect, below: bool) {
+    let text = format!("{} × {}", rect.w as i64, rect.h as i64);
+    let label: Vec<u16> = text.encode_utf16().collect();
+    // 近似量宽：数字/空格按半宽算（mono 11.5pt ≈ 7px），够对齐用
+    let text_width = (label.len() as i32) * 7;
+    let (pad_x, pad_y, line_h) = (8, 4, 14);
+    let width = text_width + pad_x * 2;
+    let height = line_h + pad_y * 2;
+    let x = (client.right - width).max(client.left);
+    let y = if below {
+        client.bottom + 6
+    } else {
+        (client.top - 6 - height).max(4)
+    };
+
+    let badge = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    };
+    let back = CreateSolidBrush(COLORREF(BADGE_BGR));
+    FillRect(hdc, &badge, back);
+    let _ = DeleteObject(back);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(0x00FF_FFFF));
-    // 贴着选区上方；顶到屏幕边缘时改放进选区内部
-    let y = if client.top > 20 {
-        client.top - 18
-    } else {
-        client.top + 4
-    };
-    let _ = TextOutW(hdc, client.left + 2, y, &label);
+    let _ = TextOutW(hdc, x + pad_x, y + pad_y, &label);
 }
 
 #[cfg(test)]
@@ -646,9 +721,10 @@ mod tests {
     }
 
     #[test]
-    fn dimming_keeps_sixty_percent_brightness() {
+    fn dimming_matches_the_mac_forty_five_percent_black() {
+        // mac 压 45% 黑 → 保留 55% ≈ 140/255（MAC_ALIGNMENT.md §1）
         assert_eq!(dim_channel(0), 0);
-        assert_eq!(dim_channel(255), 153);
+        assert_eq!(dim_channel(255), 140);
         // 单调不减，不会因整数除法出现反转
         assert!(dim_channel(128) <= dim_channel(129));
     }

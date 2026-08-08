@@ -79,6 +79,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态），嵌在截图模块内。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
+- `docs/screenshot-parity/MAC_ALIGNMENT.md` —— **截图 UI 对齐标准**（Windows/Linux 以 mac 实现为准的逐项规格：工具条按钮/顺序/文案/尺寸/配色/各状态、选区视觉、摆位算法；含分期核对表）。改截图 UI 前先读它。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `mac/Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
