@@ -236,8 +236,33 @@ impl EditorState {
 }
 
 /// 打开编辑器，跑到用户按下某个出口为止。
-pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, String> {
+///
+/// `initial_click` 是覆盖层工具栏上那一下点击（屏幕坐标）：两边的工具栏
+/// 由同一份 `Toolbar::layout` 摆在同一个位置，所以直接交给编辑器的
+/// 点击逻辑解释 —— 画笔类 = 带着选好的工具开窗；复制 / 保存 / 贴图 /
+/// 取消 = 立刻出结果，**窗口都不用开**。
+pub fn run(
+    screen: Rect,
+    image: Rect,
+    rgba: Vec<u8>,
+    initial_click: Option<(f64, f64)>,
+) -> Result<EditorResult, String> {
     unsafe {
+        let mut editor = Editor::new(image, screen);
+        if let Some(point) = initial_click {
+            editor.mouse_down(point);
+            editor.mouse_up(point);
+        }
+        if let Some(outcome) = editor.outcome() {
+            // 点的是出口类按钮：不开窗，原图直接交回去
+            return Ok(EditorResult {
+                outcome,
+                rgba,
+                width: image.w.round() as u32,
+                height: image.h.round() as u32,
+            });
+        }
+
         let instance: HINSTANCE = GetModuleHandleW(None)
             .map_err(|e| format!("GetModuleHandle 失败：{e}"))?
             .into();
@@ -250,8 +275,6 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
             ..Default::default()
         };
         RegisterClassW(&class);
-
-        let editor = Editor::new(image, screen);
         let frame = image.union(&editor.toolbar().frame).clamped_to(&screen);
         let (fw, fh) = (frame.w.round() as usize, frame.h.round() as usize);
 

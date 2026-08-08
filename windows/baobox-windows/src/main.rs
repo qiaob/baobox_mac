@@ -196,46 +196,31 @@ fn capture(args: &[String]) -> Result<String, String> {
     let options = parse_capture_args(args)?;
     gdi::prepare();
 
-    let (target, action) = match (options.full, options.region, options.window) {
-        (true, _, _) => (gdi::virtual_screen(), overlay::PostAction::Annotate),
-        (_, Some(rect), _) => (rect, overlay::PostAction::Annotate),
+    let (target, toolbar_click) = match (options.full, options.region, options.window) {
+        (true, _, _) => (gdi::virtual_screen(), None),
+        (_, Some(rect), _) => (rect, None),
         (_, _, Some(id)) => (
             gdi::windows()
                 .into_iter()
                 .find(|w| w.id == id)
                 .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
                 .frame,
-            overlay::PostAction::Annotate,
+            None,
         ),
         // 什么都没指定 → 交互式覆盖层，这是默认用法
         _ => interactive_target(overlay::Mode::Capture)?,
     };
 
     let shot = gdi::capture(target)?;
-    // 按钮条上直接选了去向的，跳过编辑器
-    match action {
-        overlay::PostAction::Copy => finish(target, shot, options.output, true, false, false),
-        overlay::PostAction::Save => finish(target, shot, options.output, false, true, false),
-        overlay::PostAction::Pin => {
-            let note = deliver(&shot, options.output, false, true)?;
-            println!("{note}，已钉在屏幕上（拖动可挪位置，任意键 / 右键 / 双击关闭）");
-            pin::show(
-                (target.x as i32, target.y as i32),
-                &shot.rgba,
-                shot.width,
-                shot.height,
-            )?;
-            Ok(String::new())
-        }
-        overlay::PostAction::Annotate => finish(
-            target,
-            shot,
-            options.output,
-            options.copy,
-            options.save,
-            options.edit,
-        ),
-    }
+    finish(
+        target,
+        shot,
+        options.output,
+        options.copy,
+        options.save,
+        options.edit,
+        toolbar_click,
+    )
 }
 
 /// 截完图之后的去向：先（可选地）进标注编辑器，再按结果收尾。
@@ -250,12 +235,15 @@ fn finish(
     copy: bool,
     save: bool,
     edit: bool,
+    toolbar_click: Option<(f64, f64)>,
 ) -> Result<String, String> {
-    if !edit {
+    // 覆盖层工具栏上点过按钮的，交给编辑器的同一套点击逻辑去解释
+    //（出口类按钮不会真的开窗）；只有纯回车确认才尊重 --no-edit
+    if !edit && toolbar_click.is_none() {
         return deliver(&shot, output, copy, save);
     }
 
-    let result = editor::run(gdi::virtual_screen(), at, shot.rgba)?;
+    let result = editor::run(gdi::virtual_screen(), at, shot.rgba, toolbar_click)?;
     let edited = gdi::Capture {
         width: result.width,
         height: result.height,
@@ -552,11 +540,11 @@ fn capture(args: &[String]) -> Result<String, String> {
     Err("本程序只能在 Windows 上运行。".to_string())
 }
 
-/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）按钮条上选的去向。
+/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）工具栏上的那一下点击。
 ///
 /// 覆盖层返回前已销毁自身，所以接下来的抓屏不会把它自己截进去。
 #[cfg(windows)]
-fn interactive_target(mode: overlay::Mode) -> Result<(Rect, overlay::PostAction), String> {
+fn interactive_target(mode: overlay::Mode) -> Result<(Rect, Option<(f64, f64)>), String> {
     let screen = gdi::virtual_screen();
     let window_rects: Vec<Rect> = gdi::windows().into_iter().map(|w| w.frame).collect();
     let result = overlay::run(screen, window_rects, mode)?;
@@ -570,7 +558,7 @@ fn interactive_target(mode: overlay::Mode) -> Result<(Rect, overlay::PostAction)
         baobox_core::selection::Outcome::FullScreen => screen,
         baobox_core::selection::Outcome::Cancelled => return Err("已取消".to_string()),
     };
-    Ok((rect, result.action))
+    Ok((rect, result.toolbar_click))
 }
 
 /// 常驻：托盘图标 + 全局快捷键 + 设置窗口。

@@ -186,35 +186,19 @@ impl ToolModule for ScreenshotTool {
 impl ScreenshotTool {
     fn capture(&mut self, region: Option<Rect>) -> Result<String, String> {
         gdi::prepare();
-        let (target, action) = match region {
-            Some(rect) => (rect, crate::overlay::PostAction::Annotate),
+        let (target, toolbar_click) = match region {
+            Some(rect) => (rect, None),
             None => interactive_target(crate::overlay::Mode::Capture)?,
         };
         let shot = gdi::capture(target)?;
 
-        // 按钮条上直接选了去向的，不再进编辑器
-        match action {
-            crate::overlay::PostAction::Copy => return self.deliver(&shot, true, false),
-            crate::overlay::PostAction::Save => return self.deliver(&shot, false, true),
-            crate::overlay::PostAction::Pin => {
-                // 贴图会占住这个线程直到用户关掉，所以先落盘
-                let note = self.deliver(&shot, false, true)?;
-                pin::show(
-                    (target.x as i32, target.y as i32),
-                    &shot.rgba,
-                    shot.width,
-                    shot.height,
-                )?;
-                return Ok(note);
-            }
-            crate::overlay::PostAction::Annotate => {}
-        }
-
-        if !self.settings.edit {
+        // 覆盖层工具栏上点过按钮的，交给编辑器的同一套点击逻辑去解释
+        //（出口类按钮不会真的开窗）；只有纯回车确认才尊重「不进编辑器」的设置
+        if !self.settings.edit && toolbar_click.is_none() {
             return self.deliver(&shot, self.settings.copy, self.settings.save);
         }
 
-        let result = editor::run(gdi::virtual_screen(), target, shot.rgba)?;
+        let result = editor::run(gdi::virtual_screen(), target, shot.rgba, toolbar_click)?;
         let edited = gdi::Capture {
             width: result.width,
             height: result.height,
@@ -315,10 +299,10 @@ impl ScreenshotTool {
     }
 }
 
-/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）用户在按钮条上选的去向。
+/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）工具栏上的那一下点击。
 fn interactive_target(
     mode: crate::overlay::Mode,
-) -> Result<(Rect, crate::overlay::PostAction), String> {
+) -> Result<(Rect, Option<(f64, f64)>), String> {
     let screen = gdi::virtual_screen();
     let window_rects: Vec<Rect> = gdi::windows().into_iter().map(|w| w.frame).collect();
     let result = crate::overlay::run(screen, window_rects, mode)?;
@@ -332,7 +316,7 @@ fn interactive_target(
         Outcome::FullScreen => screen,
         Outcome::Cancelled => return Err("已取消".to_string()),
     };
-    Ok((rect, result.action))
+    Ok((rect, result.toolbar_click))
 }
 
 #[cfg(test)]
