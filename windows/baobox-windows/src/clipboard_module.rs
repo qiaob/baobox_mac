@@ -242,6 +242,17 @@ impl ClipboardTool {
                     baobox_image::decode_rgba(&png).map_err(|e| format!("这张图打不开：{e}"))?;
                 self.deliver(&mut || clipboard::copy_rgba(width, height, &rgba))
             }
+            // 文件条目要放回**真正的文件列表**（CF_HDROP）：写路径文本的话，
+            // 在资源管理器里粘出来的是一串字，不是文件
+            Kind::File => {
+                let paths: Vec<String> = item
+                    .text
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(str::to_string)
+                    .collect();
+                self.deliver(&mut || clipboard::copy_files(&paths))
+            }
             _ => self.deliver(&mut || clipboard::copy_text(&item.text)),
         }
     }

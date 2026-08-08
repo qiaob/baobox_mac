@@ -266,6 +266,7 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         let _ = DestroyWindow(hwnd);
         let _ = UnregisterClassW(CLASS_NAME, instance);
+        strip_stale_quit();
 
         let outcome = state
             .selection
@@ -274,6 +275,19 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             .unwrap_or(Outcome::Cancelled);
         Ok(OverlayResult { outcome, windows })
     }
+}
+
+/// 把可能残留在队列里的 `WM_QUIT` 摘掉。
+///
+/// 模态循环靠「状态机出结果」break，若有哪条路径还发了 `WM_QUIT`，
+/// 它会在循环退出后残留在队列里，杀掉**下一个**消息循环 ——
+/// 常驻模式下那是 App 的主循环，表现为整个程序毫无征兆地退出；
+/// 或者是紧接着打开的编辑器，表现为「截完图编辑器一闪而没」。
+/// 上面已经不再从动作路径发 WM_QUIT，这里是最后一道保险。
+pub(crate) unsafe fn strip_stale_quit() {
+    use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, PM_REMOVE, WM_QUIT};
+    let mut message = MSG::default();
+    while PeekMessageW(&mut message, None, WM_QUIT, WM_QUIT, PM_REMOVE).as_bool() {}
 }
 
 unsafe extern "system" fn wndproc(
@@ -308,18 +322,19 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
-            // 右键取消，与 Linux 版一致
+            // 右键取消，与 Linux 版一致。
+            // 这里**不能** PostQuitMessage：run() 的循环在派发完这条消息后
+            // 就会因状态机出结果而 break，来不及消费 WM_QUIT ——
+            // 残留的 WM_QUIT 会杀掉下一个消息循环（常驻模式下是 App 主循环，
+            // 表现为按个 Esc 整个程序就退出了）
             state.selection.key_down(Key::Escape, false);
-            PostQuitMessage(0);
             LRESULT(0)
         }
         WM_KEYDOWN => {
             let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
             if let Some(key) = translate_key(wparam.0 as u32) {
+                // 同上：出结果靠 run() 循环里的检查退出，不发 WM_QUIT
                 state.selection.key_down(key, shift);
-                if state.selection.outcome().is_some() {
-                    PostQuitMessage(0);
-                }
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)

@@ -184,6 +184,43 @@ pub fn preview_body(item: &Item) -> String {
     }
 }
 
+/// 预览图等比缩到框内（只缩不放：小图放大只会糊）。
+pub fn fit_within(width: u32, height: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if width == 0 || height == 0 || max_w == 0 || max_h == 0 {
+        return (0, 0);
+    }
+    if width <= max_w && height <= max_h {
+        return (width, height);
+    }
+    let scale = (max_w as f64 / width as f64).min(max_h as f64 / height as f64);
+    (
+        ((width as f64 * scale).round() as u32).max(1),
+        ((height as f64 * scale).round() as u32).max(1),
+    )
+}
+
+/// 最近邻缩放。预览缩略图用它够了 —— 质量可接受、代码短、不引依赖。
+pub fn resample_rgba(rgba: &[u8], width: u32, height: u32, target_w: u32, target_h: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((target_w as usize) * (target_h as usize) * 4);
+    if width == 0 || height == 0 || target_w == 0 || target_h == 0 {
+        return out;
+    }
+    for y in 0..target_h as u64 {
+        let source_y = (y * height as u64 / target_h as u64).min(height as u64 - 1) as usize;
+        for x in 0..target_w as u64 {
+            let source_x = (x * width as u64 / target_w as u64).min(width as u64 - 1) as usize;
+            let at = (source_y * width as usize + source_x) * 4;
+            if at + 4 <= rgba.len() {
+                out.extend_from_slice(&rgba[at..at + 4]);
+            } else {
+                // 源数据比头里声明的短：宁可给黑块也不 panic
+                out.extend_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+    }
+    out
+}
+
 /// 文本工具层里选中一行时预览区显示什么：动作行给**转换结果**，说明行给它自己。
 ///
 /// 用户还没按 ⏎ 就能看到格式化 / 解码出来长什么样 —— 这是 macOS 版预览区
@@ -236,10 +273,11 @@ mod imp {
         PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
         SetWindowLongPtrW, ShowWindow, TranslateMessage, UnregisterClassW, EN_CHANGE,
         ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, HTCAPTION,
-        HTCLIENT, IDC_ARROW, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LB_ADDSTRING, LB_GETCURSEL,
-        LB_RESETCONTENT, LB_SETCURSEL, MSG, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, WM_COMMAND,
-        WM_DESTROY, WM_KEYDOWN, WM_NCHITTEST, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        HTCLIENT, IDC_ARROW, IMAGE_BITMAP, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LB_ADDSTRING,
+        LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, MSG, SM_CXSCREEN, SM_CYSCREEN,
+        STM_SETIMAGE, SW_HIDE, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_KEYDOWN,
+        WM_NCHITTEST, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CHILD, WS_EX_TOPMOST, WS_POPUP,
+        WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     /// 面板窗口类名。
@@ -249,6 +287,11 @@ mod imp {
     const ID_SEARCH: i32 = 100;
     const ID_LIST: i32 = 101;
     const ID_PREVIEW: i32 = 102;
+    const ID_IMAGE: i32 = 103;
+
+    /// `SS_BITMAP | SS_CENTERIMAGE`。windows crate 把 STATIC 控件样式放在
+    /// 一个没启用的 feature 里，两个值是稳定的 Win32 常量，直接写死。
+    const STATIC_IMAGE_STYLE: u32 = 14 | 0x200;
 
     /// 尺寸（96 DPI 下的基准）。左列表右预览。
     const WIDTH: i32 = 780;
@@ -296,6 +339,15 @@ mod imp {
         search: HWND,
         list: HWND,
         preview: HWND,
+        /// 图片条目的缩略图（STATIC + SS_BITMAP）；与文本预览二选一显示
+        image_view: HWND,
+        /// 正挂在 `image_view` 上的位图，换图与关面板时要删
+        image_bitmap: windows::Win32::Graphics::Gdi::HBITMAP,
+        /// `image_bitmap` 对应哪个文件。搜索时每敲一个键都会重建列表并刷新预览，
+        /// 不记这个的话同一张图会被反复读盘、解码，打字都会卡
+        image_path: Option<std::path::PathBuf>,
+        /// 预览区的尺寸，缩略图按它等比缩
+        preview_size: (i32, i32),
         hint: HWND,
         /// 列表现在显示的是哪一层
         mode: Mode,
@@ -347,10 +399,31 @@ mod imp {
 
         /// 让右侧预览区跟上当前选中的行。
         ///
-        /// 第一层给条目的元信息 + 全文；第二层给转换结果 ——
+        /// 第一层给条目的元信息 + 全文，图片条目给缩略图；第二层给转换结果 ——
         /// 用户还没按 ⏎ 就能看到格式化 / 解码出来长什么样。
-        unsafe fn update_preview(&self) {
+        unsafe fn update_preview(&mut self) {
             let index = SendMessageW(self.list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+
+            // 图片条目：读文件、缩到框内、挂上缩略图。打码的不进这条路
+            let image_path = if index >= 0 && matches!(self.mode, Mode::Browse) {
+                self.visible
+                    .get(index as usize)
+                    .and_then(|id| self.snapshot.iter().find(|e| &e.id == id))
+                    .filter(|item| item.kind == Kind::Image && !item.concealed)
+                    .and_then(|item| {
+                        crate::clipboard_store::image_dir().map(|dir| dir.join(&item.image_file))
+                    })
+            } else {
+                None
+            };
+            if let Some(path) = image_path {
+                if self.show_image(&path) {
+                    let _ = ShowWindow(self.preview, SW_HIDE);
+                    let _ = ShowWindow(self.image_view, SW_SHOW);
+                    return;
+                }
+            }
+
             let text = if index < 0 {
                 String::new()
             } else {
@@ -378,10 +451,99 @@ mod imp {
             // 多行 EDIT 只认 CRLF，裸 \n 会显示成一行
             let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
             let wide_text = wide(&normalized);
+            let _ = ShowWindow(self.image_view, SW_HIDE);
+            let _ = ShowWindow(self.preview, SW_SHOW);
             let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
                 self.preview,
                 PCWSTR(wide_text.as_ptr()),
             );
+        }
+
+        /// 把一张 PNG 读进来、等比缩小、挂到缩略图控件上。失败就回退文本预览。
+        unsafe fn show_image(&mut self, path: &std::path::Path) -> bool {
+            use windows::Win32::Graphics::Gdi::{
+                CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+                BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+            };
+
+            // 还是同一张图：位图现成的，别再读盘解码一遍
+            if self.image_path.as_deref() == Some(path) && !self.image_bitmap.is_invalid() {
+                return true;
+            }
+
+            let Ok(png) = std::fs::read(path) else {
+                return false;
+            };
+            let Ok((width, height, rgba)) = baobox_image::decode_rgba(&png) else {
+                return false;
+            };
+            let (max_w, max_h) = self.preview_size;
+            // 边框与留白扣掉一点，免得缩略图顶着边
+            let (target_w, target_h) = fit_within(
+                width,
+                height,
+                (max_w - 4).max(1) as u32,
+                (max_h - 4).max(1) as u32,
+            );
+            if target_w == 0 || target_h == 0 {
+                return false;
+            }
+            let scaled = resample_rgba(&rgba, width, height, target_w, target_h);
+
+            // 建一块自上而下的 32 位 DIB，填成 BGRA 交给 STATIC 控件
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(screen);
+            ReleaseDC(None, screen);
+            if dc.is_invalid() {
+                return false;
+            }
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: target_w as i32,
+                    biHeight: -(target_h as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let created = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0);
+            let _ = DeleteDC(dc);
+            let Ok(bitmap) = created else {
+                return false;
+            };
+            if bits.is_null() {
+                // 位图建出来了但没回传像素指针 —— 不删就漏一个 GDI 句柄
+                let _ = DeleteObject(bitmap);
+                return false;
+            }
+            let target = std::slice::from_raw_parts_mut(
+                bits.cast::<u8>(),
+                target_w as usize * target_h as usize * 4,
+            );
+            for (out, px) in target.chunks_exact_mut(4).zip(scaled.chunks_exact(4)) {
+                out[0] = px[2]; // B
+                out[1] = px[1]; // G
+                out[2] = px[0]; // R
+                out[3] = 0xFF;
+            }
+
+            let previous = self.image_bitmap;
+            self.image_bitmap = bitmap;
+            self.image_path = Some(path.to_path_buf());
+            SendMessageW(
+                self.image_view,
+                STM_SETIMAGE,
+                WPARAM(IMAGE_BITMAP.0 as usize),
+                LPARAM(bitmap.0 as isize),
+            );
+            if !previous.is_invalid() {
+                let _ = DeleteObject(previous);
+            }
+            true
         }
 
         /// Ctrl+T：进 / 出文本工具那一层。
@@ -435,7 +597,7 @@ mod imp {
         }
 
         /// ↑↓ 换一行。列表不在焦点上（焦点在搜索框），所以要自己算。
-        unsafe fn move_selection(&self, down: bool) {
+        unsafe fn move_selection(&mut self, down: bool) {
             let current = SendMessageW(self.list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
             let next = if down { current + 1 } else { current - 1 };
             if next < 0 || next as usize >= self.visible.len() {
@@ -546,6 +708,20 @@ mod imp {
                 ID_PREVIEW,
                 font,
             );
+            // 图片缩略图与文本预览同位置，二选一显示（初始隐藏）
+            let image_view = child(
+                hwnd,
+                instance,
+                w!("STATIC"),
+                "",
+                (WS_CHILD | WS_BORDER).0 | STATIC_IMAGE_STYLE,
+                MARGIN + LIST_WIDTH + MARGIN,
+                list_top,
+                preview_width,
+                list_height,
+                ID_IMAGE,
+                font,
+            );
             let hint = child(
                 hwnd,
                 instance,
@@ -566,6 +742,10 @@ mod imp {
                 search,
                 list,
                 preview,
+                image_view,
+                image_bitmap: Default::default(),
+                image_path: None,
+                preview_size: (preview_width, list_height),
                 hint,
                 mode: Mode::Browse,
                 outcome: Outcome::Cancelled,
@@ -599,6 +779,9 @@ mod imp {
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             let _ = DestroyWindow(hwnd);
+            if !state.image_bitmap.is_invalid() {
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(state.image_bitmap);
+            }
             if !font.is_invalid() {
                 let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
             }
@@ -899,6 +1082,34 @@ mod tests {
         // 说明行没有转换结果，预览它自己
         let info = entries.iter().find(|e| e.action.is_empty()).unwrap();
         assert_eq!(tool_preview_body(info, source), info.label);
+    }
+
+    #[test]
+    fn thumbnails_shrink_to_fit_but_never_upscale() {
+        // 大图等比缩进框内
+        assert_eq!(fit_within(2000, 1000, 400, 400), (400, 200));
+        assert_eq!(fit_within(1000, 2000, 400, 400), (200, 400));
+        // 小图保持原样 —— 放大只会糊
+        assert_eq!(fit_within(100, 50, 400, 400), (100, 50));
+        // 退化输入不 panic
+        assert_eq!(fit_within(0, 10, 400, 400), (0, 0));
+        assert_eq!(fit_within(10, 10, 0, 400), (0, 0));
+    }
+
+    #[test]
+    fn resampling_picks_source_pixels_without_going_out_of_bounds() {
+        // 2×1 红绿两个像素，缩成 4×1：左半红右半绿
+        let source = [255u8, 0, 0, 255, 0, 255, 0, 255];
+        let out = resample_rgba(&source, 2, 1, 4, 1);
+        assert_eq!(out.len(), 16);
+        assert_eq!(&out[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&out[12..16], &[0, 255, 0, 255]);
+        // 缩到 1×1 取到的是网格里的某个真实像素
+        let one = resample_rgba(&source, 2, 1, 1, 1);
+        assert_eq!(one.len(), 4);
+        // 源数据比声明短：给黑块，不 panic
+        let short = resample_rgba(&[255, 0, 0, 255], 2, 1, 2, 1);
+        assert_eq!(&short[4..8], &[0, 0, 0, 255]);
     }
 
     #[test]

@@ -63,8 +63,12 @@ pub fn unlisten(hwnd: HWND) {
 
 /// 把剪贴板内容读出来。
 ///
-/// 优先级：图片 → 文件 → 文本。图片优先是因为很多程序复制图片时
-/// **同时**提供一段说明文字，只取文本的话用户会发现「复制的图变成了一串字」。
+/// 优先级：**文件 → 图片 → 文本**。
+///
+/// 文件必须排在图片前面：在资源管理器里复制一个图片**文件**时，Explorer
+/// 会同时放一份渲染好的 `CF_DIB` —— 先取图的话「复制的文件」会被记成一张图，
+/// 文件名与路径全丢。图片仍在文本之前：很多程序复制图片时**同时**提供
+/// 一段说明文字，只取文本的话用户会发现「复制的图变成了一串字」。
 pub fn read(hwnd: HWND) -> Content {
     unsafe {
         if !open(hwnd) {
@@ -89,17 +93,17 @@ unsafe fn open(hwnd: HWND) -> bool {
 }
 
 unsafe fn read_opened() -> Content {
+    if IsClipboardFormatAvailable(CF_HDROP).is_ok() {
+        let paths = files();
+        if !paths.is_empty() {
+            return Content::Files(paths);
+        }
+    }
     if IsClipboardFormatAvailable(CF_DIB).is_ok() {
         if let Some(bytes) = bytes_of(CF_DIB) {
             if !bytes.is_empty() {
                 return Content::Dib(bytes);
             }
-        }
-    }
-    if IsClipboardFormatAvailable(CF_HDROP).is_ok() {
-        let paths = files();
-        if !paths.is_empty() {
-            return Content::Files(paths);
         }
     }
     if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {

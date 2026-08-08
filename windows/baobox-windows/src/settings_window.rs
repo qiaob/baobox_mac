@@ -31,11 +31,16 @@
 //! 与整个系统格格不入。必须显式取 `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
 //! 里的 `lfMessageFont` 并 `WM_SETFONT` 给每个控件。
 //!
+//! # 按工具分页（与 mac 版对齐）
+//!
+//! 左边一列工具名，右边只显示选中那个工具的设置项 —— mac 版的设置就是
+//! 按工具分 Tab 的，全部工具摞成一长条既难找又得滚半天。切页 = 把别页的
+//! 控件 `SW_HIDE`、把本页的挪回设计位置，控件只建一次。
+//!
 //! # 滚动是自己挪控件，不是 `ScrollWindowEx`
 //!
-//! 工具一多，设置项就超过一屏了（三个工具已经 700 多像素，而 768 高的
-//! 笔记本上扣掉任务栏根本摆不下）。**挂一个滚不动的滚动条比没有更糟**，
-//! 所以这里真的实现了 `WM_VSCROLL`。
+//! 分页之后单页大多一屏放得下，但难保哪个工具的设置项越加越多，
+//! 所以 `WM_VSCROLL` 仍然实现着（**挂一个滚不动的滚动条比没有更糟**）。
 //!
 //! 做法是记下每个控件「设计时的 y」，滚动时按偏移量逐个 `SetWindowPos`。
 //! 比 `ScrollWindowEx` 省心：后者滚的是像素，子控件的逻辑位置没变，
@@ -54,20 +59,21 @@ use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, DeleteObject, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     SetScrollInfo, BST_CHECKED, BST_UNCHECKED, HKM_GETHOTKEY, HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL,
-    HOTKEYF_SHIFT, UDM_SETPOS32, UDM_SETRANGE32, UDS_SETBUDDYINT,
+    HOTKEYF_SHIFT, UDM_SETPOS32, UDM_SETRANGE32, UDS_AUTOBUDDY, UDS_SETBUDDYINT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowTextLengthW,
     GetWindowTextW, LoadCursorW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
     ShowWindow, SystemParametersInfoW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE,
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, EN_CHANGE, ES_AUTOHSCROLL,
-    EnumChildWindows, GetClientRect, GWLP_USERDATA, IDC_ARROW, NONCLIENTMETRICSW, SB_BOTTOM,
+    EnumChildWindows, GetClientRect, GWLP_USERDATA, IDC_ARROW, LBN_SELCHANGE, LBS_NOTIFY,
+    LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, NONCLIENTMETRICSW, SB_BOTTOM,
     SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
     SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SPI_GETNONCLIENTMETRICS,
     SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_MOUSEWHEEL, WM_SETFONT,
-    WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_HIDE, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_MOUSEWHEEL,
+    WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_EX_CLIENTEDGE,
+    WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 /// 设置窗口类名。
@@ -76,13 +82,20 @@ const CLASS_NAME: PCWSTR = w!("BaoboxSettings");
 /// 控件 id 从这里开始编 —— 低位留给系统的标准 id（IDOK 之类）。
 const FIRST_CONTROL: i32 = 100;
 
+/// 左侧工具列表的控件 id（在系统保留区之上、普通控件之下）。
+const ID_SIDEBAR: i32 = 90;
+
 /// 行距与各段宽度（像素，96 DPI 下的基准）。
 const ROW_HEIGHT: i32 = 30;
 const HELP_HEIGHT: i32 = 18;
 const MARGIN: i32 = 16;
 const LABEL_WIDTH: i32 = 220;
 const CONTROL_WIDTH: i32 = 200;
-const WINDOW_WIDTH: i32 = 520;
+/// 左侧工具列表的宽度。
+const SIDEBAR_WIDTH: i32 = 130;
+/// 设置项区域的起点（工具列表右侧）。
+const PAGE_X: i32 = MARGIN + SIDEBAR_WIDTH + MARGIN;
+const WINDOW_WIDTH: i32 = 520 + SIDEBAR_WIDTH + MARGIN;
 
 /// 配置被改动时的回调。
 pub type OnChange = Box<dyn Fn(&Config)>;
@@ -112,15 +125,22 @@ struct SettingsState {
     config: RefCell<Config>,
     on_change: OnChange,
     font: HFONT,
-    /// 每个子控件与它**设计时**的 (x, y)。滚动就是照着这个重新摆一遍。
+    /// 每一页的子控件与它们**设计时**的 (x, y)。切页时别页隐藏、本页摆回；
+    /// 滚动就是照着这个（减去偏移）重新摆一遍。
     ///
     /// x 也要记：`SetWindowPos` 即便带 `SWP_NOSIZE`，位置也是两个坐标
     /// **一起**生效的 —— 只算 y、x 随手传 0 的话，一滚动所有控件会齐刷刷
     /// 贴到窗口左边
-    children: Vec<(HWND, i32, i32)>,
-    /// 已经往下滚了多少像素
+    page_children: Vec<Vec<(HWND, i32, i32)>>,
+    /// 每一页的内容总高
+    page_heights: Vec<i32>,
+    /// 现在显示第几页
+    current: usize,
+    /// 左侧工具列表
+    sidebar: HWND,
+    /// 已经往下滚了多少像素（只作用于当前页）
     scroll_y: i32,
-    /// 内容总高
+    /// 当前页的内容总高
     content_height: i32,
 }
 
@@ -146,10 +166,10 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         };
         RegisterClassW(&class);
 
-        let content_height = window_height(&pages);
-        // 窗口本身不超过 640 —— 再高的话 768 的笔记本上扣掉任务栏就摆不下了。
-        // 超出的部分交给滚动条
-        let height = content_height.min(640);
+        let page_heights: Vec<i32> = pages.iter().map(page_height).collect();
+        // 窗口取最高的那一页，但不超过 640 —— 再高的话 768 的笔记本上
+        // 扣掉任务栏就摆不下了。单页超出的部分交给滚动条
+        let height = page_heights.iter().copied().max().unwrap_or(200).min(640);
         let hwnd = CreateWindowExW(
             Default::default(),
             CLASS_NAME,
@@ -168,61 +188,111 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         .map_err(|e| format!("创建设置窗口失败：{e}"))?;
 
         let font = message_font();
+        // 左侧工具列表（先建，好在收集各页控件时把它排除在外）
+        let sidebar = control(
+            hwnd, instance, w!("LISTBOX"), "",
+            (WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER).0 | LBS_NOTIFY as u32,
+            MARGIN, MARGIN, SIDEBAR_WIDTH, client_height(hwnd).max(200) - MARGIN * 2,
+            ID_SIDEBAR, font,
+        );
+        for page in &pages {
+            let title = wide(&page.title);
+            SendMessageW(sidebar, LB_ADDSTRING, WPARAM(0), LPARAM(title.as_ptr() as isize));
+        }
+        SendMessageW(sidebar, LB_SETCURSEL, WPARAM(0), LPARAM(0));
+
         let mut state = Box::new(SettingsState {
             controls: Vec::new(),
             config: RefCell::new(config),
             on_change,
             font,
-            children: Vec::new(),
+            page_children: Vec::new(),
+            page_heights,
+            current: 0,
+            sidebar,
             scroll_y: 0,
-            content_height,
+            content_height: 0,
         });
-        build(hwnd, instance, &pages, &mut state);
-        // 建完再收一遍子窗口，省得给每个 control() 调用都串一个「记下来」的参数
-        state.children = collect_children(hwnd);
+
+        // 一页一页建；每建完一页收一遍子窗口，新出现的就是这一页的。
+        // 这样建控件的那些辅助函数不必都串一个「记到哪一页」的参数
+        let mut seen: std::collections::HashSet<isize> =
+            collect_children(hwnd).iter().map(|(h, _, _)| h.0 as isize).collect();
+        let mut id = FIRST_CONTROL;
+        for page in &pages {
+            id = build_page(hwnd, instance, page, &mut state, id);
+            let mut mine = Vec::new();
+            for (child, x, y) in collect_children(hwnd) {
+                if seen.insert(child.0 as isize) {
+                    mine.push((child, x, y));
+                }
+            }
+            state.page_children.push(mine);
+        }
+
         let raw = Box::into_raw(state);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
-        configure_scrollbar(hwnd, &*raw);
+        show_page(hwnd, &mut *raw, 0);
 
         let _ = ShowWindow(hwnd, SW_SHOW);
         Ok(hwnd)
     }
 }
 
-/// 窗口该多高：所有页的所有行加起来。
-fn window_height(pages: &[SettingsPage]) -> i32 {
-    let mut height = MARGIN * 2 + 40;
-    for page in pages {
-        height += ROW_HEIGHT; // 页标题
-        for field in &page.fields {
-            height += ROW_HEIGHT;
-            if field.help.is_some() {
-                height += HELP_HEIGHT;
-            }
+/// 一页该多高：标题 + 各行 + 说明行。
+fn page_height(page: &SettingsPage) -> i32 {
+    let mut height = MARGIN * 2 + 40 + ROW_HEIGHT; // 边距 + 页标题
+    for field in &page.fields {
+        height += ROW_HEIGHT;
+        if field.help.is_some() {
+            height += HELP_HEIGHT;
         }
-        height += MARGIN;
     }
     height
 }
 
-/// 逐页逐项建控件。
-unsafe fn build(
+/// 切到第 `index` 页：别页的控件藏起来，本页的摆回设计位置。
+unsafe fn show_page(hwnd: HWND, state: &mut SettingsState, index: usize) {
+    let index = index.min(state.page_children.len().saturating_sub(1));
+    state.current = index;
+    state.scroll_y = 0;
+    state.content_height = state.page_heights.get(index).copied().unwrap_or(0);
+    for (page, children) in state.page_children.iter().enumerate() {
+        for (child, x, y) in children {
+            if page == index {
+                let _ = SetWindowPos(
+                    *child, None, *x, *y, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                let _ = ShowWindow(*child, SW_SHOW);
+            } else {
+                let _ = ShowWindow(*child, SW_HIDE);
+            }
+        }
+    }
+    configure_scrollbar(hwnd, state);
+}
+
+/// 建一页的控件，返回下一个可用的控件 id。
+unsafe fn build_page(
     parent: HWND,
     instance: HINSTANCE,
-    pages: &[SettingsPage],
+    page: &SettingsPage,
     state: &mut SettingsState,
-) {
+    first_id: i32,
+) -> i32 {
     let mut y = MARGIN;
-    let mut id = FIRST_CONTROL;
+    let mut id = first_id;
+    let page_width = WINDOW_WIDTH - PAGE_X - MARGIN;
 
-    for page in pages {
-        // 页标题：一条加粗的分组标签
-        static_text(parent, instance, &page.title, MARGIN, y, WINDOW_WIDTH - MARGIN * 2, state.font);
+    {
+        // 页标题
+        static_text(parent, instance, &page.title, PAGE_X, y, page_width, state.font);
         y += ROW_HEIGHT;
 
         for field in &page.fields {
             let value = field.value(&state.config.borrow(), &page.section);
-            let control_x = MARGIN + LABEL_WIDTH;
+            let control_x = PAGE_X + LABEL_WIDTH;
 
             let (hwnd, kind) = match &field.kind {
                 FieldKind::Toggle { .. } => {
@@ -230,7 +300,7 @@ unsafe fn build(
                     let hwnd = control(
                         parent, instance, w!("BUTTON"), &field.label,
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_AUTOCHECKBOX as u32,
-                        MARGIN, y, LABEL_WIDTH + CONTROL_WIDTH, 22, id, state.font,
+                        PAGE_X, y, LABEL_WIDTH + CONTROL_WIDTH, 22, id, state.font,
                     );
                     SendMessageW(
                         hwnd,
@@ -241,7 +311,7 @@ unsafe fn build(
                     (hwnd, Kind::Check)
                 }
                 FieldKind::Choice { options, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, PAGE_X, y + 3, LABEL_WIDTH, state.font);
                     let hwnd = control(
                         parent, instance, w!("COMBOBOX"), "",
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | CBS_DROPDOWNLIST as u32,
@@ -257,16 +327,20 @@ unsafe fn build(
                     (hwnd, Kind::Combo)
                 }
                 FieldKind::Number { min, max, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, PAGE_X, y + 3, LABEL_WIDTH, state.font);
                     let edit = control(
                         parent, instance, w!("EDIT"), &value,
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
                         control_x, y, 80, 22, id, state.font,
                     );
-                    // 配一个上下箭头，省得用户手打数字
+                    // 配一个上下箭头，省得用户手打数字。
+                    // UDS_AUTOBUDDY 把 Z 序上前一个窗口（就是上面那个编辑框）
+                    // 认作 buddy —— 不绑 buddy 的话箭头点了只改内部计数，
+                    // 编辑框纹丝不动，设置永远不会变
                     let spin = control(
                         parent, instance, w!("msctls_updown32"), "",
-                        (WS_CHILD | WS_VISIBLE).0 | UDS_SETBUDDYINT as u32,
+                        (WS_CHILD | WS_VISIBLE).0
+                            | (UDS_SETBUDDYINT | UDS_AUTOBUDDY) as u32,
                         control_x + 80, y, 18, 22, id + 1000, state.font,
                     );
                     SendMessageW(spin, UDM_SETRANGE32, WPARAM(*min as usize), LPARAM(*max as isize));
@@ -279,7 +353,7 @@ unsafe fn build(
                     (edit, Kind::Number)
                 }
                 FieldKind::Hotkey { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, PAGE_X, y + 3, LABEL_WIDTH, state.font);
                     let hwnd = control_ex(
                         parent, instance, WS_EX_CLIENTEDGE, w!("msctls_hotkey32"), "",
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0,
@@ -295,7 +369,7 @@ unsafe fn build(
                     (hwnd, Kind::Hotkey)
                 }
                 FieldKind::Text { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, PAGE_X, y + 3, LABEL_WIDTH, state.font);
                     let hwnd = control_ex(
                         parent, instance, WS_EX_CLIENTEDGE, w!("EDIT"), &value,
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
@@ -318,13 +392,13 @@ unsafe fn build(
             if let Some(help) = &field.help {
                 static_text(
                     parent, instance, help,
-                    MARGIN + 2, y - 6, WINDOW_WIDTH - MARGIN * 2, state.font,
+                    PAGE_X + 2, y - 6, page_width, state.font,
                 );
                 y += HELP_HEIGHT;
             }
         }
-        y += MARGIN;
     }
+    id
 }
 
 unsafe fn static_text(
@@ -561,7 +635,10 @@ unsafe fn scroll_to(hwnd: HWND, state: &mut SettingsState, target: i32) {
         return;
     }
     state.scroll_y = clamped;
-    for (child, design_x, design_y) in &state.children {
+    let Some(children) = state.page_children.get(state.current) else {
+        return;
+    };
+    for (child, design_x, design_y) in children {
         let _ = SetWindowPos(
             *child,
             None,
@@ -591,7 +668,16 @@ unsafe extern "system" fn wndproc(
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            handle_command(state, id, code);
+            if id == ID_SIDEBAR && code == LBN_SELCHANGE {
+                // 列表点当前行也会发 LBN_SELCHANGE —— 不挡掉的话，
+                // 随手一点就把用户滚到一半的位置弹回顶部
+                let index = SendMessageW(state.sidebar, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                if index >= 0 && index as usize != state.current {
+                    show_page(hwnd, state, index as usize);
+                }
+            } else {
+                handle_command(state, id, code);
+            }
             LRESULT(0)
         }
         WM_VSCROLL => {
@@ -623,7 +709,16 @@ unsafe extern "system" fn wndproc(
         }
         WM_SIZE => {
             // 窗口被拉高了：能看到的更多，滚动范围就该变小，
-            // 而且可能要把已经滚过头的位置收回来
+            // 而且可能要把已经滚过头的位置收回来；工具列表也跟着拉高
+            let _ = SetWindowPos(
+                state.sidebar,
+                None,
+                MARGIN,
+                MARGIN,
+                SIDEBAR_WIDTH,
+                (client_height(hwnd) - MARGIN * 2).max(60),
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             configure_scrollbar(hwnd, state);
             scroll_to(hwnd, state, state.scroll_y);
             LRESULT(0)
@@ -772,21 +867,21 @@ mod tests {
     }
 
     #[test]
-    fn the_window_grows_with_the_number_of_settings() {
-        let one = window_height(&[SettingsPage::new("s", "一项", vec![Field::toggle("a", "开关", true)])]);
-        let many = window_height(&[page()]);
+    fn the_page_grows_with_the_number_of_settings() {
+        let one = page_height(&SettingsPage::new("s", "一项", vec![Field::toggle("a", "开关", true)]));
+        let many = page_height(&page());
         assert!(many > one, "多几项就该高一些，否则控件会被挤到窗口外");
         // 带说明的那一项要多留一行
-        let without_help = window_height(&[SettingsPage::new(
+        let without_help = page_height(&SettingsPage::new(
             "s",
             "测试",
             vec![Field::toggle("a", "开关", true)],
-        )]);
-        let with_help = window_height(&[SettingsPage::new(
+        ));
+        let with_help = page_height(&SettingsPage::new(
             "s",
             "测试",
             vec![Field::toggle("a", "开关", true).with_help("说明")],
-        )]);
+        ));
         assert_eq!(with_help - without_help, HELP_HEIGHT);
     }
 
@@ -801,21 +896,33 @@ mod tests {
     }
 
     #[test]
-    fn three_tools_worth_of_settings_no_longer_fit_in_one_screen() {
-        // 这条测试记的是「为什么会有滚动条」：三个工具已经超过 640，
-        // 而 768 高的笔记本扣掉任务栏就摆不下更高的窗口了
-        let many: Vec<SettingsPage> = (0..3)
-            .map(|n| {
-                SettingsPage::new(
-                    "s",
-                    "页",
-                    (0..4)
-                        .map(|m| Field::toggle(&format!("k{n}{m}"), "开关", true).with_help("说明"))
-                        .collect(),
-                )
-            })
-            .collect();
-        assert!(window_height(&many) > 640, "超过一屏就必须能滚");
+    fn pages_are_sized_per_tool_but_scrolling_still_backs_up_a_huge_page() {
+        // 设置按工具分页（与 mac 版对齐）：普通工具的一页一屏放得下……
+        let typical = SettingsPage::new(
+            "s",
+            "页",
+            (0..6)
+                .map(|m| Field::toggle(&format!("k{m}"), "开关", true).with_help("说明"))
+                .collect(),
+        );
+        assert!(page_height(&typical) < 640, "普通工具的设置页不该出滚动条");
+        // ……但哪个工具的设置项越加越多时，滚动条仍要兜得住
+        let huge = SettingsPage::new(
+            "s",
+            "页",
+            (0..20)
+                .map(|m| Field::toggle(&format!("k{m}"), "开关", true).with_help("说明"))
+                .collect(),
+        );
+        assert!(page_height(&huge) > 640, "单页超高时必须能滚");
+    }
+
+    #[test]
+    fn the_sidebar_id_stays_clear_of_both_system_and_field_ids() {
+        // 撞上系统 id 会收到莫名其妙的 WM_COMMAND，撞上字段 id 会把
+        // 切页当成改设置
+        assert!(ID_SIDEBAR > 10);
+        assert!(ID_SIDEBAR < FIRST_CONTROL);
     }
 
     #[test]

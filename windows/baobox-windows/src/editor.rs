@@ -290,6 +290,7 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         let _ = DestroyWindow(hwnd);
         let _ = UnregisterClassW(CLASS_NAME, instance);
+        crate::overlay::strip_stale_quit();
 
         let outcome = state.editor.outcome().unwrap_or(EditorOutcome::Cancel);
         if outcome == EditorOutcome::Cancel {
@@ -357,10 +358,10 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
+            // 出结果靠 run() 循环里的检查退出，**不能** PostQuitMessage：
+            // 循环在派发完这条消息后就 break，来不及消费 WM_QUIT，
+            // 残留的 WM_QUIT 会把常驻模式的 App 主循环一并杀掉
             state.editor.key_down(EditorKey::Escape, Modifiers::NONE);
-            if state.editor.outcome().is_some() {
-                PostQuitMessage(0);
-            }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
@@ -368,10 +369,8 @@ unsafe extern "system" fn wndproc(
             let modifiers = current_modifiers();
             let typing = state.editor.pending_text().is_some();
             if let Some(key) = translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
+                // 同上：不发 WM_QUIT
                 state.editor.key_down(key, modifiers);
-                if state.editor.outcome().is_some() {
-                    PostQuitMessage(0);
-                }
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)

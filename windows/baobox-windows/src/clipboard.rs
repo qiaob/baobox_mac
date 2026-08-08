@@ -22,6 +22,63 @@ const CF_DIB: u32 = 8;
 /// 不用 `CF_TEXT`：那是 ANSI 代码页，中文在非中文系统上会变成问号。
 const CF_UNICODETEXT: u32 = 13;
 
+/// `CF_HDROP` 的剪贴板格式号。
+const CF_HDROP: u32 = 15;
+
+/// 把一批文件路径放进剪贴板（与资源管理器的「复制」同一格式）。
+///
+/// 粘贴目标收到的是**真正的文件列表**：在资源管理器里 Ctrl+V 会复制文件本体，
+/// 在聊天工具里会变成附件。只写路径文本的话，这些目标只会得到一串字。
+pub fn copy_files(paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("没有可复制的文件".to_string());
+    }
+    // 布局：DROPFILES 头（20 字节）+ 每条路径以 NUL 结尾的 UTF-16 + 结尾再补一个 NUL
+    let mut list: Vec<u16> = Vec::new();
+    for path in paths {
+        list.extend(path.encode_utf16());
+        list.push(0);
+    }
+    list.push(0);
+    const HEADER: usize = 20;
+    let total = HEADER + list.len() * 2;
+
+    unsafe {
+        let handle: HGLOBAL =
+            GlobalAlloc(GMEM_MOVEABLE, total).map_err(|e| format!("分配剪贴板内存失败：{e}"))?;
+        let pointer = GlobalLock(handle);
+        if pointer.is_null() {
+            let _ = GlobalFree(handle);
+            return Err("锁定剪贴板内存失败".to_string());
+        }
+        let bytes = pointer as *mut u8;
+        std::ptr::write_bytes(bytes, 0, HEADER);
+        // pFiles：路径列表相对结构开头的偏移
+        std::ptr::write_unaligned(bytes as *mut u32, HEADER as u32);
+        // fWide（偏移 16）= TRUE：上面写的是 UTF-16
+        std::ptr::write_unaligned(bytes.add(16) as *mut u32, 1);
+        std::ptr::copy_nonoverlapping(list.as_ptr(), bytes.add(HEADER) as *mut u16, list.len());
+        let _ = GlobalUnlock(handle);
+
+        if OpenClipboard(None).is_err() {
+            let _ = GlobalFree(handle);
+            return Err("无法打开剪贴板（可能被其他程序占用）".to_string());
+        }
+        let _ = EmptyClipboard();
+        let result = SetClipboardData(CF_HDROP, HANDLE(handle.0));
+        let _ = CloseClipboard();
+
+        match result {
+            // 成功即交出所有权，绝不能再 GlobalFree
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let _ = GlobalFree(handle);
+                Err(format!("写入剪贴板失败：{e}"))
+            }
+        }
+    }
+}
+
 /// 把一段文字放进剪贴板（屏幕取字用）。
 pub fn copy_text(text: &str) -> Result<(), String> {
     // Windows 要求以 NUL 结尾的 UTF-16
