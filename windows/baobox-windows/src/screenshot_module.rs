@@ -186,11 +186,29 @@ impl ToolModule for ScreenshotTool {
 impl ScreenshotTool {
     fn capture(&mut self, region: Option<Rect>) -> Result<String, String> {
         gdi::prepare();
-        let target = match region {
-            Some(rect) => rect,
-            None => interactive_target()?,
+        let (target, action) = match region {
+            Some(rect) => (rect, crate::overlay::PostAction::Annotate),
+            None => interactive_target(crate::overlay::Mode::Capture)?,
         };
         let shot = gdi::capture(target)?;
+
+        // 按钮条上直接选了去向的，不再进编辑器
+        match action {
+            crate::overlay::PostAction::Copy => return self.deliver(&shot, true, false),
+            crate::overlay::PostAction::Save => return self.deliver(&shot, false, true),
+            crate::overlay::PostAction::Pin => {
+                // 贴图会占住这个线程直到用户关掉，所以先落盘
+                let note = self.deliver(&shot, false, true)?;
+                pin::show(
+                    (target.x as i32, target.y as i32),
+                    &shot.rgba,
+                    shot.width,
+                    shot.height,
+                )?;
+                return Ok(note);
+            }
+            crate::overlay::PostAction::Annotate => {}
+        }
 
         if !self.settings.edit {
             return self.deliver(&shot, self.settings.copy, self.settings.save);
@@ -246,7 +264,7 @@ impl ScreenshotTool {
 
     fn ocr(&mut self) -> Result<String, String> {
         gdi::prepare();
-        let target = interactive_target()?;
+        let (target, _) = interactive_target(crate::overlay::Mode::Pick)?;
         let shot = gdi::capture(target)?;
         let text = ocr::recognize(&shot.rgba, shot.width, shot.height)?;
         if text.trim().is_empty() {
@@ -268,7 +286,7 @@ impl ScreenshotTool {
         }
 
         gdi::prepare();
-        let target = interactive_target()?;
+        let (target, _) = interactive_target(crate::overlay::Mode::Pick)?;
         let path = crate::default_path(&self.settings.save_dir)?.with_extension("mp4");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
@@ -297,21 +315,24 @@ impl ScreenshotTool {
     }
 }
 
-/// 铺覆盖层让用户选，返回要抓的矩形。
-fn interactive_target() -> Result<Rect, String> {
+/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）用户在按钮条上选的去向。
+fn interactive_target(
+    mode: crate::overlay::Mode,
+) -> Result<(Rect, crate::overlay::PostAction), String> {
     let screen = gdi::virtual_screen();
     let window_rects: Vec<Rect> = gdi::windows().into_iter().map(|w| w.frame).collect();
-    let result = crate::overlay::run(screen, window_rects)?;
-    match result.outcome {
-        Outcome::Region(rect) => Ok(rect),
+    let result = crate::overlay::run(screen, window_rects, mode)?;
+    let rect = match result.outcome {
+        Outcome::Region(rect) => rect,
         Outcome::Window(index) => result
             .windows
             .get(index)
             .copied()
-            .ok_or_else(|| "选中的窗口已消失".to_string()),
-        Outcome::FullScreen => Ok(screen),
-        Outcome::Cancelled => Err("已取消".to_string()),
-    }
+            .ok_or_else(|| "选中的窗口已消失".to_string())?,
+        Outcome::FullScreen => screen,
+        Outcome::Cancelled => return Err("已取消".to_string()),
+    };
+    Ok((rect, result.action))
 }
 
 #[cfg(test)]

@@ -24,10 +24,11 @@ use baobox_core::selection::{Key, Outcome, Phase, Selection};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC,
-    DeleteObject, EndPaint, FillRect, FrameRect, GetDC, InvalidateRect, ReleaseDC, SelectObject,
-    SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-    HBITMAP, HBRUSH, HDC, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush,
+    DeleteDC, DeleteObject, EndPaint, FillRect, FrameRect, GetDC, InvalidateRect, ReleaseDC,
+    SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_SEMIBOLD, HBITMAP, HBRUSH,
+    HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_SHIFT};
@@ -52,12 +53,111 @@ const ACCENT_BGR: u32 = 0x0098_A317;
 /// 手柄边长。
 const HANDLE_SIZE: i32 = 8;
 
+/// 动作按钮的尺寸与间距（屏幕像素）。
+const BUTTON_H: f64 = 34.0;
+const BUTTON_W: f64 = 64.0;
+const CANCEL_W: f64 = 34.0;
+const BUTTON_GAP: f64 = 8.0;
+/// 按钮条与选区的距离。
+const BUTTON_MARGIN: f64 = 10.0;
+
+/// 覆盖层的用途，决定「拖完选区之后」的交互。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// 截图：拖完选区**停在可调整状态**，选区旁出现动作按钮
+    /// （编辑 / 复制 / 保存 / 贴图 / 取消），按了按钮才定稿 —— CleanShot 式。
+    Capture,
+    /// 只是选一块区域（屏幕取字、录屏）：松开鼠标即确认，没有按钮。
+    Pick,
+}
+
+/// 用户在按钮条上选了什么去向。`Mode::Pick` 与键盘回车一律算 [`PostAction::Annotate`]。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PostAction {
+    /// 进标注编辑器（默认去向）
+    Annotate,
+    /// 只复制到剪贴板
+    Copy,
+    /// 只保存到文件
+    Save,
+    /// 保存并钉在屏幕上
+    Pin,
+}
+
+/// 按钮条上的一颗按钮。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OverlayButton {
+    Annotate,
+    Copy,
+    Save,
+    Pin,
+    Cancel,
+}
+
+impl OverlayButton {
+    const ALL: [OverlayButton; 5] = [
+        OverlayButton::Annotate,
+        OverlayButton::Copy,
+        OverlayButton::Save,
+        OverlayButton::Pin,
+        OverlayButton::Cancel,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            OverlayButton::Annotate => "编辑",
+            OverlayButton::Copy => "复制",
+            OverlayButton::Save => "保存",
+            OverlayButton::Pin => "贴图",
+            OverlayButton::Cancel => "✕",
+        }
+    }
+
+    fn width(self) -> f64 {
+        if self == OverlayButton::Cancel {
+            CANCEL_W
+        } else {
+            BUTTON_W
+        }
+    }
+}
+
+/// 按钮条的摆放（屏幕坐标）：右对齐在选区下方；下方放不下翻到上方；
+/// 上下都没地方（全屏选区）就贴在选区内部的右下角。永不出屏。
+fn button_layout(rect: &Rect, screen: &Rect) -> Vec<(OverlayButton, Rect)> {
+    let total: f64 = OverlayButton::ALL.iter().map(|b| b.width()).sum::<f64>()
+        + BUTTON_GAP * (OverlayButton::ALL.len() as f64 - 1.0);
+    let x = (rect.right() - total)
+        .min(screen.right() - total - 4.0)
+        .max(screen.x + 4.0);
+    let below = rect.bottom() + BUTTON_MARGIN;
+    let above = rect.y - BUTTON_MARGIN - BUTTON_H;
+    let y = if below + BUTTON_H + 4.0 <= screen.bottom() {
+        below
+    } else if above >= screen.y + 4.0 {
+        above
+    } else {
+        rect.bottom() - BUTTON_H - BUTTON_MARGIN
+    };
+    let mut cursor = x;
+    OverlayButton::ALL
+        .iter()
+        .map(|button| {
+            let frame = Rect::new(cursor, y, button.width(), BUTTON_H);
+            cursor += button.width() + BUTTON_GAP;
+            (*button, frame)
+        })
+        .collect()
+}
+
 /// 覆盖层运行结果。
 pub struct OverlayResult {
     /// 用户选择的目标
     pub outcome: Outcome,
     /// 窗口列表（`Outcome::Window(i)` 的下标指向它）
     pub windows: Vec<Rect>,
+    /// 截图完成后的去向（按钮条的选择；键盘回车 = 默认进编辑器）
+    pub action: PostAction,
 }
 
 /// 一块 32 位自上而下的 DIB 及其内存 DC。
@@ -184,6 +284,11 @@ struct OverlayState {
     /// 而状态机用的是屏幕坐标，两者要来回换算
     origin: (f64, f64),
     frozen: Frozen,
+    /// 整个虚拟屏幕（按钮条摆放要拿它算边界）
+    screen: Rect,
+    mode: Mode,
+    /// 用户按了哪颗按钮
+    action: PostAction,
 }
 
 impl OverlayState {
@@ -199,10 +304,26 @@ impl OverlayState {
             bottom: (rect.y - self.origin.1 + rect.h) as i32,
         }
     }
+
+    /// 这一点（屏幕坐标）落在按钮条的哪颗按钮上。
+    /// 只有截图模式的调整阶段才有按钮条。
+    fn hit_button(&self, point: (f64, f64)) -> Option<OverlayButton> {
+        if self.mode != Mode::Capture {
+            return None;
+        }
+        if !matches!(self.selection.phase(), Phase::Adjusting { .. }) {
+            return None;
+        }
+        let rect = self.selection.current_rect()?;
+        button_layout(&rect, &self.screen)
+            .into_iter()
+            .find(|(_, frame)| frame.contains(point.0, point.1))
+            .map(|(button, _)| button)
+    }
 }
 
 /// 铺覆盖层并跑消息循环，直到用户确认或取消。
-pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
+pub fn run(screen: Rect, windows: Vec<Rect>, mode: Mode) -> Result<OverlayResult, String> {
     unsafe {
         // 先抓整屏当冻结底图 —— 必须在建窗之前，否则会把覆盖层自己抓进去
         let shot = crate::gdi::capture(screen)?;
@@ -227,6 +348,9 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             selection: Selection::new(screen, windows.clone()),
             origin: (screen.x, screen.y),
             frozen,
+            screen,
+            mode,
+            action: PostAction::Annotate,
         });
 
         let hwnd = CreateWindowExW(
@@ -273,7 +397,11 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             .outcome()
             .cloned()
             .unwrap_or(Outcome::Cancelled);
-        Ok(OverlayResult { outcome, windows })
+        Ok(OverlayResult {
+            outcome,
+            windows,
+            action: state.action,
+        })
     }
 }
 
@@ -311,18 +439,37 @@ unsafe extern "system" fn wndproc(
         }
         WM_LBUTTONDOWN => {
             let (x, y) = lparam_to_point(lparam);
-            state.selection.mouse_down(state.to_screen(x, y));
+            let point = state.to_screen(x, y);
+            // 先看是不是点在按钮条上 —— 按钮可能悬在选区内部（全屏选区时），
+            // 不先拦的话这一下会被状态机当成「开始挪动选区」
+            if let Some(button) = state.hit_button(point) {
+                match button {
+                    OverlayButton::Cancel => state.selection.key_down(Key::Escape, false),
+                    other => {
+                        state.action = match other {
+                            OverlayButton::Copy => PostAction::Copy,
+                            OverlayButton::Save => PostAction::Save,
+                            OverlayButton::Pin => PostAction::Pin,
+                            _ => PostAction::Annotate,
+                        };
+                        state.selection.key_down(Key::Enter, false);
+                    }
+                }
+                return LRESULT(0);
+            }
+            state.selection.mouse_down(point);
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
             let (x, y) = lparam_to_point(lparam);
             state.selection.mouse_up(state.to_screen(x, y));
-            // 松开鼠标 = 截图完成，立刻进标注编辑器（用户实测反馈：
-            // 「框选完就该是完成」）。共享状态机把拖拽结束定为「调整阶段」，
-            // 这里直接替用户按下回车确认。误触保护由状态机自带：
-            // 位移不足的点击不会进入拖拽，也就走不到这一步
-            if matches!(state.selection.phase(), Phase::Adjusting { .. }) {
+            // 屏幕取字 / 录屏只要一块区域：松开鼠标即确认，没有按钮条。
+            // 截图（Capture 模式）则停在可调整状态，让用户拖手柄改选区、
+            // 在按钮条上选去向 —— CleanShot 式交互
+            if state.mode == Mode::Pick
+                && matches!(state.selection.phase(), Phase::Adjusting { .. })
+            {
                 state.selection.key_down(Key::Enter, false);
             }
             let _ = InvalidateRect(hwnd, None, false);
@@ -421,7 +568,8 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
         FrameRect(frozen.back.dc, &client, accent);
 
         // 选区成形后才画手柄；悬停高亮窗口时画手柄会误导
-        if matches!(state.selection.phase(), Phase::Adjusting { .. }) {
+        let adjusting = matches!(state.selection.phase(), Phase::Adjusting { .. });
+        if adjusting {
             for handle in Handle::ALL {
                 let (hx, hy) = handle.anchor(&rect);
                 let cx = (hx - state.origin.0) as i32;
@@ -437,12 +585,66 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
         }
         let _ = DeleteObject(accent);
 
+        // 选区可调期间挂出动作按钮条；选区挪到哪它跟到哪
+        if adjusting && state.mode == Mode::Capture {
+            draw_buttons(frozen.back.dc, state, &rect);
+        }
+
         draw_size_label(frozen.back.dc, &client, &rect);
     }
 
     // 整帧上屏
     let _ = BitBlt(hdc, 0, 0, w, h, frozen.back.dc, 0, 0, SRCCOPY);
     let _ = EndPaint(hwnd, &ps);
+}
+
+/// 画按钮条。文字要选一个真字体 —— 覆盖层 DC 里的库存字体显示不了中文。
+unsafe fn draw_buttons(hdc: HDC, state: &OverlayState, rect: &Rect) {
+    let font = CreateFontW(
+        18,
+        0,
+        0,
+        0,
+        FW_SEMIBOLD.0 as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_DEFAULT_PRECIS.0 as u32,
+        0,
+        0,
+        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+        // 字体名留空 = 让系统按字符集挑，中文环境下会挑到能显示中文的字体
+        PCWSTR::null(),
+    );
+    let previous_font = SelectObject(hdc, font);
+    SetBkMode(hdc, TRANSPARENT);
+
+    for (button, frame) in button_layout(rect, &state.screen) {
+        let client = state.to_client(&frame);
+        // 主按钮（编辑）用 accent，其余深灰底白字
+        let background = if button == OverlayButton::Annotate {
+            ACCENT_BGR
+        } else {
+            0x0033_2E2B
+        };
+        let fill = CreateSolidBrush(COLORREF(background));
+        FillRect(hdc, &client, fill);
+        let _ = DeleteObject(fill);
+        let border = CreateSolidBrush(COLORREF(0x0077_7777));
+        FrameRect(hdc, &client, border);
+        let _ = DeleteObject(border);
+
+        SetTextColor(hdc, COLORREF(0x00FF_FFFF));
+        let label: Vec<u16> = button.label().encode_utf16().collect();
+        // 居中的近似：一个 18px 的 CJK 字宽约 18px
+        let approx_width = label.len() as i32 * 18;
+        let text_x = client.left + (((client.right - client.left) - approx_width) / 2).max(4);
+        let _ = TextOutW(hdc, text_x, client.top + 7, &label);
+    }
+
+    SelectObject(hdc, previous_font);
+    let _ = DeleteObject(font);
 }
 
 /// 在选区左上角上方标出尺寸。
@@ -480,6 +682,30 @@ mod tests {
         assert_eq!(translate_key(0x0D), Some(Key::Enter));
         assert_eq!(translate_key(0x25), Some(Key::Left));
         assert_eq!(translate_key(0x41), None, "字母键不该被覆盖层吃掉");
+    }
+
+    #[test]
+    fn the_button_bar_hugs_the_selection_and_never_leaves_the_screen() {
+        let screen = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+
+        // 常规：右对齐挂在选区下方
+        let rect = Rect::new(100.0, 100.0, 400.0, 300.0);
+        let buttons = button_layout(&rect, &screen);
+        assert_eq!(buttons.len(), 5);
+        assert!(buttons.iter().all(|(_, f)| f.y == rect.bottom() + BUTTON_MARGIN));
+        assert!(buttons.last().unwrap().1.right() <= rect.right() + 0.1);
+
+        // 选区贴到屏幕底部：翻到选区上方
+        let low = Rect::new(100.0, 700.0, 400.0, 360.0);
+        let above = button_layout(&low, &screen);
+        assert!(above[0].1.bottom() <= low.y, "下方放不下要翻上去");
+
+        // 全屏选区：上下都没地方，进选区内部，且永不出屏
+        let full = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+        for (_, frame) in button_layout(&full, &screen) {
+            assert!(frame.x >= 0.0 && frame.right() <= 1920.0);
+            assert!(frame.y >= 0.0 && frame.bottom() <= 1080.0);
+        }
     }
 
     #[test]

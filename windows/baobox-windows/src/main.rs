@@ -196,20 +196,46 @@ fn capture(args: &[String]) -> Result<String, String> {
     let options = parse_capture_args(args)?;
     gdi::prepare();
 
-    let target = match (options.full, options.region, options.window) {
-        (true, _, _) => gdi::virtual_screen(),
-        (_, Some(rect), _) => rect,
-        (_, _, Some(id)) => gdi::windows()
-            .into_iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
-            .frame,
+    let (target, action) = match (options.full, options.region, options.window) {
+        (true, _, _) => (gdi::virtual_screen(), overlay::PostAction::Annotate),
+        (_, Some(rect), _) => (rect, overlay::PostAction::Annotate),
+        (_, _, Some(id)) => (
+            gdi::windows()
+                .into_iter()
+                .find(|w| w.id == id)
+                .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
+                .frame,
+            overlay::PostAction::Annotate,
+        ),
         // 什么都没指定 → 交互式覆盖层，这是默认用法
-        _ => interactive_target()?,
+        _ => interactive_target(overlay::Mode::Capture)?,
     };
 
     let shot = gdi::capture(target)?;
-    finish(target, shot, options.output, options.copy, options.save, options.edit)
+    // 按钮条上直接选了去向的，跳过编辑器
+    match action {
+        overlay::PostAction::Copy => finish(target, shot, options.output, true, false, false),
+        overlay::PostAction::Save => finish(target, shot, options.output, false, true, false),
+        overlay::PostAction::Pin => {
+            let note = deliver(&shot, options.output, false, true)?;
+            println!("{note}，已钉在屏幕上（拖动可挪位置，任意键 / 右键 / 双击关闭）");
+            pin::show(
+                (target.x as i32, target.y as i32),
+                &shot.rgba,
+                shot.width,
+                shot.height,
+            )?;
+            Ok(String::new())
+        }
+        overlay::PostAction::Annotate => finish(
+            target,
+            shot,
+            options.output,
+            options.copy,
+            options.save,
+            options.edit,
+        ),
+    }
 }
 
 /// 截完图之后的去向：先（可选地）进标注编辑器，再按结果收尾。
@@ -307,7 +333,7 @@ fn run_ocr(args: &[String]) -> Result<String, String> {
     gdi::prepare();
     let target = match region {
         Some(rect) => rect,
-        None => interactive_target()?,
+        None => interactive_target(overlay::Mode::Pick)?.0,
     };
     let shot = gdi::capture(target)?;
     let text = ocr::recognize(&shot.rgba, shot.width, shot.height)?;
@@ -357,7 +383,7 @@ fn run_record(args: &[String]) -> Result<String, String> {
     gdi::prepare();
     let target = match region {
         Some(rect) => rect,
-        None => interactive_target()?,
+        None => interactive_target(overlay::Mode::Pick)?.0,
     };
     let path = match output {
         Some(path) => path,
@@ -526,24 +552,25 @@ fn capture(args: &[String]) -> Result<String, String> {
     Err("本程序只能在 Windows 上运行。".to_string())
 }
 
-/// 铺覆盖层让用户选，返回要抓的矩形。
+/// 铺覆盖层让用户选，返回要抓的矩形和（截图模式下）按钮条上选的去向。
 ///
 /// 覆盖层返回前已销毁自身，所以接下来的抓屏不会把它自己截进去。
 #[cfg(windows)]
-fn interactive_target() -> Result<Rect, String> {
+fn interactive_target(mode: overlay::Mode) -> Result<(Rect, overlay::PostAction), String> {
     let screen = gdi::virtual_screen();
     let window_rects: Vec<Rect> = gdi::windows().into_iter().map(|w| w.frame).collect();
-    let result = overlay::run(screen, window_rects)?;
-    match result.outcome {
-        baobox_core::selection::Outcome::Region(rect) => Ok(rect),
+    let result = overlay::run(screen, window_rects, mode)?;
+    let rect = match result.outcome {
+        baobox_core::selection::Outcome::Region(rect) => rect,
         baobox_core::selection::Outcome::Window(index) => result
             .windows
             .get(index)
             .copied()
-            .ok_or_else(|| "选中的窗口已消失".to_string()),
-        baobox_core::selection::Outcome::FullScreen => Ok(screen),
-        baobox_core::selection::Outcome::Cancelled => Err("已取消".to_string()),
-    }
+            .ok_or_else(|| "选中的窗口已消失".to_string())?,
+        baobox_core::selection::Outcome::FullScreen => screen,
+        baobox_core::selection::Outcome::Cancelled => return Err("已取消".to_string()),
+    };
+    Ok((rect, result.action))
 }
 
 /// 常驻：托盘图标 + 全局快捷键 + 设置窗口。
