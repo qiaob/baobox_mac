@@ -34,9 +34,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_SHIF
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
     LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, UnregisterClassW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW,
+    ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW,
     GWLP_USERDATA, IDC_CROSS, MSG, SW_SHOW, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -213,9 +213,7 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             .into();
 
         let class = WNDCLASSW {
-            // CS_DBLCLKS：不加的话窗口根本收不到 WM_LBUTTONDBLCLK ——
-            // 而「双击选区完成截图」是纯鼠标用户唯一的确认途径
-            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
+            style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
             hInstance: instance,
             lpszClassName: CLASS_NAME,
@@ -317,28 +315,16 @@ unsafe extern "system" fn wndproc(
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
-        WM_LBUTTONDBLCLK => {
-            // 双击选区内部 = 确认截图。选区调整阶段只有回车能确认的话，
-            // 纯鼠标的用户会以为「框住了就完了」，等不来工具栏（issue 反馈）
-            let (x, y) = lparam_to_point(lparam);
-            let point = state.to_screen(x, y);
-            let inside = matches!(state.selection.phase(), Phase::Adjusting { .. })
-                && state
-                    .selection
-                    .current_rect()
-                    .is_some_and(|rect| rect.contains(point.0, point.1));
-            if inside {
-                state.selection.key_down(Key::Enter, false);
-            } else {
-                // 选区外的双击当普通按下处理，别把这次点击吞掉
-                state.selection.mouse_down(point);
-            }
-            let _ = InvalidateRect(hwnd, None, false);
-            LRESULT(0)
-        }
         WM_LBUTTONUP => {
             let (x, y) = lparam_to_point(lparam);
             state.selection.mouse_up(state.to_screen(x, y));
+            // 松开鼠标 = 截图完成，立刻进标注编辑器（用户实测反馈：
+            // 「框选完就该是完成」）。共享状态机把拖拽结束定为「调整阶段」，
+            // 这里直接替用户按下回车确认。误触保护由状态机自带：
+            // 位移不足的点击不会进入拖拽，也就走不到这一步
+            if matches!(state.selection.phase(), Phase::Adjusting { .. }) {
+                state.selection.key_down(Key::Enter, false);
+            }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
@@ -451,12 +437,7 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
         }
         let _ = DeleteObject(accent);
 
-        draw_size_label(
-            frozen.back.dc,
-            &client,
-            &rect,
-            matches!(state.selection.phase(), Phase::Adjusting { .. }),
-        );
+        draw_size_label(frozen.back.dc, &client, &rect);
     }
 
     // 整帧上屏
@@ -464,18 +445,11 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
     let _ = EndPaint(hwnd, &ps);
 }
 
-/// 在选区左上角上方标出尺寸；选区成形后顺带写明怎么确认 ——
-/// 只有回车能确认的话，纯鼠标的用户会以为「框住了就完了」。
-unsafe fn draw_size_label(hdc: HDC, client: &RECT, rect: &Rect, adjusting: bool) {
-    let text = if adjusting {
-        format!(
-            "{} × {}    双击选区 / ⏎ 截图 · 拖动手柄调整 · Esc 取消",
-            rect.w as i64, rect.h as i64
-        )
-    } else {
-        format!("{} × {}", rect.w as i64, rect.h as i64)
-    };
-    let label: Vec<u16> = text.encode_utf16().collect();
+/// 在选区左上角上方标出尺寸。
+unsafe fn draw_size_label(hdc: HDC, client: &RECT, rect: &Rect) {
+    let label: Vec<u16> = format!("{} × {}", rect.w as i64, rect.h as i64)
+        .encode_utf16()
+        .collect();
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(0x00FF_FFFF));
     // 贴着选区上方；顶到屏幕边缘时改放进选区内部

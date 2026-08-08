@@ -32,12 +32,13 @@ use baobox_core::geometry::Rect;
 use baobox_render::chrome::{draw_toolbar, ToolbarState};
 use baobox_render::{Canvas, TextDraw};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, EndPaint,
-    BeginPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS,
-    FF_DONTCARE, FW_SEMIBOLD, HBITMAP, HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, BeginPaint, FrameRect, GetDC, InvalidateRect, ReleaseDC, SelectObject,
+    SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_SEMIBOLD, HBITMAP, HDC, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
@@ -55,6 +56,12 @@ const CLASS_NAME: PCWSTR = w!("BaoboxAnnotationEditor");
 
 /// 图像之外那一圈的底色（与 Linux 版同色）。
 const BACKDROP: [u8; 4] = [0x16, 0x18, 0x1B, 0xFF];
+
+/// 截到的图四周的描边色（Baobox accent，GDI 是 BGR 顺序）。
+///
+/// 编辑器原位等大地覆盖在截图位置上，画面与桌面逐像素相同 ——
+/// 不描边的话用户完全看不出「截到的是哪一块」（用户实测反馈）。
+const ACCENT_BGR: u32 = 0x0098_A317;
 
 /// 编辑器的最终产物。
 pub struct EditorResult {
@@ -411,6 +418,24 @@ unsafe fn paint(hwnd: HWND, state: &mut EditorState) {
     let texts = draw_annotations(&mut pixels, fw, fh, &state.editor, &frame, true);
     state.surface.write_rgba(&pixels);
     state.surface.draw_texts(&texts);
+
+    // 图四周描一圈 2px 的 accent 边（见 ACCENT_BGR 的注释）
+    let image_client = RECT {
+        left: (state.image.x - state.origin.0) as i32,
+        top: (state.image.y - state.origin.1) as i32,
+        right: (state.image.x - state.origin.0 + state.image.w) as i32,
+        bottom: (state.image.y - state.origin.1 + state.image.h) as i32,
+    };
+    let accent = CreateSolidBrush(COLORREF(ACCENT_BGR));
+    FrameRect(state.surface.dc, &image_client, accent);
+    let inner = RECT {
+        left: image_client.left + 1,
+        top: image_client.top + 1,
+        right: image_client.right - 1,
+        bottom: image_client.bottom - 1,
+    };
+    FrameRect(state.surface.dc, &inner, accent);
+    let _ = DeleteObject(accent);
 
     let _ = BitBlt(hdc, 0, 0, fw as i32, fh as i32, state.surface.dc, 0, 0, SRCCOPY);
     let _ = EndPaint(hwnd, &ps);
