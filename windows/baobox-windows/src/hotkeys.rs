@@ -15,12 +15,88 @@
 
 use baobox_app::HotkeySpec;
 use baobox_core::hotkey::{KeyCode, KeyCombo};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
     MOD_SHIFT, MOD_WIN,
 };
+
+// 本线程上现存的全部注册（App 只有一条线程，见 `app.rs`）。
+//
+// `RegisterHotKey` 对 `SendInput` 注入的组合**一样生效**：合成粘贴按键前，
+// `paste.rs` 靠这张表找出「会把这次合成吞掉」的注册并临时挂起 ——
+// 否则「剪贴板历史」默认的 Ctrl+Shift+V 会吃掉终端风格的粘贴，
+// 表现为面板反复弹出而目标程序什么都没收到。
+thread_local! {
+    static ACTIVE: RefCell<Vec<ActiveEntry>> = const { RefCell::new(Vec::new()) };
+}
+
+/// 一条现存的注册。
+#[derive(Clone, Copy)]
+struct ActiveEntry {
+    hwnd: isize,
+    id: i32,
+    combo: KeyCombo,
+}
+
+/// 合成按键期间被挂起的注册；drop 时恢复。
+pub struct SynthGuard {
+    suspended: Vec<ActiveEntry>,
+}
+
+/// 把与「即将合成的组合」完全相同的全局热键临时挂起。
+///
+/// 只挂起完全一致的（修饰键逐个比对，meta 必须没按）——
+/// 挂多了会让用户按下的真快捷键在这一小段时间里失灵。
+pub fn suspend_matching(ctrl: bool, shift: bool, alt: bool, key: char) -> SynthGuard {
+    let target = virtual_key_for(KeyCode::Char(key));
+    let mut suspended = Vec::new();
+    if target.is_none() {
+        return SynthGuard { suspended };
+    }
+    ACTIVE.with(|active| {
+        let mut list = active.borrow_mut();
+        let mut kept = Vec::with_capacity(list.len());
+        for entry in list.drain(..) {
+            let same = entry.combo.ctrl == ctrl
+                && entry.combo.shift == shift
+                && entry.combo.alt == alt
+                && !entry.combo.meta
+                && virtual_key_for(entry.combo.key) == target;
+            if same {
+                unsafe {
+                    let _ = UnregisterHotKey(HWND(entry.hwnd as *mut _), entry.id);
+                }
+                suspended.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+        *list = kept;
+    });
+    SynthGuard { suspended }
+}
+
+impl Drop for SynthGuard {
+    fn drop(&mut self) {
+        ACTIVE.with(|active| {
+            let mut list = active.borrow_mut();
+            for entry in self.suspended.drain(..) {
+                unsafe {
+                    let _ = RegisterHotKey(
+                        HWND(entry.hwnd as *mut _),
+                        entry.id,
+                        modifiers_for(&entry.combo),
+                        virtual_key_for(entry.combo.key).unwrap_or(0),
+                    );
+                }
+                list.push(entry);
+            }
+        });
+    }
+}
 
 /// 热键 id 从这里开始编。0 是合法值，但从 1 开始更容易在调试时看出「没设」。
 const FIRST_ID: i32 = 1;
@@ -103,6 +179,13 @@ impl HotkeyCenter {
                 .map_err(|e| format!("{e}"))?;
         }
         self.actions.insert(id, action.to_string());
+        ACTIVE.with(|active| {
+            active.borrow_mut().push(ActiveEntry {
+                hwnd: self.hwnd.0 as isize,
+                id,
+                combo: *combo,
+            })
+        });
         self.next_id += 1;
         Ok(())
     }
@@ -114,6 +197,11 @@ impl HotkeyCenter {
                 let _ = UnregisterHotKey(self.hwnd, *id);
             }
         }
+        ACTIVE.with(|active| {
+            active
+                .borrow_mut()
+                .retain(|entry| entry.hwnd != self.hwnd.0 as isize)
+        });
         self.actions.clear();
         // id 不复用：撤销与系统里真正解除之间有个窗口期，
         // 复用 id 可能撞上还没解除干净的那个

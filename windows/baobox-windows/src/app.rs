@@ -58,6 +58,9 @@ struct App {
     hwnd: HWND,
     /// 打开着的设置窗口
     settings: Option<HWND>,
+    /// 托盘图标「任务栏常显」还剩几次重试。explorer 要在图标出现之后
+    /// 才建那个注册表子键，所以首启时得多试几下（见 `tray::promote_in_taskbar`）
+    promote_tries: u32,
 }
 
 impl App {
@@ -157,6 +160,8 @@ pub fn run() -> Result<String, String> {
             .into();
         let hwnd = tray::message_window(instance, wndproc)?;
         let tray = tray::Tray::start(hwnd, "Baobox —— 点击托盘图标打开菜单")?;
+        // 尽量把图标提到任务栏常显，别让它一出生就躺在「隐藏的图标」里
+        let promoted = tray::promote_in_taskbar();
         let mut center = hotkeys::HotkeyCenter::new(hwnd);
         let report = center.register_all(&resolve_hotkeys(&registry, &config));
         if report.has_problems() {
@@ -170,6 +175,8 @@ pub fn run() -> Result<String, String> {
             hotkeys: center,
             hwnd,
             settings: None,
+            // 25 次 × 200ms 的 tick = 5 秒窗口，足够 explorer 把子键建出来
+            promote_tries: if promoted { 0 } else { 25 },
         });
         windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
             hwnd,
@@ -244,6 +251,12 @@ unsafe extern "system" fn wndproc(
             // 托盘菜单是弹出时才建的（`menuNeedsUpdate` 那一套），
             // 所以这里不必因为「变了」去重建什么 —— 收进来就够了
             let _ = app.registry.tick_all();
+            if app.promote_tries > 0 {
+                app.promote_tries -= 1;
+                if tray::promote_in_taskbar() {
+                    app.promote_tries = 0;
+                }
+            }
             LRESULT(0)
         }
         WM_DESTROY => {

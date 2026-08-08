@@ -6,6 +6,13 @@
 //! - ↑↓ 选，⏎ 粘贴，Esc 关掉
 //! - Ctrl+1–9 直接选中对应的那条；Ctrl+P 收藏，Ctrl+D 删除
 //!
+//! # 外观：无边框 + 右侧预览区（向 macOS 版看齐）
+//!
+//! 窗口去掉标题栏（`WS_POPUP`），Win11 上加 DWM 圆角；按住空白处可拖动
+//! （`WM_NCHITTEST` 把客户区报成标题栏）。左边是列表，右边一块只读预览区：
+//! 第一层显示选中条目的元信息与全文，第二层显示**转换结果**——
+//! 选「格式化 JSON」时右边直接就是排好版的 JSON，不用粘出去才看到。
+//!
 //! # 两层：条目 → 文本工具
 //!
 //! Ctrl+T 把列表切成第二层：这段文字被认成了什么（JSON / JWT / 时间戳 / URL…）、
@@ -13,7 +20,7 @@
 //! 就把**转换后的结果**粘出去。再按 Esc 退回第一层。
 //!
 //! macOS 版那块预览区能自由排版（徽章一行、表格一块、按钮一排），
-//! 这里只有一个列表控件，所以压成一张平表 —— 压平的规则在
+//! 这里的列表压成一张平表 —— 压平的规则在
 //! `baobox_core::textformat::action_list`，两个平台共用一份。
 //!
 //! # 面板必须先关掉再粘贴
@@ -41,10 +48,14 @@
 //! 在开发机上也能跑 —— 而「敏感内容不能被搜出来」这类规则正是最该被测到的。
 
 use baobox_core::clipboard::{Item, Kind};
+use baobox_core::filename::DateParts;
 use baobox_core::textformat;
 
 /// 列表里一条最多显示多少个字符。
 const PREVIEW_CHARS: usize = 120;
+
+/// 预览区正文最多显示多少个字符。再长的粘贴时仍是完整的。
+const PREVIEW_TEXT_CHARS: usize = 4000;
 
 /// 用户在面板里选了什么。
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +139,72 @@ pub fn tools_for(item: &Item) -> Option<Vec<textformat::Entry>> {
     Some(entries)
 }
 
+/// 预览区顶部的元信息行：类型 · 时间 · 标记。
+pub fn preview_meta(item: &Item) -> String {
+    let kind = match item.kind {
+        Kind::Image => "图片",
+        Kind::File => "文件",
+        Kind::Link => "链接",
+        Kind::Text => "文本",
+    };
+    let mut parts = vec![kind.to_string()];
+    if item.created_at > 0 {
+        let d = DateParts::from_unix(item.created_at);
+        parts.push(format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            d.year, d.month, d.day, d.hour, d.minute
+        ));
+    }
+    if item.is_snippet() {
+        parts.push("片段".to_string());
+    } else if item.pinned {
+        parts.push("收藏".to_string());
+    }
+    if item.concealed {
+        parts.push("敏感".to_string());
+    }
+    parts.join("  ·  ")
+}
+
+/// 预览区的正文。
+///
+/// 打码条目只给占位说明 —— 预览区把内容整个亮出来，正是打码要防的事。
+pub fn preview_body(item: &Item) -> String {
+    if item.concealed {
+        return "（敏感内容已打码，不显示原文；⏎ 仍会粘贴完整内容）".to_string();
+    }
+    if item.kind == Kind::Image {
+        return format!("[图片] {}", item.image_file);
+    }
+    let body: String = item.text.chars().take(PREVIEW_TEXT_CHARS).collect();
+    if item.text.chars().count() > PREVIEW_TEXT_CHARS {
+        format!("{body}\n…（后面还有，粘贴时是完整的）")
+    } else {
+        body
+    }
+}
+
+/// 文本工具层里选中一行时预览区显示什么：动作行给**转换结果**，说明行给它自己。
+///
+/// 用户还没按 ⏎ 就能看到格式化 / 解码出来长什么样 —— 这是 macOS 版预览区
+/// 最有用的一块，规则两边一致。
+pub fn tool_preview_body(entry: &textformat::Entry, source: &str) -> String {
+    if entry.action.is_empty() {
+        return entry.label.clone();
+    }
+    match textformat::apply(entry.action, source) {
+        Some(output) => {
+            let shown: String = output.chars().take(PREVIEW_TEXT_CHARS).collect();
+            if output.chars().count() > PREVIEW_TEXT_CHARS {
+                format!("{shown}\n…（后面还有，粘贴时是完整的）")
+            } else {
+                shown
+            }
+        }
+        None => "（这个动作对当前内容不适用）".to_string(),
+    }
+}
+
 /// 文本工具那一层里，一条显示成什么样。
 ///
 /// 说明行前面加一个点号，动作行不加 —— 只有一个列表控件、没有字重可用时，
@@ -158,10 +235,11 @@ mod imp {
         GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, LoadCursorW,
         PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
         SetWindowLongPtrW, ShowWindow, TranslateMessage, UnregisterClassW, EN_CHANGE,
-        ES_AUTOHSCROLL, GWLP_USERDATA, IDC_ARROW, LBN_DBLCLK, LBS_NOTIFY, LB_ADDSTRING,
-        LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, MSG, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-        WM_COMMAND, WM_DESTROY, WM_KEYDOWN, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-        WS_EX_TOPMOST, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, HTCAPTION,
+        HTCLIENT, IDC_ARROW, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LB_ADDSTRING, LB_GETCURSEL,
+        LB_RESETCONTENT, LB_SETCURSEL, MSG, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, WM_COMMAND,
+        WM_DESTROY, WM_KEYDOWN, WM_NCHITTEST, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     /// 面板窗口类名。
@@ -170,10 +248,12 @@ mod imp {
     /// 控件 id。低位留给系统的标准 id。
     const ID_SEARCH: i32 = 100;
     const ID_LIST: i32 = 101;
+    const ID_PREVIEW: i32 = 102;
 
-    /// 尺寸（96 DPI 下的基准）。
-    const WIDTH: i32 = 560;
+    /// 尺寸（96 DPI 下的基准）。左列表右预览。
+    const WIDTH: i32 = 780;
     const HEIGHT: i32 = 460;
+    const LIST_WIDTH: i32 = 370;
     const MARGIN: i32 = 10;
     const SEARCH_HEIGHT: i32 = 24;
     const HINT_HEIGHT: i32 = 18;
@@ -215,6 +295,7 @@ mod imp {
         visible: Vec<String>,
         search: HWND,
         list: HWND,
+        preview: HWND,
         hint: HWND,
         /// 列表现在显示的是哪一层
         mode: Mode,
@@ -261,6 +342,46 @@ mod imp {
             }
             // 重建之后总是选中第一条，⏎ 才有东西可粘
             SendMessageW(self.list, LB_SETCURSEL, WPARAM(0), LPARAM(0));
+            self.update_preview();
+        }
+
+        /// 让右侧预览区跟上当前选中的行。
+        ///
+        /// 第一层给条目的元信息 + 全文；第二层给转换结果 ——
+        /// 用户还没按 ⏎ 就能看到格式化 / 解码出来长什么样。
+        unsafe fn update_preview(&self) {
+            let index = SendMessageW(self.list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+            let text = if index < 0 {
+                String::new()
+            } else {
+                match &self.mode {
+                    Mode::Browse => self
+                        .visible
+                        .get(index as usize)
+                        .and_then(|id| self.snapshot.iter().find(|e| &e.id == id))
+                        .map(|item| format!("{}\n\n{}", preview_meta(item), preview_body(item)))
+                        .unwrap_or_default(),
+                    Mode::Tools { item, entries } => {
+                        let source = self
+                            .snapshot
+                            .iter()
+                            .find(|e| &e.id == item)
+                            .map(|e| e.text.as_str())
+                            .unwrap_or("");
+                        entries
+                            .get(index as usize)
+                            .map(|entry| tool_preview_body(entry, source))
+                            .unwrap_or_default()
+                    }
+                }
+            };
+            // 多行 EDIT 只认 CRLF，裸 \n 会显示成一行
+            let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
+            let wide_text = wide(&normalized);
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+                self.preview,
+                PCWSTR(wide_text.as_ptr()),
+            );
         }
 
         /// Ctrl+T：进 / 出文本工具那一层。
@@ -321,6 +442,7 @@ mod imp {
                 return;
             }
             SendMessageW(self.list, LB_SETCURSEL, WPARAM(next as usize), LPARAM(0));
+            self.update_preview();
         }
     }
 
@@ -353,7 +475,8 @@ mod imp {
                 WS_EX_TOPMOST,
                 CLASS_NAME,
                 w!("剪贴板"),
-                WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                // 无边框：没有标题栏，靠 WM_NCHITTEST 把空白处报成标题栏来拖动
+                WS_POPUP | WS_BORDER | WS_VISIBLE,
                 x.max(0),
                 y.max(0),
                 WIDTH,
@@ -367,8 +490,21 @@ mod imp {
                 return Outcome::Cancelled;
             };
 
+            // Win11 给圆角；老系统上这个属性不存在，失败无妨
+            let corner = windows::Win32::Graphics::Dwm::DWMWCP_ROUND;
+            let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                hwnd,
+                windows::Win32::Graphics::Dwm::DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner as *const _ as *const core::ffi::c_void,
+                std::mem::size_of_val(&corner) as u32,
+            );
+
             let font = crate::settings_window::message_font();
-            let inner_width = WIDTH - MARGIN * 2 - 16;
+            let inner_width = WIDTH - MARGIN * 2;
+            let preview_width = inner_width - LIST_WIDTH - MARGIN;
+            let list_top = MARGIN * 2 + SEARCH_HEIGHT;
+            let hint_top = HEIGHT - MARGIN - HINT_HEIGHT;
+            let list_height = (hint_top - 6 - list_top).max(80);
             let search = child(
                 hwnd,
                 instance,
@@ -382,7 +518,6 @@ mod imp {
                 ID_SEARCH,
                 font,
             );
-            let list_height = (HEIGHT - MARGIN * 3 - SEARCH_HEIGHT - HINT_HEIGHT - 40).max(80);
             let list = child(
                 hwnd,
                 instance,
@@ -391,10 +526,24 @@ mod imp {
                 (WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL).0
                     | LBS_NOTIFY as u32,
                 MARGIN,
-                MARGIN * 2 + SEARCH_HEIGHT,
-                inner_width,
+                list_top,
+                LIST_WIDTH,
                 list_height,
                 ID_LIST,
+                font,
+            );
+            let preview = child(
+                hwnd,
+                instance,
+                w!("EDIT"),
+                "",
+                (WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL).0
+                    | (ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL) as u32,
+                MARGIN + LIST_WIDTH + MARGIN,
+                list_top,
+                preview_width,
+                list_height,
+                ID_PREVIEW,
                 font,
             );
             let hint = child(
@@ -404,7 +553,7 @@ mod imp {
                 HINT_BROWSE,
                 (WS_CHILD | WS_VISIBLE).0,
                 MARGIN,
-                MARGIN * 2 + SEARCH_HEIGHT + list_height + 6,
+                hint_top,
                 inner_width,
                 HINT_HEIGHT,
                 0,
@@ -416,6 +565,7 @@ mod imp {
                 visible: Vec::new(),
                 search,
                 list,
+                preview,
                 hint,
                 mode: Mode::Browse,
                 outcome: Outcome::Cancelled,
@@ -544,8 +694,21 @@ mod imp {
                     state.refill(&needle);
                 } else if id == ID_LIST && code == LBN_DBLCLK {
                     state.finish(Outcome::Paste);
+                } else if id == ID_LIST && code == LBN_SELCHANGE {
+                    // 鼠标点选也要让预览区跟上（键盘路径在 move_selection 里）
+                    state.update_preview();
                 }
                 LRESULT(0)
+            }
+            WM_NCHITTEST => {
+                // 无标题栏：把空白的客户区报成标题栏，按住就能拖动；
+                // 子控件有自己的窗口，不经过这里，照常可点
+                let hit = DefWindowProcW(hwnd, message, wparam, lparam);
+                if hit.0 == HTCLIENT as isize {
+                    LRESULT(HTCAPTION as isize)
+                } else {
+                    hit
+                }
             }
             WM_DESTROY => {
                 // 用户点了标题栏上的关闭按钮：什么都没选
@@ -698,6 +861,44 @@ mod tests {
             tool_row_label(action).trim_start().chars().next(),
             tool_row_label(info).trim_start().chars().next()
         );
+    }
+
+    #[test]
+    fn the_preview_pane_shows_meta_and_full_text() {
+        let mut entry = item("hello\nworld");
+        entry.created_at = 1_785_760_496; // 2026-08-03 12:34:56 UTC
+        assert!(preview_meta(&entry).contains("2026-08-03"));
+        assert!(preview_body(&entry).contains("hello\nworld"), "预览给全文，不折行截断");
+    }
+
+    #[test]
+    fn the_preview_pane_never_shows_concealed_content() {
+        // 预览区把内容整个亮出来，正是打码要防的事
+        let mut secret = item("hunter2");
+        secret.concealed = true;
+        assert!(!preview_body(&secret).contains("hunter"));
+        assert!(preview_meta(&secret).contains("敏感"));
+    }
+
+    #[test]
+    fn an_overlong_preview_is_truncated_with_a_note() {
+        let long = "x".repeat(PREVIEW_TEXT_CHARS * 2);
+        let shown = preview_body(&item(&long));
+        assert!(shown.chars().count() < PREVIEW_TEXT_CHARS + 50);
+        assert!(shown.contains("粘贴时是完整的"), "要说清楚截断只影响预览");
+    }
+
+    #[test]
+    fn tool_rows_preview_the_transform_result_before_pasting() {
+        let source = r#"{"a":1}"#;
+        let entries = tools_for(&item(source)).unwrap();
+        let pretty = entries.iter().find(|e| e.action == "json.pretty").unwrap();
+        let shown = tool_preview_body(pretty, source);
+        assert!(shown.contains("\"a\""));
+        assert!(shown.contains('\n'), "格式化结果应当是排开的多行");
+        // 说明行没有转换结果，预览它自己
+        let info = entries.iter().find(|e| e.action.is_empty()).unwrap();
+        assert_eq!(tool_preview_body(info, source), info.label);
     }
 
     #[test]

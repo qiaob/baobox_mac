@@ -27,6 +27,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 /// 关掉面板之后等焦点回位的时间。
 pub const FOCUS_SETTLE: Duration = Duration::from_millis(120);
 
+/// 合成完之后等系统把注入的按键处理过「热键匹配」那一步，再恢复被挂起的注册。
+/// 立刻恢复的话，刚注入的组合还在输入队列里，恢复的热键会把它吞回去。
+const HOTKEY_RESUME_DELAY: Duration = Duration::from_millis(60);
+
 /// 粘贴时用哪种组合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Style {
@@ -50,6 +54,11 @@ impl Style {
 ///
 /// **调用方必须先关掉面板并等焦点回位**。
 pub fn send(style: Style) -> Result<(), String> {
+    // 我们自己的全局热键对合成的组合一样生效（RegisterHotKey 不区分注入的输入）。
+    // 「剪贴板历史」默认的 Ctrl+Shift+V 恰好与终端风格的粘贴同键 ——
+    // 先把撞车的注册挂起，粘完再恢复（guard drop 时）
+    let _guard = crate::hotkeys::suspend_matching(true, style == Style::Terminal, false, 'v');
+
     let mut modifiers = vec![VK_CONTROL];
     if style == Style::Terminal {
         modifiers.push(VK_SHIFT);
@@ -71,6 +80,7 @@ pub fn send(style: Style) -> Result<(), String> {
     if sent as usize != records.len() {
         return Err("合成按键失败（可能被更高权限的窗口挡住了）".to_string());
     }
+    std::thread::sleep(HOTKEY_RESUME_DELAY);
     Ok(())
 }
 

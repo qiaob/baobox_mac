@@ -398,10 +398,13 @@ impl ToolModule for ClipboardTool {
     }
 
     fn hotkeys(&self) -> Vec<HotkeySpec> {
+        // Ctrl+Shift+V 与 mac 端一致。它同时是终端的粘贴键 ——
+        // 合成那种粘贴时由 `hotkeys::suspend_matching` 临时挂起这条注册，
+        // 否则合成的按键会被我们自己吞掉
         vec![HotkeySpec::new(
             PANEL,
             "剪贴板历史",
-            KeyCombo::parse("Ctrl+Alt+V").ok(),
+            KeyCombo::parse("Ctrl+Shift+V").ok(),
         )]
     }
 

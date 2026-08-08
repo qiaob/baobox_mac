@@ -200,6 +200,113 @@ pub fn message_window(
     }
 }
 
+/// 把托盘图标从「隐藏的图标」溢出区提升到任务栏常显（Windows 11）。
+///
+/// Windows 没有公开 API 做这件事；Win11 把每个图标的偏好存在
+/// `HKCU\Control Panel\NotifyIconSettings\<id>` 下，`IsPromoted=1` 即常显。
+/// 那个子键由 explorer 在图标首次出现之后才建，所以第一次启动时
+/// 调用方要在几秒内重试（挂在 App 的 tick 定时器上）。
+///
+/// 返回 `true` 表示**不必再试**：写成功了、或系统根本没有这套机制（Win10，
+/// 那上面只能由用户手动把图标拖出来）。返回 `false` = 子键还没出现，稍后再试。
+pub fn promote_in_taskbar() -> bool {
+    use windows::core::PWSTR;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
+        HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_VALUE_TYPE,
+    };
+
+    let Ok(exe) = std::env::current_exe() else {
+        return true;
+    };
+    let exe = exe.to_string_lossy().to_lowercase();
+
+    unsafe {
+        let mut root = HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Control Panel\\NotifyIconSettings"),
+            0,
+            KEY_READ,
+            &mut root,
+        )
+        .is_err()
+        {
+            // Win10 没有这个键，也就没有可编程的常显开关
+            return true;
+        }
+
+        let mut found = false;
+        let mut index = 0u32;
+        loop {
+            let mut name = [0u16; 64];
+            let mut length = name.len() as u32;
+            if RegEnumKeyExW(
+                root,
+                index,
+                PWSTR(name.as_mut_ptr()),
+                &mut length,
+                None,
+                PWSTR::null(),
+                None,
+                None,
+            )
+            .is_err()
+            {
+                break;
+            }
+            index += 1;
+
+            let mut sub = HKEY::default();
+            if RegOpenKeyExW(
+                root,
+                windows::core::PCWSTR(name.as_ptr()),
+                0,
+                KEY_QUERY_VALUE | KEY_SET_VALUE,
+                &mut sub,
+            )
+            .is_err()
+            {
+                continue;
+            }
+
+            // 这个子键属不属于我们：按 ExecutablePath 匹配本程序
+            let mut kind = REG_VALUE_TYPE::default();
+            let mut buffer = [0u8; 1040];
+            let mut size = buffer.len() as u32;
+            let matched = RegQueryValueExW(
+                sub,
+                w!("ExecutablePath"),
+                None,
+                Some(&mut kind),
+                Some(buffer.as_mut_ptr()),
+                Some(&mut size),
+            )
+            .is_ok()
+                && {
+                    let chars: Vec<u16> = buffer[..size as usize]
+                        .chunks_exact(2)
+                        .map(|two| u16::from_le_bytes([two[0], two[1]]))
+                        .take_while(|c| *c != 0)
+                        .collect();
+                    String::from_utf16_lossy(&chars).to_lowercase() == exe
+                };
+
+            if matched {
+                found = true;
+                let one = 1u32.to_le_bytes();
+                let _ = RegSetValueExW(sub, w!("IsPromoted"), 0, REG_DWORD, Some(&one));
+            }
+            let _ = RegCloseKey(sub);
+            if found {
+                break;
+            }
+        }
+        let _ = RegCloseKey(root);
+        found
+    }
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
