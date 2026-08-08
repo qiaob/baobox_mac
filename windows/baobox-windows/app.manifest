@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  应用清单：两件事都是「不声明就没有」——
+
+  1. Common-Controls v6：不声明的话 Windows 用上世纪的经典风格渲染所有
+     控件（灰底 3D 按钮、方块复选框），设置窗口与剪贴板面板都跟着难看。
+     声明之后按钮 / 复选框 / 下拉框 / 滚动条全部换成系统当前主题的外观。
+  2. Per-Monitor V2 DPI：与代码里的 SetProcessDpiAwarenessContext 相同声明，
+     清单里写一份更早生效（在任何窗口创建之前）；代码里那次调用会因
+     「已设置」而失败，gdi::prepare() 已把这种失败当正常情况。
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

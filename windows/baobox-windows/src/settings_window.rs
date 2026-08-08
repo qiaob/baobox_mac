@@ -62,9 +62,10 @@ use windows::Win32::UI::Controls::{
     HOTKEYF_SHIFT, UDM_SETPOS32, UDM_SETRANGE32, UDS_AUTOBUDDY, UDS_SETBUDDYINT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowTextLengthW,
-    GetWindowTextW, LoadCursorW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
-    ShowWindow, SystemParametersInfoW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowTextLengthW, GetWindowTextW, LoadCursorW, RegisterClassW, SendMessageW,
+    SetWindowLongPtrW, ShowWindow, SystemParametersInfoW, SM_CXSCREEN, SM_CYSCREEN,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE,
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, EN_CHANGE, ES_AUTOHSCROLL,
     EnumChildWindows, GetClientRect, GWLP_USERDATA, IDC_ARROW, LBN_SELCHANGE, LBS_NOTIFY,
     LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, NONCLIENTMETRICSW, SB_BOTTOM,
@@ -170,14 +171,17 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         // 窗口取最高的那一页，但不超过 640 —— 再高的话 768 的笔记本上
         // 扣掉任务栏就摆不下了。单页超出的部分交给滚动条
         let height = page_heights.iter().copied().max().unwrap_or(200).min(640);
+        // 居中：CW_USEDEFAULT 会摆在左上角一带，找起来别扭
+        let x = (GetSystemMetrics(SM_CXSCREEN) - WINDOW_WIDTH) / 2;
+        let y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
         let hwnd = CreateWindowExW(
             Default::default(),
             CLASS_NAME,
             w!("Baobox 设置"),
             // WS_VSCROLL 与 WM_VSCROLL 的处理是配套的 —— 见模块文档
             WS_OVERLAPPEDWINDOW | WS_VSCROLL,
-            windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
-            windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+            x.max(0),
+            y.max(0),
             WINDOW_WIDTH,
             height,
             None,

@@ -153,6 +153,17 @@ pub fn run() -> Result<String, String> {
     }
     registry.activate_all(&config);
     crate::gdi::prepare();
+    // 启用了 Common-Controls v6（见 app.manifest）之后，msctls_hotkey32 /
+    // msctls_updown32 这些控件类要显式注册一次，否则设置窗口里建不出来
+    unsafe {
+        use windows::Win32::UI::Controls::{
+            InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX,
+        };
+        let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_WIN95_CLASSES,
+        });
+    }
 
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None)
