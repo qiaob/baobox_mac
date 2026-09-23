@@ -43,6 +43,14 @@ final class CaptureOverlayView: NSView {
 
     private let accent = NSColor(srgbRed: 0x2B / 255.0, green: 0xC4 / 255.0, blue: 0xB8 / 255.0, alpha: 1)
 
+    /// 角标 / 放大镜读数用的等宽字体：常驻一份，不在 draw 里每帧现建。
+    /// 现建的字体用完即被释放，紧接着再取时 `monospacedSystemFont` 偶尔返回 nil（头文件标的
+    /// nonnull，Swift 不判空）；nil 进了属性字典，量字时 CoreText 抛 NSInvalidArgumentException，
+    /// 整个 App 退出。本机压测：每次现建约 4% 拿到 nil，常驻一份后几百万次一次都没有；
+    /// 系统字体（底部提示条）同样压测没有这个问题。
+    private static let badgeFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+    private static let loupeFont = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+
     /// 录制模式的选区确认工具条（声音开关 / 取消 / 开始录制）。
     private var recordBar: RecordStartBar?
 
@@ -212,7 +220,11 @@ final class CaptureOverlayView: NSView {
         }
         lastMouseLocal = localPoint(event)
         if case .hovering = phase {
-            let detected = WindowDetector.window(atCG: globalCG(localPoint(event)))
+            // 指针已在别的屏时，本屏 overlay 也可能收到 mouseMoved（key 窗口开着
+            // acceptsMouseMovedEvents）。只有指针所在的屏需要高亮，其余屏置 nil，
+            // 同 refreshHoverAtCurrentMouse —— 否则会去高亮一个根本不在本屏的窗口。
+            let p = localPoint(event)
+            let detected = bounds.contains(p) ? WindowDetector.window(atCG: globalCG(p)) : nil
             phase = .hovering(detected)
             needsDisplay = true
         } else {
@@ -536,16 +548,20 @@ final class CaptureOverlayView: NSView {
             drawDim(ctx)
             if let detected {
                 let local = localRect(fromGlobalCG: detected.frameCG).intersection(bounds)
-                punchHole(ctx, rect: local)
-                accent.withAlphaComponent(0.16).setFill()
-                local.fill()
-                let border = NSBezierPath(rect: local)
-                border.lineWidth = 3
-                accent.setStroke()
-                border.stroke()
-                let sizeText = "\(Int(detected.frameCG.width)) × \(Int(detected.frameCG.height))"
-                let label = "\(detected.appName)\(detected.title.map { " · \($0)" } ?? "") — \(sizeText)"
-                drawBadge(label, origin: NSPoint(x: local.minX, y: local.minY - 26), anchorRight: false)
+                // 窗口不在本屏时交集是 null 矩形，原点为 +inf：拿它画角标，NSBezierPath 抛
+                // 「No current point for curve」，Swift 接不住，整个 App 退出。
+                if !local.isEmpty {
+                    punchHole(ctx, rect: local)
+                    accent.withAlphaComponent(0.16).setFill()
+                    local.fill()
+                    let border = NSBezierPath(rect: local)
+                    border.lineWidth = 3
+                    accent.setStroke()
+                    border.stroke()
+                    let sizeText = "\(Int(detected.frameCG.width)) × \(Int(detected.frameCG.height))"
+                    let label = "\(detected.appName)\(detected.title.map { " · \($0)" } ?? "") — \(sizeText)"
+                    drawBadge(label, origin: NSPoint(x: local.minX, y: local.minY - 26), anchorRight: false)
+                }
             }
             if recordMode {
                 drawHintPill([L("screenshot.record.hint.click"),
@@ -696,7 +712,7 @@ final class CaptureOverlayView: NSView {
         let hex = Self.pixelHex(in: image, x: Int(px), y: Int(py)) ?? "—"
         let info = "\(Int(gcg.x)), \(Int(gcg.y))   \(hex)"
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
+            .font: Self.loupeFont,
             .foregroundColor: NSColor(white: 0.92, alpha: 1)
         ]
         let str = NSAttributedString(string: info, attributes: attrs)
@@ -757,8 +773,7 @@ final class CaptureOverlayView: NSView {
     }
 
     private func drawBadge(_ text: String, origin: NSPoint, anchorRight: Bool) {
-        let font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        let attrs: [NSAttributedString.Key: Any] = [.font: Self.badgeFont, .foregroundColor: NSColor.white]
         let str = NSAttributedString(string: text, attributes: attrs)
         let size = str.size()
         let padX: CGFloat = 8, padY: CGFloat = 4
