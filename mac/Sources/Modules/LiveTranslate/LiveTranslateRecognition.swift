@@ -129,7 +129,7 @@ final class LiveTranslateAnalyzerRecognizer: LiveTranslateRecognizer {
         resultsTask = nil
         if let analyzer {
             Task {
-                try? await analyzer.cancelAndFinishNow()
+                await analyzer.cancelAndFinishNow()
             }
         }
         analyzer = nil
