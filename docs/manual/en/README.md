@@ -12,6 +12,7 @@ For version **0.0.6**. This manual covers every tool and every feature currently
 | [Clipboard](clipboard.md) | History, search, paste-back, favorites, text tools, snippets, privacy and encryption |
 | [Window manager](window-manager.md) | Halves, quarters, maximize, center, across displays, layout snapshots |
 | [Keyboard clicking](keyboard-nav.md) | Letter-label clicking, continuous mode, keyboard scrolling |
+| [Live Translate](live-translate.md) | Live captions from the mic or system audio, English ⇄ Chinese, on-screen caption bar |
 | [Keep awake](caffeinate.md) | Timed sleep prevention, optional display-on |
 | [Claude Code assistant](claude-code.md) | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](codex.md) | Session resume, quota and usage, visual config, turn notifications, maintenance |

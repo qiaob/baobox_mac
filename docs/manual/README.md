@@ -12,6 +12,7 @@
 | [剪贴板](clipboard.md) | 历史、搜索、回填粘贴、收藏、文本工具、文本片段、隐私与加密 |
 | [窗口管理](window-manager.md) | 半屏 / 四分屏 / 最大化 / 居中 / 跨屏、布局快照 |
 | [键盘点击](keyboard-nav.md) | 字母标签点击、连续点击、键盘滚动 |
+| [实时翻译](live-translate.md) | 麦克风 / 系统声音实时字幕、英中互译、屏幕字幕条 |
 | [防休眠](caffeinate.md) | 定时阻止睡眠、可选屏幕常亮 |
 | [Claude Code 助手](claude-code.md) | 会话续接、额度与用量、审计、通知、配置可视化、statusline、MCP |
 | [Codex 助手](codex.md) | 会话续接、额度与用量、配置可视化、完成通知、维护 |
