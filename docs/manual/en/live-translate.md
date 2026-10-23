@@ -38,9 +38,16 @@ Turn off "Show Translation" to get original-language captions only (live dictati
 - Font size and background opacity apply immediately.
 - Drag the bar to move it — its position is remembered. It stays on top over full-screen apps and across Spaces.
 
+## Speed and accuracy
+
+- On **macOS 26 and later** the new on-device speech engine is used automatically: text appears faster, context is kept
+  across the whole stream, accuracy is higher, and audio never leaves your Mac. The model downloads the first time
+  (the bar shows "Downloading the speech model"). Older systems, or a failed download, fall back to the previous engine.
+- **Custom vocabulary**: add names, product names and jargon that get misheard (comma- or newline-separated) in settings.
+
 ## Privacy
 
-- "Prefer on-device recognition" is on by default: when the on-device model is available, **audio
+- On macOS 26 recognition is always on-device. On older systems, "Prefer on-device recognition" is on by default: when the on-device model is available, **audio
   never leaves your Mac**; otherwise Apple's speech service is used (same as system Dictation).
 - Translation uses the built-in on-device Apple Translation (macOS 15+), no third-party service.
 - Captions are never written to disk and are cleared when you stop.

@@ -9,6 +9,7 @@ struct LiveTranslateSettingsView: View {
     @AppStorage(LiveTranslateSettings.displayKey) private var display = LiveTranslateDisplay.both.rawValue
     @AppStorage(LiveTranslateSettings.fontSizeKey) private var fontSize = LiveTranslateSettings.defaultFontSize
     @AppStorage(LiveTranslateSettings.opacityKey) private var opacity = LiveTranslateSettings.defaultOpacity
+    @AppStorage(LiveTranslateSettings.vocabularyKey) private var vocabulary = ""
 
     @ObservedObject private var controller = LiveTranslateController.shared
 
@@ -41,9 +42,23 @@ struct LiveTranslateSettingsView: View {
                 }
                 .onChange(of: language) { _, _ in controller.restartIfRunning() }
 
-                Toggle("livetranslate.settings.onDevice", isOn: $onDevice)
-                    .onChange(of: onDevice) { _, _ in controller.restartIfRunning() }
-                Text("livetranslate.settings.onDeviceHelp")
+                if LiveTranslateSettings.analyzerSupported {
+                    Text("livetranslate.settings.engineAnalyzer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Toggle("livetranslate.settings.onDevice", isOn: $onDevice)
+                        .onChange(of: onDevice) { _, _ in controller.restartIfRunning() }
+                    Text("livetranslate.settings.onDeviceHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("livetranslate.settings.vocabularySection") {
+                TextField("livetranslate.settings.vocabularyPlaceholder", text: $vocabulary, axis: .vertical)
+                    .lineLimit(2...5)
+                Text("livetranslate.settings.vocabularyHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

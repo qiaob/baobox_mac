@@ -24,7 +24,8 @@
 |---|---|---|
 | 麦克风采集 | `AVAudioEngine.inputNode` tap | 默认输入设备；需麦克风授权（entitlement 已有） |
 | 系统声音采集 | ScreenCaptureKit `SCStream`，`capturesAudio = true`，只挂 `.audio` 输出 | 复用录屏那套；需**屏幕录制**授权；`excludesCurrentProcessAudio` |
-| 语音识别 | `Speech` 框架 `SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest` | locale `en-US` / `zh-CN`；设置开「优先本地识别」且 `supportsOnDeviceRecognition` 时 `requiresOnDeviceRecognition = true`（不上传音频）；需**语音识别**授权 → `NSSpeechRecognitionUsageDescription` |
+| 语音识别（macOS 26+，首选） | `Speech` 框架 `SpeechAnalyzer` + `SpeechTranscriber`（`.volatileResults`） | 本地模型、为长音频设计，一路流到底不切段 → 上下文完整、**更准**；volatile 结果出字**更快**。首次用 `AssetInventory` 自动下载语言模型；音频经 `AVAudioConverter` 转成 `bestAvailableAudioFormat`。`#if compiler(>=6.2)` 包住（需 Xcode 26 编译） |
+| 语音识别（macOS 14–15 / 回退） | `Speech` 框架 `SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest` | locale `en-US` / `zh-CN`；设置开「优先本地识别」且 `supportsOnDeviceRecognition` 时 `requiresOnDeviceRecognition = true`（不上传音频）；需**语音识别**授权 → `NSSpeechRecognitionUsageDescription` |
 | 翻译 | `Translation` 框架（macOS 15+），SwiftUI `.translationTask` 拿 `TranslationSession` | 系统本地翻译；语言包首次使用时系统弹下载。**macOS 14 降级为只显示原文**，字幕条上提示一次 |
 
 `Speech` / `Translation` 是新引入的系统框架：录屏的音频、截图的 OCR（Vision）之外没有现成能力可复用，
@@ -45,7 +46,15 @@
                                                └──▶ lines[id].translation
 ```
 
-### 3.1 分段（segment）
+### 3.0 引擎选择
+
+macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、模型下载失败、启动失败 → **自动回退**旧引擎。
+两个引擎实现同一个 `LiveTranslateRecognizer` 协议（`onUpdate(id, text, isFinal)`），控制器不关心用的是哪个。
+新引擎每个 final 结果算一句（id+1），之后的 volatile 结果是下一句的进行中文字。
+
+**专有名词**：用户在设置里填的词（逗号 / 换行分隔，最多 100 个）—— 新引擎走 `AnalysisContext.contextualStrings`，旧引擎走 `request.contextualStrings`，提高人名、产品名、术语的识别率。
+
+### 3.1 旧引擎分段（segment）
 
 `SFSpeechRecognizer` 单个请求有时长上限（服务端约 1 分钟），且一句话说完前文字会一直被改写。
 因此按「段」识别：每段一个 request + task，段 id 单调递增，字幕条只保留**最近 2 段**（上一句淡出 + 当前句）。
@@ -73,6 +82,11 @@
 `TranslationSession` 只在 `.translationTask` 闭包生命周期内使用，不外泄；字幕条关闭即任务取消、循环结束。
 
 翻译失败（语言包未装、用户取消下载）只在字幕条提示一次，并引导到「系统设置 › 通用 › 语言与地区 › 翻译语言」。
+
+## 3.3 构建
+
+`build-macos.yml` 用 Xcode 26（macos-15）与 Xcode 16.2（macos-14）各编一次：前者编进新引擎，后者保证旧工具链也编得过。
+`release.yml` 用 Xcode 26 —— 否则发出去的包里没有新引擎。本地用 Xcode 16 编也能用，只是只有旧引擎。
 
 ## 4. 字幕条
 
@@ -103,6 +117,7 @@
 | `livetranslate.fontSize` | 16–40 | 24 | 即时 |
 | `livetranslate.opacity` | 0.3–1.0 | 0.75 | 即时 |
 | `livetranslate.onDevice` | Bool | `true` | 运行中自动重启 |
+| `livetranslate.vocabulary` | 专有名词原文 | 空 | 下次开始 |
 | `livetranslate.barOrigin` | `NSStringFromPoint` | — | 拖动时写 |
 
 ## 7. 文件
@@ -110,8 +125,9 @@
 | 文件 | 内容 |
 |---|---|
 | `LiveTranslateTool.swift` | `ToolModule` 壳：菜单、快捷键、设置 Tab |
-| `LiveTranslateController.swift` | 设置键、状态机、权限、分段识别 |
-| `LiveTranslateAudio.swift` | `AudioRouter`、麦克风源、系统声音源（SCK） |
+| `LiveTranslateController.swift` | 设置键、状态机、权限、引擎选择与回退、字幕行 |
+| `LiveTranslateRecognition.swift` | 识别引擎协议 + SpeechAnalyzer 引擎 + SFSpeechRecognizer 分段引擎 + 专有名词解析 |
+| `LiveTranslateAudio.swift` | `AudioRouter`（sink）、PCM 格式转换、麦克风源、系统声音源（SCK） |
 | `LiveTranslateTranslator.swift` | 翻译节流队列 + `translationTask` 桥接 |
 | `LiveTranslateBar.swift` | 字幕条 `NSPanel` 与 SwiftUI 视图 |
 | `LiveTranslateSettingsView.swift` | 设置页 |

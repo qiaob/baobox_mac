@@ -1,27 +1,64 @@
 import AVFoundation
 import CoreMedia
 import ScreenCaptureKit
-import Speech
 
-/// 音频路由：音源回调线程把 PCM 交给「当前段」的识别请求。
+/// 音频路由：音源回调线程把 PCM 交给当前识别引擎的接收端（sink）。
 ///
-/// 切段时主线程原子替换 request，音频线程下一块就进新请求 —— 不丢音频。
-/// @unchecked Sendable 依据：唯一的可变状态 `request` 只在 `lock` 内读写。
+/// 旧引擎切段时主线程原子替换 sink，音频线程下一块就进新请求 —— 不丢音频。
+/// @unchecked Sendable 依据：唯一的可变状态 `sink` 只在 `lock` 内读写；
+/// sink 本身只在音频回调线程上调用（同一时刻只有一个音源）。
 final class LiveTranslateAudioRouter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
+    typealias Sink = (AVAudioPCMBuffer) -> Void
 
-    func setRequest(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+    private let lock = NSLock()
+    private var sink: Sink?
+
+    func setSink(_ sink: Sink?) {
         lock.lock()
-        self.request = request
+        self.sink = sink
         lock.unlock()
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        let request = self.request
+        let sink = self.sink
         lock.unlock()
-        request?.append(buffer)
+        sink?(buffer)
+    }
+}
+
+/// 把音源的 PCM 转成识别引擎要求的格式（新引擎要固定采样率 / 格式）。
+/// 只在音频回调线程上使用，见 `LiveTranslateAudioRouter`。
+final class LiveTranslatePCMConverter {
+    private let outputFormat: AVAudioFormat
+    private var converter: AVAudioConverter?
+
+    init(outputFormat: AVAudioFormat) {
+        self.outputFormat = outputFormat
+    }
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        if buffer.format == outputFormat { return buffer }
+        if converter == nil || converter?.inputFormat != buffer.format {
+            converter = AVAudioConverter(from: buffer.format, to: outputFormat)
+        }
+        guard let converter, buffer.format.sampleRate > 0 else { return nil }
+        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return nil }
+        var consumed = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, inputStatus in
+            if consumed {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            consumed = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, output.frameLength > 0 else { return nil }
+        return output
     }
 }
 
