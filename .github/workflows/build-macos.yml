@@ -15,7 +15,20 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # 两套工具链都要过：Xcode 26 编进实时翻译的 SpeechAnalyzer 新引擎（#if compiler(>=6.2)），
+    # Xcode 16.2 验证没有新 SDK 的机器照样编得过（走旧引擎）。只有 Xcode 26 那份上传产物。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            xcode: "26"
+            upload: true
+          - runner: macos-14
+            xcode: "16.2"
+            upload: false
+    name: build (Xcode ${{ matrix.xcode }})
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: mac
@@ -24,7 +37,7 @@ jobs:
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.2"
+          xcode-version: ${{ matrix.xcode }}
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -49,6 +62,7 @@ jobs:
             build
 
       - name: Package
+        if: matrix.upload
         run: |
           cd "$RUNNER_TEMP/build"
           ditto -c -k --keepParent Baobox.app Baobox-macos.zip
@@ -56,6 +70,7 @@ jobs:
       # 上传 zip 而不是 .app 目录：GitHub 的 artifact 打包会丢掉符号链接与
       # 可执行位，.app 下载下来就打不开了。自己先 ditto 成 zip 可以避开。
       - uses: actions/upload-artifact@v4
+        if: matrix.upload
         with:
           name: Baobox-macos
           path: ${{ runner.temp }}/build/Baobox-macos.zip
