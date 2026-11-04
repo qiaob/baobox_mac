@@ -48,6 +48,7 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 | [剪贴板](docs/manual/clipboard.md) | ⌘⇧V · ⌘⌥V | 历史、搜索、回填粘贴、收藏、格式识别与转换、文本片段、落盘加密 |
 | [窗口管理](docs/manual/window-manager.md) | ⌃⌥ 系列 | 半屏 / 四分屏 / 最大化 / 居中 / 跨屏，13 个动作 + 布局快照 |
 | [键盘点击](docs/manual/keyboard-nav.md) | ⌘⇧空格 | 给可点元素打字母标签，敲字母即点击；另有键盘滚动 |
+| [实时翻译](docs/manual/live-translate.md) | 出厂不绑定 | 麦克风 / 系统声音实时转字幕，英中互译，屏幕底部字幕条 |
 | [防休眠](docs/manual/caffeinate.md) | 纯菜单 | 定时阻止睡眠，可选屏幕常亮 |
 | [Claude Code 助手](docs/manual/claude-code.md) | ⌃⇧空格 | 会话续接、额度用量、审计、通知、配置可视化、statusline、MCP |
 | [Codex 助手](docs/manual/codex.md) | 出厂不绑定 | 会话续接、额度用量、配置可视化、完成通知、维护 |
@@ -115,6 +116,12 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 - **连续点击**：点完自动刷新标签接着点，Esc 或鼠标点击退出
 - **标签范围**：仅当前屏 / 所有屏
 - **键盘滚动**：j / k 滚动、空格翻页，专治 Chrome 这类不暴露滚动条的页面
+
+### 实时翻译
+
+选**麦克风**或**系统声音**作音源，语音实时转成字幕并**英文 ⇄ 中文**互译，显示在屏幕底部一条
+可拖动的半透明字幕条上（双语 / 仅译文 / 仅原文）。识别用系统 Speech 框架（优先本地识别），
+翻译用系统自带的本地翻译（macOS 15+），全程不经第三方服务。
 
 ### 防休眠
 
@@ -256,7 +263,7 @@ mac/Sources/
 │   ├── KeyCombo / Permissions / Geometry / L10n / QRCodeGenerator / TextRecognizer …
 ├── Modules/                # 每个工具一个目录
 │   ├── Screenshot/  Clipboard/  WindowManager/  KeyboardNav/
-│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/
+│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/  LiveTranslate/
 ├── Settings/               # 设置窗口（通用 / 快捷键 / 各工具 / 关于）
 ├── Onboarding/             # 首启权限引导
 └── Resources/              # Localizable.xcstrings、Assets
