@@ -226,6 +226,7 @@ private struct SelectionTranslateView: View {
     }
 
     @ViewBuilder
+    @available(macOS 15.0, *)
     private func translationArea(text: String, source: SelectionLanguage) -> some View {
         Group {
             if let translatedText {
