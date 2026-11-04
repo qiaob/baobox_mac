@@ -199,8 +199,11 @@ enum ScreenshotResultHandler {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setData(png, forType: .png)
-        let nsImage = NSImage(cgImage: cgImage, size: .zero)
-        if let tiff = nsImage.tiffRepresentation {
+        // TIFF 直接从 bitmap rep 编码，不经 NSImage：NSImage 的 tiffRepresentation 要先按
+        // 「点尺寸 + 当前设备分辨率」选/渲一份 representation，混合 DPI（Retina + 1x 屏）
+        // 时可能渲成低分辨率那份，粘出去的图发糊；rep 编码则与设备无关、逐像素保真。
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        if let tiff = rep.representation(using: .tiff, properties: [:]) {
             pasteboard.setData(tiff, forType: .tiff)
         }
     }

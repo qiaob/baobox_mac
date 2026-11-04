@@ -77,9 +77,13 @@ final class ScreenshotHistoryStore {
     }
 
     func cgImage(for entry: Entry) -> CGImage? {
-        guard let image = image(for: entry) else { return nil }
-        var rect = NSRect(origin: .zero, size: image.size)
-        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        // 不走 NSImage.cgImage(forProposedRect:)：那会按「点尺寸 + 当前设备分辨率」挑/渲
+        // representation，混合 DPI 时可能返回降采样的一份，历史里找回的图就糊了。
+        // 直接解落盘 PNG 的 bitmap rep，其 cgImage 逐像素等同原图、与设备无关。
+        let url = Self.dir.appendingPathComponent(entry.filename)
+        guard let data = try? Data(contentsOf: url),
+              let rep = NSBitmapImageRep(data: data) else { return nil }
+        return rep.cgImage
     }
 
     /// 菜单缩略图（等比缩到最长边 140pt，缓存复用）。

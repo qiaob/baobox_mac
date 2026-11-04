@@ -102,7 +102,8 @@ final class PinnedImageWindow: NSPanel {
         if let png = rep.representation(using: .png, properties: [:]) {
             pasteboard.setData(png, forType: .png)
         }
-        if let tiff = NSImage(cgImage: image, size: .zero).tiffRepresentation {
+        // TIFF 同样直接走 rep 编码，不经 NSImage 的设备相关栅格化（见 ResultHandler 注释）。
+        if let tiff = rep.representation(using: .tiff, properties: [:]) {
             pasteboard.setData(tiff, forType: .tiff)
         }
     }
