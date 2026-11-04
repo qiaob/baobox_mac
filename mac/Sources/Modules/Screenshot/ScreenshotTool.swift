@@ -160,10 +160,11 @@ final class ScreenshotTool: ToolModule {
     }
 
     private static func saveEntry(_ entry: ScreenshotHistoryStore.Entry) {
-        guard let image = ScreenshotHistoryStore.shared.image(for: entry),
-              let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return }
+        // 历史里存的本来就是 PNG 原图数据，直接搬运落盘。旧实现绕一圈
+        // NSImage → TIFF → rep → PNG：tiffRepresentation 的栅格化与当前设备分辨率相关，
+        // 混合 DPI 时会把 Retina 原图降采样再存出，图就这么糊掉的。
+        let source = ScreenshotHistoryStore.dir.appendingPathComponent(entry.filename)
+        guard let png = try? Data(contentsOf: source) else { return }
 
         // 文件名沿用截图模板，但用条目自身的时间戳（不是保存时刻）。
         let formatter = DateFormatter()
@@ -211,8 +212,19 @@ final class ScreenshotTool: ToolModule {
             alert.runModal()
             return
         }
-        var rect = NSRect(origin: .zero, size: image.size)
-        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+        // 取像素最大的 bitmap representation 的 cgImage，不用 cgImage(forProposedRect:)：
+        // 剪贴板里的图若带 144 DPI（系统截图等），image.size 只有像素的一半（点），
+        // 按它提图会拿到半分辨率版本，贴出来发糊。无 bitmap rep（PDF 等矢量内容）时
+        // 才回退旧提法。
+        let cg: CGImage?
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep })
+            .max(by: { $0.pixelsWide < $1.pixelsWide }) {
+            cg = rep.cgImage
+        } else {
+            var rect = NSRect(origin: .zero, size: image.size)
+            cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        }
+        guard let cg else { return }
         Self.pinCentered(cg)
     }
 

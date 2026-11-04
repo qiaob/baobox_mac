@@ -945,14 +945,17 @@ final class CaptureOverlayView: NSView {
         mosaicImage = nil
     }
 
-    /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上、Retina 换算。
+    /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上。
+    /// 倍率从底图自身反推（像素宽 ÷ 视图点宽），不用 backingScaleFactor 假设 —— 同
+    /// `CaptureController.crop`：底图实际像素密度与假设不一致时，按假设裁剪会错位/降采样。
     private func cropFrozenBackground(localRect: NSRect) -> CGImage? {
-        guard let frozenBackground else { return nil }
-        let scale = screenRef.backingScaleFactor
-        let x = localRect.minX * scale
-        let y = (bounds.height - localRect.maxY) * scale
-        let w = localRect.width * scale
-        let h = localRect.height * scale
+        guard let frozenBackground, bounds.width > 0, bounds.height > 0 else { return nil }
+        let scaleX = CGFloat(frozenBackground.width) / bounds.width
+        let scaleY = CGFloat(frozenBackground.height) / bounds.height
+        let x = localRect.minX * scaleX
+        let y = (bounds.height - localRect.maxY) * scaleY
+        let w = localRect.width * scaleX
+        let h = localRect.height * scaleY
         let pixelRect = CGRect(x: x.rounded(), y: y.rounded(), width: w.rounded(), height: h.rounded())
         return frozenBackground.cropping(to: pixelRect)
     }

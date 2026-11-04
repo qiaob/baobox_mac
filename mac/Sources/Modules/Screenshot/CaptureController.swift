@@ -268,12 +268,16 @@ final class CaptureController {
     }
 
     /// 从整屏图裁剪 AK 全局 rect 对应的像素区域（原点左上，同 CaptureEngine.displayRect 口径）。
+    /// 倍率从图像自身反推（像素宽 ÷ 屏点宽）：冻结图来自 `CGWindowListCreateImage`，
+    /// 其实际像素密度未必恒等于 `backingScaleFactor`（镜像 / 缩放模式下会偏），
+    /// 按假设值裁剪会错位或变相降采样。
     static func crop(_ full: CGImage, rectAK: NSRect, screen: NSScreen) -> CGImage? {
-        let scale = screen.backingScaleFactor
-        let x = (rectAK.minX - screen.frame.minX) * scale
-        let y = (screen.frame.maxY - rectAK.maxY) * scale
-        let w = rectAK.width * scale
-        let h = rectAK.height * scale
+        let scaleX = CGFloat(full.width) / screen.frame.width
+        let scaleY = CGFloat(full.height) / screen.frame.height
+        let x = (rectAK.minX - screen.frame.minX) * scaleX
+        let y = (screen.frame.maxY - rectAK.maxY) * scaleY
+        let w = rectAK.width * scaleX
+        let h = rectAK.height * scaleY
         let pixelRect = CGRect(x: x.rounded(), y: y.rounded(), width: w.rounded(), height: h.rounded())
         return full.cropping(to: pixelRect)
     }
