@@ -54,6 +54,7 @@ BaoboxApp(@main, Settings scene)
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
+| SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层英⇄中翻译 + 朗读（AX 取词 / ⌘C 兜底 / 框选 OCR 三条取词路径，Translation 框架，macOS 15+ 翻译）。`docs/selection-translate/` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
