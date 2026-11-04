@@ -110,9 +110,20 @@ final class ClipboardMonitor {
     }
 
     private func saveImage(_ image: NSImage) -> String? {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        // 直接从像素最大的 bitmap representation 编 PNG，不经 tiffRepresentation：
+        // 后者按点尺寸 + 当前设备分辨率栅格化，混合 DPI 环境下会把 Retina 图
+        // 存成低分辨率版本（与截图偶发模糊同源，见 PR #32）。没有 bitmap rep
+        // （PDF 等矢量内容）时才回退 TIFF 路径，先栅格化再说，不能直接丢图。
+        let rep: NSBitmapImageRep?
+        if let bitmap = image.representations.compactMap({ $0 as? NSBitmapImageRep })
+            .max(by: { $0.pixelsWide < $1.pixelsWide }) {
+            rep = bitmap
+        } else if let tiff = image.tiffRepresentation {
+            rep = NSBitmapImageRep(data: tiff)
+        } else {
+            rep = nil
+        }
+        guard let rep, let png = rep.representation(using: .png, properties: [:]) else { return nil }
         // 用内容哈希做文件名。原先是 UUID，导致 ClipboardItem.contentSignature
         // （"image:<文件名>"）永远不可能相等 —— 图片去重形同虚设，同一张图反复复制会
         // 持续堆积历史条目和磁盘 PNG。
