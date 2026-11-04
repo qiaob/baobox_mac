@@ -237,8 +237,18 @@ final class ClipboardPanelController: NSObject {
     /// 与「大窗编辑」同款处理 —— 开窗后收面板。
     private func previewImage(_ item: ClipboardItem) {
         guard let image = ClipboardStore.image(for: item) else { return }
-        var rect = NSRect(origin: .zero, size: image.size)
-        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+        // 取像素最大的 bitmap representation 的原图，不用 cgImage(forProposedRect:)：
+        // 落盘图是 Retina 像素尺寸，image.size（点）只有一半时按它提图会拿到
+        // 半分辨率版本，预览发糊（与 PR #32 同源）。无 bitmap rep 时回退旧提法。
+        let cg: CGImage?
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep })
+            .max(by: { $0.pixelsWide < $1.pixelsWide }) {
+            cg = rep.cgImage
+        } else {
+            var rect = NSRect(origin: .zero, size: image.size)
+            cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        }
+        guard let cg else { return }
         let data = ClipboardStore.imageData(for: item)
         ImagePreviewWindow.present(
             image: cg,
