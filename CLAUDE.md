@@ -55,6 +55,7 @@ BaoboxApp(@main, Settings scene)
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
 | LiveTranslate | `livetranslate` | **实时翻译**：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ Translation 框架英中互译（macOS 15+，14 降级只显示原文）→ 屏幕底部字幕条。`docs/live-translate/DESIGN.md` |
+| SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层英⇄中翻译 + 朗读（AX 取词 / ⌘C 兜底 / 框选 OCR 三条取词路径，Translation 框架，macOS 15+ 翻译）。`docs/selection-translate/` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
