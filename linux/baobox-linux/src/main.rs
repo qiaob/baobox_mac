@@ -41,6 +41,7 @@ mod settings_window;
 mod store;
 mod text;
 mod text_input;
+mod theme;
 mod tray;
 mod x11capture;
 

@@ -72,9 +72,11 @@ pub fn open(store: &Store) -> Outcome {
     if !gtk::is_initialized() && gtk::init().is_err() {
         return Outcome::Cancelled;
     }
+    crate::theme::install();
 
     let result = Rc::new(RefCell::new(Outcome::Cancelled));
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.style_context().add_class("baobox-panel");
     window.set_title("剪贴板");
     window.set_default_size(560, 460);
     window.set_position(gtk::WindowPosition::CenterAlways);
@@ -92,6 +94,7 @@ pub fn open(store: &Store) -> Outcome {
     column.pack_start(&search, false, false, 0);
 
     let list = gtk::ListBox::new();
+    list.style_context().add_class("baobox-panel-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
     let scroller = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);

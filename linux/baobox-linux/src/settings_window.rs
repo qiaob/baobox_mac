@@ -4,6 +4,9 @@
 //! `baobox_app::SettingsPage`，与 Windows 侧共用同一份声明。
 //! 这个文件只做一件事：把声明翻译成 GTK 控件，再把改动写回配置。
 //!
+//! 布局与 mac 版设置窗口对齐：860×560、左侧 200 宽边栏选页、
+//! 右侧页标题 + 白色分组卡片，样式常量在 [`crate::theme`]。
+//!
 //! # 为什么改一下就存一次
 //!
 //! 没有「确定 / 取消」按钮。改完立刻生效、立刻落盘，与 macOS 的系统设置、
@@ -30,31 +33,63 @@ pub type OnChange = Rc<dyn Fn(&Config)>;
 ///
 /// 必须在 GTK 主线程上调用。
 pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) {
+    crate::theme::install();
     let config = Rc::new(RefCell::new(config));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Baobox 设置");
-    window.set_default_size(560, 480);
+    window.style_context().add_class("baobox-settings");
+    // 与 mac 版同一尺寸；内容再多也是页内滚动，不靠拉大窗口
+    window.set_default_size(860, 560);
+    window.set_size_request(720, 460);
     window.set_position(gtk::WindowPosition::Center);
 
-    // 左侧一列工具，右侧对应的一页 —— 与 mac 版设置窗口同一个形状
-    let notebook = gtk::Notebook::new();
-    notebook.set_tab_pos(gtk::PositionType::Left);
+    // 左边栏选页 + 右边一摞页面 —— mac 版设置窗口的形状。
+    // 以前用 Notebook 的左侧页签，渲染出来是竖排文字条，和 mac 版毫无关系。
+    let layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let sidebar = gtk::ListBox::new();
+    sidebar.set_size_request(200, -1);
+    sidebar.style_context().add_class("baobox-sidebar");
+    sidebar.set_selection_mode(gtk::SelectionMode::Single);
 
+    let stack = gtk::Stack::new();
+    stack.style_context().add_class("baobox-detail");
+    stack.set_hexpand(true);
+
+    if pages.is_empty() {
+        add_sidebar_row(&sidebar, "设置");
+        let empty = gtk::Label::new(Some("还没有任何工具提供设置项。"));
+        stack.add_named(&empty, "settings");
+    }
     for page in &pages {
+        add_sidebar_row(&sidebar, &page.title);
         let content = build_page(page, Rc::clone(&config), Rc::clone(&on_change));
         let scroller = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.add(&content);
-        notebook.append_page(&scroller, Some(&gtk::Label::new(Some(&page.title))));
+        stack.add_named(&scroller, &page.section);
     }
 
-    if pages.is_empty() {
-        let empty = gtk::Label::new(Some("还没有任何工具提供设置项。"));
-        notebook.append_page(&empty, Some(&gtk::Label::new(Some("设置"))));
+    // sections 与边栏行一一对应，选中哪行就翻到哪页
+    let sections: Vec<String> = if pages.is_empty() {
+        vec!["settings".to_string()]
+    } else {
+        pages.iter().map(|page| page.section.clone()).collect()
+    };
+    let stack_for_sidebar = stack.clone();
+    sidebar.connect_row_selected(move |_, row| {
+        let Some(row) = row else { return };
+        if let Some(section) = sections.get(row.index() as usize) {
+            stack_for_sidebar.set_visible_child_name(section);
+        }
+    });
+    if let Some(first) = sidebar.row_at_index(0) {
+        sidebar.select_row(Some(&first));
     }
 
-    window.add(&notebook);
+    layout.pack_start(&sidebar, false, false, 0);
+    layout.pack_start(&stack, true, true, 0);
+    window.add(&layout);
     // 关掉窗口不等于退出 App —— 这是个常驻程序，托盘图标还在
     window.connect_delete_event(|window, _| {
         unsafe { window.destroy() };
@@ -63,18 +98,39 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) {
     window.show_all();
 }
 
-/// 把一页声明翻译成一列控件。
-fn build_page(page: &SettingsPage, config: Rc<RefCell<Config>>, on_change: OnChange) -> gtk::Box {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    column.set_margin_top(18);
-    column.set_margin_bottom(18);
-    column.set_margin_start(18);
-    column.set_margin_end(18);
+/// 边栏里的一行：只有标题（模型里没有图标，先不硬凑）。
+fn add_sidebar_row(sidebar: &gtk::ListBox, title: &str) {
+    let label = gtk::Label::new(Some(title));
+    label.set_xalign(0.0);
+    let row = gtk::ListBoxRow::new();
+    row.add(&label);
+    sidebar.add(&row);
+}
 
-    for field in &page.fields {
+/// 把一页声明翻译成「页标题 + 一张分组卡片」。
+fn build_page(page: &SettingsPage, config: Rc<RefCell<Config>>, on_change: OnChange) -> gtk::Box {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.set_margin_top(20);
+    column.set_margin_bottom(20);
+    column.set_margin_start(20);
+    column.set_margin_end(20);
+
+    let title = gtk::Label::new(Some(&page.title));
+    title.set_xalign(0.0);
+    title.style_context().add_class("baobox-page-title");
+    column.pack_start(&title, false, false, 0);
+
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.style_context().add_class("baobox-card");
+
+    for (index, field) in page.fields.iter().enumerate() {
+        if index > 0 {
+            card.pack_start(&gtk::Separator::new(gtk::Orientation::Horizontal), false, false, 0);
+        }
         let section = page.section.clone();
         let current = field.value(&config.borrow(), &section);
         let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        row.style_context().add_class("baobox-row");
 
         let control: gtk::Box = match &field.kind {
             FieldKind::Toggle { .. } => {
@@ -178,13 +234,14 @@ fn build_page(page: &SettingsPage, config: Rc<RefCell<Config>>, on_change: OnCha
         if let Some(help) = &field.help {
             let hint = gtk::Label::new(Some(help));
             hint.set_xalign(0.0);
-            hint.style_context().add_class("dim-label");
-            // 说明文字小一号，别和标题抢注意力
+            // 说明文字小一号、灰一号，别和标题抢注意力
+            hint.style_context().add_class("baobox-hint");
             hint.set_margin_start(2);
             row.pack_start(&hint, false, false, 0);
         }
-        column.pack_start(&row, false, false, 0);
+        card.pack_start(&row, false, false, 0);
     }
+    column.pack_start(&card, false, false, 0);
     column
 }
 

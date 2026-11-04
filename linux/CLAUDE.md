@@ -46,7 +46,8 @@ dbus-run-session -- xvfb-run -a cargo test
 | `text_input.rs` | 文字工具的输入框（借 GTK 的输入法栈，中文靠它） |
 | `pin.rs` | 贴图窗口 |
 | `tray.rs` | StatusNotifierItem + dbusmenu |
-| `settings_window.rs` | GTK3 设置窗口 |
+| `settings_window.rs` | GTK3 设置窗口（侧边栏 + 分组卡片，对齐 mac 版） |
+| `theme.rs` | 全局 GTK CSS：向 mac 版看齐的配色 / 圆角 / 选中态 |
 | `hotkeys.rs` | 多快捷键中心 |
 | `clipboard.rs` | X11 selection 剪贴板（写） |
 | `clipboard_read.rs` | 监听剪贴板变化并读回内容（XFIXES + INCR 分片） |

@@ -81,6 +81,7 @@ pub fn run() -> Result<String, String> {
     registry.activate_all(&config);
 
     gtk::init().map_err(|e| format!("GTK 初始化失败：{e}。常驻模式需要图形环境。"))?;
+    crate::theme::install();
 
     let (tx, rx) = channel::<String>();
     let shared = Shared::new(&registry, &config);

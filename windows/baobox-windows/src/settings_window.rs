@@ -31,6 +31,10 @@
 //! 与整个系统格格不入。必须显式取 `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
 //! 里的 `lfMessageFont` 并 `WM_SETFONT` 给每个控件。
 //!
+//! 页标题在此基础上另建一份放大加粗的字体，再在页与页之间压一条蚀刻线 ——
+//! 向 mac / Linux 版的「页标题 + 分组」层级看齐。侧边栏那种大改要重写
+//! 滚动记账，留待能在真机上逐像素验证时再做，不在这里盲改。
+//!
 //! # 滚动是自己挪控件，不是 `ScrollWindowEx`
 //!
 //! 工具一多，设置项就超过一屏了（三个工具已经 700 多像素，而 768 高的
@@ -50,7 +54,7 @@ use baobox_core::hotkey::KeyCombo;
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, DeleteObject, HFONT};
+use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, DeleteObject, HFONT, FW_BOLD};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     SetScrollInfo, BST_CHECKED, BST_UNCHECKED, HKM_GETHOTKEY, HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL,
@@ -81,7 +85,7 @@ const ROW_HEIGHT: i32 = 30;
 const HELP_HEIGHT: i32 = 18;
 const MARGIN: i32 = 16;
 const LABEL_WIDTH: i32 = 220;
-const CONTROL_WIDTH: i32 = 200;
+const CONTROL_WIDTH: i32 = 264;
 const WINDOW_WIDTH: i32 = 520;
 
 /// 配置被改动时的回调。
@@ -112,6 +116,8 @@ struct SettingsState {
     config: RefCell<Config>,
     on_change: OnChange,
     font: HFONT,
+    /// 页标题专用：消息字体放大加粗，与正文拉开层级。
+    title_font: HFONT,
     /// 每个子控件与它**设计时**的 (x, y)。滚动就是照着这个重新摆一遍。
     ///
     /// x 也要记：`SetWindowPos` 即便带 `SWP_NOSIZE`，位置也是两个坐标
@@ -168,11 +174,13 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         .map_err(|e| format!("创建设置窗口失败：{e}"))?;
 
         let font = message_font();
+        let title_font = title_font();
         let mut state = Box::new(SettingsState {
             controls: Vec::new(),
             config: RefCell::new(config),
             on_change,
             font,
+            title_font,
             children: Vec::new(),
             scroll_y: 0,
             content_height,
@@ -215,9 +223,14 @@ unsafe fn build(
     let mut y = MARGIN;
     let mut id = FIRST_CONTROL;
 
-    for page in pages {
-        // 页标题：一条加粗的分组标签
-        static_text(parent, instance, &page.title, MARGIN, y, WINDOW_WIDTH - MARGIN * 2, state.font);
+    for (page_index, page) in pages.iter().enumerate() {
+        if page_index > 0 {
+            // 页与页之间压一条蚀刻线，分组才读得出来。
+            // 它落在上一页结尾留出的 MARGIN 空档正中，不占新的高度
+            separator(parent, instance, MARGIN, y - 8, WINDOW_WIDTH - MARGIN * 2, state.font);
+        }
+        // 页标题：放大加粗，与下面的字段拉开层级
+        static_text(parent, instance, &page.title, MARGIN, y, WINDOW_WIDTH - MARGIN * 2, 22, state.title_font);
         y += ROW_HEIGHT;
 
         for field in &page.fields {
@@ -241,7 +254,7 @@ unsafe fn build(
                     (hwnd, Kind::Check)
                 }
                 FieldKind::Choice { options, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
                     let hwnd = control(
                         parent, instance, w!("COMBOBOX"), "",
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | CBS_DROPDOWNLIST as u32,
@@ -257,7 +270,7 @@ unsafe fn build(
                     (hwnd, Kind::Combo)
                 }
                 FieldKind::Number { min, max, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
                     let edit = control(
                         parent, instance, w!("EDIT"), &value,
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
@@ -279,7 +292,7 @@ unsafe fn build(
                     (edit, Kind::Number)
                 }
                 FieldKind::Hotkey { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
                     let hwnd = control_ex(
                         parent, instance, WS_EX_CLIENTEDGE, w!("msctls_hotkey32"), "",
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0,
@@ -295,7 +308,7 @@ unsafe fn build(
                     (hwnd, Kind::Hotkey)
                 }
                 FieldKind::Text { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, state.font);
+                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
                     let hwnd = control_ex(
                         parent, instance, WS_EX_CLIENTEDGE, w!("EDIT"), &value,
                         (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
@@ -318,7 +331,7 @@ unsafe fn build(
             if let Some(help) = &field.help {
                 static_text(
                     parent, instance, help,
-                    MARGIN + 2, y - 6, WINDOW_WIDTH - MARGIN * 2, state.font,
+                    MARGIN + 2, y - 6, WINDOW_WIDTH - MARGIN * 2, 18, state.font,
                 );
                 y += HELP_HEIGHT;
             }
@@ -334,12 +347,32 @@ unsafe fn static_text(
     x: i32,
     y: i32,
     width: i32,
+    height: i32,
     font: HFONT,
 ) {
     control(
         parent, instance, w!("STATIC"), text,
         (WS_CHILD | WS_VISIBLE).0,
-        x, y, width, 18, 0, font,
+        x, y, width, height, 0, font,
+    );
+}
+
+/// `SS_ETCHEDHORZ` 的原始值 —— windows crate 没导出这个静态控件样式常量。
+const SS_ETCHEDHORZ: u32 = 0x0000_0010;
+
+/// 一条横向蚀刻线（页与页之间的分隔）。
+unsafe fn separator(
+    parent: HWND,
+    instance: HINSTANCE,
+    x: i32,
+    y: i32,
+    width: i32,
+    font: HFONT,
+) {
+    control(
+        parent, instance, w!("STATIC"), "",
+        (WS_CHILD | WS_VISIBLE).0 | SS_ETCHEDHORZ,
+        x, y, width, 4, 0, font,
     );
 }
 
@@ -416,6 +449,29 @@ pub unsafe fn message_font() -> HFONT {
     } else {
         HFONT::default()
     }
+}
+
+/// 页标题的字体：消息字体放大到 1.4 倍并加粗。
+pub unsafe fn title_font() -> HFONT {
+    let mut metrics = NONCLIENTMETRICSW {
+        cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
+        ..Default::default()
+    };
+    let ok = SystemParametersInfoW(
+        SPI_GETNONCLIENTMETRICS,
+        metrics.cbSize,
+        Some(&mut metrics as *mut _ as *mut _),
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+    .is_ok();
+    if !ok {
+        return HFONT::default();
+    }
+    let mut logfont = metrics.lfMessageFont;
+    // lfHeight 是负数（按字符高度匹配），同比例放大就是乘过去
+    logfont.lfHeight = logfont.lfHeight * 14 / 10;
+    logfont.lfWeight = FW_BOLD.0 as i32;
+    CreateFontIndirectW(&logfont)
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -633,6 +689,9 @@ unsafe extern "system" fn wndproc(
             // 只把这个窗口自己的资源还回去
             if !state.font.is_invalid() {
                 let _ = DeleteObject(state.font);
+            }
+            if !state.title_font.is_invalid() {
+                let _ = DeleteObject(state.title_font);
             }
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(pointer));
