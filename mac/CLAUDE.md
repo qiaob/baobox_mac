@@ -3,7 +3,7 @@
 给在 `mac/` 下干活的会话。**先读仓库根目录的 `CLAUDE.md`** —— 那一页是产品全貌、
 模块清单与八条通用约定，是这个项目的主文档。这一页只补 macOS 特有的东西。
 
-macOS 是**功能最全的那一版**（八个工具都在），另外两个平台目前只有截图。
+macOS 是**功能最全的那一版**（九个工具都在），另外两个平台目前只有截图。
 跨平台共享逻辑在 `../shared/`（Rust），mac 侧是独立的 Swift 实现 ——
 **共享的是规格与算法，不是代码行**，见 `../docs/multiplatform/ARCHITECTURE.md`。
 
@@ -62,7 +62,7 @@ Sources/App/         BaoboxApp、AppDelegate（装配所有模块）、StatusIte
 Sources/Core/        ToolModule / ToolRegistry / HotkeyCenter / Permissions /
                      Geometry / L10n / TextRecognizer / QRCodeGenerator …
 Sources/Settings/    设置窗口
-Sources/Modules/<名>/ 八个工具，一个目录一个
+Sources/Modules/<名>/ 九个工具，一个目录一个
 Sources/Resources/   Localizable.xcstrings
 ```
 

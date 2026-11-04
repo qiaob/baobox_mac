@@ -50,6 +50,7 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 | [Clipboard](docs/manual/en/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
 | [Window manager](docs/manual/en/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
 | [Keyboard clicking](docs/manual/en/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
+| [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar |
 | [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
 | [Claude Code assistant](docs/manual/en/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](docs/manual/en/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
@@ -139,6 +140,13 @@ clicks prefer `AXPress` — **your actual mouse never moves**.
 - **Label scope**: current display only, or all of them
 - **Keyboard scrolling**: j/k to scroll, Space to page — for pages like Chrome that don't
   expose a scrollbar element
+
+### Live Translate
+
+Pick the **microphone** or **system audio** as the source; speech becomes live captions translated
+**English ⇄ Chinese**, shown in a draggable translucent bar at the bottom of the screen (bilingual /
+translation only / original only). Recognition uses the system Speech framework (on-device when
+available); translation uses the built-in on-device Apple Translation (macOS 15+). No third-party services.
 
 ### Keep awake
 
@@ -295,7 +303,7 @@ mac/Sources/
 │   ├── KeyCombo / Permissions / Geometry / L10n / QRCodeGenerator / TextRecognizer …
 ├── Modules/                # one directory per tool
 │   ├── Screenshot/  Clipboard/  WindowManager/  KeyboardNav/
-│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/
+│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/  LiveTranslate/
 ├── Settings/               # settings window
 ├── Onboarding/             # first-launch permission flow
 └── Resources/              # Localizable.xcstrings, Assets
