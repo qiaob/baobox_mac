@@ -1,206 +1,215 @@
 import AppKit
+import Foundation
 
-/// M1 内置形象：代码绘制的橘猫。
-///
-/// 设计 §7 的渲染层解耦点在本文件：引擎只产出 PetPose，本视图负责把它画出来。
-/// 后续放入 `Resources/Pets/<id>/` 的帧序列（2D)或 USDZ 模型（3D)时，
-/// 换掉本视图即可，引擎、窗口、通知内核都不动。
-final class CodeDrawnPetView: NSView {
+// MARK: - 素材包（pet.json）
+
+/// 一个状态的取帧方式：整行帧图（sheet）或散图序列（frames）二选一。
+struct PetStateSpec: Decodable {
+    var sheet: String?      // 帧图文件名；"*" = 文件夹里第一张 PNG（优先名字含 side 的）
+    var frames: [String]?   // 散图文件名序列
+    var frameWidth: Int?    // sheet 模式必填
+    var frameHeight: Int?
+    var row: Int?           // sheet 里第几行（0 起，从上往下）
+    var count: Int?         // 帧数；nil = 按图宽自动算
+    var fps: Double?
+}
+
+struct PetManifest: Decodable {
+    var name: String
+    var pixelArt: Bool?
+    var states: [String: PetStateSpec]
+}
+
+/// 一个可用的宠物形象：文件夹 + 清单 + 已解码的各状态帧。
+struct PetPackage {
+    let id: String
+    let name: String
+    let pixelArt: Bool
+    let framesByState: [String: [NSImage]]
+    let fpsByState: [String: Double]
+}
+
+/// 素材包加载器。两处来源：
+/// 1. App 包内 `Pets/`（随版本发布的内置形象）；
+/// 2. `~/Library/Application Support/Baobox/Pets/`（用户自放，不用重打包即可换形象）。
+/// 首次启动会在 2 处生成几个示例形象文件夹（只写 pet.json，图由用户把素材包里的帧图放进来）。
+enum PetPackageLoader {
+    static var userPetsDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("Baobox/Pets", isDirectory: true)
+    }
+
+    static func loadAll() -> [PetPackage] {
+        var dirs: [URL] = []
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("Pets", isDirectory: true) {
+            dirs.append(bundled)
+        }
+        dirs.append(userPetsDirectory)
+        var packages: [PetPackage] = []
+        var seen: Set<String> = []
+        for dir in dirs {
+            guard let subs = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) else { continue }
+            for sub in subs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let id = sub.lastPathComponent
+                guard !seen.contains(id), let pkg = loadPackage(id: id, in: sub) else { continue }
+                seen.insert(id)
+                packages.append(pkg)
+            }
+        }
+        return packages
+    }
+
+    private static func loadPackage(id: String, in dir: URL) -> PetPackage? {
+        let manifestURL = dir.appendingPathComponent("pet.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(PetManifest.self, from: data) else { return nil }
+        var framesByState: [String: [NSImage]] = [:]
+        var fpsByState: [String: Double] = [:]
+        for (state, spec) in manifest.states {
+            let frames = loadFrames(spec: spec, in: dir)
+            if !frames.isEmpty {
+                framesByState[state] = frames
+                fpsByState[state] = spec.fps ?? 8
+            }
+        }
+        // 至少要有 idle 才算可用包。
+        guard framesByState["idle"] != nil else { return nil }
+        return PetPackage(id: id, name: manifest.name, pixelArt: manifest.pixelArt ?? true,
+                          framesByState: framesByState, fpsByState: fpsByState)
+    }
+
+    private static func loadFrames(spec: PetStateSpec, in dir: URL) -> [NSImage] {
+        if let names = spec.frames {
+            return names.compactMap { NSImage(contentsOf: dir.appendingPathComponent($0)) }
+        }
+        guard let sheetName = spec.sheet else { return [] }
+        let sheetURL: URL?
+        if sheetName == "*" {
+            let pngs = (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ))?.filter { $0.pathExtension.lowercased() == "png" } ?? []
+            sheetURL = pngs.first(where: { $0.lastPathComponent.lowercased().contains("side") }) ?? pngs.first
+        } else {
+            sheetURL = dir.appendingPathComponent(sheetName)
+        }
+        guard let sheetURL, let sheet = NSImage(contentsOf: sheetURL),
+              let cg = sheet.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return [] }
+        let fw = spec.frameWidth ?? 64
+        let fh = spec.frameHeight ?? fw
+        let rowY = (spec.row ?? 0) * fh
+        guard rowY + fh <= cg.height else { return [] }
+        let total = spec.count ?? max(cg.width / fw, 0)
+        var frames: [NSImage] = []
+        for i in 0..<total {
+            let rect = CGRect(x: i * fw, y: rowY, width: fw, height: fh)
+            guard let cropped = cg.cropping(to: rect) else { continue }
+            frames.append(NSImage(cgImage: cropped, size: NSSize(width: fw, height: fh)))
+        }
+        return frames
+    }
+
+    // MARK: 示例形象（只写清单，图由用户放）
+
+    /// Frakassets Free Pets Pack（CC-BY 4.0）的三只：帧图为「动画 × 朝向」分行，
+    /// 顺序 Happy / Idle / Sleep / Walk × South / East / North / West，侧面用 East 行。
+    static func ensureStarterPackages() {
+        let starters: [(id: String, name: String)] = [
+            ("cat-orange", "橘猫"),
+            ("shiba-puppy", "柴犬"),
+            ("fox-red", "赤狐"),
+        ]
+        let fm = FileManager.default
+        for starter in starters {
+            let dir = userPetsDirectory.appendingPathComponent(starter.id, isDirectory: true)
+            let manifestURL = dir.appendingPathComponent("pet.json")
+            if fm.fileExists(atPath: manifestURL.path) { continue }
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let json = """
+            {
+              "name": "\(starter.name)",
+              "pixelArt": true,
+              "states": {
+                "idle":   { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 5,  "fps": 6 },
+                "walk":   { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 13, "fps": 12 },
+                "happy":  { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 1,  "fps": 10 },
+                "sleep":  { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 9,  "fps": 4 }
+              }
+            }
+            """
+            try? json.write(to: manifestURL, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+// MARK: - 帧渲染视图
+
+/// 帧序列渲染（设计 §7.1)：按引擎姿态选状态、按时间取帧；朝向镜像、跳跃/呼吸以位移叠加。
+/// 没有可用素材包时只画一个 SF Symbol 占位（空态提示，不是形象本体）。
+final class SpritePetView: NSView {
     var pose = PetPose() {
         didSet { needsDisplay = true }
     }
 
+    private(set) var package: PetPackage?
+
+    func setPackage(_ package: PetPackage?) {
+        self.package = package
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        let b = bounds
+        guard let package, let frames = framesForCurrentState(package) else {
+            drawPlaceholder(in: b)
+            return
+        }
+        let fps = package.fpsByState[stateKey] ?? 8
+        let index = Int(pose.time * fps) % frames.count
+        let image = frames[index]
         guard let context = NSGraphicsContext.current else { return }
         context.saveGraphicsState()
         defer { context.restoreGraphicsState() }
+        context.imageInterpolation = package.pixelArt ? .none : .high
 
-        let b = bounds
-        let s = min(b.width, b.height)
-        let cx = b.midX
-        // 朝向：绘制一律朝右，需要时整体镜像。
+        let targetHeight = b.height * 0.94
+        let aspect = image.size.width / max(image.size.height, 1)
+        let targetWidth = targetHeight * aspect
+        let rect = NSRect(x: b.midX - targetWidth / 2,
+                          y: b.minY + pose.bob + pose.bounce,
+                          width: targetWidth, height: targetHeight)
         if pose.facingLeft {
-            context.cgContext.translateBy(x: cx, y: 0)
+            context.cgContext.translateBy(x: b.midX, y: 0)
             context.cgContext.scaleBy(x: -1, y: 1)
-            context.cgContext.translateBy(x: -cx, y: 0)
+            context.cgContext.translateBy(x: -b.midX, y: 0)
         }
-        context.cgContext.translateBy(x: 0, y: pose.bob + pose.bounce)
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+    }
 
-        let ground = b.minY + s * 0.05
-        if pose.lying {
-            drawLying(cx: cx, ground: ground, s: s)
-        } else {
-            drawStanding(cx: cx, ground: ground, s: s)
+    private var stateKey: String {
+        switch pose.state {
+        case .sleep: return "sleep"
+        case .wander: return "walk"
+        case .notify: return "happy"
+        case .idle, .dragged: return "idle"
         }
     }
 
-    // MARK: - 颜色
-
-    private var bodyColor: NSColor { NSColor(calibratedRed: 0.93, green: 0.58, blue: 0.25, alpha: 1) }
-    private var darkColor: NSColor { NSColor(calibratedRed: 0.60, green: 0.35, blue: 0.14, alpha: 1) }
-    private var creamColor: NSColor { NSColor(calibratedRed: 0.99, green: 0.91, blue: 0.78, alpha: 1) }
-    private var pinkColor: NSColor { NSColor(calibratedRed: 0.96, green: 0.55, blue: 0.55, alpha: 1) }
-
-    // MARK: - 站姿（待机 / 行走共用，腿部相位不同）
-
-    private func drawStanding(cx: CGFloat, ground: CGFloat, s: CGFloat) {
-        let wandering = pose.state == .wander
-        let wag = sin(wandering ? pose.walkPhase * 0.8 : pose.time * 2) * s * 0.03
-
-        // 尾巴
-        let tail = NSBezierPath()
-        tail.move(to: NSPoint(x: cx - s * 0.24, y: ground + s * 0.34))
-        tail.curve(to: NSPoint(x: cx - s * 0.45, y: ground + s * 0.56 + wag),
-                   controlPoint1: NSPoint(x: cx - s * 0.40, y: ground + s * 0.30),
-                   controlPoint2: NSPoint(x: cx - s * 0.50, y: ground + s * 0.44))
-        tail.lineWidth = s * 0.05
-        tail.lineCapStyle = .round
-        darkColor.setStroke()
-        tail.stroke()
-
-        // 腿：行走时交替抬起，待机时是两只前爪
-        if wandering {
-            let liftA = max(0, sin(pose.walkPhase)) * s * 0.035
-            let liftB = max(0, -sin(pose.walkPhase)) * s * 0.035
-            bodyColor.setFill()
-            NSBezierPath(roundedRect: NSRect(x: cx + s * 0.08, y: ground + liftA, width: s * 0.07, height: s * 0.13),
-                         xRadius: s * 0.03, yRadius: s * 0.03).fill()
-            NSBezierPath(roundedRect: NSRect(x: cx - s * 0.16, y: ground + liftB, width: s * 0.07, height: s * 0.13),
-                         xRadius: s * 0.03, yRadius: s * 0.03).fill()
-        } else {
-            bodyColor.setFill()
-            NSBezierPath(ovalIn: NSRect(x: cx + s * 0.02, y: ground, width: s * 0.12, height: s * 0.05)).fill()
-            NSBezierPath(ovalIn: NSRect(x: cx - s * 0.18, y: ground, width: s * 0.12, height: s * 0.05)).fill()
-        }
-
-        // 身体与肚子
-        bodyColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: cx - s * 0.29, y: ground + s * 0.12, width: s * 0.58, height: s * 0.40)).fill()
-        creamColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: cx - s * 0.14, y: ground + s * 0.14, width: s * 0.36, height: s * 0.24)).fill()
-        // 背部条纹
-        darkColor.setStroke()
-        for i in 0..<3 {
-            let stripe = NSBezierPath()
-            let x = cx - s * 0.10 + CGFloat(i) * s * 0.09
-            stripe.move(to: NSPoint(x: x, y: ground + s * 0.50))
-            stripe.line(to: NSPoint(x: x + s * 0.02, y: ground + s * 0.42))
-            stripe.lineWidth = s * 0.018
-            stripe.lineCapStyle = .round
-            stripe.stroke()
-        }
-
-        drawHead(hx: cx + s * 0.22, hy: ground + s * 0.60, s: s)
+    private func framesForCurrentState(_ package: PetPackage) -> [NSImage]? {
+        if let frames = package.framesByState[stateKey] { return frames }
+        if stateKey == "happy", let frames = package.framesByState["notify"] { return frames }
+        return package.framesByState["idle"]
     }
 
-    // MARK: - 躺姿（睡觉）
-
-    private func drawLying(cx: CGFloat, ground: CGFloat, s: CGFloat) {
-        // 身体：扁长椭圆贴地
-        bodyColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: cx - s * 0.35, y: ground, width: s * 0.70, height: s * 0.27)).fill()
-        // 尾巴环在身后
-        let tail = NSBezierPath()
-        tail.move(to: NSPoint(x: cx - s * 0.33, y: ground + s * 0.06))
-        tail.curve(to: NSPoint(x: cx - s * 0.10, y: ground + s * 0.015),
-                   controlPoint1: NSPoint(x: cx - s * 0.38, y: ground + s * 0.02),
-                   controlPoint2: NSPoint(x: cx - s * 0.24, y: ground - s * 0.01))
-        tail.lineWidth = s * 0.045
-        tail.lineCapStyle = .round
-        darkColor.setStroke()
-        tail.stroke()
-
-        // 头枕在身体前端
-        let hx = cx + s * 0.28
-        let hy = ground + s * 0.13
-        bodyColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: hx - s * 0.16, y: hy - s * 0.16, width: s * 0.32, height: s * 0.32)).fill()
-        let ear = NSBezierPath()
-        ear.move(to: NSPoint(x: hx - s * 0.12, y: hy + s * 0.10))
-        ear.line(to: NSPoint(x: hx - s * 0.11, y: hy + s * 0.24))
-        ear.line(to: NSPoint(x: hx + s * 0.01, y: hy + s * 0.14))
-        ear.close()
-        bodyColor.setFill()
-        ear.fill()
-        // 闭眼 + 鼻子
-        darkColor.setStroke()
-        let eye = NSBezierPath()
-        eye.move(to: NSPoint(x: hx + s * 0.03, y: hy + s * 0.01))
-        eye.line(to: NSPoint(x: hx + s * 0.10, y: hy + s * 0.01))
-        eye.lineWidth = s * 0.016
-        eye.lineCapStyle = .round
-        eye.stroke()
-        pinkColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: hx + s * 0.135, y: hy - s * 0.045, width: s * 0.04, height: s * 0.028)).fill()
-
-        // Zzz
-        let drift = CGFloat(sin(pose.time * 1.2)) * s * 0.012
-        drawLetter("Z", at: NSPoint(x: hx + s * 0.10, y: hy + s * 0.24 + drift), size: s * 0.17, alpha: 0.75)
-        drawLetter("z", at: NSPoint(x: hx + s * 0.02, y: hy + s * 0.38 + drift), size: s * 0.12, alpha: 0.5)
-    }
-
-    // MARK: - 头（站姿）
-
-    private func drawHead(hx: CGFloat, hy: CGFloat, s: CGFloat) {
-        // 耳朵
-        for dx in [CGFloat(-0.15), CGFloat(0.03)] {
-            let ear = NSBezierPath()
-            ear.move(to: NSPoint(x: hx + dx * s, y: hy + s * 0.12))
-            ear.line(to: NSPoint(x: hx + (dx + 0.015) * s, y: hy + s * 0.30))
-            ear.line(to: NSPoint(x: hx + (dx + 0.14) * s, y: hy + s * 0.155))
-            ear.close()
-            bodyColor.setFill()
-            ear.fill()
-            let inner = NSBezierPath()
-            inner.move(to: NSPoint(x: hx + (dx + 0.035) * s, y: hy + s * 0.145))
-            inner.line(to: NSPoint(x: hx + (dx + 0.045) * s, y: hy + s * 0.235))
-            inner.line(to: NSPoint(x: hx + (dx + 0.115) * s, y: hy + s * 0.16))
-            inner.close()
-            pinkColor.setFill()
-            inner.fill()
-        }
-        // 脸
-        bodyColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: hx - s * 0.205, y: hy - s * 0.205, width: s * 0.41, height: s * 0.41)).fill()
-        // 口鼻
-        creamColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: hx - s * 0.02, y: hy - s * 0.125, width: s * 0.20, height: s * 0.13)).fill()
-        pinkColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: hx + s * 0.135, y: hy - s * 0.05, width: s * 0.045, height: s * 0.03)).fill()
-        // 眼睛
-        if pose.eyesClosed {
-            darkColor.setStroke()
-            for dx in [CGFloat(0.03), CGFloat(0.14)] {
-                let eye = NSBezierPath()
-                eye.move(to: NSPoint(x: hx + dx * s - s * 0.02, y: hy + s * 0.04))
-                eye.line(to: NSPoint(x: hx + dx * s + s * 0.02, y: hy + s * 0.04))
-                eye.lineWidth = s * 0.016
-                eye.lineCapStyle = .round
-                eye.stroke()
-            }
-        } else {
-            darkColor.setFill()
-            for dx in [CGFloat(0.03), CGFloat(0.14)] {
-                NSBezierPath(ovalIn: NSRect(x: hx + dx * s - s * 0.016, y: hy + s * 0.024, width: s * 0.032, height: s * 0.032)).fill()
-            }
-        }
-        // 胡须
-        darkColor.setStroke()
-        for dy in [CGFloat(0.0), CGFloat(-0.045)] {
-            let whisker = NSBezierPath()
-            whisker.move(to: NSPoint(x: hx + s * 0.15, y: hy + dy * s - s * 0.03))
-            whisker.line(to: NSPoint(x: hx + s * 0.27, y: hy + dy * s - s * 0.015))
-            whisker.lineWidth = s * 0.008
-            whisker.stroke()
-        }
-    }
-
-    private func drawLetter(_ letter: String, at point: NSPoint, size: CGFloat, alpha: CGFloat) {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.boldSystemFont(ofSize: size),
-            .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(alpha),
-        ]
-        (letter as NSString).draw(at: point, withAttributes: attrs)
+    private func drawPlaceholder(in rect: NSRect) {
+        let config = NSImage.SymbolConfiguration(pointSize: min(rect.width, rect.height) * 0.5, weight: .regular)
+        guard let symbol = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return }
+        let size = symbol.size
+        symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                               width: size.width, height: size.height),
+                    from: .zero, operation: .sourceOver, fraction: 0.35)
     }
 }

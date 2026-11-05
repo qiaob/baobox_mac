@@ -8,6 +8,7 @@ enum PetSettings {
     static let quietUntilKey = "pet.quietUntil"
     static let originXKey = "pet.originX"
     static let originYKey = "pet.originY"
+    static let characterKey = "pet.character"
     static let soundKey = "notify.sound"
     static let historyLimitKey = "notify.historyLimit"
 
@@ -19,6 +20,9 @@ enum PetSettings {
     static var size: Double { UserDefaults.standard.object(forKey: sizeKey) as? Double ?? 1.0 }
     /// 手动勿扰截止时间（「安静一下」）。
     static var quietUntil: Date? { UserDefaults.standard.object(forKey: quietUntilKey) as? Date }
+    /// 当前形象 id（素材包文件夹名）；空 = 第一个可用包。
+    static var character: String { UserDefaults.standard.string(forKey: characterKey) ?? "" }
+
     /// 提示音总开关（默认关；投稿方自身的声音设置另行折算在 playSound 里）。
     static var soundEnabled: Bool { UserDefaults.standard.object(forKey: soundKey) as? Bool ?? false }
     static var historyLimit: Int { UserDefaults.standard.object(forKey: historyLimitKey) as? Int ?? 50 }

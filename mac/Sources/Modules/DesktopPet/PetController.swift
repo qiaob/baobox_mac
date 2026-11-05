@@ -10,7 +10,7 @@ final class PetController: NotifyPresenting {
     let bubble = BubbleController()
 
     private var panel: PetPanel?
-    private let petView = CodeDrawnPetView()
+    private let petView = SpritePetView()
     private var started = false
 
     var isReady: Bool { PetSettings.enabled && panel?.isVisible == true }
@@ -50,6 +50,8 @@ final class PetController: NotifyPresenting {
             petView.pose = pose
         }
 
+        PetPackageLoader.ensureStarterPackages()
+        reloadCharacter()
         let origin = restoredOrigin()
         panel.setFrameOrigin(origin)
         engine.start(at: origin)
@@ -99,6 +101,28 @@ final class PetController: NotifyPresenting {
     func present(_ n: PetNotification, onAction: @escaping (String) -> Void) {
         engine.notify(level: n.level)
         bubble.show(n, onAction: onAction)
+    }
+
+    // MARK: - 形象
+
+    private(set) var packages: [PetPackage] = []
+
+    func reloadCharacter() {
+        packages = PetPackageLoader.loadAll()
+        let wanted = PetSettings.character
+        let pkg = packages.first(where: { $0.id == wanted }) ?? packages.first
+        petView.setPackage(pkg)
+    }
+
+    func availableCharacters() -> [(id: String, name: String)] {
+        if packages.isEmpty { reloadCharacter() }
+        return packages.map { ($0.id, $0.name) }
+    }
+
+    func openPetsFolder() {
+        PetPackageLoader.ensureStarterPackages()
+        try? FileManager.default.createDirectory(at: PetPackageLoader.userPetsDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(PetPackageLoader.userPetsDirectory)
     }
 
     // MARK: - 安静一下

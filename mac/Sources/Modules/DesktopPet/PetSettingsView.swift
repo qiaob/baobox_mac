@@ -9,6 +9,8 @@ struct PetSettingsView: View {
     @AppStorage("notify.source.claudecode") private var sourceClaude = true
     @AppStorage("notify.source.codex") private var sourceCodex = true
     @AppStorage("notify.source.livetranslate") private var sourceLive = true
+    @AppStorage(PetSettings.characterKey) private var character = ""
+    @State private var characters: [(id: String, name: String)] = []
 
     var body: some View {
         Form {
@@ -35,6 +37,26 @@ struct PetSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("pet.settings.characterSection") {
+                if characters.isEmpty {
+                    Text("pet.settings.noCharacter")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("pet.settings.character", selection: $character) {
+                        ForEach(characters, id: \.id) { item in
+                            Text(item.name).tag(item.id)
+                        }
+                    }
+                    .onChange(of: character) { _, _ in
+                        PetController.shared.reloadCharacter()
+                    }
+                }
+                Button("pet.settings.openFolder") {
+                    PetController.shared.openPetsFolder()
+                }
+            }
+
             Section("pet.settings.notifySection") {
                 Toggle("pet.settings.sound", isOn: $sound)
                 Toggle("pet.settings.sourceClaude", isOn: $sourceClaude)
@@ -43,5 +65,6 @@ struct PetSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { characters = PetController.shared.availableCharacters() }
     }
 }
