@@ -271,6 +271,11 @@ final class HotkeyCenter: ObservableObject {
         registrations[id]?.combo ?? nil
     }
 
+    /// 已登记的快捷键定义（模块设置页嵌录制控件时按 id 取标题 / 说明 / 默认键位）。
+    func definition(for id: String) -> HotkeyDefinition? {
+        registrations[id]?.def
+    }
+
     func effectiveCombo(for def: HotkeyDefinition) -> KeyCombo? {
         loadPersisted(for: def.id) ?? def.defaultCombo
     }

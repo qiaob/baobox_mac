@@ -7,6 +7,8 @@ mac/Baobox.entitlements
 # 构建产物
 mac/build/
 mac/DerivedData/
+# 离线翻译的推理进程（make vendor 下载的 llama.cpp 预编译包）
+mac/Vendor/
 .DS_Store
 
 # SwiftPM

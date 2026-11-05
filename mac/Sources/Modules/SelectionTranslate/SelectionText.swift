@@ -1,6 +1,10 @@
 import AppKit
 import ApplicationServices
-import NaturalLanguage
+import os
+
+enum SelectionTranslateLog {
+    static let selection = Logger(subsystem: "com.baobox.app", category: "selectiontranslate")
+}
 
 /// 一次取词的结果。见 docs/selection-translate/DESIGN.md §2。
 struct SelectionTextResult {
@@ -12,62 +16,20 @@ struct SelectionTextResult {
 
     enum Route {
         case accessibility
-        case copyFallback
+        /// 借剪贴板：按前台 App 自己的「拷贝」菜单项。
+        case menuCopy
+        /// 借剪贴板：合成 ⌘C（仅手动触发、且菜单栏里找不到「拷贝」时）。
+        case keystrokeCopy
+        /// App 自己在选中时就拷进了剪贴板（终端的「选中即复制」、TUI 用 OSC 52 自己复制）。
+        case appCopied
         case ocr
     }
 }
 
-/// 本功能只做英⇄中：判定原文是中文还是英文，译文自动取另一种。
-enum SelectionLanguage {
-    case chinese
-    case english
-
-    var other: SelectionLanguage { self == .chinese ? .english : .chinese }
-
-    /// Translation 框架用的语言代码。
-    var translationCode: String {
-        switch self {
-        case .chinese: return "zh-Hans"
-        case .english: return "en"
-        }
-    }
-
-    /// 朗读用的嗓音语言。
-    var voiceLanguage: String {
-        switch self {
-        case .chinese: return "zh-CN"
-        case .english: return "en-US"
-        }
-    }
-
-    /// 语言名按惯例用各自语言书写，不随界面语言翻译。
-    var displayName: String {
-        switch self {
-        case .chinese: return "中文"
-        case .english: return "English"
-        }
-    }
-}
-
-/// 取词：AX 读选中文字为主，模拟 ⌘C 兜底（仅手动触发时用）。
+/// 取词：AX 读选中文字为主；读不到时借剪贴板 —— 按前台 App 自己的「拷贝」菜单项，
+/// 手动触发且找不到菜单项时才合成 ⌘C。
+/// 语种判定在共享层 `LanguageDetector`（docs/translation-engine/DESIGN.md §3.1）。
 enum SelectionText {
-
-    /// 语种判定（本地 NLLanguageRecognizer）。认不出就按内容兜底：
-    /// 含中日韩表意字 → 中文，否则英文。
-    static func detectLanguage(of text: String) -> SelectionLanguage {
-        let recognizer = NLLanguageRecognizer()
-        recognizer.languageConstraints = [.simplifiedChinese, .traditionalChinese, .english]
-        recognizer.processString(text)
-        switch recognizer.dominantLanguage {
-        case .simplifiedChinese, .traditionalChinese:
-            return .chinese
-        case .english:
-            return .english
-        default:
-            let hasCJK = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
-            return hasCJK ? .chinese : .english
-        }
-    }
 
     // MARK: - AX 路径
 
@@ -133,54 +95,159 @@ enum SelectionText {
                       height: quartz.height)
     }
 
-    // MARK: - ⌘C 兜底
+    // MARK: - 借剪贴板兜底
 
-    /// 模拟一次 ⌘C 读剪贴板再**恢复原内容**。会短暂改动剪贴板，
-    /// 剪贴板监听可能把这一条记进历史 —— 已知代价，见设计文档 §2。
+    enum CopyMethod {
+        /// 用 AX 按了 App 自己的「拷贝」菜单项。
+        case menu
+        /// 合成了一次 ⌘C 按键。
+        case keystroke
+    }
+
+    enum CopyOutcome {
+        case copied(String, CopyMethod)
+        /// 菜单栏里没有快捷键为 ⌘C 的项（或菜单栏读不到）。
+        case noMenuItem
+        /// 「拷贝」置灰：App 认为没有选区。
+        case disabled
+        /// 按了「拷贝」但剪贴板没变（或拷到的只有空白）。
+        case nothingCopied
+        /// 拷到的是文件 / 图片：不是在选文字。
+        case notText
+
+        /// 写日志用：不带选中的文字本身。
+        var logDescription: String {
+            switch self {
+            case .copied(let text, let method): return "copied \(text.count) chars via \(method)"
+            case .noMenuItem: return "no copy menu item"
+            case .disabled: return "copy disabled"
+            case .nothingCopied: return "nothing copied"
+            case .notText: return "not text"
+            }
+        }
+    }
+
+    /// 本次运行里「按菜单项不拷、得真按 ⌘C 才拷」的 App。终端常见：拷贝选区走的是视图自己的
+    /// 快捷键处理，菜单里的「拷贝」被按下也不动剪贴板（实测 Otty）。记住后直接按 ⌘C，省掉白等的那一拍。
+    @MainActor private static var keystrokeCopyApps: Set<pid_t> = []
+
+    /// 借剪贴板取词，见设计文档 §2.1。要求前台 App 菜单栏里有快捷键 ⌘C 的「拷贝」且没置灰（置灰 = 没有选区，
+    /// 这时不碰剪贴板、不响提示音）。先用 AX 按这一项；剪贴板没动静再合成一次 ⌘C。
     @MainActor
-    static func fetchViaCopyFallback() async -> SelectionTextResult? {
-        let pasteboard = NSPasteboard.general
-        let snapshot = snapshotItems(of: pasteboard)
-        let changeBefore = pasteboard.changeCount
-
-        postCommandC()
-        var copied: String?
-        // 等前台 App 把选区写进剪贴板，最多 ~0.35 秒。
-        for _ in 0..<12 {
-            try? await Task.sleep(nanoseconds: 30_000_000)
-            if pasteboard.changeCount != changeBefore {
-                copied = pasteboard.string(forType: .string)
-                break
-            }
+    static func copyViaMenu(pid: pid_t, allowImages: Bool) async -> CopyOutcome {
+        guard let item = copyMenuItem(pid: pid) else { return .noMenuItem }
+        guard isEnabled(item) else { return .disabled }
+        var pressResult = AXError.success
+        let pressMenu: PasteboardBorrow.Trigger = {
+            pressResult = AXUIElementPerformAction(item, kAXPressAction as CFString)
+            return pressResult == .success
         }
-        restore(snapshot, to: pasteboard)
-
-        guard let copied, !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let mouse = NSEvent.mouseLocation
-        return SelectionTextResult(text: copied,
-                                   anchorRect: CGRect(x: mouse.x, y: mouse.y, width: 1, height: 1),
-                                   route: .copyFallback)
+        let pressKeys: PasteboardBorrow.Trigger = {
+            postCommandC()
+            return true
+        }
+        let knownKeystroke = keystrokeCopyApps.contains(pid)
+        let triggers = knownKeystroke ? [pressKeys] : [pressMenu, pressKeys]
+        let (result, used) = await PasteboardBorrow.copy(allowImages: allowImages, triggers: triggers)
+        let method: CopyMethod = knownKeystroke || used == 1 ? .keystroke : .menu
+        // 诊断：按的是哪一项、AXPress 返回什么、有没有走到合成 ⌘C（不记选中的文字本身）。
+        let title = stringAttribute(item, kAXTitleAttribute) ?? "?"
+        SelectionTranslateLog.selection.notice(
+            "menu item \"\(title, privacy: .public)\": press \(knownKeystroke ? "skipped" : String(pressResult.rawValue), privacy: .public), keystroke \(method == .keystroke ? "sent" : "not needed", privacy: .public)")
+        if case .text = result, method == .keystroke { keystrokeCopyApps.insert(pid) }
+        return outcome(of: result, method: method)
     }
 
-    private static func snapshotItems(of pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
-        (pasteboard.pasteboardItems ?? []).map { item in
-            var entry: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) { entry[type] = data }
-            }
-            return entry
+    /// 合成一次 ⌘C 借剪贴板取词。只给手动触发、且菜单栏里找不到「拷贝」的 App 用。
+    @MainActor
+    static func copyViaKeystroke() async -> CopyOutcome {
+        let (result, _) = await PasteboardBorrow.copy(allowImages: true, triggers: [{
+            postCommandC()
+            return true
+        }])
+        return outcome(of: result, method: .keystroke)
+    }
+
+    private static func outcome(of result: PasteboardBorrow.Result, method: CopyMethod) -> CopyOutcome {
+        switch result {
+        case .text(let text):
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .nothingCopied : .copied(text, method)
+        case .unchanged:
+            return .nothingCopied
+        case .notText:
+            return .notText
         }
     }
 
-    private static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        guard !snapshot.isEmpty else { return }
-        let items = snapshot.map { entry in
-            let item = NSPasteboardItem()
-            for (type, data) in entry { item.setData(data, forType: type) }
+    /// 按 pid 缓存「拷贝」所在的菜单；菜单项每次现找（App 可能重建菜单项）。
+    @MainActor private static var copyMenuCache: (pid: pid_t, menu: AXUIElement)?
+
+    /// 前台 App 菜单栏里快捷键为 ⌘C 的菜单项。按快捷键认而不按标题认：标题随系统语言变（Copy / 拷贝 / 复制）。
+    @MainActor
+    private static func copyMenuItem(pid: pid_t) -> AXUIElement? {
+        if let cache = copyMenuCache, cache.pid == pid, let item = copyItem(in: cache.menu) {
             return item
         }
-        pasteboard.writeObjects(items)
+        copyMenuCache = nil
+        guard let menuBar = elementAttribute(AXUIElementCreateApplication(pid), kAXMenuBarAttribute) else {
+            return nil
+        }
+        // 跳过第一个（苹果菜单）；「编辑」通常是第 3～4 个，按顺序找很快就到。
+        for barItem in childElements(of: menuBar).dropFirst() {
+            for menu in childElements(of: barItem) {
+                if let item = copyItem(in: menu) {
+                    copyMenuCache = (pid, menu)
+                    return item
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func copyItem(in menu: AXUIElement) -> AXUIElement? {
+        childElements(of: menu).first(where: isCopyShortcut)
+    }
+
+    private static func isCopyShortcut(_ item: AXUIElement) -> Bool {
+        var charRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(item, kAXMenuItemCmdCharAttribute as CFString, &charRef) == .success,
+              let char = charRef as? String, char.lowercased() == "c" else { return false }
+        var modifiersRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(item, kAXMenuItemCmdModifiersAttribute as CFString,
+                                            &modifiersRef) == .success,
+              let modifiers = modifiersRef as? Int else { return false }
+        // kAXMenuItemModifierNone（0）= 只按 ⌘；带 ⇧ / ⌥ / ⌃ 的不是「拷贝」。
+        return modifiers == 0
+    }
+
+    private static func isEnabled(_ item: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(item, kAXEnabledAttribute as CFString, &ref) == .success else {
+            return false
+        }
+        return (ref as? Bool) ?? false
+    }
+
+    private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &ref) == .success else { return nil }
+        return ref as? String
+    }
+
+    private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &ref) == .success,
+              let ref, CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(ref, to: AXUIElement.self)
+    }
+
+    private static func childElements(of element: AXUIElement) -> [AXUIElement] {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref) == .success,
+              let objects = ref as? [AnyObject] else { return [] }
+        return objects.compactMap { object in
+            CFGetTypeID(object) == AXUIElementGetTypeID() ? unsafeBitCast(object, to: AXUIElement.self) : nil
+        }
     }
 
     private static func postCommandC() {

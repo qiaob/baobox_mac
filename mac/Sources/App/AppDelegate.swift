@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installMainMenu()
 
         registry.register(ScreenshotTool())
+        registry.register(ScreenDrawTool())
         registry.register(ClipboardTool())
         registry.register(CaffeinateTool())
         registry.register(WindowManagerTool())

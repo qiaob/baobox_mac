@@ -6,7 +6,7 @@
 
 **Baobox** —— macOS 菜单栏常驻的「效率工具集合」App（对标 CleanShot X + Paste，再加一组开发者工具）。一个 App 内置多个工具，统一入口 / 快捷键 / 设置。无 Dock 图标（`LSUIElement`），**非沙盒 + Hardened Runtime**，bundle id `com.baobox.app`。
 
-- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（唯一例外：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书）。
+- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（例外三个：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书；离线翻译把 llama.cpp 官方预编译的 `llama-server` 作为子进程打进 App 包 —— `make vendor` 按固定构建号 + SHA-256 下载、不进 git，模型文件由用户在 App 里单独下载，见 `docs/translation-engine/DESIGN.md`；朗读译文的「Baobox 同传」虚拟麦克风是 BlackHole（GPL-3.0）源码改名编译的音频驱动 —— `make vendor` 按固定版本 + SHA-256 下载源码编译、打进 App 包，用户在设置里点安装才装进系统，见 `docs/live-translate-voice/DESIGN.md`）。
 - 工程用 **XcodeGen** 生成（见 `mac/project.yml`，`sources: - Sources`（相对 mac/） 全量 glob，新增 `.swift` 文件自动纳入，无需改 project.yml）。
 
 ## 构建与验证（重要）
@@ -41,21 +41,22 @@ BaoboxApp(@main, Settings scene)
 
 核心协议 **`ToolModule`**（`mac/Sources/Core/ToolModule.swift`）：每个工具实现 `id / name / symbolName / submenuItems() / hotkeys() / settingsTab() / activate() / willTerminate()`，向 `ToolRegistry` 注册即接入菜单栏、二级菜单、设置 Tab、全局快捷键。**框架不认识具体工具**。
 
-共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`。设置窗口在 `mac/Sources/Settings/`。
+共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`、`PasteboardBorrow`（借剪贴板取一次文字再还原，剪贴板历史据此跳过）、`Translation/`（两个翻译模块共用：语言表 + 语种检测、引擎选择、离线模型下载与 `llama-server` 进程管理、设置区块）。设置窗口在 `mac/Sources/Settings/`。
 
 ## 模块清单（`mac/Sources/Modules/<名>/`，菜单顺序 = 注册顺序）
 
 | 模块 | id | 说明 |
 |---|---|---|
-| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、**屏幕标注画笔**、录屏、历史。ScreenCaptureKit；菜单场景走「含菜单整屏」冻结底图，见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
+| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、录屏、历史。ScreenCaptureKit；菜单场景走「含菜单整屏」冻结底图，见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
+| ScreenDraw | `screendraw` | **屏幕标注画笔**：直接在屏幕上圈画（绘制 / 穿透两态），讲解演示用。模块壳 `ScreenDrawTool` 在 `Modules/Screenshot/`（共用标注引擎），快捷键 id 沿用 `screenshot.draw`。`docs/screen-draw/DESIGN.md` |
 | Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
-| LiveTranslate | `livetranslate` | **实时翻译**：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ Translation 框架英中互译（macOS 15+，14 降级只显示原文）→ 屏幕底部字幕条。`docs/live-translate/DESIGN.md` |
-| SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层英⇄中翻译 + 朗读（AX 取词 / ⌘C 兜底 / 框选 OCR 三条取词路径，Translation 框架，macOS 15+ 翻译）。`docs/selection-translate/` |
+| LiveTranslate | `livetranslate` | **实时翻译**：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
+| SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层翻译 + 朗读（AX 取词 / 借剪贴板兜底（App 自己的「拷贝」菜单项，终端等 AX 读不到的 App 自动弹出也能用）/ 框选 OCR；原文语种自动识别，译成可选语言；系统翻译 / 离线模型，macOS 14 也能翻）。`docs/selection-translate/` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
@@ -78,9 +79,10 @@ BaoboxApp(@main, Settings scene)
 - `docs/design/ui-design-v1.html` —— UI 设计稿与**设计令牌（配色）**：accent 浅 `#17A398` / 深 `#2BC4B8`，深浅两套变量。
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）+ `RECENT_FILES.md`（最近文件增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
-- `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态），嵌在截图模块内。
+- `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态）。2026-11 起是菜单栏一级入口（`ScreenDrawTool`），代码仍在 Screenshot 目录、与截图共用标注引擎。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/live-translate/DESIGN.md` —— 实时翻译：分段识别（停顿 / 45s 切段）、翻译节流（finals 全翻 + 最新 partial）、字幕条窗口。
+- `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。
