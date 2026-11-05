@@ -1,6 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 import CoreGraphics
+import os
 
 enum CaptureTarget {
     case window(CGWindowID)
@@ -22,6 +23,7 @@ enum CaptureError: LocalizedError {
 
 /// 基于 ScreenCaptureKit（macOS 14 API）的截图引擎。
 enum CaptureEngine {
+    private static let log = Logger(subsystem: "com.baobox.app", category: "capture")
     /// `excludingWindowIDs`：从画面中剔除的窗口（用于"overlay 不消隐直接冻结画面"，
     /// 把自己的蒙层 / 工具条排除掉）。仅对 display 类目标生效。
     static func capture(_ target: CaptureTarget,
@@ -98,6 +100,18 @@ enum CaptureEngine {
         config.height = Int((contentRect.height * scale).rounded())
         config.showsCursor = false
         config.captureResolution = .best
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+
+        let first = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        // SCK 偶尔会返回小于配置像素的图（倍率抖动时按低倍率出图，#32 的倍率兜底
+        // 只能保证 config 算对，拦不住它实际出图缩水）。普通截图当场消隐重拍感不强，
+        // 但标注冻结底图用的就是这张图：冻结帧替换实时画面那一刻预览会「突然变糊」，
+        // 导出也跟着低清。这里校验实际像素，不足就重抓一次并取较大的一张。
+        // 容差 1px：配置宽高经 rounded() 取整，差一行/列不算降采样，避免无谓重抓。
+        guard first.width < config.width - 1 || first.height < config.height - 1 else { return first }
+        log.warning("capture below configured size: got \(first.width)×\(first.height), want \(config.width)×\(config.height); retrying once")
+        let second = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let best = second.width * second.height >= first.width * first.height ? second : first
+        log.warning("capture retry result: \(best.width)×\(best.height)")
+        return best
     }
 }
