@@ -1,0 +1,14 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "AnimalArmature|Idle",
+    "walk": "AnimalArmature|Walk",
+    "happy": "AnimalArmature|Run_Jump",
+    "sleep": "AnimalArmature|Idle_2_HeadLow",
+    "drag": "AnimalArmature|Run"
+  },
+  "fidgets": [
+    "AnimalArmature|Idle_2",
+    "AnimalArmature|Eating"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "idle_breathe",
+    "walk": "walk_in",
+    "happy": "wave",
+    "sleep": {
+      "clip": "lie_down",
+      "hold": true
+    },
+    "drag": "happy_wiggle"
+  },
+  "fidgets": [
+    "look_around",
+    "scratch_ear",
+    "yawn",
+    "stretch",
+    "ear_perk",
+    "sniff"
+  ]
+}

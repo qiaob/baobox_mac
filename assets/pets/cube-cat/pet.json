@@ -1,0 +1,9 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "static",
+    "walk": "walk",
+    "happy": "run",
+    "drag": "run"
+  }
+}

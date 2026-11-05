@@ -1,0 +1,14 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "Idle",
+    "walk": "Walk",
+    "happy": "Jump_ToIdle",
+    "sleep": "Idle_2_HeadLow",
+    "drag": "Gallop"
+  },
+  "fidgets": [
+    "Idle_2",
+    "Eating"
+  ]
+}
