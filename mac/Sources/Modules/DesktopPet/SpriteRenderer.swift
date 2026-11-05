@@ -148,27 +148,59 @@ enum PetPackageLoader {
 /// 帧序列渲染（设计 §7.1)：按引擎姿态选状态、按时间取帧；朝向镜像、跳跃/呼吸以位移叠加。
 /// 没有可用素材包时只画一个 SF Symbol 占位（空态提示，不是形象本体）。
 final class SpritePetView: NSView {
+    /// 姿态每 tick（30fps）都会变，但画面只在帧号 / 朝向 / 整点位移变了时才不同 —— 只在那时重画
+    /// （每 tick 都重画时空闲 CPU 约 10%，大半耗在重绘上）。
     var pose = PetPose() {
-        didSet { needsDisplay = true }
+        didSet {
+            let key = renderKey()
+            if key != lastRenderKey {
+                lastRenderKey = key
+                needsDisplay = true
+            }
+        }
     }
 
     private(set) var package: PetPackage?
+    private var lastRenderKey: RenderKey?
+
+    /// 决定画面的全部输入：相同就不用重画。
+    private struct RenderKey: Equatable {
+        var state: String
+        var frame: Int
+        var facingLeft: Bool
+        var offsetY: Int
+    }
 
     func setPackage(_ package: PetPackage?) {
         self.package = package
+        lastRenderKey = nil
         needsDisplay = true
+    }
+
+    private func renderKey() -> RenderKey {
+        guard let package, let resolved = resolvedFrames(package) else {
+            return RenderKey(state: "placeholder", frame: 0, facingLeft: false, offsetY: 0)
+        }
+        return RenderKey(state: resolved.state, frame: frameIndex(package, resolved),
+                         facingLeft: pose.facingLeft, offsetY: verticalOffset)
+    }
+
+    /// 呼吸 / 跳跃位移取整点：像素图不糊边，也让重画次数跟着降下来。
+    private var verticalOffset: Int { Int((pose.bob + pose.bounce).rounded()) }
+
+    private func frameIndex(_ package: PetPackage, _ resolved: (state: String, frames: [NSImage])) -> Int {
+        let fps = package.fpsByState[resolved.state] ?? 8
+        return Int(pose.time * fps) % resolved.frames.count
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let b = bounds
-        guard let package, let frames = framesForCurrentState(package) else {
+        guard let package, let resolved = resolvedFrames(package) else {
             drawPlaceholder(in: b)
             return
         }
-        let fps = package.fpsByState[stateKey] ?? 8
-        let index = Int(pose.time * fps) % frames.count
-        let image = frames[index]
+        let image = resolved.frames[frameIndex(package, resolved)]
         guard let context = NSGraphicsContext.current else { return }
         context.saveGraphicsState()
         defer { context.restoreGraphicsState() }
@@ -178,7 +210,7 @@ final class SpritePetView: NSView {
         let aspect = image.size.width / max(image.size.height, 1)
         let targetWidth = targetHeight * aspect
         let rect = NSRect(x: b.midX - targetWidth / 2,
-                          y: b.minY + pose.bob + pose.bounce,
+                          y: b.minY + CGFloat(verticalOffset),
                           width: targetWidth, height: targetHeight)
         if pose.facingLeft {
             context.cgContext.translateBy(x: b.midX, y: 0)
@@ -197,10 +229,13 @@ final class SpritePetView: NSView {
         }
     }
 
-    private func framesForCurrentState(_ package: PetPackage) -> [NSImage]? {
-        if let frames = package.framesByState[stateKey] { return frames }
-        if stateKey == "happy", let frames = package.framesByState["notify"] { return frames }
-        return package.framesByState["idle"]
+    /// 当前姿态实际用哪组帧：缺的状态回退 idle，帧率也跟着用被借用那组的。
+    private func resolvedFrames(_ package: PetPackage) -> (state: String, frames: [NSImage])? {
+        let candidates = stateKey == "happy" ? ["happy", "notify", "idle"] : [stateKey, "idle"]
+        for key in candidates {
+            if let frames = package.framesByState[key], !frames.isEmpty { return (key, frames) }
+        }
+        return nil
     }
 
     private func drawPlaceholder(in rect: NSRect) {

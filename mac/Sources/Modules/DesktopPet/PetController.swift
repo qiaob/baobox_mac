@@ -46,7 +46,8 @@ final class PetController: NotifyPresenting {
         engine.petSize = side
         engine.onPose = { [weak self] pose, origin in
             guard let self, let panel = self.panel else { return }
-            if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+            // 拖拽时窗口由 PetPanel 跟手移动；引擎里的位置松手才更新，这时不能按它把窗口拽回去。
+            if pose.state != .dragged, panel.frame.origin != origin { panel.setFrameOrigin(origin) }
             petView.pose = pose
         }
 

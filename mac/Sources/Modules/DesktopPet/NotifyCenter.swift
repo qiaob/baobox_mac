@@ -82,13 +82,19 @@ final class NotifyCenter {
 
     private func deliver(_ n: PetNotification, onAction: ((String) -> Void)?) {
         if let presenter, presenter.isReady {
-            if n.playSound, PetSettings.soundEnabled {
+            if wantsSound(n) {
                 NSSound(named: "Glass")?.play()
             }
             presenter.present(n) { actionID in onAction?(actionID) }
         } else {
             postSystemNotification(n)
         }
+    }
+
+    /// 投稿方自己的声音设置（Claude Code / Codex 的提示音开关，已折算进 playSound）照旧生效；
+    /// notify.sound 只给没要求发声的 alert 级补一声（设计 §9：alert 提示音，默认关）。
+    private func wantsSound(_ n: PetNotification) -> Bool {
+        n.playSound || (n.level == .alert && PetSettings.soundEnabled)
     }
 
     /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（设计 §2）。
@@ -100,7 +106,7 @@ final class NotifyCenter {
         let content = UNMutableNotificationContent()
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
-        if n.playSound { content.sound = .default }
+        if wantsSound(n) { content.sound = .default }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { _ in }
     }

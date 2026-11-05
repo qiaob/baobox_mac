@@ -65,12 +65,26 @@ final class PetEngine {
     }
 
     /// 收到通知时的提醒动作：从睡眠中醒来并跳一下（alert 跳得更高、更久）。
+    /// 拖拽中不改状态 —— 否则提醒结束后引擎会在用户手里开始走动；松手后 tick 按 notifyUntil 补上提醒动作。
     func notify(level: PetNotification.Level) {
-        if state == .sleep || state == .dragged { state = .idle }
+        if state == .sleep { state = .idle }
         notifyStartedAt = Date()
         notifyDuration = level == .alert ? 1.5 : 0.9
         notifyUntil = Date().addingTimeInterval(notifyDuration)
-        state = .notify
+        if state != .dragged { state = .notify }
+    }
+
+    private var sleepCheckedAt = Date.distantPast
+    private var sleepCached = false
+
+    /// 勿扰 / 长空闲判定。查窗口列表（全屏检测）和 HID 空闲时间都要跨进程，
+    /// tick 是 30fps，每秒算一次就够（实测每帧都查时空闲 CPU 约 10%）。
+    private func shouldSleep(_ now: Date) -> Bool {
+        if now.timeIntervalSince(sleepCheckedAt) >= 1 {
+            sleepCheckedAt = now
+            sleepCached = NotifyDND.shared.isSuppressed || Self.secondsSinceAnyInput() > 300
+        }
+        return sleepCached
     }
 
     private func tick() {
@@ -86,7 +100,7 @@ final class PetEngine {
                 nextWanderAt = now.addingTimeInterval(Double.random(in: 6...14))
             }
             if state != .notify {
-                if NotifyDND.shared.isSuppressed || Self.secondsSinceAnyInput() > 300 {
+                if shouldSleep(now) {
                     state = .sleep
                 } else if state == .sleep {
                     state = .idle
