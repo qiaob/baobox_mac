@@ -202,11 +202,14 @@ final class LiveTranslateTranscript {
     }
 
     private static func notifyMinutesReady(fileName: String) {
-        let content = UNMutableNotificationContent()
-        content.title = L("livetranslate.record.notifyTitle")
-        content.body = L("livetranslate.record.notifyBody \(fileName)")
-        let request = UNNotificationRequest(identifier: "livetranslate.minutes.\(fileName)", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
+        // 改走通知内核（DesktopPet）：宠物呈现，宠物关时由内核回退系统通知。
+        NotifyCenter.shared.post(PetNotification(
+            source: "livetranslate",
+            level: .ambient,
+            title: L("livetranslate.record.notifyTitle"),
+            body: L("livetranslate.record.notifyBody \(fileName)"),
+            dedupeKey: "minutes.\(fileName)"
+        ))
     }
 
     // MARK: - 写盘

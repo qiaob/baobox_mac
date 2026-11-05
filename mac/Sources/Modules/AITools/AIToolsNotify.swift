@@ -256,12 +256,14 @@ final class CodexNotify: ObservableObject {
 
     /// 额度 80% 提醒（5h 或周）。与 Claude 同机制，防重由 `CodexUsageStore` 负责。
     func notifyBudget(percent: Int, weekly: Bool) {
-        let content = UNMutableNotificationContent()
-        content.title = weekly ? L("aitools.notify.weeklyBudget.title") : L("aitools.notify.budget.title")
-        content.body = L("aitools.notify.budget.body \(percent)")
-        if AIToolsNotifierSettings.soundEnabled { content.sound = .default }
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
+        // 改走通知内核（DesktopPet）：宠物呈现，宠物关时由内核回退系统通知。
+        NotifyCenter.shared.post(PetNotification(
+            source: "codex",
+            level: .ambient,
+            title: weekly ? L("aitools.notify.weeklyBudget.title") : L("aitools.notify.budget.title"),
+            body: L("aitools.notify.budget.body \(percent)"),
+            playSound: AIToolsNotifierSettings.soundEnabled
+        ))
     }
 
     /// 处理一行事件 JSON。notify=false 用于初始回放。
@@ -306,12 +308,13 @@ final class CodexNotify: ObservableObject {
         }
         let body = String(summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.summaryClip))
 
-        let content = UNMutableNotificationContent()
-        content.title = title
-        if !body.isEmpty { content.body = body }
-        if AIToolsNotifierSettings.soundEnabled { content.sound = .default }
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
+        NotifyCenter.shared.post(PetNotification(
+            source: "codex",
+            level: .bubble,
+            title: title,
+            body: body,
+            playSound: AIToolsNotifierSettings.soundEnabled
+        ))
     }
 
     // MARK: 脚本生成 / 事件文件维护（nonisolated static）
