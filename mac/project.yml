@@ -10,7 +10,14 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Sources
+      - path: Sources
+        excludes:
+          - "Resources/Pets"
+      # 内置宠物形象：整个文件夹原样拷进 Resources/Pets/<形象>/（每个形象都有自己的 pet.json，
+      # 按普通资源平铺会同名冲突）。见 docs/desktop-pet/PACKS.md。
+      - path: Sources/Resources/Pets
+        type: folder
+        buildPhase: resources
     info:
       path: Sources/Info.plist
       properties:

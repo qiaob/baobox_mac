@@ -2,7 +2,7 @@ import AppKit
 
 /// 宠物控制器：拥有窗口、引擎、气泡，并实现通知呈现端（设计 §2)。
 @MainActor
-final class PetController: NotifyPresenting {
+final class PetController: ObservableObject, NotifyPresenting {
     static let shared = PetController()
     private init() {}
 
@@ -11,6 +11,10 @@ final class PetController: NotifyPresenting {
 
     private var panel: PetPanel?
     private let petView = SpritePetView()
+    /// 3D 后端：用到 3D 形象时才建（SceneKit / Metal 初始化不便宜，只用 2D 形象的人不必付这个钱）。
+    private lazy var modelView = PetModelView()
+    /// 3D 视图里当前装着的形象；nil = 显示的是 2D 视图。
+    private var shownModelID: String?
     private var started = false
 
     var isReady: Bool { PetSettings.enabled && panel?.isVisible == true }
@@ -48,10 +52,13 @@ final class PetController: NotifyPresenting {
             guard let self, let panel = self.panel else { return }
             // 拖拽时窗口由 PetPanel 跟手移动；引擎里的位置松手才更新，这时不能按它把窗口拽回去。
             if pose.state != .dragged, panel.frame.origin != origin { panel.setFrameOrigin(origin) }
-            petView.pose = pose
+            if self.shownModelID != nil {
+                self.modelView.pose = pose
+            } else {
+                self.petView.pose = pose
+            }
         }
 
-        PetPackageLoader.ensureStarterPackages()
         reloadCharacter()
         let origin = restoredOrigin()
         panel.setFrameOrigin(origin)
@@ -85,6 +92,7 @@ final class PetController: NotifyPresenting {
             bubble.dismissAll()
             panel?.orderOut(nil)
         }
+        if shownModelID != nil { modelView.setActive(PetSettings.enabled) }
     }
 
     func applySize() {
@@ -106,22 +114,60 @@ final class PetController: NotifyPresenting {
 
     // MARK: - 形象
 
-    private(set) var packages: [PetPackage] = []
+    /// 内置 + 已下载 + 自制的全部形象（设置页的选择列表）。
+    @Published private(set) var packages: [PetPackage] = []
 
-    func reloadCharacter() {
-        packages = PetPackageLoader.loadAll()
+    /// 当前用的形象：设置里选的那个；没选过 / 已被删掉时用第一个（内置形象排在最前）。
+    var currentCharacterID: String {
         let wanted = PetSettings.character
-        let pkg = packages.first(where: { $0.id == wanted }) ?? packages.first
-        petView.setPackage(pkg)
+        return (packages.first { $0.id == wanted } ?? packages.first)?.id ?? ""
     }
 
-    func availableCharacters() -> [(id: String, name: String)] {
-        if packages.isEmpty { reloadCharacter() }
-        return packages.map { ($0.id, $0.name) }
+    /// 从磁盘重新扫一遍素材包（启动、下载 / 删除之后）。
+    func reloadCharacter() {
+        packages = PetPackageLoader.loadAll()
+        applyCharacter()
+    }
+
+    func selectCharacter(_ id: String, reload: Bool = false) {
+        UserDefaults.standard.set(id, forKey: PetSettings.characterKey)
+        if reload { reloadCharacter() } else { applyCharacter() }
+    }
+
+    private func applyCharacter() {
+        let id = currentCharacterID
+        let package = packages.first { $0.id == id }
+        if let package, package.model != nil {
+            // 设置页每次打开都会重扫素材包；同一个 3D 形象不重新读模型（否则动画从头来、还白读一遍文件）。
+            if shownModelID != package.id {
+                shownModelID = modelView.setPackage(package) ? package.id : nil
+            }
+            if shownModelID != nil {
+                petView.setPackage(nil)
+                show(modelView)
+                modelView.setActive(PetSettings.enabled)
+                return
+            }
+            // 模型读不出来：回退 2D 占位。
+            petView.setPackage(nil)
+            show(petView)
+            return
+        }
+        if shownModelID != nil {
+            modelView.setPackage(nil)
+            modelView.setActive(false)
+            shownModelID = nil
+        }
+        petView.setPackage(package)
+        show(petView)
+    }
+
+    private func show(_ view: NSView) {
+        guard let panel, panel.contentView !== view else { return }
+        panel.contentView = view
     }
 
     func openPetsFolder() {
-        PetPackageLoader.ensureStarterPackages()
         try? FileManager.default.createDirectory(at: PetPackageLoader.userPetsDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(PetPackageLoader.userPetsDirectory)
     }

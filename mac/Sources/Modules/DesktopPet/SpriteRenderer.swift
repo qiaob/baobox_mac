@@ -3,86 +3,173 @@ import Foundation
 
 // MARK: - 素材包（pet.json）
 
-/// 一个状态的取帧方式：整行帧图（sheet）或散图序列（frames）二选一。
+/// 一个状态的取帧方式：整行帧图（sheet）或散图序列（frames）二选一。格式见 docs/desktop-pet/PACKS.md §2。
 struct PetStateSpec: Decodable {
-    var sheet: String?      // 帧图文件名；"*" = 文件夹里第一张 PNG（优先名字含 side 的）
+    var sheet: String?      // 帧图文件名；"*" = 文件夹里第一张 PNG
     var frames: [String]?   // 散图文件名序列
     var frameWidth: Int?    // sheet 模式必填
     var frameHeight: Int?
     var row: Int?           // sheet 里第几行（0 起，从上往下）
-    var count: Int?         // 帧数；nil = 按图宽自动算
+    var column: Int?        // 从第几列开始取（0 起）；一行里拼了几段动画时用
+    var count: Int?         // 帧数；nil = 取到行尾
     var fps: Double?
 }
 
 struct PetManifest: Decodable {
-    var name: String
+    /// 自制形象的显示名；内置 / 可下载形象的名字由 PetCatalog 按界面语言给出。
+    var name: String?
     var pixelArt: Bool?
-    var states: [String: PetStateSpec]
+    /// 素材画的是朝哪边（"left" / "right"，默认 right）；走的方向和它相反时渲染层镜像。
+    var facing: String?
+    /// 2D 帧图（与 model 二选一）。
+    var states: [String: PetStateSpec]?
+    /// 3D：模型文件名（.glb / .gltf）。
+    var model: String?
+    /// 3D：状态 → 动画片段；不写的按片段名猜。
+    var clips: [String: PetClipSpec]?
+    /// 3D：模型正面不朝 +Z 时的修正（度）。
+    var yaw: Double?
+    /// 3D：在自动取景的基础上再放大 / 缩小。
+    var scale: Double?
+    /// 3D：待机时偶尔做的小动作（东张西望、挠耳朵、打哈欠…），随机挑一个播一次。
+    var fidgets: [String]?
 }
 
-/// 一个可用的宠物形象：文件夹 + 清单 + 已解码的各状态帧。
+/// 所有帧里不透明像素的并集（像素），以帧的「底边中点」为原点。
+/// 渲染按它统一缩放、让脚踩在窗口底边 —— 不同来源的素材留白差别很大，按帧尺寸缩放会忽大忽小、悬在半空。
+struct PetContentBox {
+    var left: CGFloat
+    var right: CGFloat
+    var bottom: CGFloat
+    var top: CGFloat
+
+    var height: CGFloat { max(top - bottom, 1) }
+    /// 绕中线镜像后也要放得下的宽度。
+    var symmetricWidth: CGFloat { max(2 * max(-left, right), 1) }
+
+    mutating func formUnion(_ other: PetContentBox) {
+        left = min(left, other.left)
+        right = max(right, other.right)
+        bottom = min(bottom, other.bottom)
+        top = max(top, other.top)
+    }
+}
+
+/// 一个可用的宠物形象：文件夹 + 清单 + 已解码的各状态帧（2D），或模型与动作映射（3D，模型用到时才读）。
 struct PetPackage {
     let id: String
     let name: String
     let pixelArt: Bool
+    let facesLeft: Bool
     let framesByState: [String: [NSImage]]
     let fpsByState: [String: Double]
+    let content: PetContentBox
+    /// 非 nil = 3D 形象，由 PetModelView 渲染。
+    var model: PetModelSpec?
 }
 
-/// 素材包加载器。两处来源：
-/// 1. App 包内 `Pets/`（随版本发布的内置形象）；
-/// 2. `~/Library/Application Support/Baobox/Pets/`（用户自放，不用重打包即可换形象）。
-/// 首次启动会在 2 处生成几个示例形象文件夹（只写 pet.json，图由用户把素材包里的帧图放进来）。
+/// 素材包加载器。三处来源，同 id 先到先得：
+/// 1. App 包内 `Pets/`（内置形象，按 PetCatalog.builtIn 的顺序）；
+/// 2. `~/Library/Application Support/Baobox/Pets/` 里设置页下载的形象（按 PetCatalog.downloadable 的顺序）；
+/// 3. 同一目录里用户自己放的形象（按文件夹名）。
 enum PetPackageLoader {
     static var userPetsDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Baobox/Pets", isDirectory: true)
     }
 
+    static var bundledPetsDirectory: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("Pets", isDirectory: true)
+    }
+
     static func loadAll() -> [PetPackage] {
-        var dirs: [URL] = []
-        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("Pets", isDirectory: true) {
-            dirs.append(bundled)
-        }
-        dirs.append(userPetsDirectory)
         var packages: [PetPackage] = []
         var seen: Set<String> = []
-        for dir in dirs {
-            guard let subs = try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-            ) else { continue }
-            for sub in subs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let id = sub.lastPathComponent
-                guard !seen.contains(id), let pkg = loadPackage(id: id, in: sub) else { continue }
-                seen.insert(id)
-                packages.append(pkg)
-            }
+        func add(_ id: String, in dir: URL) {
+            guard !seen.contains(id), let pkg = loadPackage(id: id, in: dir) else { return }
+            seen.insert(id)
+            packages.append(pkg)
         }
+        let user = userPetsDirectory
+        if let bundled = bundledPetsDirectory {
+            for info in PetCatalog.builtIn {
+                add(info.id, in: bundled.appendingPathComponent(info.id, isDirectory: true))
+            }
+            for dir in subdirectories(of: bundled) { add(dir.lastPathComponent, in: dir) }
+        }
+        for info in PetCatalog.downloadable {
+            add(info.id, in: user.appendingPathComponent(info.id, isDirectory: true))
+        }
+        for dir in subdirectories(of: user) { add(dir.lastPathComponent, in: dir) }
         return packages
+    }
+
+    /// 文件夹里第一个 .glb / .gltf（按文件名排序）。
+    private static func firstModelFile(in dir: URL) -> String? {
+        let items = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return items.sorted().first { ["glb", "gltf"].contains(($0 as NSString).pathExtension.lowercased()) }
+    }
+
+    /// 不含隐藏目录（下载暂存目录以 `.` 开头，不会被当成形象）。
+    private static func subdirectories(of dir: URL) -> [URL] {
+        let items = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        )) ?? []
+        return items
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     private static func loadPackage(id: String, in dir: URL) -> PetPackage? {
         let manifestURL = dir.appendingPathComponent("pet.json")
-        guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(PetManifest.self, from: data) else { return nil }
+        let manifest: PetManifest
+        if let data = try? Data(contentsOf: manifestURL),
+           let decoded = try? JSONDecoder().decode(PetManifest.self, from: data) {
+            manifest = decoded
+        } else if let glb = firstModelFile(in: dir) {
+            // 只放了一个 .glb、没写 pet.json：文件夹名当名字，动作按片段名猜。
+            manifest = PetManifest(name: id, model: glb)
+        } else {
+            return nil
+        }
+        let name = PetCatalog.info(for: id)?.name ?? manifest.name ?? id
+        if let modelFile = manifest.model {
+            let url = dir.appendingPathComponent(modelFile)
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            let spec = PetModelSpec(url: url, clips: manifest.clips ?? [:], fidgets: manifest.fidgets ?? [],
+                                    yawDegrees: manifest.yaw ?? 0, scale: manifest.scale ?? 1)
+            return PetPackage(id: id, name: name, pixelArt: false, facesLeft: false, framesByState: [:],
+                              fpsByState: [:], content: PetContentBox(left: 0, right: 0, bottom: 0, top: 0),
+                              model: spec)
+        }
         var framesByState: [String: [NSImage]] = [:]
         var fpsByState: [String: Double] = [:]
-        for (state, spec) in manifest.states {
+        var content: PetContentBox?
+        for (state, spec) in manifest.states ?? [:] {
             let frames = loadFrames(spec: spec, in: dir)
-            if !frames.isEmpty {
-                framesByState[state] = frames
-                fpsByState[state] = spec.fps ?? 8
+            guard !frames.isEmpty else { continue }
+            framesByState[state] = frames.map(\.image)
+            fpsByState[state] = spec.fps ?? 8
+            for frame in frames {
+                guard let box = frame.box else { continue }
+                if content == nil { content = box } else { content?.formUnion(box) }
             }
         }
-        // 至少要有 idle 才算可用包。
-        guard framesByState["idle"] != nil else { return nil }
-        return PetPackage(id: id, name: manifest.name, pixelArt: manifest.pixelArt ?? true,
-                          framesByState: framesByState, fpsByState: fpsByState)
+        // 至少要有 idle、且不是全透明才算可用包。
+        guard framesByState["idle"] != nil, let content else { return nil }
+        return PetPackage(id: id, name: name, pixelArt: manifest.pixelArt ?? true,
+                          facesLeft: manifest.facing?.lowercased() == "left",
+                          framesByState: framesByState, fpsByState: fpsByState, content: content)
     }
 
-    private static func loadFrames(spec: PetStateSpec, in dir: URL) -> [NSImage] {
+    private static func loadFrames(spec: PetStateSpec, in dir: URL) -> [(image: NSImage, box: PetContentBox?)] {
         if let names = spec.frames {
-            return names.compactMap { NSImage(contentsOf: dir.appendingPathComponent($0)) }
+            return names.compactMap { name in
+                guard let image = NSImage(contentsOf: dir.appendingPathComponent(name)),
+                      let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+                return frame(cg)
+            }
         }
         guard let sheetName = spec.sheet else { return [] }
         let sheetURL: URL?
@@ -90,56 +177,64 @@ enum PetPackageLoader {
             let pngs = (try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
             ))?.filter { $0.pathExtension.lowercased() == "png" } ?? []
-            sheetURL = pngs.first(where: { $0.lastPathComponent.lowercased().contains("side") }) ?? pngs.first
+            sheetURL = pngs.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
         } else {
             sheetURL = dir.appendingPathComponent(sheetName)
         }
         guard let sheetURL, let sheet = NSImage(contentsOf: sheetURL),
               let cg = sheet.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return [] }
-        let fw = spec.frameWidth ?? 64
+        let fw = spec.frameWidth ?? cg.height
         let fh = spec.frameHeight ?? fw
+        guard fw > 0, fh > 0 else { return [] }
         let rowY = (spec.row ?? 0) * fh
+        let startColumn = max(spec.column ?? 0, 0)
         guard rowY + fh <= cg.height else { return [] }
-        let total = spec.count ?? max(cg.width / fw, 0)
-        var frames: [NSImage] = []
+        let available = max(cg.width / fw - startColumn, 0)
+        let total = min(spec.count ?? available, available)
+        var frames: [(image: NSImage, box: PetContentBox?)] = []
         for i in 0..<total {
-            let rect = CGRect(x: i * fw, y: rowY, width: fw, height: fh)
+            let rect = CGRect(x: (startColumn + i) * fw, y: rowY, width: fw, height: fh)
             guard let cropped = cg.cropping(to: rect) else { continue }
-            frames.append(NSImage(cgImage: cropped, size: NSSize(width: fw, height: fh)))
+            frames.append(frame(cropped))
         }
         return frames
     }
 
-    // MARK: 示例形象（只写清单，图由用户放）
+    /// NSImage 的 size 按像素给（1 像素 = 1 点），渲染层再统一换算成屏幕尺寸。
+    private static func frame(_ cg: CGImage) -> (image: NSImage, box: PetContentBox?) {
+        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        return (image, contentBox(cg))
+    }
 
-    /// Frakassets Free Pets Pack（CC-BY 4.0）的三只：帧图为「动画 × 朝向」分行，
-    /// 顺序 Happy / Idle / Sleep / Walk × South / East / North / West，侧面用 East 行。
-    static func ensureStarterPackages() {
-        let starters: [(id: String, name: String)] = [
-            ("cat-orange", "橘猫"),
-            ("shiba-puppy", "柴犬"),
-            ("fox-red", "赤狐"),
-        ]
-        let fm = FileManager.default
-        for starter in starters {
-            let dir = userPetsDirectory.appendingPathComponent(starter.id, isDirectory: true)
-            let manifestURL = dir.appendingPathComponent("pet.json")
-            if fm.fileExists(atPath: manifestURL.path) { continue }
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            let json = """
-            {
-              "name": "\(starter.name)",
-              "pixelArt": true,
-              "states": {
-                "idle":   { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 5,  "fps": 6 },
-                "walk":   { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 13, "fps": 12 },
-                "happy":  { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 1,  "fps": 10 },
-                "sleep":  { "sheet": "*", "frameWidth": 64, "frameHeight": 64, "row": 9,  "fps": 4 }
-              }
-            }
-            """
-            try? json.write(to: manifestURL, atomically: true, encoding: .utf8)
+    /// 这一帧不透明像素的包围盒（以帧底边中点为原点）；全透明返回 nil。帧都很小（几十像素见方），逐像素扫一遍即可。
+    private static func contentBox(_ image: CGImage) -> PetContentBox? {
+        let w = image.width
+        let h = image.height
+        guard w > 0, h > 0 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
         }
+        guard drawn else { return nil }
+        var minX = w, maxX = -1, minRow = h, maxRow = -1
+        for row in 0..<h {
+            for x in 0..<w where pixels[(row * w + x) * 4 + 3] > 8 {
+                minX = min(minX, x)
+                maxX = max(maxX, x)
+                minRow = min(minRow, row)
+                maxRow = max(maxRow, row)
+            }
+        }
+        guard maxX >= 0 else { return nil }
+        // 位图内存的第 0 行是图像最上面一行。
+        let half = CGFloat(w) / 2
+        return PetContentBox(left: CGFloat(minX) - half, right: CGFloat(maxX + 1) - half,
+                             bottom: CGFloat(h - 1 - maxRow), top: CGFloat(h - minRow))
     }
 }
 
@@ -171,9 +266,19 @@ final class SpritePetView: NSView {
         var offsetY: Int
     }
 
+    /// 形象占窗口高度的比例：头顶留出提醒时跳一下（最高约 13 点）的空间。
+    private static let heightFill: CGFloat = 0.8
+    private static let widthFill: CGFloat = 0.94
+
     func setPackage(_ package: PetPackage?) {
         self.package = package
         lastRenderKey = nil
+        needsDisplay = true
+    }
+
+    /// 拖到缩放比不同的屏幕上时，整数倍放大要按新屏幕重算。
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
         needsDisplay = true
     }
 
@@ -206,16 +311,23 @@ final class SpritePetView: NSView {
         defer { context.restoreGraphicsState() }
         context.imageInterpolation = package.pixelArt ? .none : .high
 
-        let targetHeight = b.height * 0.94
-        let aspect = image.size.width / max(image.size.height, 1)
-        let targetWidth = targetHeight * aspect
-        let rect = NSRect(x: b.midX - targetWidth / 2,
-                          y: b.minY + CGFloat(verticalOffset),
-                          width: targetWidth, height: targetHeight)
-        if pose.facingLeft {
-            context.cgContext.translateBy(x: b.midX, y: 0)
+        let box = package.content
+        let backing = max(window?.backingScaleFactor ?? 2, 1)
+        var scale = min(b.height * Self.heightFill / box.height, b.width * Self.widthFill / box.symmetricWidth)
+        if package.pixelArt {
+            // 像素图按整数个屏幕像素放大：每个源像素占的格子一样大，不糊边、不出现宽窄不一的像素。
+            scale = max((scale * backing).rounded(.down), 1) / backing
+        }
+        func snap(_ value: CGFloat) -> CGFloat { (value * backing).rounded() / backing }
+        let width = image.size.width * scale
+        let height = image.size.height * scale
+        let rect = NSRect(x: snap(b.midX - width / 2),
+                          y: snap(b.minY - box.bottom * scale + CGFloat(verticalOffset)),
+                          width: width, height: height)
+        if pose.facingLeft != package.facesLeft {
+            context.cgContext.translateBy(x: rect.midX, y: 0)
             context.cgContext.scaleBy(x: -1, y: 1)
-            context.cgContext.translateBy(x: -b.midX, y: 0)
+            context.cgContext.translateBy(x: -rect.midX, y: 0)
         }
         image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     }
