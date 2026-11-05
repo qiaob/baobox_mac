@@ -101,7 +101,21 @@ NotifyCenter.shared.post(_ n: PetNotification,
 - 相机与光：固定透视相机（轻微俯角）+ 单方向光 + 环境光，无阴影贴图（用模型自带 AO），背景透明（`SCNView` alpha)。
 - 功耗：活动时上限 30fps；`sleep` / 被全屏遮挡 / 勿扰时暂停渲染循环（保留最后一帧静态图）；系统低电量或热压力高时自动切换 2D 后端并在设置里提示。
 - 命中与气泡：3D 形象命中用模型投影包围盒近似（略小于视觉体积，避免挡操作）；气泡仍为 2D 浮层，锚在宠物头顶投影点。
-- 资产现实：代码不是瓶颈，**带四段动画的低多边形猫/狗模型**才是——采购 / 约稿 / 生成后绑骨三选一，单独在 issue 待定里决策；二次元 3D 形象不进首发。
+- 资产现实：代码不是瓶颈，**带四段动画的低多边形猫/狗模型**才是。选型结论见 §7.3，开源现成模型足够起步，不必等采购 / 约稿；二次元 3D 形象不进首发。
+
+### 7.3 3D 资产选型（2026-11-05 调研定）
+
+开源现成模型以 GLB/glTF 为主，出厂前统一转 USDZ（苹果免费 Reality Converter 或 Blender 转一道，运行时零负担）。已核实可直接用的候选：
+
+| 形象 | 来源 | 授权 | 动画（实测/官方页） | 对四状态的覆盖 |
+|---|---|---|---|---|
+| **狐狸（M3 原型定版）** | KhronosGroup glTF Sample Assets `Fox.glb` | 模型 CC0；骨骼/动画 CC-BY 4.0（须署名） | Survey / Walk / Run（159KB、24 关节，已下载解析实测） | 待机=Survey、走=Walk、提醒=Run 顶替；缺睡 |
+| **动物包（正式内置主力）** | Quaternius Ultimate Animated Animal Pack（12 只动物）+ LowPoly Animated Animals（含哈巴狗） | CC0（官网确认，商用免署名） | 每只 12+ 段：Walk / Gallop / Jump / Kick / Death 等 | 待机/走/跳齐全；睡用 Death 躺倒帧顶替 |
+| **机器人（备选吉祥物）** | three.js 官方示例 RobotExpressive | MIT（仓库标注） | Idle / Walking / Running / Jump / Dance / Wave 等 13 段 | 四状态全覆盖且提醒动作（Wave）最贴 |
+
+- **分工**：M3 渲染管线原型直接用狐狸验证（零等待、兼容性最稳）；正式内置形象从 Quaternius 包里挑（CC0 无署名负担）；机器人作为「助手型」备选。
+- **署名义务**：狐狸的骨骼/动画为 CC-BY 4.0，若正式版保留该模型，须在 App「关于 / 素材致谢」与仓库 `NOTICE` 中注明：模型 by PixelMannen (CC0)，rigging & animation by tomkranis (CC BY 4.0)，glTF conversion by @AsoboStudio & @scurest。
+- **共性缺口**：「睡觉」专用片段普遍没有，一律用躺倒类片段（Death / Lie）顶替 + 闭眼靠姿态，视觉达标即可，不单独立项补动画。
 
 ## 8. 窗口与层级
 
