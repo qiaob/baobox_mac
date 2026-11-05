@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import os
 import ScreenCaptureKit
 
 /// 音频路由：音源回调线程把 PCM 交给当前识别引擎的接收端（sink）。
@@ -12,6 +13,31 @@ final class LiveTranslateAudioRouter: @unchecked Sendable {
 
     private let lock = NSLock()
     private var sink: Sink?
+    /// 旁路：原样再给一份（朗读译文时把我的原声混进会议，见 docs/live-translate-voice/DESIGN.md §3）。
+    private var monitor: Sink?
+    /// 静音：外放朗读译文期间不送识别，免得把读出来的声音再识别一遍（同上 §6）。
+    private var muted = false
+    /// 最近一次「有人在说话」（音量超过阈值）的时间。识别看门狗用它区分「没人说话」和「识别卡住」。
+    private var lastVoice = Date.distantPast
+    /// 停顿后重新开口的时刻，还没等到出字（字幕条的识别延迟 = 开口到出字，见 `takeOnset`）。
+    private var onset: Date?
+    /// 心跳日志用的统计（见 `takeStats`）。
+    private var stats = Stats()
+
+    /// 上次取走以来收到的音频：块数、总秒数、其中有人声的秒数、暂停识别（朗读中）丢掉的秒数。
+    struct Stats {
+        var buffers = 0
+        var seconds: Double = 0
+        var voiced: Double = 0
+        var muted: Double = 0
+    }
+
+    /// 约 -40 dBFS：安静房间的底噪在它之下，正常说话 / 视频人声在它之上。
+    private static let voiceRMSThreshold: Float = 0.01
+    /// 静了这么久再出声才算「重新开口」。
+    private static let onsetGap: TimeInterval = 0.6
+    /// 一次开口最多等这么久出字，过了就让后来的开口顶替（之前那次多半是没被识别成字的杂音）。
+    private static let onsetPending: TimeInterval = 2.5
 
     func setSink(_ sink: Sink?) {
         lock.lock()
@@ -19,11 +45,87 @@ final class LiveTranslateAudioRouter: @unchecked Sendable {
         lock.unlock()
     }
 
-    func append(_ buffer: AVAudioPCMBuffer) {
+    func setMonitor(_ monitor: Sink?) {
         lock.lock()
-        let sink = self.sink
+        self.monitor = monitor
+        lock.unlock()
+    }
+
+    func setMuted(_ muted: Bool) {
+        lock.lock()
+        self.muted = muted
+        lock.unlock()
+    }
+
+    var lastVoiceDate: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastVoice
+    }
+
+    /// 字幕条出了新字时取走「开口时刻」（取一次就清掉）。超过 `maxAge` 还没出字的不算：多半是咳嗽、
+    /// 敲键盘之类没被识别成字的声音，拿它算延迟会虚高。
+    func takeOnset(maxAge: TimeInterval) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let onset else { return nil }
+        self.onset = nil
+        return Date().timeIntervalSince(onset) <= maxAge ? onset : nil
+    }
+
+    /// 取走统计并清零（控制器每 10 秒记一行心跳日志）。
+    func takeStats() -> Stats {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = stats
+        stats = Stats()
+        return taken
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        let voiced = Self.isVoiced(buffer)
+        let seconds = buffer.format.sampleRate > 0 ? Double(buffer.frameLength) / buffer.format.sampleRate : 0
+        lock.lock()
+        stats.buffers += 1
+        stats.seconds += seconds
+        if voiced { stats.voiced += seconds }
+        if muted { stats.muted += seconds }
+        let sink = muted ? nil : self.sink
+        let monitor = self.monitor
+        // 静音期间不算「有人在说话」：识别器的看门狗不会因为没出字而误判卡死。
+        if voiced, !muted {
+            let now = Date()
+            // 停顿后重新开口：记下开口时刻。上一次开口还在等出字（不到 onsetPending）就不覆盖 —— 不然先说的那截
+            // 出字时会按后开口的那次算，延迟偏小。
+            if now.timeIntervalSince(lastVoice) > Self.onsetGap,
+               onset.map({ now.timeIntervalSince($0) > Self.onsetPending }) ?? true {
+                onset = now
+            }
+            lastVoice = now
+        }
         lock.unlock()
         sink?(buffer)
+        monitor?(buffer)
+    }
+
+    /// 一串录音里有人声的总秒数（「自动」轮流识别判断「说了这么久、字却这么少」用）。
+    static func voicedDuration(of buffers: [AVAudioPCMBuffer]) -> TimeInterval {
+        buffers.reduce(0) { total, buffer in
+            guard buffer.format.sampleRate > 0, isVoiced(buffer) else { return total }
+            return total + Double(buffer.frameLength) / buffer.format.sampleRate
+        }
+    }
+
+    /// 第一声道的 RMS 是否过阈值。非 float 格式拿不到样本就当没信息（不更新）。
+    static func isVoiced(_ buffer: AVAudioPCMBuffer) -> Bool {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return false }
+        let count = Int(buffer.frameLength)
+        var sum: Float = 0
+        for index in 0..<count {
+            let value = samples[index]
+            sum += value * value
+        }
+        return (sum / Float(count)).squareRoot() > voiceRMSThreshold
     }
 }
 
@@ -76,12 +178,38 @@ final class LiveTranslateMicSource: LiveTranslateAudioSource {
     private let engine = AVAudioEngine()
     private let router: LiveTranslateAudioRouter
     private var tapInstalled = false
+    private var configObserver: NSObjectProtocol?
 
     init(router: LiveTranslateAudioRouter) {
         self.router = router
     }
 
     func start() async throws {
+        try installTapAndStart()
+        // 换输入设备 / 耳机切模式 / 别的 App 改了采样率：系统会停掉引擎、只发这个通知。
+        // 不接住的话麦克风就此静音，字幕看起来「暂停」了。
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recoverFromConfigurationChange()
+            }
+        }
+    }
+
+    func stop() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+        }
+        configObserver = nil
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        engine.stop()
+    }
+
+    private func installTapAndStart() throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
@@ -98,12 +226,20 @@ final class LiveTranslateMicSource: LiveTranslateAudioSource {
         }
     }
 
-    func stop() {
+    /// 按新的输入格式重新挂 tap、重启引擎；失败就保持停止（看门狗不会误判：没有声音进来）。
+    private func recoverFromConfigurationChange() {
+        guard configObserver != nil else { return }
+        LiveTranslateLog.audio.error("audio engine configuration changed, restarting microphone input")
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
         engine.stop()
+        do {
+            try installTapAndStart()
+        } catch {
+            LiveTranslateLog.audio.error("microphone restart failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// tap 在音频线程回调：在 nonisolated 上下文里造闭包，避免被推断成主线程隔离。

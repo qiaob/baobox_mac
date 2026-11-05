@@ -12,7 +12,9 @@ final class LiveTranslateTool: ToolModule {
     private var controller: LiveTranslateController { LiveTranslateController.shared }
 
     func willTerminate() {
-        controller.stop()
+        controller.terminate()
+        OfflineTranslator.shared.shutdown()
+        OfflineTranslator.corrector.shutdown()
     }
 
     func submenuItems() -> [NSMenuItem] {
@@ -22,6 +24,13 @@ final class LiveTranslateTool: ToolModule {
         items.append(ClosureMenuItem(title: toggleTitle, hotkeyID: "livetranslate.toggle") { [weak self] in
             self?.controller.toggle()
         })
+        // 最近一次的本地记录（只看内存里的状态，菜单构建不碰磁盘）。
+        if let transcript = controller.lastTranscript, transcript.hasContent {
+            let url = transcript.fileURL
+            items.append(ClosureMenuItem(title: L("livetranslate.record.openLatest")) {
+                NSWorkspace.shared.open(url)
+            })
+        }
         items.append(.separator())
 
         // 音源（单选）。
@@ -38,23 +47,52 @@ final class LiveTranslateTool: ToolModule {
         }
         items.append(.separator())
 
-        // 语言方向（单选）。
+        // 说话语言（单选）：自动（两种之间逐句判别）+ 常用几种 + 当前选中的（完整列表在设置页）。
         items.append(NSMenuItem(title: L("livetranslate.menu.languageHeader"), action: nil, keyEquivalent: ""))
-        let currentLanguage = LiveTranslateSettings.language
-        let translates = LiveTranslateSettings.translateEnabled
-        for language in LiveTranslateLanguage.allCases {
-            let title = translates
-                ? "\(language.displayName) → \(language.other.displayName)"
-                : language.displayName
-            let item = ClosureMenuItem(title: title) { [weak self] in
-                guard LiveTranslateSettings.language != language else { return }
-                LiveTranslateSettings.language = language
+        let currentSpeech = LiveTranslateSettings.speech
+        let autoSpeech = LiveTranslateSpeech.auto(LiveTranslateSettings.autoA, LiveTranslateSettings.autoB)
+        let autoItem = ClosureMenuItem(title: autoSpeech.title) { [weak self] in
+            guard LiveTranslateSettings.speech != autoSpeech else { return }
+            LiveTranslateSettings.setAutoSpeech()
+            self?.controller.restartIfRunning()
+        }
+        autoItem.state = currentSpeech == autoSpeech ? .on : .off
+        items.append(autoItem)
+        var spoken = TranslationLanguage.common
+        if case .fixed(let current) = currentSpeech, !spoken.contains(current) {
+            spoken.append(current)
+        }
+        for language in spoken {
+            let item = ClosureMenuItem(title: language.endonym) { [weak self] in
+                guard LiveTranslateSettings.speech != .fixed(language) else { return }
+                LiveTranslateSettings.setSpeech(language)
                 self?.controller.restartIfRunning()
             }
-            item.state = language == currentLanguage ? .on : .off
+            item.state = currentSpeech == .fixed(language) ? .on : .off
             items.append(item)
         }
         items.append(.separator())
+
+        // 译成（单选，开着翻译时才有）。
+        let translates = LiveTranslateSettings.translateEnabled
+        if translates {
+            items.append(NSMenuItem(title: L("livetranslate.menu.targetHeader"), action: nil, keyEquivalent: ""))
+            let currentTarget = LiveTranslateSettings.target
+            var targets = TranslationLanguage.common
+            if !targets.contains(currentTarget) {
+                targets.append(currentTarget)
+            }
+            for language in targets {
+                let item = ClosureMenuItem(title: language.endonym) { [weak self] in
+                    guard LiveTranslateSettings.target != language else { return }
+                    LiveTranslateSettings.target = language
+                    self?.controller.restartIfRunning()
+                }
+                item.state = language == currentTarget ? .on : .off
+                items.append(item)
+            }
+            items.append(.separator())
+        }
 
         let translateItem = ClosureMenuItem(title: L("livetranslate.menu.translate")) { [weak self] in
             LiveTranslateSettings.translateEnabled.toggle()

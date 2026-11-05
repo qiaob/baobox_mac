@@ -7,6 +7,7 @@ final class ClipboardMonitor {
     private let store: ClipboardStore
     private var timer: Timer?
     private var lastChangeCount: Int
+    private var borrowObserver: NSObjectProtocol?
 
     /// PasteService 回填时置位，跳过一次自身产生的变更。
     var ignoreNextChange = false
@@ -25,17 +26,34 @@ final class ClipboardMonitor {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        // 划词翻译借剪贴板取词之前先轮询一次：用户刚复制、还没轮到的那条照常入库。
+        // queue 为 nil = 在发通知的线程上同步执行，PasteboardBorrow 只在主线程发。
+        borrowObserver = NotificationCenter.default.addObserver(
+            forName: PasteboardBorrow.willBeginNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.poll()
+            }
+        }
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let borrowObserver {
+            NotificationCenter.default.removeObserver(borrowObserver)
+        }
+        borrowObserver = nil
     }
 
     private func poll() {
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != lastChangeCount else { return }
+        // 划词翻译正借剪贴板取词（拷贝 → 读取 → 还原）：先不动；还原后的那次变更整体跳过，
+        // 被拷出来的选区和还原回去的原内容都不是用户的复制。
+        if PasteboardBorrow.isActive { return }
         lastChangeCount = pasteboard.changeCount
+        if pasteboard.changeCount == PasteboardBorrow.settledChangeCount { return }
 
         if ignoreNextChange {
             ignoreNextChange = false

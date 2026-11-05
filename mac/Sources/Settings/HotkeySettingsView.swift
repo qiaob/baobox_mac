@@ -46,7 +46,26 @@ struct HotkeySettingsView: View {
     }
 }
 
-private struct HotkeyRow: View {
+/// 模块设置页里嵌的快捷键行：与「快捷键」页同一个录制控件、同一份存储。出厂不绑定的快捷键
+/// 只放在快捷键页里不好找，在各模块自己的设置页也能直接录。
+struct ModuleHotkeyRows: View {
+    let ids: [String]
+    @ObservedObject private var hotkeys = HotkeyCenter.shared
+
+    init(ids: [String]) {
+        self.ids = ids
+    }
+
+    var body: some View {
+        ForEach(ids, id: \.self) { id in
+            if let def = hotkeys.definition(for: id) {
+                HotkeyRow(def: def, conflicted: hotkeys.conflictedIDs.contains(id))
+            }
+        }
+    }
+}
+
+struct HotkeyRow: View {
     let def: HotkeyDefinition
     let conflicted: Bool
     @State private var combo: KeyCombo?

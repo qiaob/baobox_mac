@@ -148,7 +148,7 @@ private final class RegionPickerView: NSView {
             context.restoreGState()
             NSColor.controlAccentColor.setStroke()
             let border = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
-            border.stroke()
+            NSBezierPath(rect: border).stroke()
             let label = "\(Int(rect.width)) × \(Int(rect.height))"
             (label as NSString).draw(at: NSPoint(x: rect.minX, y: rect.maxY + 4),
                                      withAttributes: [.foregroundColor: NSColor.white,

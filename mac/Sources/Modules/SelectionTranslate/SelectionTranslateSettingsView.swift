@@ -5,6 +5,10 @@ struct SelectionTranslateSettingsView: View {
     @AppStorage(SelectionTranslateSettings.autoPopupKey) private var autoPopup = true
     @AppStorage(SelectionTranslateSettings.copyFallbackKey) private var copyFallback = true
     @AppStorage(SelectionTranslateSettings.autoSpeakKey) private var autoSpeak = false
+    @AppStorage(SelectionTranslateSettings.targetKey)
+    private var target = SelectionTranslateSettings.target.code
+    @AppStorage(SelectionTranslateSettings.secondaryTargetKey)
+    private var secondaryTarget = SelectionTranslateSettings.secondaryTarget.code
 
     var body: some View {
         Form {
@@ -13,6 +17,26 @@ struct SelectionTranslateSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+
+            Section {
+                Picker("selectiontranslate.settings.target", selection: $target) {
+                    ForEach(TranslationLanguage.all) { language in
+                        Text(language.endonym).tag(language.code)
+                    }
+                }
+                Picker("selectiontranslate.settings.secondaryTarget", selection: $secondaryTarget) {
+                    ForEach(TranslationLanguage.all) { language in
+                        Text(language.endonym).tag(language.code)
+                    }
+                }
+                Text("selectiontranslate.settings.targetHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("selectiontranslate.settings.languageSection")
+            }
+
+            TranslationEngineSection()
 
             Section {
                 Toggle("selectiontranslate.settings.autoPopup", isOn: $autoPopup)
@@ -28,6 +52,13 @@ struct SelectionTranslateSettingsView: View {
                     .foregroundStyle(.secondary)
             } header: {
                 Text("selectiontranslate.settings.triggerSection")
+            }
+
+            Section {
+                // id 与 SelectionTranslateTool.hotkeys() 一致。
+                ModuleHotkeyRows(ids: ["selectiontranslate.translateSelection", "selectiontranslate.regionOCR"])
+            } header: {
+                Text("settings.tab.hotkeys")
             }
 
             Section {

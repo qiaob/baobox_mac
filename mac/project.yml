@@ -50,3 +50,52 @@ targets:
         DEVELOPMENT_TEAM: JD2ZQL6YU2
         ENABLE_HARDENED_RUNTIME: true
         DEAD_CODE_STRIPPING: true
+        # 下面的脚本阶段要写 Contents/Helpers，不能跑在脚本沙盒里。
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # 离线翻译的推理进程（docs/translation-engine/DESIGN.md §2.2）：把 `make vendor` 下载的
+    # Vendor/llama 拷进 Contents/Helpers/llama，并用 App 同一身份逐个签名（嵌套代码要先于 App 本身签名，
+    # Xcode 的 CodeSign 步骤在所有脚本阶段之后）。不开 Hardened Runtime：ad-hoc 构建下库校验会拒载 dylib。
+    # 没有 Vendor 就跳过 —— App 照常可用，离线模型在设置里显示为不可用。
+    postBuildScripts:
+      - name: Embed llama-server
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          SRC="${SRCROOT}/Vendor/llama"
+          DEST="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/llama"
+          if [ ! -x "${SRC}/llama-server" ]; then
+            echo "warning: ${SRC}/llama-server not found, offline translation helper not embedded (run: make vendor)"
+            exit 0
+          fi
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          cp "${SRC}/llama-server" "${SRC}"/*.dylib "${DEST}/"
+          # 许可证不是代码，放进 Resources（Helpers 下只能放已签名的代码）。
+          cp "${SRC}/LICENSE" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/llama.cpp-LICENSE.txt"
+          if [ "${CODE_SIGNING_ALLOWED}" != "NO" ]; then
+            IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
+            for f in "${DEST}"/*.dylib "${DEST}/llama-server"; do
+              /usr/bin/codesign --force --sign "${IDENTITY}" --timestamp=none "$f"
+            done
+          fi
+      # 「Baobox 同传」虚拟麦克风驱动（docs/live-translate-voice/DESIGN.md §3）：把 `make vendor` 编出来的
+      # Vendor/audio-driver/BaoboxInterpreter.driver 拷进 Contents/Library/Audio/ 并用 App 同一身份签名；
+      # 用户在设置里点「安装」才装进系统。没有就跳过 —— 照样能用别的虚拟声卡（如 BlackHole）。
+      - name: Embed audio driver
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          SRC="${SRCROOT}/Vendor/audio-driver"
+          DEST="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Library/Audio"
+          if [ ! -d "${SRC}/BaoboxInterpreter.driver" ]; then
+            echo "warning: ${SRC}/BaoboxInterpreter.driver not found, virtual microphone not embedded (run: make vendor)"
+            exit 0
+          fi
+          rm -rf "${DEST}"
+          mkdir -p "${DEST}"
+          cp -R "${SRC}/BaoboxInterpreter.driver" "${DEST}/"
+          cp "${SRC}/BlackHole-LICENSE.txt" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/BlackHole-LICENSE.txt"
+          if [ "${CODE_SIGNING_ALLOWED}" != "NO" ]; then
+            /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --timestamp=none \
+              "${DEST}/BaoboxInterpreter.driver"
+          fi
