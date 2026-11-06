@@ -38,10 +38,6 @@ struct PetManifest: Decodable {
     /// 3D：出场落地后、退场前播的片段（一个名字或一串，#54）；不写的用默认（VRM 招手 / 道别，其他形象跳一下）。
     var enter: PetClipSequence?
     var leave: PetClipSequence?
-    /// AI 对话（#55，docs/desktop-pet/CHAT.md §4）：人设（系统提示词）、声音、开场白。都可省略，用内置默认。
-    var persona: String?
-    var voice: PetVoiceSpec?
-    var greeting: String?
 }
 
 /// 所有帧里不透明像素的并集（像素），以帧的「底边中点」为原点。
@@ -75,10 +71,6 @@ struct PetPackage {
     let content: PetContentBox
     /// 非 nil = 3D 形象，由 PetModelView 渲染。
     var model: PetModelSpec?
-    /// AI 对话（pet.json 的 persona / voice / greeting，#55）。
-    var persona: String?
-    var voice: PetVoiceSpec?
-    var greeting: String?
 }
 
 /// 素材包加载器。三处来源，同 id 先到先得：
@@ -135,18 +127,6 @@ enum PetPackageLoader {
     }
 
     private static func loadPackage(id: String, in dir: URL) -> PetPackage? {
-        guard var package = loadShape(id: id, in: dir) else { return nil }
-        if let data = try? Data(contentsOf: dir.appendingPathComponent("pet.json")),
-           let manifest = try? JSONDecoder().decode(PetManifest.self, from: data) {
-            package.persona = manifest.persona
-            package.voice = manifest.voice
-            package.greeting = manifest.greeting
-        }
-        return package
-    }
-
-    /// 形象本体（2D 帧 / 3D 模型）。
-    private static func loadShape(id: String, in dir: URL) -> PetPackage? {
         let manifestURL = dir.appendingPathComponent("pet.json")
         let manifest: PetManifest
         if let data = try? Data(contentsOf: manifestURL),

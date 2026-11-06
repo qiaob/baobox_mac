@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 /// 宠物控制器：拥有窗口、引擎、气泡、环形菜单，并实现通知呈现端（设计 §2；交互见 docs/desktop-pet/INTERACTION.md）。
 @MainActor
@@ -75,7 +74,6 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.saveOrigin(origin)
             self?.bubble.relayout()
             self?.layoutAccessory()
-            self?.layoutChat()
         }
         panel.onDragState = { [weak self] dragging in self?.engine.setDragged(dragging) }
         engine.petSize = side
@@ -94,9 +92,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             if self.shownModelID != nil {
                 self.modelView.pose = pose
             } else {
-                var talking = pose
-                talking.bounce += self.talkLevel * 3
-                self.petView.pose = talking
+                self.petView.pose = pose
             }
         }
 
@@ -149,7 +145,6 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 退出 Baobox：宠物开着就先播一个短退场（只掉下去那段），最多等 0.5 秒，不拖慢退出 / 重启。
     func stop() {
         saveOrigin(choreographyHome ?? engine.origin)
-        closeChat()
         radial.close(animated: false)
         bubble.dismissAll()
         if let panel, panel.isVisible, PetSettings.enabled, !isLent, !switchingCharacter {
@@ -183,7 +178,6 @@ final class PetController: ObservableObject, NotifyPresenting {
             choreographyHome = engine.origin
         }
         isChoreographing = true
-        closeChat()
         radial.close(animated: false)
         panel.ignoresMouseEvents = true
         bubble.setSuspended(true)
@@ -333,129 +327,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     }
 
     private func updateHeld() {
-        engine.setHeld(bubbleShowing || menuShowing || isLent || chatShowing)
-    }
-
-    // MARK: - AI 对话（#55，docs/desktop-pet/CHAT.md）
-
-    let chat = PetChatController()
-    private var chatPanel: PetChatPanel?
-    private var chatShowing = false
-    private var chatWired = false
-    /// 正在说话时张嘴的程度（2D 形象据此轻轻弹动）。
-    private var talkLevel: CGFloat = 0
-    /// 打开聊天框前的前台 App：关掉后把焦点还给它。
-    private var appBeforeChat: NSRunningApplication?
-
-    var isChatOpen: Bool { chatShowing }
-
-    func toggleChat() {
-        if chatShowing { closeChat() } else { openChat() }
-    }
-
-    /// 在宠物旁边打开聊天框（宠物开着、不在出场 / 退场 / 休息画面里）。
-    func openChat() {
-        guard PetSettings.enabled, !isChoreographing, !isLent, let panel, panel.isVisible,
-              let package = packages.first(where: { $0.id == currentCharacterID }) else { return }
-        wireChat()
-        radial.close()
-        chat.load(package)
-        let chatPanel = self.chatPanel ?? makeChatPanel()
-        if !chatShowing {
-            appBeforeChat = NSWorkspace.shared.frontmostApplication
-            chatShowing = true
-            layoutChat()
-            panel.addChildWindow(chatPanel, ordered: .above)
-            chat.opened()
-            updateHeld()
-        }
-        chatPanel.orderFrontRegardless()
-        chatPanel.makeKey()
-    }
-
-    func closeChat() {
-        guard chatShowing else { return }
-        chatShowing = false
-        chat.cancel()
-        if let chatPanel {
-            panel?.removeChildWindow(chatPanel)
-            chatPanel.orderOut(nil)
-        }
-        updateHeld()
-        // 聊天框不激活 Baobox；万一 Baobox 被激活了（点了设置之类），把前台还给原来的 App。
-        if NSApp.isActive, let app = appBeforeChat, app != NSRunningApplication.current, !app.isTerminated {
-            app.activate()
-        }
-        appBeforeChat = nil
-    }
-
-    /// 清空当前角色的对话（环形菜单）。
-    func clearChat() {
-        guard let package = packages.first(where: { $0.id == currentCharacterID }) else { return }
-        wireChat()
-        chat.load(package)
-        chat.clear()
-        say(L("pet.chat.cleared"))
-    }
-
-    private func wireChat() {
-        guard !chatWired else { return }
-        chatWired = true
-        chat.onClose = { [weak self] in self?.closeChat() }
-        chat.onMood = { [weak self] mood in
-            guard let self, self.shownModelID != nil else { return }
-            self.modelView.setMood(mood)
-        }
-        chat.voice.onMouth = { [weak self] level in self?.setTalk(level) }
-    }
-
-    private func makeChatPanel() -> PetChatPanel {
-        let chatPanel = PetChatPanel(
-            contentRect: NSRect(x: 0, y: 0, width: PetChatView.width, height: PetChatView.height),
-            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
-        )
-        chatPanel.isFloatingPanel = true
-        chatPanel.level = .floating
-        chatPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        chatPanel.isOpaque = false
-        chatPanel.backgroundColor = .clear
-        chatPanel.hasShadow = true
-        chatPanel.contentView = NSHostingView(rootView: PetChatView(controller: chat))
-        chatPanel.onCancel = { [weak self] in self?.closeChat() }
-        self.chatPanel = chatPanel
-        return chatPanel
-    }
-
-    /// 聊天框放在宠物头顶；头顶放不下就放到宠物旁边（右边放不下放左边）。
-    private func layoutChat() {
-        guard chatShowing, let chatPanel, let panel else { return }
-        let pet = panel.frame
-        let screen = NSScreen.screens.first(where: { $0.frame.intersects(pet) }) ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = NSSize(width: PetChatView.width, height: PetChatView.height)
-        let head = pet.minY + pet.height * BubbleController.headFraction
-        var origin: NSPoint
-        if head + 6 + size.height <= visible.maxY - 4 {
-            origin = NSPoint(x: pet.midX - size.width / 2, y: head + 6)
-        } else {
-            let right = pet.maxX + 6
-            let x = right + size.width <= visible.maxX - 4 ? right : pet.minX - 6 - size.width
-            origin = NSPoint(x: x, y: pet.midY - size.height / 2)
-        }
-        origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
-        origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
-        chatPanel.setFrame(NSRect(origin: origin, size: size), display: true)
-    }
-
-    /// 说话时：VRM 张嘴，毛绒 / 动物模型轻轻一鼓一鼓，2D 形象轻轻弹（见 onPose）。
-    private func setTalk(_ level: CGFloat) {
-        talkLevel = level
-        guard shownModelID != nil else { return }
-        if modelView.isHumanoid {
-            modelView.setMouth(level)
-        } else if !isChoreographing {
-            modelView.presentationScale = CGSize(width: 1, height: 1 + 0.04 * level)
-        }
+        engine.setHeld(bubbleShowing || menuShowing || isLent)
     }
 
     // MARK: - 启用 / 尺寸
@@ -491,7 +363,6 @@ final class PetController: ObservableObject, NotifyPresenting {
             }
         } else {
             switchingCharacter = false
-            closeChat()
             radial.close(animated: false)
             bubble.dismissAll()
             let finish: () -> Void = { [weak self] in
@@ -532,7 +403,6 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.setOrigin(frame.origin)
         bubble.relayout()
         layoutAccessory()
-        layoutChat()
     }
 
     // MARK: - 点击穿透（VRM：只有人身上接鼠标）
@@ -735,7 +605,6 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 挂在宠物窗上的气泡不受影响。宠物没开 / 没就绪时返回 nil（休息画面走无宠物的回退画面）。
     func lendRenderView() -> Loan? {
         guard !isLent, PetSettings.enabled, !switchingCharacter, let panel, panel.isVisible else { return nil }
-        closeChat()
         // 正在出场 / 退场：直接收尾（站回原位、外观复原）再借出。
         if isChoreographing {
             endChoreography(restoreHome: true)
@@ -834,10 +703,6 @@ final class PetController: ObservableObject, NotifyPresenting {
                 self?.interact("play")
             })
         }
-        inner.insert(RadialMenuItem(id: "pet.chat", symbol: "bubble.left.and.bubble.right.fill",
-                                    title: L("pet.ring.chat")) { [weak self] in
-            self?.openChat()
-        }, at: 0)
         inner.append(RadialMenuItem(id: "pet.quiet", symbol: quiet ? "bell.fill" : "moon.zzz.fill",
                                     title: quiet ? L("pet.ring.unquiet") : L("pet.ring.quiet")) { [weak self] in
             if quiet { self?.clearQuiet() } else { self?.quietForOneHour() }
@@ -854,9 +719,6 @@ final class PetController: ObservableObject, NotifyPresenting {
             tool("caffeinate.toggle", "cup.and.saucer.fill", L("pet.ring.caffeinate")),
             tool("focushealth.focus", "timer", L("pet.ring.focus")),
         ].compactMap { $0 }
-        outer.append(RadialMenuItem(id: "pet.chatClear", symbol: "trash", title: L("pet.ring.chatClear")) { [weak self] in
-            self?.clearChat()
-        })
         outer.append(RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
             self?.nextCharacter()
         })
@@ -873,10 +735,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.setEnabled(false)
         })
 
-        // 内圈凑满 7 格（第 8 格是「更多」）；多了的（「安静一下」前面那格）挪到外圈。
-        while inner.count > 7 {
-            outer.insert(inner.remove(at: inner.count - 2), at: 0)
-        }
+        // 内圈凑满 7 格（第 8 格是「更多」）。
         while inner.count < 7, !outer.isEmpty {
             inner.insert(outer.removeFirst(), at: max(inner.count - 1, 0))
         }
@@ -912,7 +771,6 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 换形象：开着动画时先让旧形象退场，再换上新形象出场（#54）。
     func selectCharacter(_ id: String, reload: Bool = false) {
         let previous = currentCharacterID
-        if id != previous { closeChat() }
         UserDefaults.standard.set(id, forKey: PetSettings.characterKey)
         if reload { packages = PetPackageLoader.loadAll() }
         // 退场还没播完 / 新形象还在读：播完、读完时会按最新的选择来。

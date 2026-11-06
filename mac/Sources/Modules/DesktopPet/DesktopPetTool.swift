@@ -56,15 +56,7 @@ final class DesktopPetTool: ToolModule {
                 defaultCombo: nil
             ) {
                 PetController.shared.toggleEnabled()
-            },
-            HotkeyDefinition(
-                id: "pet.chat",
-                title: L("pet.hotkey.chat"),
-                subtitle: nil,
-                defaultCombo: nil
-            ) {
-                PetController.shared.toggleChat()
-            },
+            }
         ]
     }
 
