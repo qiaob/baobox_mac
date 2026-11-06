@@ -268,7 +268,10 @@ struct MeetingDetectionMachine: Equatable {
         tracks = tracks.filter { now.timeIntervalSince($0.value.lastSeen) < Self.gap($0.value.signal) }
 
         if recordingMeeting {
-            for app in tracks.keys { tracks[app]?.asked = true }
+            // 这会儿正在开的（这次采样有信号的）算问过：录完同一场不再来问。早先一闪而过、录的时候没信号的不算 ——
+            // 2026-11-06 真机：钉钉开会前主程序碰了两下麦克风（各不到 0.1 秒），记录还在 3 分钟宽限期里，
+            // 录别的会时被一并标成问过，两分钟后真开钉钉会议就没问。
+            for app in signals.keys where tracks[app] != nil { tracks[app]?.asked = true }
             return nil
         }
         guard !holdOff else { return nil }
