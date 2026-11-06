@@ -1503,7 +1503,8 @@
     "focus.settings.item.awayCounts" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Being away from the computer counts as done" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "离开电脑够久算完成" } } } },
     "focus.settings.item.delete" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除" } } } },
     "pet.ring.focus" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Focus" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "专注" } } } },
-    "pet.settings.sourceFocus" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Focus & Health" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "专注与健康" } } } }
+    "pet.settings.sourceFocus" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Focus & Health" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "专注与健康" } } } },
+    "capture.busy %@" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ is using the microphone. Stop it first." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在%@，先停止再开始" } } } }
   },
   "version" : "1.0"
 }

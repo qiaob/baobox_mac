@@ -393,9 +393,19 @@ final class LiveTranslateController: ObservableObject {
 
     func start() {
         guard !isRunning, !isStarting else { return }
+        // 与会议记录、听写互斥（设备端识别同一时间只能跑一个请求），见 Core/AudioCaptureCoordinator。
+        guard AudioCaptureCoordinator.shared.claim(owner: Self.captureOwner, label: L("livetranslate.name"),
+                                                   microphone: LiveTranslateSettings.source == .microphone) else {
+            if let message = AudioCaptureCoordinator.shared.busyMessage() {
+                NotifyCenter.shared.post(PetNotification(source: "livetranslate", level: .ambient, title: message))
+            }
+            return
+        }
         isStarting = true
         Task { await self.startFlow() }
     }
+
+    private static let captureOwner = "livetranslate"
 
     /// 改了音源 / 语言 / 翻译开关等需要重建识别链路的设置后调用。本地记录接着写同一份。
     func restartIfRunning() {
@@ -417,6 +427,7 @@ final class LiveTranslateController: ObservableObject {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        AudioCaptureCoordinator.shared.release(owner: Self.captureOwner)
         // 记录：最后那句还没定稿也记上；改设置重启时接着写，否则收尾（结束时间、整理纪要）。
         for line in lines {
             record(line, force: true)
@@ -475,6 +486,8 @@ final class LiveTranslateController: ObservableObject {
             if !isRunning {
                 finishTranscript()
                 lines = []
+                // 没开起来（权限被拒、识别不可用…）：让出占用。
+                AudioCaptureCoordinator.shared.release(owner: Self.captureOwner)
             }
         }
         let source = LiveTranslateSettings.source
