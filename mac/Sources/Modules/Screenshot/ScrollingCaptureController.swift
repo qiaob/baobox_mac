@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// 长截屏（滚动拼接）：选区固定不动，用户自己滚动页面，这里按固定节奏抓帧，
 /// 交给 `ScrollingCaptureStitcher` 按纵向重叠拼成一张长图。
@@ -9,6 +10,8 @@ import AppKit
 @MainActor
 final class ScrollingCaptureController {
     static let shared = ScrollingCaptureController()
+
+    private static let log = Logger(subsystem: "com.baobox.app", category: "capture")
 
     private(set) var isRunning = false
 
@@ -22,6 +25,8 @@ final class ScrollingCaptureController {
     private var stitcher: ScrollingCaptureStitcher?
     /// 上一帧还在后台拼接时跳过这一拍，避免积压。
     private var inFlight = false
+    /// 抓帧 API 已确认给不出期望像素时置位，本次会话内不再逐帧重抓。
+    private var frameScaleShortfall = false
 
     /// 拼接队列：串行，`append` 与最终 `compose` 都走它，compose 天然排在在途帧之后。
     private let queue = DispatchQueue(label: "com.baobox.screenshot.scrollingCapture", qos: .userInitiated)
@@ -42,6 +47,7 @@ final class ScrollingCaptureController {
         isRunning = true
         rectAK = rect
         scale = max(screen.backingScaleFactor, 1)
+        frameScaleShortfall = false
         startedAt = Date()
         stitcher = ScrollingCaptureStitcher()
 
@@ -139,8 +145,22 @@ final class ScrollingCaptureController {
         guard let border else { return nil }
         let boundsCG = Geometry.cgRect(fromAppKit: rectAK)
         // 抓「边框窗以下」的全部窗口 —— 边框与其上的 HUD 都不会进画面。
-        return CGWindowListCreateImage(boundsCG, .optionOnScreenBelowWindow,
-                                       CGWindowID(border.windowNumber), .bestResolution)
+        guard let first = CGWindowListCreateImage(boundsCG, .optionOnScreenBelowWindow,
+                                                  CGWindowID(border.windowNumber), .bestResolution) else { return nil }
+        // 同 #40：CGWindowListCreateImage 偶尔无视 .bestResolution 按低倍率出图，
+        // 帧图直接拼进成品，低清即整张长图低清。按选区点尺寸 × 倍率校验实际像素
+        // （容差 1px），不足重抓一次取较大者；重抓仍不足说明这台机器上该 API 拿不到
+        // 更高分辨率，本次会话内不再逐帧重抓（每帧翻倍抓图的代价不值）。
+        let expectedW = Int((rectAK.width * scale).rounded())
+        let expectedH = Int((rectAK.height * scale).rounded())
+        guard !frameScaleShortfall, first.width < expectedW - 1 || first.height < expectedH - 1 else { return first }
+        Self.log.warning("scrolling frame below native size: got \(first.width)×\(first.height), want \(expectedW)×\(expectedH); retrying once")
+        guard let second = CGWindowListCreateImage(boundsCG, .optionOnScreenBelowWindow,
+                                                   CGWindowID(border.windowNumber), .bestResolution) else { return first }
+        let best = second.width * second.height >= first.width * first.height ? second : first
+        if best.width < expectedW - 1 || best.height < expectedH - 1 { frameScaleShortfall = true }
+        Self.log.warning("scrolling frame retry result: \(best.width)×\(best.height)")
+        return best
     }
 
     private static func reportEmpty() {

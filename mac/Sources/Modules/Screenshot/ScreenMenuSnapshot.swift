@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import os
 
 /// 「含菜单整屏」快照：菜单打开时按截图快捷键，在**收起菜单之前**抓一次
 /// （每屏一张，含菜单等所有 on-screen 窗口）；截图 `begin` 在极短时间内取用作冻结底图，取后即弃。
@@ -13,6 +14,8 @@ import CoreGraphics
 /// 用同步的 `CGWindowListCreateImage`（能抓到菜单，且同步、无 async 时序问题）。仅主线程访问。
 @MainActor
 enum ScreenMenuSnapshot {
+    private static let log = Logger(subsystem: "com.baobox.app", category: "capture")
+
     private static var images: [CGDirectDisplayID: CGImage] = [:]
     private static var capturedAt: Date = .distantPast
 
@@ -22,12 +25,30 @@ enum ScreenMenuSnapshot {
         for screen in NSScreen.screens {
             guard let displayID = screen.displayID else { continue }
             let boundsCG = Geometry.cgRect(fromAppKit: screen.frame)
-            guard let image = CGWindowListCreateImage(boundsCG, .optionOnScreenOnly,
-                                                      kCGNullWindowID, .bestResolution) else { continue }
+            guard let image = captureScreen(boundsCG: boundsCG, screen: screen) else { continue }
             result[displayID] = image
         }
         images = result
         capturedAt = Date()
+    }
+
+    /// 抓一屏并校验实际像素。`CGWindowListCreateImage` 偶尔会无视 `.bestResolution`
+    /// 按 1x 出图（与 #40 里 SCK 的出图缩水同类），而这张快照是冻结模式下所有截图
+    /// 路径的底图，源头低清则整链低清：按该屏 backing 倍率算期望像素（容差 1px，
+    /// 期望值经 rounded() 取整），不足就重抓一次取较大者，并留日志便于在 Console 复核。
+    private static func captureScreen(boundsCG: CGRect, screen: NSScreen) -> CGImage? {
+        guard let first = CGWindowListCreateImage(boundsCG, .optionOnScreenOnly,
+                                                  kCGNullWindowID, .bestResolution) else { return nil }
+        let scale = max(screen.backingScaleFactor, 1)
+        let expectedW = Int((screen.frame.width * scale).rounded())
+        let expectedH = Int((screen.frame.height * scale).rounded())
+        guard first.width < expectedW - 1 || first.height < expectedH - 1 else { return first }
+        log.warning("menu snapshot below native size: got \(first.width)×\(first.height), want \(expectedW)×\(expectedH); retrying once")
+        guard let second = CGWindowListCreateImage(boundsCG, .optionOnScreenOnly,
+                                                   kCGNullWindowID, .bestResolution) else { return first }
+        let best = second.width * second.height >= first.width * first.height ? second : first
+        log.warning("menu snapshot retry result: \(best.width)×\(best.height)")
+        return best
     }
 
     /// 取出并清空快照。仅当足够新鲜（< 0.5s，确保确实是本次菜单场景抓的）才返回，否则视为陈旧丢弃。

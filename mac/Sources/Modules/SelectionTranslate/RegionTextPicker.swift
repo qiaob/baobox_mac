@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import os
 
 /// 框选 OCR：把鼠标所在屏冻结成底图，用户拖出矩形后裁剪 + 本地识别。
 ///
@@ -9,6 +10,8 @@ import CoreGraphics
 @MainActor
 final class RegionTextPicker {
     typealias Completion = @MainActor (String?, CGRect?) -> Void
+
+    private static let log = Logger(subsystem: "com.baobox.app", category: "capture")
 
     private var window: RegionPickerWindow?
     private var completion: Completion?
@@ -109,7 +112,19 @@ final class RegionTextPicker {
                             y: primaryHeight - screen.frame.minY - screen.frame.height,
                             width: screen.frame.width,
                             height: screen.frame.height)
-        return CGWindowListCreateImage(quartz, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution])
+        guard let first = CGWindowListCreateImage(quartz, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]) else { return nil }
+        // 同 #40：该 API 偶尔无视 .bestResolution 按 1x 出图。裁剪倍率从图反推不会
+        // 错位，但喂给 OCR 的像素少了一半，识别率明显下降。按屏 backing 倍率校验
+        // 实际像素（容差 1px），不足重抓一次取较大者，并留日志便于在 Console 复核。
+        let scale = max(screen.backingScaleFactor, 1)
+        let expectedW = Int((screen.frame.width * scale).rounded())
+        let expectedH = Int((screen.frame.height * scale).rounded())
+        guard first.width < expectedW - 1 || first.height < expectedH - 1 else { return first }
+        log.warning("region OCR freeze below native size: got \(first.width)×\(first.height), want \(expectedW)×\(expectedH); retrying once")
+        guard let second = CGWindowListCreateImage(quartz, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]) else { return first }
+        let best = second.width * second.height >= first.width * first.height ? second : first
+        log.warning("region OCR freeze retry result: \(best.width)×\(best.height)")
+        return best
     }
 }
 
