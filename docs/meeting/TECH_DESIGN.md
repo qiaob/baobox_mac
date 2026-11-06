@@ -85,7 +85,7 @@
 - `MeetingCalendar`：`EKEventStore`，macOS 14 `requestFullAccessToEvents`（首次在设置里打开日历时申请）；`project.yml` 加 `NSCalendarsFullAccessUsageDescription` 与 entitlement `com.apple.security.personal-information.calendars`（Hardened Runtime 下缺 entitlement 会直接拒）。监听 `.EKEventStoreChanged` + 60 秒刷新；缓存未来 24 小时事件（菜单构建零 IO）。
 - `MeetingLinkParser`（纯函数，可单测）：从 URL / 地点 / 备注里找 Zoom（`zoom.us/j/`、`zoommtg://`）、腾讯会议（`meeting.tencent.com/dm/`、`wemeet://`）、钉钉（`dingtalk.com/…/meeting`、`dingtalk://`）、Google Meet（`meet.google.com/`）、Teams（`teams.microsoft.com/l/meetup-join`）、飞书（`vc.feishu.cn/j/`、`meetings.feishu.cn`）、Webex（`webex.com/`）。
 - `MeetingReminder`：每 30 秒看下一场；到提前量发常驻气泡（同一事件只提醒一次）；暂停（1 小时 / 今天 / 直到明天）。
-- `MeetingDetector`：每 5 秒：会议 App 在运行（bundle id 表：`us.zoom.xos`、`com.tencent.meeting`、`com.alibaba.DingTalkMac`、`com.microsoft.teams2`、`com.microsoft.teams`、`com.electron.lark`、`com.bytedance.feishu`、`com.cisco.webexmeetingsapp`、`com.apple.FaceTime`、`com.tencent.xinWeChat`、`com.tinyspeck.slackmacgap`）且 `NotifyDND.microphoneInUse` 且 `!AudioCaptureCoordinator.isBaoboxUsingMicrophone`，持续 ≥ 10 秒 → 问一次（同 App 同一段占用不重复问）；日历事件已开始且带链接、没在记录 → 问一次。
+- `MeetingDetector`：每 5 秒：每个会议 App（bundle id 表见 `MeetingDetectionApps`）单独判断是否正在开会 —— 它开会时才起的进程开着（`meetingProcesses`，如钉钉的 Tblive），或 `MeetingMicrophoneProbe` 按进程查出它在用麦克风；满足持续时间就问一次（同一场不重复问）；日历事件已开始且带链接、没在记录 → 问一次。详见 §10「会议检测」。
 
 ## 6. 界面
 
@@ -134,9 +134,13 @@
 - **会前提醒**（`MeetingReminder`）：15 秒心跳（提前量 1 分钟时 30 秒太粗）；窗口 = 开始前提前量到开始后 2 分钟（刚从睡眠醒来也补上），再晚交给「已开始」检测。气泡是 **alert 级 sticky**：勿扰时非 alert 会被攒起来、补发时没有按钮，等勿扰结束会议早开始了 —— 与桌面宠物的设计一致（`docs/desktop-pet/INTERACTION.md`：会议提醒 = sticky）；不想被打扰就「暂停会议提醒」。正在记这一场（提前开始、自动绑上了）不提醒；记录别的会议时主按钮换成 [加入会议]（不另开记录）。「上次有 N 项未完成」= 该系列此前会议的全部未完成行动项（与简报一致）。
 - **问过的记账**（`MeetingPromptBook`，UserDefaults `meeting.prompted` / `meeting.ignoredEvents`，过期 = 事件结束后一天）：会前提醒与「已开始」检测共用（同一场只问一次，重启后也不再问）；点 [忽略] = 这一场不再问、不自动开始，进行期间 App 检测也不问。自动开始另记一笔（提醒过的那场照样可以自动开始，但只自动开始一次）。
 - **暂停会议提醒**：1 小时 / 今天（到今天 24 点）/ 直到明天（到明天 24 点，后天恢复；菜单项 tooltip 写明）。暂停同时管会前提醒、检测的询问与自动开始；暂停中菜单换成「恢复会议提醒（已暂停到 …）」。存 `meeting.reminder.pausedUntil`。
-- **会议检测**（`MeetingDetector` 每 5 秒，顺手 `refreshMicrophoneState()`）：
+- **会议检测**（`MeetingDetector` 每 5 秒）：
   - 规则 1 只在开始后 15 分钟内问（醒来时已开会半小时就不问了，交给规则 2）。
-  - 规则 2 的状态机（纯函数 `MeetingDetectionMachine`）：麦克风被占用（且有会议 App 在跑）连续 10 秒才问，中间断一下重新计；空闲 30 秒以上这段占用才算结束（会议软件换设备时会短暂松开）；问的时候在跑的会议 App 都算问过（Slack、微信常驻，不然会接着问它们），中途才打开的 App 自己满 10 秒后可以问；Baobox 自己在用麦克风（会议、自由听译、自检）或在录屏时这段算问过 —— 刚结束记录、会议软件还开着麦克风时不会马上又来问。
+  - 规则 2 的信号（纯函数 `MeetingDetectionApps.signals`），每个会议 App 单独算：
+    - **会议进程**：会议 App 开会时才起的进程开着（`meetingProcesses`：钉钉的 `Tblive.app`、`DingMeeting.app`，按 `NSWorkspace.runningApplications` 的 bundle id）—— 静音入会也算。
+    - **麦克风**：`MeetingMicrophoneProbe`（后台读，下一次采样用）按进程查谁在录音 —— macOS 14 的 CoreAudio 进程对象（`kAudioHardwarePropertyProcessObjectList` + `kAudioProcessPropertyIsRunningInput`，任何输入设备都算），PID → `proc_pidpath` → 所在最外层 `.app`（辅助进程归宿主 App）→ bundle id；不含 Baobox 自己。系统目录里的进程（WebKit 的 GPU 进程替网页录音、FaceTime 的 `avconferenced`）说不清是谁的，只算到前台的会议 App；系统不支持按进程查时退回「默认输入设备在用」，同样只算前台。没有会议 App 在跑时不读 CoreAudio。
+    - 2026-11-06 真机：钉钉开会起 Tblive，入会后麦克风只用了 6 秒就松开（静音），旧规则「会议 App 在跑 + 默认麦克风被占用满 10 秒」问不到；Slack、微信常驻时浏览器开会又会算到它们头上 —— 所以改成按 App、按进程。
+  - 规则 2 的状态机（纯函数 `MeetingDetectionMachine`），每个 App 一条记录（一场会）：会议进程连续 3 秒、专门开会的 App 用麦克风连续 5 秒、聊天 App 连续 10 秒（语音消息、试麦不算）才问；信号断开不超过 15 秒（会议进程）/ 3 分钟（麦克风：静音时有的软件会松开）还算同一场，只问一次；一次只弹一个，同时在开的算问过，之后才开的照样问。Baobox 在记录会议时正在开的都算问过（结束记录后同一场不再来问）；在用麦克风做别的（听写、字幕、自检）或在录屏时先不问，结束后再问。
   - 候选排序：前台那个 → 专门开会的（Zoom、腾讯会议、Teams、Webex、FaceTime）→ 常驻聊天 App（钉钉、飞书、微信、Slack）。忽略名单存 bundle id → 显示名（`meeting.detect.ignored`），设置里可移除。「自动检测会议」默认开（只问不自己开始）。
   - 询问也是 alert 级：会议软件全屏时勿扰是开着的。
 - **自动开始**（`meeting.autoStart`，默认关，不受「自动检测」开关影响）：规则 1 命中（带链接的日历会议开始 15 分钟内）或规则 2 命中且有进行中的日历会议 → 不问，直接开始线上会议记录（绑这场），先 toast 一句。第一次用照样先弹合规说明。

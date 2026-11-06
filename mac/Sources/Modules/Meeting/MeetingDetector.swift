@@ -6,11 +6,12 @@ private let detectorLog = Logger(subsystem: "com.baobox.app", category: "meeting
 /// 会议检测（docs/meeting/REQUIREMENTS.md §2、TECH_DESIGN §5）：每 5 秒采样一次，满足任一条件就问要不要记录。
 ///
 /// 1. 日历事件已开始（15 分钟内）、带会议链接、还没在记录 → 气泡 [加入并记录][开始记录][忽略]。会前提醒问过的那场不再问。
-/// 2. 会议 App 在运行 + 麦克风被占用 ≥ 10 秒 + 不是 Baobox 自己在用 → 气泡 [开始记录][忽略][不再检测此 App]。
-///    同一段占用只问一次（`MeetingDetectionMachine`）；正在进行的日历会议被「忽略」过就不问。
+/// 2. 会议 App 正在开会 → 气泡 [开始记录][忽略][不再检测此 App]。「正在开会」= 它开会时才起的进程开着（钉钉的 Tblive，
+///    静音也算），或按进程查出来是它在用麦克风（`MeetingMicrophoneProbe`）；每个 App 一场只问一次（`MeetingDetectionMachine`）；
+///    正在进行的日历会议被「忽略」过就不问。
 ///
 /// 「命中日历会议时自动开始记录」（默认关）开着时，上面两种碰到日历会议都不问、直接开始（绑这场），并说一声。
-/// 麦克风占用读 `NotifyDND.shared.microphoneInUse`（后台刷新的缓存，每次采样顺手刷新一次）。询问都是 alert 级：
+/// 麦克风按进程查要读 CoreAudio，放到后台，每次采样用上一次读到的结果（晚 5 秒无所谓）。询问都是 alert 级：
 /// 会议软件全屏时勿扰是开着的，攒起来补发就没有按钮了。
 @MainActor
 final class MeetingDetector {
@@ -20,6 +21,9 @@ final class MeetingDetector {
     private var machine = MeetingDetectionMachine()
     private var timer: Timer?
     private var started = false
+    /// 上一次在后台读到的「谁在用麦克风」。
+    private var microphoneUsage = MeetingMicrophoneUsage()
+    private var microphoneRefreshing = false
 
     func start() {
         guard !started else { return }
@@ -37,13 +41,26 @@ final class MeetingDetector {
     }
 
     private func tick() {
-        let dnd = NotifyDND.shared
-        // 刷新缓存（后台读 CoreAudio）；这一次用的是上一次读到的值，晚 5 秒无所谓（要持续 10 秒才问）。
-        dnd.refreshMicrophoneState()
         let now = Date()
         let paused = MeetingReminder.shared.isPaused(at: now)
         checkCalendar(at: now, paused: paused)
-        checkApps(at: now, paused: paused, microphoneInUse: dnd.microphoneInUse)
+        checkApps(at: now, paused: paused)
+    }
+
+    /// 后台读一次谁在用麦克风，结果回主线程缓存（下一次采样用）。
+    private func refreshMicrophoneUsage() {
+        guard !microphoneRefreshing else { return }
+        microphoneRefreshing = true
+        DispatchQueue.global(qos: .utility).async {
+            let usage = MeetingMicrophoneProbe.sample()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let detector = MeetingDetector.shared
+                    detector.microphoneUsage = usage
+                    detector.microphoneRefreshing = false
+                }
+            }
+        }
     }
 
     // MARK: - 规则 1：日历事件已开始
@@ -96,20 +113,31 @@ final class MeetingDetector {
 
     // MARK: - 规则 2：会议 App + 麦克风
 
-    private func checkApps(at now: Date, paused: Bool, microphoneInUse: Bool) {
+    private func checkApps(at now: Date, paused: Bool) {
         let session = MeetingSessionController.shared
         let workspace = NSWorkspace.shared
-        let ignored = Set(MeetingSettings.ignoredApps.keys)
-        let running = workspace.runningApplications.compactMap(\.bundleIdentifier)
-        let candidates = MeetingDetectionApps.candidates(running: running,
-                                                         frontmost: workspace.frontmostApplication?.bundleIdentifier,
-                                                         ignored: ignored)
-        // Baobox 自己在用麦克风（会议记录、自由听译、听写、设备自检）或在录屏：分不清是谁在用，这一段算问过。
-        let capturing = AudioCaptureCoordinator.shared.isBaoboxUsingMicrophone || session.isActive
-            || NotifyDND.shared.hasToken("recording")
+        let running = workspace.runningApplications
+        let runningIDs = running.compactMap(\.bundleIdentifier)
+        let frontmost = workspace.frontmostApplication?.bundleIdentifier
         let enabled = MeetingSettings.detectionEnabled || MeetingSettings.autoStart
-        guard let bundleID = machine.step(now: now, micBusy: microphoneInUse && enabled, baoboxCapturing: capturing,
-                                          candidates: candidates) else { return }
+        var signals: [String: MeetingSignal] = [:]
+        if enabled {
+            // 没有会议 App 在跑就不去读 CoreAudio。
+            if runningIDs.contains(where: MeetingDetectionApps.isMeetingApp) {
+                refreshMicrophoneUsage()
+            } else {
+                microphoneUsage = MeetingMicrophoneUsage()
+            }
+            signals = MeetingDetectionApps.signals(runningBundleIDs: runningIDs,
+                                                   microphoneApps: microphoneUsage.apps,
+                                                   unattributedMicrophone: microphoneUsage.unattributed,
+                                                   frontmost: frontmost,
+                                                   ignored: Set(MeetingSettings.ignoredApps.keys))
+        }
+        // Baobox 在记录会议：正在开的会算问过；在用麦克风做别的（听写、字幕、自检）或在录屏：先不问，结束后再问。
+        let holdOff = AudioCaptureCoordinator.shared.current != nil || NotifyDND.shared.hasToken("recording")
+        guard let bundleID = machine.step(now: now, signals: signals, frontmost: frontmost,
+                                          recordingMeeting: session.isActive, holdOff: holdOff) else { return }
         // 暂停期间不问（这一段占用也就算问过了）。
         guard !paused else { return }
         let calendarEvent = MeetingCalendar.shared.bindingCandidate(at: now)
@@ -125,9 +153,7 @@ final class MeetingDetector {
             }
         }
         guard MeetingSettings.detectionEnabled else { return }
-        let name = running.contains(bundleID)
-            ? workspace.runningApplications.first(where: { $0.bundleIdentifier == bundleID })?.localizedName
-            : nil
+        let name = running.first(where: { $0.bundleIdentifier == bundleID })?.localizedName
         askApp(bundleID: bundleID, name: name ?? bundleID, event: calendarEvent)
     }
 

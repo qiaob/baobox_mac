@@ -1,14 +1,21 @@
 import Foundation
 
-// 会议检测的纯逻辑（docs/meeting/TECH_DESIGN.md §5，规则 2）：会议 App 在运行 + 麦克风被别人占用 ≥ 10 秒 → 问一次。
-// 只依赖 Foundation，可脱离 App 单独编译测试；采样（运行中的 App、麦克风占用）与发气泡在 MeetingDetector.swift。
+// 会议检测的纯逻辑（docs/meeting/TECH_DESIGN.md §5，规则 2）：只依赖 Foundation，可脱离 App 单独编译测试；
+// 采样（运行中的进程、谁在用麦克风）在 MeetingMicrophoneUsage.swift / MeetingDetector.swift，发气泡在 MeetingDetector.swift。
 //
-// 麦克风占用只知道「默认输入设备在被用」，不知道是谁在用；所以「同一段占用只问一次」：问的时候在跑的会议 App 都算问过，
-// 麦克风空下来 30 秒以上才算这段占用结束。Baobox 自己在录（会议、自由听译、自检）的那段也算问过 ——
-// 刚结束记录、会议软件还开着麦克风时不会马上又来问。
+// 每个会议 App 单独判断「是不是正在开会」，信号两种：
+// - 会议进程：会议 App 开会时才起的进程开着（如钉钉的 Tblive）—— 入会就静音也算，看到 3 秒就问；
+// - 麦克风：按进程查出来是这个 App（含它包里的辅助进程）在录音 —— 专门开会的 App 连续 5 秒、聊天 App 连续 10 秒才问
+//   （微信语音消息、Slack 试麦这类短占用不算）。说不清是谁在录（WebKit 网页通话、系统不支持按进程查）时只算到前台的会议 App。
+// 同一场只问一次（同时有几个 App 在开会也只弹一个）：信号断开不超过一段时间还算同一场（会议进程 15 秒；麦克风 3 分钟 —— 有的软件静音时会松开麦克风）。
+// Baobox 自己在记录会议时，正在开的会都算问过（结束记录后同一场不再来问）；Baobox 在用麦克风做别的（听写、字幕、自检）
+// 或在录屏时先不问，结束后再问。
+//
+// 2026-11-06 真机：钉钉开会起的是包里的 Tblive.app，入会后麦克风只用了 6 秒就松开（静音），
+// 原来「会议 App 在跑 + 默认麦克风被占用满 10 秒」的规则问不到；而 Slack、微信常驻时，浏览器开会又会被算到它们头上。
 
 enum MeetingDetectionApps {
-    /// 专门开会的 App：麦克风被占用时多半就是它在用。
+    /// 专门开会的 App：麦克风被它用着多半就是在开会。
     static let dedicated = [
         "us.zoom.xos",
         "com.tencent.meeting",
@@ -27,6 +34,11 @@ enum MeetingDetectionApps {
         "com.tencent.xinWeChat",
         "com.tinyspeck.slackmacgap",
     ]
+    /// 会议 App 开会时才起的进程（bundle id）→ 所属 App。它开着就是在开会，静音也算。
+    static let meetingProcesses: [String: String] = [
+        "5ZSL2CJU2T.com.dingtalk.mac.tblive": "com.alibaba.DingTalkMac",
+        "5ZSL2CJU2T.com.dingtalk.meeting": "com.alibaba.DingTalkMac",
+    ]
 
     static var all: [String] { dedicated + chat }
 
@@ -34,77 +46,143 @@ enum MeetingDetectionApps {
         all.contains(bundleID)
     }
 
-    /// 在跑的会议 App（去掉忽略名单里的），按「先问谁」排：前台那个、专门开会的、聊天 App。
-    static func candidates(running: [String], frontmost: String?, ignored: Set<String>) -> [String] {
-        let present = Set(running).subtracting(ignored)
+    static func isDedicated(_ bundleID: String) -> Bool {
+        dedicated.contains(bundleID)
+    }
+
+    /// 按「先问谁」排（只留会议 App）：前台那个、专门开会的、聊天 App。
+    static func ordered(_ apps: Set<String>, frontmost: String?) -> [String] {
         var ordered: [String] = []
-        if let frontmost, present.contains(frontmost), isMeetingApp(frontmost) {
+        if let frontmost, apps.contains(frontmost), isMeetingApp(frontmost) {
             ordered.append(frontmost)
         }
-        for bundleID in all where present.contains(bundleID) && !ordered.contains(bundleID) {
+        for bundleID in all where apps.contains(bundleID) && !ordered.contains(bundleID) {
             ordered.append(bundleID)
         }
         return ordered
     }
+
+    /// 进程可执行文件所在的最外层 .app：辅助进程算进宿主 App
+    /// （…/DingTalk.app/Contents/Frameworks/Tblive.app/Contents/MacOS/Tblive → …/DingTalk.app）。
+    /// 系统目录里的（WebKit 的 GPU 进程等，说不清是替谁录的）返回 nil。
+    static func hostAppPath(forExecutable path: String) -> String? {
+        guard !path.hasPrefix("/System/"), !path.hasPrefix("/usr/") else { return nil }
+        guard let range = path.range(of: ".app/") else { return nil }
+        return String(path[..<range.lowerBound]) + ".app"
+    }
+
+    /// 这一次采样里各会议 App 的信号（已去掉忽略名单）。
+    /// - Parameters:
+    ///   - runningBundleIDs: 在跑的进程的 bundle id（找会议进程）。
+    ///   - microphoneApps: 在录音的进程所属 App 的 bundle id（不含 Baobox 自己）。
+    ///   - unattributedMicrophone: 有进程在录音但说不清是谁（只算到前台的会议 App 头上）。
+    static func signals(runningBundleIDs: [String], microphoneApps: Set<String>, unattributedMicrophone: Bool,
+                        frontmost: String?, ignored: Set<String>) -> [String: MeetingSignal] {
+        var result: [String: MeetingSignal] = [:]
+        for bundleID in runningBundleIDs {
+            if let owner = meetingProcesses[bundleID] { result[owner] = .meetingProcess }
+        }
+        for app in microphoneApps where isMeetingApp(app) && result[app] == nil {
+            result[app] = .microphone
+        }
+        if unattributedMicrophone, let frontmost, isMeetingApp(frontmost), result[frontmost] == nil {
+            result[frontmost] = .microphone
+        }
+        for app in ignored {
+            result[app] = nil
+        }
+        return result
+    }
 }
 
-/// 检测的状态机：每次采样（5 秒）推一步，该问时返回问哪个 App。
-struct MeetingDetectionMachine: Equatable {
-    /// 麦克风被占用（且有会议 App 在跑）持续这么久才问。
-    static let sustain: TimeInterval = 10
-    /// 麦克风空了这么久，这一段占用才算结束（会议软件换设备、重开音频时会短暂松开）。
-    static let occupancyGap: TimeInterval = 30
+/// 一个会议 App「正在开会」的依据。
+enum MeetingSignal: Equatable {
+    /// 会议 App 开会时才起的进程开着。
+    case meetingProcess
+    /// 这个 App 在用麦克风。
+    case microphone
+}
 
-    /// 这一段连续占用从什么时候开始（中间断一下就重新计）。
-    private(set) var busySince: Date?
-    /// 最后一次看到被占用。
-    private(set) var lastBusy: Date?
-    /// 这一段占用里已经问过（或 Baobox 自己在录）时在跑的 App。
-    private(set) var covered: Set<String> = []
-    /// 这一段连续占用里，每个 App 是什么时候出现的（中途才打开的 App 要自己满 10 秒）。
-    private(set) var appSeen: [String: Date] = [:]
+/// 检测的状态机：每次采样（5 秒）推一步，该问时返回问哪个 App。每个 App 一条记录（一场会）。
+struct MeetingDetectionMachine: Equatable {
+    /// 会议进程开着这么久就问。
+    static let processSustain: TimeInterval = 3
+    /// 专门开会的 App 连续用麦克风这么久才问。
+    static let dedicatedMicrophoneSustain: TimeInterval = 5
+    /// 聊天 App 连续用麦克风这么久才问（语音消息、试麦不算）。
+    static let chatMicrophoneSustain: TimeInterval = 10
+    /// 会议进程退出这么久，这一场才算结束（下一场接着开也能问到）。
+    static let processGap: TimeInterval = 15
+    /// 麦克风松开这么久，这一场才算结束（静音时有的软件会松开麦克风，解除静音不该再问一遍）。
+    static let microphoneGap: TimeInterval = 180
+
+    struct Track: Equatable {
+        /// 这一次连续出现信号从什么时候开始；最近一次采样没有信号为 nil。
+        var runSince: Date?
+        /// 最后一次看到信号。
+        var lastSeen: Date
+        /// 最后一次看到的信号。
+        var signal: MeetingSignal
+        /// 这一场问过了（或 Baobox 记录过）。
+        var asked: Bool
+    }
+
+    /// 正在开（或刚结束、还在宽限期里）的会，按 App。
+    private(set) var tracks: [String: Track] = [:]
 
     init() {}
 
+    static func sustain(_ signal: MeetingSignal, app: String) -> TimeInterval {
+        switch signal {
+        case .meetingProcess: return processSustain
+        case .microphone: return MeetingDetectionApps.isDedicated(app) ? dedicatedMicrophoneSustain : chatMicrophoneSustain
+        }
+    }
+
+    static func gap(_ signal: MeetingSignal) -> TimeInterval {
+        switch signal {
+        case .meetingProcess: return processGap
+        case .microphone: return microphoneGap
+        }
+    }
+
     /// - Parameters:
-    ///   - micBusy: 默认输入设备正被使用。
-    ///   - baoboxCapturing: Baobox 自己在用麦克风 / 在记录会议（这时分不清是谁在用，不问；这段占用算问过）。
-    ///   - candidates: 在跑的会议 App（已去掉忽略名单），按优先级排。
+    ///   - signals: 这次采样里各会议 App 的信号（`MeetingDetectionApps.signals`）。
+    ///   - frontmost: 前台 App（先问它）。
+    ///   - recordingMeeting: Baobox 正在记录会议：正在开的会都算问过，不问。
+    ///   - holdOff: Baobox 在用麦克风做别的（听写、字幕、自检）或在录屏：先不问，之后再问。
     /// - Returns: 该问的 App（bundle id）；不问为 nil。
-    mutating func step(now: Date, micBusy: Bool, baoboxCapturing: Bool, candidates: [String]) -> String? {
-        if baoboxCapturing {
-            lastBusy = now
-            busySince = nil
-            appSeen = [:]
-            covered.formUnion(candidates)
-            return nil
+    mutating func step(now: Date, signals: [String: MeetingSignal], frontmost: String?,
+                       recordingMeeting: Bool, holdOff: Bool) -> String? {
+        for (app, track) in tracks where signals[app] == nil {
+            var track = track
+            track.runSince = nil
+            tracks[app] = track
         }
-        guard micBusy, !candidates.isEmpty else {
-            busySince = nil
-            appSeen = [:]
-            if let last = lastBusy, now.timeIntervalSince(last) >= Self.occupancyGap {
-                lastBusy = nil
-                covered = []
+        for (app, signal) in signals {
+            if var track = tracks[app], now.timeIntervalSince(track.lastSeen) < Self.gap(track.signal) {
+                if track.runSince == nil { track.runSince = now }
+                track.lastSeen = now
+                track.signal = signal
+                tracks[app] = track
+            } else {
+                tracks[app] = Track(runSince: now, lastSeen: now, signal: signal, asked: false)
             }
+        }
+        tracks = tracks.filter { now.timeIntervalSince($0.value.lastSeen) < Self.gap($0.value.signal) }
+
+        if recordingMeeting {
+            for app in tracks.keys { tracks[app]?.asked = true }
             return nil
         }
-        if let last = lastBusy, now.timeIntervalSince(last) >= Self.occupancyGap {
-            // 上一段占用早就结束了（采样中断过，比如睡眠）：重新算。
-            covered = []
+        guard !holdOff else { return nil }
+        for app in MeetingDetectionApps.ordered(Set(signals.keys), frontmost: frontmost) {
+            guard let track = tracks[app], !track.asked, let since = track.runSince,
+                  now.timeIntervalSince(since) >= Self.sustain(track.signal, app: app) else { continue }
+            // 一次只问一个：这会儿同时在开的也算问过（不接着弹第二个气泡）；之后才开的会照样问。
+            for active in signals.keys { tracks[active]?.asked = true }
+            return app
         }
-        let since = busySince ?? now
-        busySince = since
-        lastBusy = now
-        for app in candidates where appSeen[app] == nil {
-            appSeen[app] = now
-        }
-        let eligible = candidates.first { app in
-            guard !covered.contains(app) else { return false }
-            let start = max(since, appSeen[app] ?? now)
-            return now.timeIntervalSince(start) >= Self.sustain
-        }
-        guard let pick = eligible else { return nil }
-        covered.formUnion(candidates)
-        return pick
+        return nil
     }
 }

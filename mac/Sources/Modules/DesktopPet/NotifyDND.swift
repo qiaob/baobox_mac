@@ -66,7 +66,9 @@ final class NotifyDND {
         }
     }
 
-    private nonisolated static func defaultInputIsRunning() -> Bool {
+    /// 默认输入设备正被使用（不管是谁在用）。会调 CoreAudio HAL，不要在主线程调。
+    /// 会议检测在系统不支持按进程查麦克风时也用它兜底（MeetingMicrophoneProbe）。
+    nonisolated static func defaultInputIsRunning() -> Bool {
         var deviceID = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
