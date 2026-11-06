@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ScreenDrawTool())
         registry.register(ClipboardTool())
         registry.register(CaffeinateTool())
+        registry.register(FocusHealthTool())
         registry.register(WindowManagerTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())

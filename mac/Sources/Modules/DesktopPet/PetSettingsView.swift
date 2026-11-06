@@ -9,6 +9,7 @@ struct PetSettingsView: View {
     @AppStorage("notify.source.claudecode") private var sourceClaude = true
     @AppStorage("notify.source.codex") private var sourceCodex = true
     @AppStorage("notify.source.livetranslate") private var sourceLive = true
+    @AppStorage("notify.source.focus") private var sourceFocus = true
     @ObservedObject private var pet = PetController.shared
     @ObservedObject private var store = PetPackStore.shared
 
@@ -75,6 +76,7 @@ struct PetSettingsView: View {
                 Toggle("pet.settings.sourceClaude", isOn: $sourceClaude)
                 Toggle("pet.settings.sourceCodex", isOn: $sourceCodex)
                 Toggle("pet.settings.sourceLive", isOn: $sourceLive)
+                Toggle("pet.settings.sourceFocus", isOn: $sourceFocus)
             }
         }
         .formStyle(.grouped)
