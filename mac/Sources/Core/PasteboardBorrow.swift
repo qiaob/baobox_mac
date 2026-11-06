@@ -1,10 +1,12 @@
 import AppKit
 
-/// 借用系统剪贴板取一次文字：让前台 App 把选区拷进剪贴板 → 读出 → 立即还原原内容。
+/// 借用系统剪贴板：取一次文字（让前台 App 把选区拷进剪贴板 → 读出 → 立即还原原内容），
+/// 或粘一次文字（写入 → ⌘V → 还原，见 `paste`）。
 ///
 /// 划词翻译在辅助功能读不到选区时用（很多终端、部分 Electron / 自绘界面的 App），
-/// 见 docs/selection-translate/DESIGN.md §2。借用期间以及还原本身产生的剪贴板变更都不是
-/// 用户的复制：剪贴板历史据 `isActive` / `settledChangeCount` 跳过，不入库。只在主线程使用。
+/// 见 docs/selection-translate/DESIGN.md §2；语音听写写不进输入框时借它粘贴，见 docs/dictation/TECH_DESIGN.md §5。
+/// 借用期间以及还原本身产生的剪贴板变更都不是用户的复制：剪贴板历史据 `isActive` / `settledChangeCount`
+/// 跳过，不入库。只在主线程使用。
 @MainActor
 enum PasteboardBorrow {
     enum Result {
@@ -61,6 +63,48 @@ enum PasteboardBorrow {
         }.value
     }
 
+    /// 借剪贴板把一段文字粘进前台 App（语音听写插入的第二档，docs/dictation/TECH_DESIGN.md §5）：
+    /// 快照全部剪贴板条目 → 写入文字 → 等物理修饰键松开（最多 0.5 秒）→ 合成 ⌘V → 0.35 秒后还原快照。
+    /// 整个过程 `isActive`：写入与还原两次变更剪贴板历史都跳过，不入库。
+    /// 已在借用中（划词取词、上一次粘贴还没还原）返回 false，什么也不做。需要辅助功能权限（合成按键）。
+    static func paste(_ text: String) async -> Bool {
+        guard !isActive else { return false }
+        NotificationCenter.default.post(name: willBeginNotification, object: nil)
+        isActive = true
+        let pasteboard = NSPasteboard.general
+        let snapshot = snapshotItems(of: pasteboard)
+        // 同 `copy`：放进独立任务，调用方被取消也要等到还原完。
+        return await Task { @MainActor () -> Bool in
+            defer { finish() }
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            // 告诉别家剪贴板管理器「临时内容，别存」（nspasteboard.org 约定）。
+            pasteboard.setData(Data(), forType: transientType)
+            // 快捷键刚松开时 ⌘⌥⇧ 可能还按着，叠加到合成的 ⌘V 上就成了别的命令（同 PasteService）。
+            let deadline = Date().addingTimeInterval(0.5)
+            let held: NSEvent.ModifierFlags = [.command, .option, .shift, .control]
+            while !NSEvent.modifierFlags.intersection(held).isEmpty, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            postCommandV()
+            // 目标 App 读完剪贴板再还原，太早还原会粘出旧内容。
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            restore(snapshot, to: pasteboard)
+            return true
+        }.value
+    }
+
+    private static func postCommandV() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        // 0x09 = kVK_ANSI_V（Carbon 虚拟键码，避免为一个常量引整个 Carbon 头）。
+        let down = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+        down?.flags = .maskCommand
+        up?.flags = .maskCommand
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+
     private static func finish() {
         isActive = false
         settledChangeCount = NSPasteboard.general.changeCount
@@ -79,6 +123,7 @@ enum PasteboardBorrow {
     }
 
     private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
     private static let legacyFilenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
     private static let imageTypes: Set<NSPasteboard.PasteboardType> = [
         .tiff, .png, .pdf, NSPasteboard.PasteboardType("public.jpeg"),
