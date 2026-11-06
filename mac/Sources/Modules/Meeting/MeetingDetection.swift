@@ -10,7 +10,8 @@ import Foundation
 //   这一轮录音里认出过一次就一直算，见 `MeetingWebLatch`）
 //   （微信语音消息、Slack 试麦这类短占用不算）。说不清是谁在录（WebKit 网页通话、系统不支持按进程查）时只算到前台的会议 App。
 // 麦克风一被占用就采样、在用期间每秒采样（MeetingDetector，借鉴 Notion），所以进会两三秒就能问到。
-// 同一场只问一次（同时有几个 App 在开会也只弹一个）：信号断开不超过一段时间还算同一场（会议进程 15 秒；麦克风 3 分钟 —— 有的软件静音时会松开麦克风）。
+// 同一场只问一次（同时有几个 App 在开会也只弹一个）：信号断开不超过一段时间还算同一场 —— 会议进程 10 秒；
+// 专门开会的 App / 会议网站松开麦克风 10 秒（它们静音时也开着麦克风，松开就是退会了）；聊天 App 3 分钟（钉钉等静音时会松开麦克风）。
 // Baobox 自己在记录会议时，正在开的会都算问过（结束记录后同一场不再来问）；Baobox 在用麦克风做别的（听写、字幕、自检）
 // 或在录屏时先不问，结束后再问。
 //
@@ -207,9 +208,12 @@ struct MeetingDetectionMachine: Equatable {
     static let dedicatedMicrophoneSustain: TimeInterval = 2
     /// 聊天 App 连续用麦克风这么久才问（语音消息、试麦不算）。
     static let chatMicrophoneSustain: TimeInterval = 10
-    /// 会议进程退出这么久，这一场才算结束（下一场接着开也能问到）。
-    static let processGap: TimeInterval = 15
-    /// 麦克风松开这么久，这一场才算结束（静音时有的软件会松开麦克风，解除静音不该再问一遍）。
+    /// 会议进程退出这么久，这一场才算结束（下一场接着开也能问到）。比平时的采样间隔（5 秒）长就行。
+    static let processGap: TimeInterval = 10
+    /// 专门开会的 App（含会议网站）松开麦克风这么久，这一场就算结束：它们静音时也一直开着麦克风（要提示「你在静音中说话」），
+    /// 松开就是退会了 —— 2026-11-06 真机：Zoom 退会 13 秒后进下一场，按原来的 3 分钟算成同一场，没问。
+    static let dedicatedMicrophoneGap: TimeInterval = 10
+    /// 聊天 App 松开麦克风这么久，这一场才算结束（钉钉等静音时会松开麦克风，解除静音不该再问一遍）。
     static let microphoneGap: TimeInterval = 180
 
     struct Track: Equatable {
@@ -235,10 +239,10 @@ struct MeetingDetectionMachine: Equatable {
         }
     }
 
-    static func gap(_ signal: MeetingSignal) -> TimeInterval {
+    static func gap(_ signal: MeetingSignal, app: String) -> TimeInterval {
         switch signal {
         case .meetingProcess: return processGap
-        case .microphone: return microphoneGap
+        case .microphone: return MeetingDetectionApps.isDedicated(app) ? dedicatedMicrophoneGap : microphoneGap
         }
     }
 
@@ -256,7 +260,7 @@ struct MeetingDetectionMachine: Equatable {
             tracks[app] = track
         }
         for (app, signal) in signals {
-            if var track = tracks[app], now.timeIntervalSince(track.lastSeen) < Self.gap(track.signal) {
+            if var track = tracks[app], now.timeIntervalSince(track.lastSeen) < Self.gap(track.signal, app: app) {
                 if track.runSince == nil { track.runSince = now }
                 track.lastSeen = now
                 track.signal = signal
@@ -265,7 +269,7 @@ struct MeetingDetectionMachine: Equatable {
                 tracks[app] = Track(runSince: now, lastSeen: now, signal: signal, asked: false)
             }
         }
-        tracks = tracks.filter { now.timeIntervalSince($0.value.lastSeen) < Self.gap($0.value.signal) }
+        tracks = tracks.filter { now.timeIntervalSince($0.value.lastSeen) < Self.gap($0.value.signal, app: $0.key) }
 
         if recordingMeeting {
             // 这会儿正在开的（这次采样有信号的）算问过：录完同一场不再来问。早先一闪而过、录的时候没信号的不算 ——
