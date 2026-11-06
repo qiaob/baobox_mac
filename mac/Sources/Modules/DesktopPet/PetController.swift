@@ -49,6 +49,8 @@ final class PetController: ObservableObject, NotifyPresenting {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.contentView = stage
+        // 出场 / 退场时按洞线裁掉宠物（PetEntrance）要用图层遮罩。
+        stage.wantsLayer = true
         self.panel = panel
 
         bubble.anchorFrame = { [weak panel] in panel?.frame ?? .zero }
@@ -191,12 +193,38 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.endScript(at: restoreHome ? home : nil)
         if restoreHome, let home { panel?.setFrameOrigin(home) }
         applyFrame(PetEntrancePlan.Frame(origin: engine.origin, look: .idle, attentive: false))
+        portal.hide()
         panel?.ignoresMouseEvents = false
         updateClickThrough()
     }
 
+    /// 出场 / 退场的黑洞（排在宠物窗下面）。
+    private let portal = PetPortal()
+    /// 「被吞掉」的遮罩：只留洞线以上的宠物。
+    private let swallowMask = CALayer()
+
+    /// 洞多宽：大约是宠物身子的宽度（VRM 人又高又瘦，窗口放大了，洞按身子算）。
+    private var holeWidth: CGFloat {
+        guard shownModelID != nil else { return panelSide * 0.8 }
+        return panelSide * (modelView.isHumanoid ? 0.42 : 0.7)
+    }
+
     private func applyFrame(_ frame: PetEntrancePlan.Frame) {
         panel?.alphaValue = frame.alpha
+        portal.setOpen(frame.hole)
+        if let line = frame.swallowLine, let layer = stage.layer {
+            // 宠物窗左下角 = frame.origin：洞线在窗口里的高度 = line − origin.y。
+            let bounds = stage.bounds
+            let cut = min(max(line - frame.origin.y, 0), bounds.height)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            swallowMask.backgroundColor = NSColor.black.cgColor
+            swallowMask.frame = CGRect(x: 0, y: cut, width: bounds.width, height: bounds.height - cut)
+            if layer.mask !== swallowMask { layer.mask = swallowMask }
+            CATransaction.commit()
+        } else if stage.layer?.mask != nil {
+            stage.layer?.mask = nil
+        }
         if shownModelID != nil {
             // VRM 有自己的落地片段；毛绒 / 动物模型没有，靠形变压一下。
             modelView.presentationScale = modelView.isHumanoid ? CGSize(width: 1, height: 1) : frame.scale
@@ -208,6 +236,11 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 交给引擎逐帧执行；播完在下一轮主循环回调 completion（被新的出场 / 退场打断的不回调）。
     private func run(_ plan: PetEntrancePlan, as state: PetEngine.State, completion: @escaping () -> Void) {
         let start = Date()
+        if let hole = plan.hole, let panel {
+            portal.show(center: hole.center, width: hole.width, below: panel)
+        } else {
+            portal.hide()
+        }
         applyFrame(plan.sample(0))
         engine.runScript(as: state) { [weak self] now in
             let t = now.timeIntervalSince(start)
@@ -237,15 +270,15 @@ final class PetController: ObservableObject, NotifyPresenting {
         let home = choreographyHome ?? engine.origin
         let plan = reduceMotion
             ? PetEntrancePlan.fade(home: home, appearing: true)
-            : PetEntrancePlan.enter(home: home, side: panelSide,
-                                    screen: PetEntrancePlan.screenFrame(containing: home, side: panelSide),
+            : PetEntrancePlan.enter(home: home, side: panelSide, footInset: engine.footInset, holeWidth: holeWidth,
                                     greetClip: shownModelID != nil && modelView.hasEntranceClip(leaving: false))
         let first = plan.sample(0)
         engine.setOrigin(first.origin)
         panel.setFrameOrigin(first.origin)
-        applyFrame(first)
         panel.orderFrontRegardless()
+        applyFrame(first)
         if shownModelID != nil { modelView.setActive(true) }
+        // 黑洞要排在宠物窗下面：窗口显示出来之后再摆。
         run(plan, as: .entering) { [weak self] in
             guard let self else { return }
             self.endChoreography(restoreHome: true)
@@ -281,9 +314,8 @@ final class PetController: ObservableObject, NotifyPresenting {
         if reduceMotion {
             plan = PetEntrancePlan.fade(home: home, appearing: false)
         } else {
-            plan = PetEntrancePlan.leave(home: home, side: panelSide,
-                                         screen: PetEntrancePlan.screenFrame(containing: home, side: panelSide),
-                                         is3D: is3D, farewellClip: farewellClip, quick: quick)
+            plan = PetEntrancePlan.leave(home: home, side: panelSide, footInset: engine.footInset,
+                                         holeWidth: holeWidth, farewellClip: farewellClip, quick: quick)
             if !quick, farewellClip { modelView.performEntrance(leaving: true) }
         }
         run(plan, as: .leaving) { [weak self] in
