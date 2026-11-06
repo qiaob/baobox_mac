@@ -25,6 +25,9 @@ struct PetModelSpec {
     var stateVariants: [String: [String]] = [:]
     /// 待机多久做一次小动作（秒）。
     var fidgetInterval: ClosedRange<Double> = 8...16
+    /// 出场落地后 / 退场前播的一串片段（pet.json 的 enter / leave，#54）；空 = 用默认。
+    var enterClips: [String] = []
+    var leaveClips: [String] = []
 
     /// 结合模型里实际有的片段名，给出每个状态用哪段。
     func resolvedClips(available: [String]) -> [String: Clip] {
@@ -103,7 +106,12 @@ extension PetModelSpec {
     /// VRM 没写动作映射时用程序化动作的默认映射（docs/desktop-pet/VRM.md §4.2）。写了的照旧按 pet.json 来。
     /// 都是手臂离开身体、整个人动起来的大动作 —— 桌宠只有一两百像素高，手指、表情这种细节看不出来。
     func withVRMDefaults() -> PetModelSpec {
-        guard clips.isEmpty, fidgets.isEmpty, interactions.isEmpty else { return self }
+        guard clips.isEmpty, fidgets.isEmpty, interactions.isEmpty else {
+            var spec = self
+            if spec.enterClips.isEmpty { spec.enterClips = ["wave"] }
+            if spec.leaveClips.isEmpty { spec.leaveClips = ["bye"] }
+            return spec
+        }
         var spec = PetModelSpec(
             url: url,
             clips: [
@@ -126,6 +134,8 @@ extension PetModelSpec {
         )
         spec.stateVariants = ["happy": ["wave", "big_wave", "raise_hand", "banzai", "ta_da"]]
         spec.fidgetInterval = 5...10
+        spec.enterClips = enterClips.isEmpty ? ["wave"] : enterClips
+        spec.leaveClips = leaveClips.isEmpty ? ["bye"] : leaveClips
         return spec
     }
 }
@@ -194,6 +204,9 @@ final class PetModelView: SCNView {
     /// 状态 → 进入时随机挑的片段（见 PetModelSpec.stateVariants）。
     private var variants: [String: [GLTFClip]] = [:]
     private var fidgetInterval: ClosedRange<Double> = 8...16
+    /// 出场 / 退场片段（模型里实际有的；缺任何一段就整串不用，回退到跳一下）。
+    private var enterSequence: [GLTFClip] = []
+    private var leaveSequence: [GLTFClip] = []
     private var pendingSequence: [GLTFClip] = []
     private var lastState = "idle"
     /// 睡觉的片段播完后整个场景暂停（不再渲染），省电（设计 §7.2）。
@@ -323,9 +336,12 @@ final class PetModelView: SCNView {
         fidgets = []
         interactions = [:]
         variants = [:]
+        enterSequence = []
+        leaveSequence = []
         pendingSequence = []
         currentClip = nil
         yaw = .nan
+        presentationScale = CGSize(width: 1, height: 1)
         guard var spec = package?.model, let loaded else { return }
         if loaded.vrm != nil { spec = spec.withVRMDefaults() }
         model = loaded
@@ -334,6 +350,12 @@ final class PetModelView: SCNView {
         interactions = spec.resolvedInteractions(available: Array(loaded.clips.keys))
         variants = spec.stateVariants.mapValues { $0.compactMap { loaded.clips[$0] } }.filter { !$0.value.isEmpty }
         fidgetInterval = spec.fidgetInterval
+        func sequence(_ names: [String]) -> [GLTFClip] {
+            let found = names.compactMap { loaded.clips[$0] }
+            return found.count == names.count ? found : []
+        }
+        enterSequence = sequence(spec.enterClips)
+        leaveSequence = sequence(spec.leaveClips)
         // VRM 0.x 面朝 −Z，自动转过来（pet.json 不用写 yaw）。
         let facing: Double = loaded.vrm?.isVRM0 == true ? 180 : 0
         orientNode.simdEulerAngles = SIMD3(0, Float((spec.yawDegrees + facing) * .pi / 180), 0)
@@ -362,6 +384,28 @@ final class PetModelView: SCNView {
         let sequence = names.compactMap { model.clips[$0] }
         guard sequence.count == names.count else { return nil }
         return play(sequence: sequence)
+    }
+
+    /// 有没有出场 / 退场片段（编排据此决定要不要留时间给它）。
+    func hasEntranceClip(leaving: Bool) -> Bool {
+        !(leaving ? leaveSequence : enterSequence).isEmpty
+    }
+
+    /// 出场落地后打招呼 / 退场前道别（#54）：播 pet.json 的 enter / leave（VRM 默认招手 / 道别）。没有返回 nil。
+    @discardableResult
+    func performEntrance(leaving: Bool) -> TimeInterval? {
+        let sequence = leaving ? leaveSequence : enterSequence
+        guard !sequence.isEmpty else { return nil }
+        return play(sequence: sequence)
+    }
+
+    /// 出场 / 退场时的形变（以脚底为原点横竖缩放，落地压扁一下）。VRM 有自己的落地片段，不用它。
+    var presentationScale = CGSize(width: 1, height: 1) {
+        didSet {
+            guard presentationScale != oldValue else { return }
+            bounceNode.simdScale = SIMD3(Float(presentationScale.width), Float(presentationScale.height),
+                                         Float(presentationScale.width))
+        }
     }
 
     private func play(sequence: [GLTFClip]) -> TimeInterval? {
@@ -523,7 +567,7 @@ final class PetModelView: SCNView {
         switch pose.state {
         case .wander: target = pose.facingLeft ? -.pi / 2 : .pi / 2
         case .notify, .rest: target = 0
-        case .idle, .sleep, .dragged, .jump, .fall: target = pose.attentive ? 0 : (pose.facingLeft ? -0.45 : 0.45)
+        case .idle, .sleep, .dragged, .jump, .fall, .entering, .leaving: target = pose.attentive ? 0 : (pose.facingLeft ? -0.45 : 0.45)
         }
         // 在空中时脚下的影子藏起来（影子在宠物窗里，跟着窗口飞，留着反而像踩着它）。
         let airborne = pose.state == .jump || pose.state == .fall
@@ -558,6 +602,7 @@ final class PetModelView: SCNView {
         case .jump: return "jump"
         case .fall: return "fall"
         case .rest: return "rest"
+        case .entering, .leaving: return "idle"
         }
     }
 

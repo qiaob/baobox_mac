@@ -68,6 +68,7 @@ enum VRMMotion {
             Definition(name: "idle", duration: 4, plant: both, pose: idle),
             Definition(name: "walk", duration: walkCycle, pose: walk),
             Definition(name: "wave", duration: 2.6, plant: both, pose: wave),
+            Definition(name: "bye", duration: 0.55, plant: both, pose: bye),
             Definition(name: "sleep", duration: 1.8, plant: both) { t in
                 var p = blend(idle(t), dozing(body), ramp(t, 0, 1.6))
                 p.expressions["blink"] = Float(ramp(t, 0.8, 1.7))
@@ -343,6 +344,19 @@ enum VRMMotion {
         let shake = sin(2 * Double.pi * 2.4 * (t - 0.35)) * 20 * ramp(t, 0.35, 0.5) * (1 - ramp(t, duration - 0.6, duration - 0.35))
         p.arm(.right, elevation: lerp(-72, 28, e), forward: lerp(6, 18, e), elbow: 0)
         p.forearmUp(.right, (80 + shake) * e, forward: 12 * (1 - e))
+        p.rotations["head"] = qz(6 * e) * qy(-4 * e) * p.rotation("head")
+        p.expressions["happy"] = Float(e)
+        return p
+    }
+
+    /// 道别（退场前，#54）：右手很快举到头侧摆一下半就放下。退场一共不到 0.9 秒，挥手要在 0.55 秒里做完。
+    static func bye(_ t: Double) -> VRMPose {
+        let duration = 0.55
+        let e = envelope(t, duration, rise: 0.15, fall: 0.15)
+        var p = idle(t)
+        let shake = sin(2 * Double.pi * 3 * (t - 0.15)) * 22 * ramp(t, 0.12, 0.2)
+        p.arm(.right, elevation: lerp(-72, 26, e), forward: lerp(6, 18, e), elbow: 0)
+        p.forearmUp(.right, (78 + shake) * e, forward: 12 * (1 - e))
         p.rotations["head"] = qz(6 * e) * qy(-4 * e) * p.rotation("head")
         p.expressions["happy"] = Float(e)
         return p

@@ -32,6 +32,19 @@ final class PetEngine {
         case fall
         /// 趴在窗口顶边上休息。
         case rest
+        /// 出场 / 退场动画进行中（#54，docs/desktop-pet/ENTRANCE.md）：位置与外观由控制器给的脚本逐帧决定，
+        /// 不溜达、不睡、不跳窗口。渲染层看到的是脚本给的「外观状态」（跳 / 落 / 站 / 提醒），不会是这两个。
+        case entering, leaving
+    }
+
+    /// 出场 / 退场脚本的一帧。
+    struct ScriptFrame {
+        var origin: NSPoint
+        /// 这一帧渲染层按哪个状态画（jump / fall / idle / notify / wander）。
+        var look: State
+        var attentive: Bool
+        var bounce: CGFloat = 0
+        var facingLeft: Bool?
     }
 
     private(set) var state: State = .idle
@@ -99,6 +112,36 @@ final class PetEngine {
 
     private static let gravity: CGFloat = 2600
 
+    // MARK: 出场 / 退场脚本（#54）
+
+    /// 返回 nil = 脚本结束（之后不再调用）。
+    private var script: ((Date) -> ScriptFrame?)?
+    private var scriptState: State = .entering
+    /// 换脚本时递增：旧脚本在 tick 里返回 nil 时，不能把刚换上的新脚本清掉。
+    private var scriptGeneration = 0
+
+    var isScripted: Bool { script != nil }
+
+    /// 接管位置与外观，直到脚本返回 nil。正在跳 / 掉的打断（出场从屏幕外开始，不接着原来的抛物线）。
+    func runScript(as state: State, _ frame: @escaping (Date) -> ScriptFrame?) {
+        flight = nil
+        fallVelocity = nil
+        stateUntil = nil
+        script = frame
+        scriptState = state
+        scriptGeneration += 1
+        self.state = state
+    }
+
+    /// 脚本结束后宠物站在哪儿（退场完把位置放回原处，下次出场从这里开始、位置也照常记住）。
+    func endScript(at point: NSPoint?) {
+        script = nil
+        scriptGeneration += 1
+        if let point { origin = point }
+        if state == .entering || state == .leaving { state = .idle }
+        nextWanderAt = max(nextWanderAt, Date().addingTimeInterval(4))
+    }
+
     func start(at origin: NSPoint) {
         self.origin = origin
         settle(animated: false)
@@ -131,13 +174,20 @@ final class PetEngine {
 
     /// 活动范围改了（设置页）：重新找脚下的台面。
     func rangeChanged() {
-        if state == .dragged { return }
+        if state == .dragged || script != nil { return }
         settle(animated: true)
     }
 
     /// 收到通知时的提醒动作：从睡眠中醒来并跳一下（alert 跳得更高、更久）。
     /// 拖拽中 / 在空中不改状态；落地或松手后 tick 按 notifyUntil 补上提醒动作。
     func notify(level: PetNotification.Level) {
+        if script != nil {
+            // 出场 / 退场中：记下时间就好，落地后 tick 按 notifyUntil 补上提醒动作。
+            notifyStartedAt = Date()
+            notifyDuration = level == .alert ? 1.5 : 0.9
+            notifyUntil = Date().addingTimeInterval(notifyDuration)
+            return
+        }
         if state == .sleep || state == .rest { state = .idle }
         notifyStartedAt = Date()
         notifyDuration = level == .alert ? 1.5 : 0.9
@@ -193,6 +243,22 @@ final class PetEngine {
     private func tick() {
         let now = Date()
         let dt = 1.0 / 30.0
+
+        if let script {
+            let generation = scriptGeneration
+            if let frame = script(now) {
+                origin = frame.origin
+                state = scriptState
+                if let left = frame.facingLeft { walkDirection = left ? -1 : 1 }
+                if frame.look == .wander { pose.walkPhase += dt * 9 }
+                finishScriptFrame(frame, now: now)
+                return
+            }
+            // 脚本自己结束了（且期间没换成别的脚本）：回到正常状态机。
+            if generation == scriptGeneration { endScript(at: nil) }
+            // 脚本里换了新脚本（退场接出场）：下一拍由新脚本接手。
+            if self.script != nil { return }
+        }
 
         if state != .dragged {
             if advanceFlight(now: now, dt: dt) {
@@ -260,6 +326,18 @@ final class PetEngine {
         finishFrame(now: now)
     }
 
+    private func finishScriptFrame(_ frame: ScriptFrame, now: Date) {
+        pose.state = frame.look
+        pose.attentive = frame.attentive
+        pose.facingLeft = walkDirection < 0
+        pose.time = now.timeIntervalSinceReferenceDate
+        pose.lying = false
+        pose.bob = 0
+        pose.bounce = frame.bounce
+        updateBlink(now: now)
+        onPose?(pose, origin)
+    }
+
     private func finishFrame(now: Date) {
         pose.state = state
         pose.attentive = held || now < busyUntil
@@ -267,6 +345,17 @@ final class PetEngine {
         pose.time = now.timeIntervalSinceReferenceDate
         pose.lying = state == .sleep || state == .rest
         pose.bob = state == .idle ? CGFloat(sin(pose.time * 1.7)) * 1.4 : 0
+        updateBlink(now: now)
+        if state == .notify, let start = notifyStartedAt {
+            let p = now.timeIntervalSince(start) / max(notifyDuration, 0.01)
+            pose.bounce = p < 1 ? CGFloat(sin(min(p, 1) * .pi)) * 13 : 0
+        } else {
+            pose.bounce = 0
+        }
+        onPose?(pose, origin)
+    }
+
+    private func updateBlink(now: Date) {
         if state == .sleep {
             pose.eyesClosed = true
         } else if now < blinkStart {
@@ -277,13 +366,6 @@ final class PetEngine {
             pose.eyesClosed = false
             blinkStart = now.addingTimeInterval(Double.random(in: 2.2...4.5))
         }
-        if state == .notify, let start = notifyStartedAt {
-            let p = now.timeIntervalSince(start) / max(notifyDuration, 0.01)
-            pose.bounce = p < 1 ? CGFloat(sin(min(p, 1) * .pi)) * 13 : 0
-        } else {
-            pose.bounce = 0
-        }
-        onPose?(pose, origin)
     }
 
     // MARK: - 台面

@@ -4,6 +4,7 @@ import SwiftUI
 struct PetSettingsView: View {
     @AppStorage(PetSettings.enabledKey) private var enabled = true
     @AppStorage(PetSettings.roamKey) private var roam = true
+    @AppStorage(PetSettings.entranceKey) private var entrance = true
     @AppStorage(PetSettings.sizeKey) private var size = 1.0
     @AppStorage(PetSettings.rangeKey) private var range = PetRange.bottom.rawValue
     @AppStorage(PetSettings.soundKey) private var sound = false
@@ -28,6 +29,7 @@ struct PetSettingsView: View {
                         PetController.shared.applyVisibility()
                     }
                 Toggle("pet.settings.roam", isOn: $roam)
+                Toggle("pet.settings.entrance", isOn: $entrance)
                 Picker("pet.settings.range", selection: $range) {
                     Text("pet.range.bottom").tag(PetRange.bottom.rawValue)
                     Text("pet.range.windows").tag(PetRange.windows.rawValue)

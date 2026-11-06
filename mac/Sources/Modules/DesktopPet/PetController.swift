@@ -25,7 +25,10 @@ final class PetController: ObservableObject, NotifyPresenting {
     private(set) var isLent = false
     private var characterChangePending = false
 
-    var isReady: Bool { PetSettings.enabled && panel?.isVisible == true }
+    /// 换形象时退场已播完、新形象还没出场（VRM 要在后台读几秒）：这期间通知照样交给宠物，排队等它出场。
+    private var switchingCharacter = false
+
+    var isReady: Bool { PetSettings.enabled && (panel?.isVisible == true || switchingCharacter) }
 
     // MARK: - 生命周期
 
@@ -97,6 +100,11 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.ledges = { [weak self] in self?.windowWatcher.ledges ?? [] }
         configureRange()
         engine.start(at: origin)
+        // 3D 形象在后台读（VRM 要好几秒）：读好再出场，不先拿占位图跳一遍。期间的通知排队。
+        if PetSettings.enabled, loadingModelID != nil {
+            switchingCharacter = true
+            bubble.setSuspended(true)
+        }
         applyVisibility()
         startClickThroughTracking()
     }
@@ -132,12 +140,158 @@ final class PetController: ObservableObject, NotifyPresenting {
         }
     }
 
+    /// 退出 Baobox：宠物开着就先播一个短退场（只掉下去那段），最多等 0.5 秒，不拖慢退出 / 重启。
     func stop() {
-        saveOrigin(engine.origin)
-        engine.stop()
+        saveOrigin(choreographyHome ?? engine.origin)
         radial.close(animated: false)
         bubble.dismissAll()
+        if let panel, panel.isVisible, PetSettings.enabled, !isLent, !switchingCharacter {
+            var done = false
+            playExit(quick: true) { done = true }
+            let deadline = Date().addingTimeInterval(0.5)
+            // 退出流程里等不了事件循环下一轮：就地转几圈，让引擎的帧定时器和 3D 渲染跑起来。
+            while !done, Date() < deadline {
+                RunLoop.current.run(mode: .default, before: min(deadline, Date().addingTimeInterval(1.0 / 60)))
+            }
+        }
+        engine.stop()
         panel?.orderOut(nil)
+    }
+
+    // MARK: - 出场 / 退场（#54，docs/desktop-pet/ENTRANCE.md）
+
+    /// 正在播出场 / 退场：不接鼠标、不溜达、气泡排队、头顶挂件先摘下来。
+    private(set) var isChoreographing = false
+    /// 播之前宠物站的位置：退场播完放回这里（下次出场、记住的位置都用它）。
+    private var choreographyHome: NSPoint?
+
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// 该不该播动画：设置里开着、宠物没借给休息画面。
+    private var animatesEntrance: Bool { PetSettings.entranceAnimation && !isLent }
+
+    private func beginChoreography() {
+        guard let panel else { return }
+        if !isChoreographing {
+            choreographyHome = engine.origin
+        }
+        isChoreographing = true
+        radial.close(animated: false)
+        panel.ignoresMouseEvents = true
+        bubble.setSuspended(true)
+        updateAccessory()
+    }
+
+    /// 播完（或被打断不再播）：外观复原，位置放回 `home`，恢复鼠标、气泡与头顶挂件。
+    private func endChoreography(restoreHome: Bool) {
+        guard isChoreographing else { return }
+        isChoreographing = false
+        let home = choreographyHome
+        choreographyHome = nil
+        engine.endScript(at: restoreHome ? home : nil)
+        if restoreHome, let home { panel?.setFrameOrigin(home) }
+        applyFrame(PetEntrancePlan.Frame(origin: engine.origin, look: .idle, attentive: false))
+        panel?.ignoresMouseEvents = false
+        updateClickThrough()
+    }
+
+    private func applyFrame(_ frame: PetEntrancePlan.Frame) {
+        panel?.alphaValue = frame.alpha
+        if shownModelID != nil {
+            // VRM 有自己的落地片段；毛绒 / 动物模型没有，靠形变压一下。
+            modelView.presentationScale = modelView.isHumanoid ? CGSize(width: 1, height: 1) : frame.scale
+        } else {
+            petView.presentationScale = frame.scale
+        }
+    }
+
+    /// 交给引擎逐帧执行；播完在下一轮主循环回调 completion（被新的出场 / 退场打断的不回调）。
+    private func run(_ plan: PetEntrancePlan, as state: PetEngine.State, completion: @escaping () -> Void) {
+        let start = Date()
+        applyFrame(plan.sample(0))
+        engine.runScript(as: state) { [weak self] now in
+            let t = now.timeIntervalSince(start)
+            guard let self, t < plan.duration else {
+                DispatchQueue.main.async { MainActor.assumeIsolated { completion() } }
+                return nil
+            }
+            let frame = plan.sample(t)
+            self.applyFrame(frame)
+            return PetEngine.ScriptFrame(origin: frame.origin, look: frame.look, attentive: frame.attentive,
+                                         bounce: frame.bounce, facingLeft: frame.facingLeft)
+        }
+    }
+
+    /// 出场：先放到起点再显示。设置里关了动画就直接出现；减弱动态效果时原地淡入。
+    private func playEntrance() {
+        guard let panel else { return }
+        guard animatesEntrance else {
+            if isChoreographing { endChoreography(restoreHome: true) }
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            bubble.setSuspended(false)
+            updateAccessory()
+            return
+        }
+        beginChoreography()
+        let home = choreographyHome ?? engine.origin
+        let plan = reduceMotion
+            ? PetEntrancePlan.fade(home: home, appearing: true)
+            : PetEntrancePlan.enter(home: home, side: panelSide,
+                                    screen: PetEntrancePlan.screenFrame(containing: home, side: panelSide),
+                                    greetClip: shownModelID != nil && modelView.hasEntranceClip(leaving: false))
+        let first = plan.sample(0)
+        engine.setOrigin(first.origin)
+        panel.setFrameOrigin(first.origin)
+        applyFrame(first)
+        panel.orderFrontRegardless()
+        if shownModelID != nil { modelView.setActive(true) }
+        run(plan, as: .entering) { [weak self] in
+            guard let self else { return }
+            self.endChoreography(restoreHome: true)
+            self.bubble.setSuspended(false)
+            self.updateAccessory()
+            if !self.reduceMotion { self.greet(afterEntrance: true) }
+        }
+    }
+
+    /// 打招呼：有出场片段的播片段（VRM 招手）；没有的跳一下 —— 出场编排里已经弹过一下的就不再跳。
+    private func greet(afterEntrance: Bool) {
+        if shownModelID != nil, let duration = modelView.performEntrance(leaving: false) {
+            engine.occupy(for: duration)
+        } else if !afterEntrance {
+            engine.occupy(for: 1)
+            engine.notify(level: .bubble)
+        }
+    }
+
+    /// 退场：播完回调（窗口还没收起，由调用方决定收起还是换形象）。没开动画 / 窗口没显示时立刻回调。
+    private func playExit(quick: Bool, completion: @escaping () -> Void) {
+        guard let panel, panel.isVisible, animatesEntrance else {
+            if isChoreographing { endChoreography(restoreHome: true) }
+            completion()
+            return
+        }
+        // 正在出场又要退场（快速开关）：从此刻的位置退，播完放回出场的终点。
+        beginChoreography()
+        let home = engine.origin
+        let is3D = shownModelID != nil
+        let farewellClip = is3D && modelView.hasEntranceClip(leaving: true)
+        let plan: PetEntrancePlan
+        if reduceMotion {
+            plan = PetEntrancePlan.fade(home: home, appearing: false)
+        } else {
+            plan = PetEntrancePlan.leave(home: home, side: panelSide,
+                                         screen: PetEntrancePlan.screenFrame(containing: home, side: panelSide),
+                                         is3D: is3D, farewellClip: farewellClip, quick: quick)
+            if !quick, farewellClip { modelView.performEntrance(leaving: true) }
+        }
+        run(plan, as: .leaving) { [weak self] in
+            guard let self else { return }
+            panel.orderOut(nil)
+            self.endChoreography(restoreHome: true)
+            completion()
+        }
     }
 
     private func updateHeld() {
@@ -162,20 +316,38 @@ final class PetController: ObservableObject, NotifyPresenting {
         setEnabled(!PetSettings.enabled)
     }
 
+    /// 宠物开 / 关：开 = 出场，关 = 退场后收起（#54）。已经是那个样子就只理一理窗口。
     func applyVisibility() {
+        guard let panel else { return }
         if PetSettings.enabled {
-            panel?.orderFrontRegardless()
-            updateAccessory()
+            if shownModelID != nil { modelView.setActive(true) }
+            if switchingCharacter { return }   // 新形象读好后自己出场
+            let leaving = isChoreographing && engine.state == .leaving
+            if !panel.isVisible || leaving {
+                playEntrance()
+            } else {
+                panel.orderFrontRegardless()
+                updateAccessory()
+            }
         } else {
-            // 先把头顶挂件摘下来交还：子窗口会跟着宠物窗一起收起。
-            updateAccessory()
+            switchingCharacter = false
             radial.close(animated: false)
             bubble.dismissAll()
-            panel?.orderOut(nil)
+            let finish: () -> Void = { [weak self] in
+                guard let self, !PetSettings.enabled else { return }
+                // 先把头顶挂件摘下来交还：子窗口会跟着宠物窗一起收起。
+                self.updateAccessory()
+                self.panel?.orderOut(nil)
+                if self.shownModelID != nil { self.modelView.setActive(false) }
+            }
+            if panel.isVisible, !(isChoreographing && engine.state == .leaving) {
+                playExit(quick: false, completion: finish)
+            } else if !isChoreographing {
+                finish()
+            }
             // 宠物关了，之后的通知走系统通知：现在就把权限问好（已问过则不再弹）。
             NotifyCenter.shared.prepareSystemFallback(requestPermission: true)
         }
-        if shownModelID != nil { modelView.setActive(PetSettings.enabled) }
     }
 
     /// 按尺寸设置与当前形象调整宠物窗：底边中点不动（换成更大的 VRM 窗时脚还踩在原地），不出屏。
@@ -217,7 +389,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     }
 
     private func updateClickThrough() {
-        guard let panel, !isLent, panel.isVisible, !panel.isTracking else { return }
+        guard let panel, !isLent, !isChoreographing, panel.isVisible, !panel.isTracking else { return }
         var ignore = false
         if shownModelID != nil, modelView.isHumanoid {
             let mouse = NSEvent.mouseLocation
@@ -266,7 +438,8 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     private func updateAccessory(size: CGSize? = nil) {
         guard let accessory else { return }
-        if PetSettings.enabled, !isLent, let panel, panel.isVisible {
+        // 出场 / 退场途中不挂：控制条先放到屏幕顶部，落地后再挂回来。
+        if PetSettings.enabled, !isLent, !isChoreographing, let panel, panel.isVisible {
             // 先告诉挂件方（它据此停掉自己的拖动和记位置），再挂上、贴位。
             if accessoryDocked != true {
                 accessoryDocked = true
@@ -330,7 +503,7 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     /// 做个互动动作并冒一句话。3D 形象按 pet.json 的 interactions（或按片段名猜）播；2D 形象跳一下。
     func interact(_ kind: String, fallback: String? = nil) {
-        guard PetSettings.enabled else { return }
+        guard PetSettings.enabled, !isChoreographing else { return }
         radial.close()
         var used = kind
         var duration: TimeInterval?
@@ -380,7 +553,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 宠物没开、正借给休息画面、2D 形象或形象里没有这些片段时返回 false（调用方就只让它跳一下）。
     @discardableResult
     func act(clips: [String]) -> Bool {
-        guard PetSettings.enabled, !isLent, shownModelID != nil,
+        guard PetSettings.enabled, !isLent, !isChoreographing, shownModelID != nil,
               let duration = modelView.performClips(clips) else { return false }
         engine.occupy(for: duration)
         return true
@@ -399,7 +572,12 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 把当前渲染视图借给休息画面放大。宠物窗留在原地但变空、不接鼠标，引擎站住不溜达；
     /// 挂在宠物窗上的气泡不受影响。宠物没开 / 没就绪时返回 nil（休息画面走无宠物的回退画面）。
     func lendRenderView() -> Loan? {
-        guard !isLent, PetSettings.enabled, let panel, panel.isVisible else { return nil }
+        guard !isLent, PetSettings.enabled, !switchingCharacter, let panel, panel.isVisible else { return nil }
+        // 正在出场 / 退场：直接收尾（站回原位、外观复原）再借出。
+        if isChoreographing {
+            endChoreography(restoreHome: true)
+            bubble.setSuspended(false)
+        }
         let view: NSView = shownModelID != nil ? modelView : petView
         guard view.superview === stage else { return nil }
         radial.close(animated: false)
@@ -444,6 +622,8 @@ final class PetController: ObservableObject, NotifyPresenting {
             applyCharacter()
         }
         applyVisibility()
+        // 归位：休息画面已经把它送回原处，这里转过来打个招呼（#54；不再从屏幕外跳上来）。
+        if PetSettings.enabled, PetSettings.entranceAnimation, !reduceMotion { greet(afterEntrance: false) }
     }
 
     // MARK: - 环形菜单（右键）
@@ -556,9 +736,40 @@ final class PetController: ObservableObject, NotifyPresenting {
         applyCharacter()
     }
 
+    /// 换形象：开着动画时先让旧形象退场，再换上新形象出场（#54）。
     func selectCharacter(_ id: String, reload: Bool = false) {
+        let previous = currentCharacterID
         UserDefaults.standard.set(id, forKey: PetSettings.characterKey)
-        if reload { reloadCharacter() } else { applyCharacter() }
+        if reload { packages = PetPackageLoader.loadAll() }
+        // 退场还没播完 / 新形象还在读：播完、读完时会按最新的选择来。
+        if isChoreographing, engine.state == .leaving, switchingCharacter { return }
+        if switchingCharacter {
+            applyCharacter()
+            return
+        }
+        guard currentCharacterID != previous, PetSettings.enabled, animatesEntrance,
+              let panel, panel.isVisible else {
+            applyCharacter()
+            return
+        }
+        switchingCharacter = true
+        playExit(quick: false) { [weak self] in
+            guard let self else { return }
+            guard self.switchingCharacter else {
+                // 退场途中宠物被关掉了：窗口已收起，3D 渲染也停掉。
+                if !PetSettings.enabled, self.shownModelID != nil { self.modelView.setActive(false) }
+                return
+            }
+            self.applyCharacter()
+        }
+    }
+
+    /// 换好的形象显示出来了：换形象途中就让它出场。
+    private func characterShown() {
+        guard switchingCharacter else { return }
+        switchingCharacter = false
+        guard PetSettings.enabled else { return }
+        playEntrance()
     }
 
     /// 正在后台读的 3D 形象：读完前不重复发起；期间换成了别的形象，读完的结果作废。
@@ -579,6 +790,7 @@ final class PetController: ObservableObject, NotifyPresenting {
                 petView.setPackage(nil)
                 stage.show(modelView)
                 modelView.setActive(PetSettings.enabled)
+                characterShown()
                 return
             }
             // 模型在后台读（VRM 一读就是好几秒，docs/desktop-pet/VRM.md §6），读好之前旧形象照常显示。
@@ -606,6 +818,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         petView.setPackage(package)
         stage.show(petView)
         applySize()
+        characterShown()
     }
 
     /// 后台读好的 3D 形象换上；读不出来回退 2D 占位。
@@ -619,6 +832,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             petView.setPackage(nil)
             stage.show(petView)
             applySize()
+            characterShown()
             return
         }
         modelView.setPackage(package, model: model)
@@ -627,6 +841,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         stage.show(modelView)
         modelView.setActive(PetSettings.enabled)
         applySize()
+        characterShown()
     }
 
     func openPetsFolder() {

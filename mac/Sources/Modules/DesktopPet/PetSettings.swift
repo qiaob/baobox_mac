@@ -23,6 +23,7 @@ enum PetSettings {
     static let characterKey = "pet.character"
     static let rangeKey = "pet.range"
     static let rangeRectKey = "pet.rangeRect"
+    static let entranceKey = "pet.entrance"
     static let soundKey = "notify.sound"
     static let historyLimitKey = "notify.historyLimit"
 
@@ -30,6 +31,8 @@ enum PetSettings {
     static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
     /// 是否在桌面底部走动（默认开）。
     static var roam: Bool { UserDefaults.standard.object(forKey: roamKey) as? Bool ?? true }
+    /// 出场 / 退场动画（#54，默认开）。系统「减弱动态效果」打开时只淡入淡出。
+    static var entranceAnimation: Bool { UserDefaults.standard.object(forKey: entranceKey) as? Bool ?? true }
     /// 体型倍率（默认 1.0）。
     static var size: Double { UserDefaults.standard.object(forKey: sizeKey) as? Double ?? 1.0 }
     /// 手动勿扰截止时间（「安静一下」）。

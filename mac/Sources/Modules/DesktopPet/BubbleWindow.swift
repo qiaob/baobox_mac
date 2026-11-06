@@ -58,6 +58,9 @@ final class BubbleController: ObservableObject {
     private static let stickyReminderInterval: TimeInterval = 25
 
     private var waiting: [BubbleEntry] = []
+    /// 出场 / 退场动画期间（#54）气泡先收起来、新来的排队，宠物落地后再出（气泡是宠物窗的子窗口，不收会跟着飞出屏幕）。
+    private(set) var suspended = false
+    private var held: [(PetNotification, (String) -> Void)] = []
     private var panel: BubblePanel?
     private var hosting: BubbleHostingView?
     private var ticker: Timer?
@@ -67,6 +70,10 @@ final class BubbleController: ObservableObject {
     // MARK: - 显示 / 关闭
 
     func show(_ n: PetNotification, onAction: @escaping (String) -> Void) {
+        if suspended {
+            held.append((n, onAction))
+            return
+        }
         let base: TimeInterval? = {
             switch n.resolvedStyle {
             case .toast: return 3
@@ -101,7 +108,25 @@ final class BubbleController: ObservableObject {
     func dismissAll() {
         entries.removeAll()
         waiting.removeAll()
+        held.removeAll()
         refresh()
+    }
+
+    /// 收起 / 放出气泡（见 suspended）。放出时排队的按到达顺序补上。
+    func setSuspended(_ on: Bool) {
+        guard on != suspended else { return }
+        suspended = on
+        if on {
+            if let panel {
+                parentWindow?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
+            return
+        }
+        let pending = held
+        held = []
+        for (notification, action) in pending { show(notification, onAction: action) }
+        if !entries.isEmpty { refresh() }
     }
 
     var isShowing: Bool { !entries.isEmpty }
@@ -170,6 +195,8 @@ final class BubbleController: ObservableObject {
             onVisibilityChange?(false)
             return
         }
+        // 收着的时候不显示（放出时再 refresh 一次）。
+        guard !suspended else { return }
         ensurePanel()
         if ticker == nil {
             ticker = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in

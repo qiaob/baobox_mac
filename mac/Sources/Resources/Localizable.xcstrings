@@ -1,6 +1,7 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "pet.settings.entrance" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Entrance & Exit Animations" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "出场 / 退场动画" } } } },
     "livetranslate.bar.latest" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Jump to latest" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "回到最新" } } } },
     "livetranslate.bar.loadingModel" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading the translation model — the first time takes a few seconds…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载翻译模型，第一次要几秒…" } } } },
     "livetranslate.latency.help" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Latency. Speech: from when you start talking again after a pause to the first words on screen. Translation: from a finished chunk to its translation (including AI correction when it's on). Each is the median of the last 5. When a chunk has waited longer than usual, the time it has been waiting is shown instead (with …), so a stuck translation is easy to spot." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "延迟监控。识别：停顿后开口，到字幕上出字；翻译：一截话说完，到译文出来（开了 AI 纠错含纠错时间）。都是最近 5 次的中位数。有一截等译文比平时久时，改为显示它已经等了多久（带 …），翻译卡住一眼看得出。" } } } },
