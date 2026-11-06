@@ -33,15 +33,25 @@ enum ClaudeHookScripts {
     /// 识别自家条目 / 脚本的路径标志。
     static let markerFragment = "/Baobox/ClaudeCode/"
 
-    /// reporter 脚本内容固定：把 stdin 追加进 events.jsonl，再补一个换行。
-    static let reporterScript = """
+    /// reporter 脚本内容固定：把 stdin 的事件 JSON 追加进 events.jsonl（一行一个）。
+    /// 顺带在同一个 JSON 里补上 `baobox_terminal`：会话开在哪个终端（终端 App、Otty 面板、控制终端），
+    /// 点通知时据此跳回那个窗口（docs/claude-code-assistant/NOTIFY_JUMP.md）。都取自会话进程的环境，
+    /// 值里去掉引号、反斜杠和换行，保证拼出来仍是合法 JSON；输入不是 `{…}` 时原样写。
+    /// 内容变了的话，已装 hooks 的用户启动时会被自动换成新版（`refreshState`）。
+    static let reporterScript = #"""
     #!/bin/sh
     d="$HOME/Library/Application Support/Baobox/ClaudeCode"
     mkdir -p "$d"
-    cat >> "$d/events.jsonl"
-    printf "\\n" >> "$d/events.jsonl"
+    input=$(cat)
+    clean() { printf '%s' "$1" | tr -d '"\\\r\n'; }
+    tty=$(ps -o tty= -p "$PPID" 2>/dev/null)
+    term="\"baobox_terminal\":{\"app\":\"$(clean "$__CFBundleIdentifier")\",\"otty_pane\":\"$(clean "$OTTY_PANE_ID")\",\"tty\":\"$(clean "$tty" | tr -d ' ')\"}"
+    case "$input" in
+        \{*\}) printf '%s,%s}\n' "${input%\}}" "$term" >> "$d/events.jsonl" ;;
+        *) printf '%s\n' "$input" >> "$d/events.jsonl" ;;
+    esac
     exit 0
-    """
+    """#
 
     /// guard 脚本内容固定：逐条 ERE 规则匹配整行 JSON，命中则反馈原因并 exit 2。
     static let guardScript = """
@@ -113,9 +123,14 @@ final class ClaudeHooksManager: ObservableObject {
     /// 后台读 settings.json 判定安装状态，读规则文件，回主线程发布。
     func refreshState() {
         let patternsURL = self.patternsURL
+        let reporterURL = self.reporterURL
         DispatchQueue.global(qos: .utility).async {
             let settings = ClaudeSettingsFile.load()
             let reporterOn = Self.hasBaoboxEntry(in: settings, events: ClaudeHookScripts.reporterEvents)
+            // 已装的 reporter 是旧版脚本（比如还不记终端位置）：换成新版。只动自家脚本文件，不碰 settings.json。
+            if reporterOn, (try? String(contentsOf: reporterURL, encoding: .utf8)) != ClaudeHookScripts.reporterScript {
+                _ = Self.writeScript(ClaudeHookScripts.reporterScript, to: reporterURL)
+            }
             let guardOn = Self.hasBaoboxEntry(in: settings, events: [ClaudeHookScripts.guardEvent])
             let patterns = Self.readPatterns(url: patternsURL)
             DispatchQueue.main.async {
