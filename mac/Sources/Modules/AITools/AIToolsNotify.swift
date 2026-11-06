@@ -1,5 +1,4 @@
 import Foundation
-import UserNotifications
 
 /// Codex 助手 —— Codex 完成通知：notify 程序生成 + 事件文件监听 + 系统通知。
 ///
@@ -9,7 +8,7 @@ import UserNotifications
 /// `DispatchSourceFileSystemObject` 监听该文件增量，回合完成（agent-turn-complete）时发系统通知。
 ///
 /// 模式照 `ClaudeLiveStatus`，但**独立实现、独立 events 文件**，避免两模块耦合。
-/// 通知走 UNUserNotificationCenter，未签名 dev 包可能失败，全部判空不 crash。
+/// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key）：
 ///   - aitools.notify.turnComplete.title      zh:「Codex 回合完成」   en:「Codex turn complete」
@@ -249,10 +248,6 @@ final class CodexNotify: ObservableObject {
     }
 
     // MARK: 通知
-
-    func requestAuthorizationIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-    }
 
     /// 额度 80% 提醒（5h 或周）。与 Claude 同机制，防重由 `CodexUsageStore` 负责。
     func notifyBudget(percent: Int, weekly: Bool) {

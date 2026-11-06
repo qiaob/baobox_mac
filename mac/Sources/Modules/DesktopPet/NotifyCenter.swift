@@ -133,11 +133,7 @@ final class NotifyCenter {
     /// 「现在休息」「再来一轮」这些在宠物关着时全都点不了（2026-11-06 真机踩到）。
     private func postSystemNotification(_ n: PetNotification, onAction: ((String) -> Void)?) {
         let center = UNUserNotificationCenter.current()
-        if !didRequestAuth {
-            didRequestAuth = true
-            center.delegate = SystemNotificationRouter.shared
-            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        }
+        prepareSystemFallback(requestPermission: true)
         let content = UNMutableNotificationContent()
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
@@ -175,6 +171,19 @@ final class NotifyCenter {
         center.getNotificationCategories { _ in
             center.add(request) { _ in }
         }
+    }
+
+    /// 系统通知回退的准备（宠物模块自己判断什么时候会用上，功能模块不碰系统通知）：
+    /// 装上回调代理（不弹任何东西）；`requestPermission` 时顺带申请通知权限 —— 宠物关着启动、
+    /// 或用户刚把宠物关掉时就问，免得第一条回退通知因为弹授权框而丢掉。已授权 / 已拒绝时系统不会再弹。
+    func prepareSystemFallback(requestPermission: Bool) {
+        let center = UNUserNotificationCenter.current()
+        if center.delegate !== SystemNotificationRouter.shared {
+            center.delegate = SystemNotificationRouter.shared
+        }
+        guard requestPermission, !didRequestAuth else { return }
+        didRequestAuth = true
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     /// 系统通知上的按钮 / 点击（宠物关着时的回退路径）回到投稿方。点通知本体 = "open"（同气泡）。

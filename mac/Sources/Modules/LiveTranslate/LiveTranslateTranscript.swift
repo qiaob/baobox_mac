@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import UserNotifications
 
 /// 实时翻译的本地记录与纪要设置（前缀 `livetranslate.record.`）。见 docs/live-translate/DESIGN.md §6。
 enum LiveTranslateRecordSettings {
@@ -158,11 +157,6 @@ final class LiveTranslateTranscript {
         minutesTask?.cancel()
         minutes = .interrupted
         writeNow(sync: true)
-    }
-
-    /// 开始记录时就问一下通知权限：纪要整理好时发通知，到那时再问就晚了（第一条会丢）。
-    static func prepareNotifications() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     // MARK: - 纪要

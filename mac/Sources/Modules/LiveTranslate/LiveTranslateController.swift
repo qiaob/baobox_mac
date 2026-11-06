@@ -781,9 +781,6 @@ final class LiveTranslateController: ObservableObject {
         lastTranscript = transcript
         transcriptURL = nil
         recording = true
-        if LiveTranslateRecordSettings.summary {
-            LiveTranslateTranscript.prepareNotifications()
-        }
     }
 
     /// 停止：写结束时间、整理纪要（App 退出时同步写完、不整理）。

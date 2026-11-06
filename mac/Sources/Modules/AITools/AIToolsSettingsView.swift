@@ -304,7 +304,6 @@ struct AIToolsNotifySection: View {
                     get: { notify.isInstalled },
                     set: { newValue in
                         if newValue {
-                            notify.requestAuthorizationIfNeeded()
                             notify.install { _ in }
                         } else {
                             notify.remove { _ in }

@@ -176,7 +176,6 @@ struct AIToolsNotifyToggleMenuRow: View {
                 get: { notify.isInstalled },
                 set: { on in
                     if on {
-                        notify.requestAuthorizationIfNeeded()
                         notify.install { ok in
                             if !ok { AIToolsNotifyToggleMenuRow.presentInstallFailed() }
                         }

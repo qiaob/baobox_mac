@@ -66,6 +66,8 @@ final class DesktopPetTool: ToolModule {
 
     func activate() {
         NotifyCenter.shared.presenter = PetController.shared
+        // 宠物关着启动：通知会走系统通知，先把权限问好。
+        NotifyCenter.shared.prepareSystemFallback(requestPermission: !PetSettings.enabled)
         PetController.shared.start()
     }
 
