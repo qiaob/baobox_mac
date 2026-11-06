@@ -205,7 +205,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
     /// 当前形象没有喂食 / 陪玩动作时，从外圈挪工具进内圈，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
-        let hotkeys = (NSApp.delegate as? AppDelegate)?.registry.allHotkeys().flatMap(\.defs) ?? []
+        let hotkeys = AppDelegate.shared?.registry.allHotkeys().flatMap(\.defs) ?? []
         func tool(_ id: String, _ symbol: String, _ title: String) -> RadialMenuItem? {
             guard let def = hotkeys.first(where: { $0.id == id }) else { return nil }
             let action = def.action
@@ -253,7 +253,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.sendTestNotification(.sticky)
         })
         outer.append(RadialMenuItem(id: "pet.settings", symbol: "gearshape", title: L("pet.ring.settings")) {
-            guard let registry = (NSApp.delegate as? AppDelegate)?.registry else { return }
+            guard let registry = AppDelegate.shared?.registry else { return }
             SettingsWindowController.shared.show(registry: registry, tab: "desktop-pet")
         })
         outer.append(RadialMenuItem(id: "pet.hide", symbol: "eye.slash", title: L("pet.ring.hide")) { [weak self] in
