@@ -88,7 +88,11 @@ enum TextInserter {
     }
 
     private static func paste(_ text: String) async -> Result {
-        await PasteboardBorrow.paste(text) ? .paste : copy(text, reason: .busy)
+        // 划词翻译正借着剪贴板（一秒内就还原）：等它还完再粘。抢着写的话，它一还原就把我们的文字盖掉了。
+        for _ in 0..<20 where PasteboardBorrow.isActive {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return await PasteboardBorrow.paste(text) ? .paste : copy(text, reason: .busy)
     }
 
     // MARK: - 辅助功能写入
