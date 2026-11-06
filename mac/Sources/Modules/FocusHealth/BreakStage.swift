@@ -213,7 +213,7 @@ final class BreakStageController {
         } else {
             let info = fallbackInfoRect(on: screen)
             window.setFrame(info, display: false)
-            attachInfo(frame: NSRect(origin: .zero, size: info.size))
+            attachInfo(frame: NSRect(origin: .zero, size: info.size), in: window)
         }
         window.orderFrontRegardless()
         if blocking { window.makeKey() }
@@ -241,11 +241,13 @@ final class BreakStageController {
                       width: size.width, height: size.height)
     }
 
-    private func attachInfo(frame: NSRect) {
+    /// 窗口显式传进来：宠物关着时卡片在 stageWindow 赋值之前就要挂上（第一版写成
+    /// `stageWindow?.contentView?.addSubview` 挂了个空，宠物关着时整屏只剩纯色、没有一个字，2026-11-06 真机踩到）。
+    private func attachInfo(frame: NSRect, in window: NSWindow) {
         infoView?.removeFromSuperview()
         let hosting = BreakInfoHostingView(rootView: BreakInfoView(model: model))
         hosting.frame = frame
-        stageWindow?.contentView?.addSubview(hosting)
+        window.contentView?.addSubview(hosting)
         infoView = hosting
     }
 
@@ -287,7 +289,7 @@ final class BreakStageController {
         window.setFrame(union, display: false)
         loan.view.frame = pet.offsetBy(dx: -union.minX, dy: -union.minY)
         petRectInWindow = loan.view.frame
-        attachInfo(frame: info.offsetBy(dx: -union.minX, dy: -union.minY))
+        attachInfo(frame: info.offsetBy(dx: -union.minX, dy: -union.minY), in: window)
         window.display()
     }
 
