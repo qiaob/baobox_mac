@@ -1,0 +1,29 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "AnimalArmature|AnimalArmature|AnimalArmature|Idle",
+    "walk": "AnimalArmature|AnimalArmature|AnimalArmature|Run",
+    "happy": "AnimalArmature|AnimalArmature|AnimalArmature|Idle_Peck",
+    "drag": "AnimalArmature|AnimalArmature|AnimalArmature|Run"
+  },
+  "fidgets": [
+    "AnimalArmature|AnimalArmature|AnimalArmature|Idle_Peck"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "AnimalArmature|AnimalArmature|AnimalArmature|Idle_Peck"
+      ]
+    ],
+    "feed": [
+      [
+        "AnimalArmature|AnimalArmature|AnimalArmature|Idle_Peck"
+      ]
+    ],
+    "play": [
+      [
+        "AnimalArmature|AnimalArmature|AnimalArmature|Attack"
+      ]
+    ]
+  }
+}

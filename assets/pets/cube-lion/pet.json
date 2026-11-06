@@ -1,0 +1,21 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "static",
+    "walk": "walk",
+    "happy": "run",
+    "drag": "run"
+  },
+  "interactions": {
+    "poke": [
+      [
+        "run"
+      ]
+    ],
+    "play": [
+      [
+        "run"
+      ]
+    ]
+  }
+}

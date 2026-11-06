@@ -1,0 +1,95 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "idle_breathe",
+    "walk": "walk_in",
+    "happy": "wave",
+    "sleep": {
+      "clip": "lie_down",
+      "hold": true
+    },
+    "drag": "happy_wiggle"
+  },
+  "fidgets": [
+    "look_around",
+    "scratch_ear",
+    "yawn",
+    "stretch",
+    "ear_perk",
+    "sniff"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "giggle"
+      ],
+      [
+        "ear_perk"
+      ],
+      [
+        "happy_wiggle"
+      ],
+      [
+        "laugh"
+      ],
+      [
+        "happy_bounce"
+      ]
+    ],
+    "highFive": [
+      [
+        "paw_highfive_R"
+      ],
+      [
+        "paw_highfive_L"
+      ]
+    ],
+    "pet": [
+      [
+        "listen_nod"
+      ],
+      [
+        "giggle"
+      ]
+    ],
+    "feed": [
+      [
+        "sit_down",
+        "sit_hold_eat",
+        "stand_up"
+      ],
+      [
+        "sit_down",
+        "sit_hold_drink",
+        "stand_up"
+      ]
+    ],
+    "play": [
+      [
+        "pounce"
+      ],
+      [
+        "bat_paw_L"
+      ],
+      [
+        "bat_paw_R"
+      ],
+      [
+        "lie_play"
+      ],
+      [
+        "laugh_tumble"
+      ]
+    ],
+    "wake": [
+      [
+        "get_up",
+        "stretch"
+      ],
+      [
+        "get_up",
+        "yawn"
+      ]
+    ]
+  }
+}

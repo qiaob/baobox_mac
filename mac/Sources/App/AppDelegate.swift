@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(KeyboardNavTool())
         registry.register(LiveTranslateTool())
         registry.register(SelectionTranslateTool())
+        registry.register(DesktopPetTool())
         // 0.0.2 暂不发布抓包工具（NetCapture 尚在完善）：模块代码保留在仓库，仅此版本不注册/不激活，
         // 后续完善后取消下一行注释即可恢复。
         // registry.register(NetCaptureTool())
