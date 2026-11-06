@@ -30,9 +30,9 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         CFBundleIconFile: AppIcon
         NSHumanReadableCopyright: "© 2026 Baobox"
-        NSMicrophoneUsageDescription: "录屏时录制你的声音（可选开启）、实时翻译选麦克风作音源时识别你说的话，以及语音听写把你说的话转成文字。Used to record your voice during screen recording (optional), to transcribe speech when Live Translate uses the microphone, and for Dictation."
-        # 实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
-        NSSpeechRecognitionUsageDescription: "实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Live Translate and Dictation convert speech into text (on this Mac when possible)."
+        NSMicrophoneUsageDescription: "录屏时录制你的声音（可选开启）、会议记录与实时翻译转写你说的话，以及语音听写把你说的话转成文字。Used to record your voice during screen recording (optional), to transcribe what you say in meeting recordings and Live Translate, and for Dictation."
+        # 会议记录、实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
+        NSSpeechRecognitionUsageDescription: "会议记录、实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Meeting recording, Live Translate and Dictation convert speech into text (on this Mac when possible)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
         NSLocalNetworkUsageDescription: "网络抓包代理需要绑定局域网接口，供同网手机连接调试。The packet-capture proxy binds local-network interfaces so phones on the same network can connect for debugging."
         # 会议读本机日历（只读、数据不出本机）：下一场会议、会前提醒、一键入会、会议绑定日历事件。
