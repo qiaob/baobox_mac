@@ -15,6 +15,8 @@ struct PetModelSpec {
     let clips: [String: PetClipSpec]
     /// 待机时偶尔播一次的小动作。
     let fidgets: [String]
+    /// 互动（poke / highFive / pet / feed / play / wake）→ 若干候选，每个候选是一串依次播放的片段。
+    let interactions: [String: [[String]]]
     /// 模型正面不朝 +Z 时的修正（度）。
     let yawDegrees: Double
     /// 在自动取景的基础上再放大 / 缩小。
@@ -52,6 +54,55 @@ struct PetModelSpec {
             result["idle"] = Clip(name: first, loop: true, hold: false)
         }
         return result
+    }
+}
+
+extension PetModelSpec {
+    static let interactionKinds = ["poke", "highFive", "pet", "feed", "play", "wake"]
+
+    /// 每种互动的候选（只留模型里真有的片段）；没写的按片段名猜，猜不到就不支持（菜单里不显示）。
+    func resolvedInteractions(available: [String]) -> [String: [[String]]] {
+        let names = Set(available)
+        let sorted = available.sorted { $0.count != $1.count ? $0.count < $1.count : $0 < $1 }
+        let guesses: [String: [String]] = [
+            "poke": ["giggle", "laugh", "happy", "ear_perk", "wiggle", "yes", "jump", "hitreact"],
+            "highFive": ["highfive", "high_five", "wave", "thumbsup"],
+            "pet": ["listen_nod", "nod", "lap", "headlow", "purr"],
+            "feed": ["sit_hold_eat", "eat", "chew", "drink"],
+            "play": ["pounce", "bat_paw", "lie_play", "play", "dance", "attack", "punch"],
+            "wake": ["get_up", "stand_up", "yawn", "stretch"],
+        ]
+        var result: [String: [[String]]] = [:]
+        for kind in Self.interactionKinds {
+            if let explicit = interactions[kind] {
+                let valid = explicit.filter { !$0.isEmpty && $0.allSatisfy(names.contains) }
+                if !valid.isEmpty { result[kind] = valid }
+                continue
+            }
+            var options: [[String]] = []
+            for keyword in guesses[kind] ?? [] {
+                for name in sorted where name.lowercased().contains(keyword) && !options.contains([name]) {
+                    options.append([name])
+                }
+                if options.count >= 3 { break }
+            }
+            if !options.isEmpty { result[kind] = Array(options.prefix(4)) }
+        }
+        return result
+    }
+}
+
+/// pet.json 里互动的一个候选：一个片段名，或一串依次播放的片段名（如 ["sit_down", "sit_hold_eat", "stand_up"]）。
+struct PetClipSequence: Decodable {
+    var clips: [String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let one = try? container.decode(String.self) {
+            clips = [one]
+        } else {
+            clips = try container.decode([String].self)
+        }
     }
 }
 
@@ -94,6 +145,10 @@ final class PetModelView: SCNView {
     /// 待机小动作（模型里实际有的那些）与下一次的时间。
     private var fidgets: [GLTFClip] = []
     private var nextFidgetAt = Date.distantFuture
+    /// 互动：当前形象支持哪些、正在播的一串里还剩哪些。
+    private var interactions: [String: [[String]]] = [:]
+    private var pendingSequence: [GLTFClip] = []
+    private var lastState = "idle"
     /// 睡觉的片段播完后整个场景暂停（不再渲染），省电（设计 §7.2）。
     private var sleepPauseAt = Date.distantFuture
     private var active = true
@@ -158,17 +213,40 @@ final class PetModelView: SCNView {
         model = nil
         clips = [:]
         fidgets = []
+        interactions = [:]
+        pendingSequence = []
         currentClip = nil
         yaw = .nan
         guard let spec = package?.model, let loaded = try? GLTFLoader.load(contentsOf: spec.url) else { return false }
         model = loaded
         clips = spec.resolvedClips(available: Array(loaded.clips.keys))
         fidgets = spec.fidgets.compactMap { loaded.clips[$0] }
+        interactions = spec.resolvedInteractions(available: Array(loaded.clips.keys))
         orientNode.simdEulerAngles = SIMD3(0, Float(spec.yawDegrees * .pi / 180), 0)
         orientNode.addChildNode(loaded.root)
         fit(scale: Float(spec.scale))
         apply(pose)
         return true
+    }
+
+    /// 当前形象支不支持某种互动（环形菜单据此显示 / 隐藏「喂食」「陪玩」）。
+    func supports(_ kind: String) -> Bool {
+        interactions[kind] != nil
+    }
+
+    /// 做一个互动动作，返回总时长（引擎据此站住不动）；不支持返回 nil。
+    @discardableResult
+    func perform(_ kind: String) -> TimeInterval? {
+        guard let model, let option = interactions[kind]?.randomElement() else { return nil }
+        let sequence = option.compactMap { model.clips[$0] }
+        guard let first = sequence.first else { return nil }
+        if let current = currentClip?.clip { model.stop(current, fadeOut: 0.15) }
+        model.play(first, loop: false, hold: false, fadeIn: 0.15)
+        currentClip = ("interact", first)
+        clipLockedUntil = Date().addingTimeInterval(first.duration)
+        pendingSequence = Array(sequence.dropFirst())
+        scene?.isPaused = false
+        return sequence.reduce(0) { $0 + $1.duration }
     }
 
     /// 宠物隐藏时停掉渲染循环。
@@ -194,9 +272,24 @@ final class PetModelView: SCNView {
         guard let model else { return }
         let state = Self.stateKey(pose.state)
         let now = Date()
-        // 一次性片段（挥手）播完前不切走；待机小动作则可以被待机以外的状态（提醒 / 走路 / 拖拽 / 睡觉）立刻打断。
-        let playingFidget = currentClip?.state == "fidget"
-        let locked = now < clipLockedUntil && !(playingFidget && state != "idle")
+        // 从睡梦中被叫醒：先播「起身 / 打哈欠」。
+        if lastState == "sleep", state == "idle", interactions["wake"] != nil {
+            lastState = state
+            perform("wake")
+            return
+        }
+        lastState = state
+        // 一串互动片段：上一段播完接下一段。
+        if currentClip?.state == "interact", now >= clipLockedUntil, !pendingSequence.isEmpty {
+            let next = pendingSequence.removeFirst()
+            if let current = currentClip?.clip { model.stop(current, fadeOut: 0.12) }
+            model.play(next, loop: false, hold: false, fadeIn: 0.12)
+            currentClip = ("interact", next)
+            clipLockedUntil = now.addingTimeInterval(next.duration)
+        }
+        // 一次性片段（挥手）播完前不切走；待机小动作 / 互动则可以被待机以外的状态（提醒 / 拖拽 / 走路 / 睡觉）立刻打断。
+        let interruptible = currentClip?.state == "fidget" || currentClip?.state == "interact"
+        let locked = now < clipLockedUntil && !(interruptible && state != "idle")
         if currentClip?.state != state, !locked,
            let choice = clips[state] ?? clips["idle"], let next = model.clips[choice.name] {
             if next.name != currentClip?.clip.name || !choice.loop {
@@ -205,6 +298,7 @@ final class PetModelView: SCNView {
                 clipLockedUntil = (!choice.loop && !choice.hold) ? now.addingTimeInterval(next.duration) : .distantPast
             }
             currentClip = (state, next)
+            pendingSequence = []
             if state == "idle" { nextFidgetAt = now.addingTimeInterval(Double.random(in: 8...16)) }
             sleepPauseAt = state == "sleep" ? now.addingTimeInterval(next.duration + 0.3) : .distantFuture
         } else if state == "idle", currentClip?.state == "idle", !locked, now >= nextFidgetAt,
@@ -218,7 +312,8 @@ final class PetModelView: SCNView {
         }
 
         // 帧率：走路 / 提醒 / 拖拽 30fps，待机呼吸 20fps 就够顺；睡下以后整个场景暂停，醒来再恢复。
-        let fps = (state == "walk" || state == "happy" || state == "drag") ? 30 : 20
+        let lively = state == "walk" || state == "happy" || state == "drag" || currentClip?.state == "interact"
+        let fps = lively ? 30 : 20
         if preferredFramesPerSecond != fps { preferredFramesPerSecond = fps }
         if let scene, active {
             let shouldPause = state == "sleep" && now >= sleepPauseAt
@@ -229,7 +324,7 @@ final class PetModelView: SCNView {
         switch pose.state {
         case .wander: target = pose.facingLeft ? -.pi / 2 : .pi / 2
         case .notify: target = 0
-        case .idle, .sleep, .dragged: target = pose.facingLeft ? -0.45 : 0.45
+        case .idle, .sleep, .dragged: target = pose.attentive ? 0 : (pose.facingLeft ? -0.45 : 0.45)
         }
         if yaw.isNaN {
             yaw = target

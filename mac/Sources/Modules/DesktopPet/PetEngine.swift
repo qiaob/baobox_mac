@@ -11,6 +11,8 @@ struct PetPose {
     var bounce: CGFloat = 0
     var eyesClosed = false
     var lying = false
+    /// 有气泡 / 菜单 / 互动时站住面向用户。
+    var attentive = false
 }
 
 /// 宠物行为状态机（设计 §6）。只产出窗口位置与姿态，不管 2D / 3D 怎么画。
@@ -37,6 +39,10 @@ final class PetEngine {
     private var notifyStartedAt: Date?
     private var notifyUntil: Date?
     private var notifyDuration: TimeInterval = 1
+    /// 有气泡或环形菜单开着：站住不溜达、面向用户。
+    private var held = false
+    /// 互动动作（摸摸 / 喂食…）播放中：同样不溜达、不进入睡觉。
+    private var busyUntil = Date.distantPast
 
     func start(at origin: NSPoint) {
         self.origin = origin
@@ -74,6 +80,28 @@ final class PetEngine {
         if state != .dragged { state = .notify }
     }
 
+    /// 有气泡 / 菜单时站住（正在走就停下）。
+    func setHeld(_ on: Bool) {
+        held = on
+        if on, state == .wander {
+            state = .idle
+            stateUntil = nil
+        }
+        if !on { nextWanderAt = max(nextWanderAt, Date().addingTimeInterval(4)) }
+    }
+
+    /// 互动动作要占用宠物 `seconds` 秒：期间不溜达、睡着的先醒。
+    func occupy(for seconds: TimeInterval) {
+        busyUntil = max(busyUntil, Date().addingTimeInterval(seconds))
+        if state == .sleep || state == .wander {
+            state = .idle
+            stateUntil = nil
+        }
+        sleepCheckedAt = Date()
+        sleepCached = false
+        nextWanderAt = max(nextWanderAt, busyUntil.addingTimeInterval(4))
+    }
+
     private var sleepCheckedAt = Date.distantPast
     private var sleepCached = false
 
@@ -99,13 +127,17 @@ final class PetEngine {
                 notifyUntil = nil
                 nextWanderAt = now.addingTimeInterval(Double.random(in: 6...14))
             }
+            let busy = now < busyUntil
             if state != .notify {
-                if shouldSleep(now) {
+                if !busy, shouldSleep(now) {
                     state = .sleep
                 } else if state == .sleep {
                     state = .idle
                 }
-                if state == .idle, PetSettings.roam, now >= nextWanderAt {
+                if state == .wander, held || busy {
+                    state = .idle
+                    stateUntil = nil
+                } else if state == .idle, PetSettings.roam, !held, !busy, now >= nextWanderAt {
                     state = .wander
                     stateUntil = now.addingTimeInterval(Double.random(in: 3...7))
                     walkDirection = Bool.random() ? 1 : -1
@@ -133,6 +165,7 @@ final class PetEngine {
         }
 
         pose.state = state
+        pose.attentive = held || now < busyUntil
         pose.facingLeft = walkDirection < 0
         pose.time = now.timeIntervalSinceReferenceDate
         pose.lying = state == .sleep

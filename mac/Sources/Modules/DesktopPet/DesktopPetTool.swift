@@ -37,9 +37,13 @@ final class DesktopPetTool: ToolModule {
         }
         quietItem.submenu = quietMenu
         items.append(quietItem)
-        items.append(ClosureMenuItem(title: L("pet.menu.test")) {
-            PetController.shared.sendTestNotification()
-        })
+        let testItem = NSMenuItem(title: L("pet.menu.test"), action: nil, keyEquivalent: "")
+        let testMenu = NSMenu()
+        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testToast")) { PetController.shared.sendTestNotification(.toast) })
+        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testCard")) { PetController.shared.sendTestNotification(.card) })
+        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testSticky")) { PetController.shared.sendTestNotification(.sticky) })
+        testItem.submenu = testMenu
+        items.append(testItem)
         return items
     }
 

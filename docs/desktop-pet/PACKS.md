@@ -6,7 +6,8 @@
 ## 1. 结论
 
 - **默认 3D**：内置 3 个毛绒形象（小猫 / 小狗 / 小兔），开箱即用，不用用户做任何事。
-- **更多形象一键下载**：设置 → 桌面宠物 → 更多形象，跟离线翻译模型一样一个按钮 + 进度条，可删除。现有 7 个：柴犬、哈士奇、狐狸、巴哥犬、方块猫、方块狗、机器人。
+- **更多形象一键下载**：设置 → 桌面宠物 → 更多形象，跟离线翻译模型一样一个按钮 + 进度条，可删除。现有 16 个：柴犬、哈士奇、狐狸、巴哥犬、熊猫、长耳兔、青蛙、浣熊、小鸡、团子猫、方块猫 / 狗 / 兔 / 猪 / 狮、机器人。
+- 交互（单击 / 双击 / 抚摸 / 喂食 / 陪玩 / 睡醒）与通知气泡见 `INTERACTION.md`。
 - **2D 帧图形象照旧支持**（自制用），格式见 §4.2。
 - **直接读 GLB / glTF，不转 USDZ**。与 DESIGN.md §7.3「出厂前统一转 USDZ」不同：本机没有 Reality Converter / Blender，用户自己往文件夹里放模型时也做不到转换；SceneKit / Model I/O 又都不认 glTF，所以 App 内自带一个最小读取器（§5）。
 - 素材全部转存在本仓库（个人自用，按用户决定不做授权审查）。原计划的 Frakassets 2D 素材包放在 itch.io，脚本请求一律 429，App 里下载不了，已放弃。
@@ -54,6 +55,14 @@
     "drag": "happy_wiggle"
   },
   "fidgets": ["look_around", "scratch_ear", "yawn", "stretch"],
+  "interactions": {
+    "poke": [["giggle"], ["ear_perk"], ["happy_wiggle"]],
+    "highFive": [["paw_highfive_R"], ["paw_highfive_L"]],
+    "pet": [["listen_nod"]],
+    "feed": [["sit_down", "sit_hold_eat", "stand_up"], ["sit_down", "sit_hold_drink", "stand_up"]],
+    "play": [["pounce"], ["bat_paw_L"], ["lie_play"]],
+    "wake": [["get_up", "stretch"], ["get_up", "yawn"]]
+  },
   "yaw": 0,
   "scale": 1
 }
@@ -62,6 +71,8 @@
 - `clips`：引擎状态 → 模型里的动画片段名。状态有五个：`idle` 待机、`walk` 走路、`happy` 来通知时（播一次）、`sleep` 睡觉（默认播完停在最后一帧）、`drag` 被拖着。值可以直接写片段名，也可以写 `{ "clip", "loop", "hold" }`。
 - 没写的状态按片段名猜（idle / survey → 待机，walk → 走路，jump / wave / yes → 通知，sleep / lie / sit → 睡觉），再没有就用待机。
 - `fidgets`：待机时每 8–16 秒随机播一个的小动作，播完回到待机；来通知 / 开始走路会立刻打断。
+- `interactions`：互动 → 若干候选（随机挑一个），每个候选是一串依次播放的片段（只有一段时也可以直接写字符串）。互动有六种：`poke` 单击、`highFive` 双击、`pet` 抚摸、`feed` 喂食、`play` 陪玩、`wake` 睡醒。没写的按片段名猜（giggle / jump → 单击，highfive / wave → 双击，nod → 抚摸，eat / drink → 喂食，pounce / dance → 陪玩，get_up / yawn → 睡醒），猜不到就不支持（环形菜单里不显示「喂食」「陪玩」）。
+- 片段名要写全名：Quaternius 的模型带 `AnimalArmature|` 之类的前缀（有的重复三遍）。
 - `yaw`：模型正面不朝 +Z 时的修正（度）；`scale`：在自动取景的基础上再放大 / 缩小。
 - `name`：只对自制形象有用（内置 / 可下载形象的名字按界面语言取自 `PetCatalog`）。
 - 只放一个 `.glb`、不写 `pet.json` 也行：文件夹名当名字，动作全靠猜。
@@ -112,5 +123,7 @@
 | `plush-cat` / `plush-dog` / `plush-bunny` | 小猫 / 小狗 / 小兔（内置） | BabyPurrPal（`github.com/akshaynikhare/BabyPurrPal`，`assets/characters/`） |
 | `shiba` / `husky` / `fox` | 柴犬 / 哈士奇 / 狐狸 | Quaternius Ultimate Animated Animals（poly.pizza） |
 | `pug` | 巴哥犬 | Quaternius Characters Pug（poly.pizza） |
-| `cube-cat` / `cube-dog` | 方块猫 / 方块狗 | Kenney Cube Pets（外置贴图已内嵌进 GLB） |
+| `panda` / `rabbit` / `frog` | 熊猫 / 长耳兔 / 青蛙 | Quaternius 直立动物角色（poly.pizza） |
+| `raccoon` / `chick` / `cat-blob` | 浣熊 / 小鸡 / 团子猫 | Quaternius 方块动物 / Cat Blob（poly.pizza） |
+| `cube-cat` / `cube-dog` / `cube-bunny` / `cube-pig` / `cube-lion` | 方块猫 / 狗 / 兔 / 猪 / 狮 | Kenney Cube Pets（外置贴图已内嵌进 GLB） |
 | `robot` | 机器人 | three.js 示例 RobotExpressive（Tomás Laulhé） |

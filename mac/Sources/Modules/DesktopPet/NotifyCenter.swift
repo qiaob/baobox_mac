@@ -10,9 +10,23 @@ struct PetNotification {
         case alert      // 重要：气泡 + 宠物提醒动作，可发声
     }
 
+    /// 呈现样式（docs/desktop-pet/INTERACTION.md §2）。不指定时按级别：ambient → toast、bubble → card、alert → sticky。
+    enum Style {
+        case toast      // 一行字，3 秒自动消失
+        case card       // 标题 + 正文（+ 按钮），8 秒自动消失，鼠标悬停时暂停计时
+        case sticky     // 常驻：必须点按钮或 × 才消失，宠物隔一会儿招手提醒
+    }
+
     struct Action {
+        enum Role {
+            case primary        // 品牌色实心按钮（「进入会议」）
+            case secondary      // 普通按钮（「稍后」）
+            case destructive    // 红字（「忽略」「取消」）
+        }
+
         let id: String
         let label: String
+        var role: Role = .secondary
     }
 
     var source: String
@@ -24,6 +38,19 @@ struct PetNotification {
     var ttl: TimeInterval? = nil
     /// 投稿方要求发声（其自身声音设置已折算进来）；宠物路径再受 notify.sound 总开关约束。
     var playSound: Bool = false
+    /// 不指定 = 按级别决定。
+    var style: Style? = nil
+    /// SF Symbol；不指定 = 按来源给默认图标。
+    var icon: String? = nil
+
+    var resolvedStyle: Style {
+        if let style { return style }
+        switch level {
+        case .ambient: return .toast
+        case .bubble: return .card
+        case .alert: return .sticky
+        }
+    }
 }
 
 /// 呈现端（桌面宠物）。NotifyCenter 不持有窗口，只调这个协议，便于回退与测试。

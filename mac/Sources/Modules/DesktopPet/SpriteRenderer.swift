@@ -33,6 +33,8 @@ struct PetManifest: Decodable {
     var scale: Double?
     /// 3D：待机时偶尔做的小动作（东张西望、挠耳朵、打哈欠…），随机挑一个播一次。
     var fidgets: [String]?
+    /// 3D：互动（poke / highFive / pet / feed / play / wake）→ 候选列表，候选可以是一串片段。
+    var interactions: [String: [PetClipSequence]]?
 }
 
 /// 所有帧里不透明像素的并集（像素），以帧的「底边中点」为原点。
@@ -138,6 +140,7 @@ enum PetPackageLoader {
             let url = dir.appendingPathComponent(modelFile)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             let spec = PetModelSpec(url: url, clips: manifest.clips ?? [:], fidgets: manifest.fidgets ?? [],
+                                    interactions: (manifest.interactions ?? [:]).mapValues { $0.map(\.clips) },
                                     yawDegrees: manifest.yaw ?? 0, scale: manifest.scale ?? 1)
             return PetPackage(id: id, name: name, pixelArt: false, facesLeft: false, framesByState: [:],
                               fpsByState: [:], content: PetContentBox(left: 0, right: 0, bottom: 0, top: 0),
