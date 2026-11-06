@@ -1,0 +1,54 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "Idle",
+    "walk": "Walking",
+    "happy": "Wave",
+    "sleep": {
+      "clip": "Sitting",
+      "hold": true
+    },
+    "drag": "Jump"
+  },
+  "fidgets": [
+    "Yes",
+    "ThumbsUp",
+    "Dance"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "Yes"
+      ],
+      [
+        "No"
+      ],
+      [
+        "ThumbsUp"
+      ]
+    ],
+    "highFive": [
+      [
+        "Wave"
+      ]
+    ],
+    "pet": [
+      [
+        "Yes"
+      ]
+    ],
+    "play": [
+      [
+        "Dance"
+      ],
+      [
+        "Punch"
+      ]
+    ],
+    "wake": [
+      [
+        "Standing"
+      ]
+    ]
+  }
+}

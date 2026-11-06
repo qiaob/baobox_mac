@@ -125,13 +125,13 @@ final class ClaudeNotifier {
     /// 任务完成通知（受总开关控制）。
     func notifyStop(project: String) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.stop.title \(project)"), body: "", speakProject: project)
+        post(title: L("claudecode.notify.stop.title \(project)"), body: "", level: .bubble, speakProject: project)
     }
 
     /// 等待确认通知（受总开关控制），正文带 Claude 的 message。
     func notifyWaiting(project: String, message: String) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.waiting.title \(project)"), body: message, speakProject: project)
+        post(title: L("claudecode.notify.waiting.title \(project)"), body: message, level: .alert, speakProject: project)
     }
 
     /// 额度 80% 提醒。
@@ -168,24 +168,27 @@ final class ClaudeNotifier {
     }
 
     /// speakProject 非 nil 时,该通知参与语音朗读(完成 / 等待类)。
-    private func post(title: String, body: String, speakProject: String? = nil) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        if !body.isEmpty { content.body = body }
-        // 提醒方式互斥:sound 响提示音(自定义音走 NSSound 自播,默认音挂通知);
-        // speech 只朗读;none 静默投递。
+    /// 视觉呈现改走通知内核（DesktopPet）：宠物在场时经宠物，关时由内核回退系统通知；
+    /// 声音仍按本模块 alertStyle 处理（自定义音自播，默认音交给内核在 playSound 时发）。
+    private func post(title: String, body: String, level: PetNotification.Level = .ambient, speakProject: String? = nil) {
+        var useDefaultSound = false
         switch ClaudeNotifierSettings.alertStyle {
         case .sound:
             if ClaudeNotifierSettings.soundName.isEmpty {
-                content.sound = .default
+                useDefaultSound = true
             } else {
                 playSound()
             }
         case .speech, .none:
             break
         }
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
+        NotifyCenter.shared.post(PetNotification(
+            source: "claudecode",
+            level: level,
+            title: title,
+            body: body,
+            playSound: useDefaultSound
+        ))
 
         if let speakProject, ClaudeNotifierSettings.alertStyle == .speech {
             speak(title: title, project: speakProject)

@@ -1,0 +1,45 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "AnimalArmature|Idle",
+    "walk": "AnimalArmature|Walk",
+    "happy": "AnimalArmature|Run_Jump",
+    "sleep": "AnimalArmature|Idle_2_HeadLow",
+    "drag": "AnimalArmature|Run"
+  },
+  "fidgets": [
+    "AnimalArmature|Idle_2",
+    "AnimalArmature|Eating"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "AnimalArmature|Run_Jump"
+      ],
+      [
+        "AnimalArmature|Idle_HitReact_Left"
+      ],
+      [
+        "AnimalArmature|Idle_HitReact_Right"
+      ]
+    ],
+    "pet": [
+      [
+        "AnimalArmature|Idle_2_HeadLow"
+      ]
+    ],
+    "feed": [
+      [
+        "AnimalArmature|Eating"
+      ]
+    ],
+    "play": [
+      [
+        "AnimalArmature|Run_Jump"
+      ],
+      [
+        "AnimalArmature|Attack"
+      ]
+    ]
+  }
+}

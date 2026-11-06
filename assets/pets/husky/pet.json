@@ -1,0 +1,45 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "Idle",
+    "walk": "Walk",
+    "happy": "Jump_ToIdle",
+    "sleep": "Idle_2_HeadLow",
+    "drag": "Gallop"
+  },
+  "fidgets": [
+    "Idle_2",
+    "Eating"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "Jump_ToIdle"
+      ],
+      [
+        "Idle_HitReact_Left"
+      ],
+      [
+        "Idle_HitReact_Right"
+      ]
+    ],
+    "pet": [
+      [
+        "Idle_2_HeadLow"
+      ]
+    ],
+    "feed": [
+      [
+        "Eating"
+      ]
+    ],
+    "play": [
+      [
+        "Gallop_Jump"
+      ],
+      [
+        "Attack"
+      ]
+    ]
+  }
+}

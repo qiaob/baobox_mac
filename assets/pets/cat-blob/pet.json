@@ -1,0 +1,40 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "CharacterArmature|Idle",
+    "walk": "CharacterArmature|Walk",
+    "happy": "CharacterArmature|Jump",
+    "drag": "CharacterArmature|Jump"
+  },
+  "fidgets": [
+    "CharacterArmature|Yes"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "CharacterArmature|Yes"
+      ],
+      [
+        "CharacterArmature|Jump"
+      ]
+    ],
+    "highFive": [
+      [
+        "CharacterArmature|Yes"
+      ]
+    ],
+    "pet": [
+      [
+        "CharacterArmature|Yes"
+      ]
+    ],
+    "play": [
+      [
+        "CharacterArmature|Dance"
+      ],
+      [
+        "CharacterArmature|Bite_Front"
+      ]
+    ]
+  }
+}

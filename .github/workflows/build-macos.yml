@@ -24,7 +24,9 @@ jobs:
           - runner: macos-15
             xcode: "26"
             upload: true
-          - runner: macos-14
+          # macos-14 的 runner 镜像 2026-11 已下线（任务直接被取消：configuration not supported）；
+          # macos-15 镜像仍装着 Xcode 16.2（16C5032a），与本机开发用的版本一致。
+          - runner: macos-15
             xcode: "16.2"
             upload: false
     name: build (Xcode ${{ matrix.xcode }})
