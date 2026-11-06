@@ -9,16 +9,22 @@ private final class MeetingControlPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// 会议控制条（docs/meeting/TECH_DESIGN.md §3）：记录期间常驻的小浮条，可拖动（记住位置）。
+/// 会议控制条（docs/meeting/TECH_DESIGN.md §3）：记录期间常驻的小浮条。宠物开着时挂在宠物头顶、跟着宠物走
+/// （要挪就拖宠物）；宠物关着时在屏幕顶部居中，可拖动（记住位置）。
 /// `● REC 时长 · 类型 · 两路电平点 | 暂停 / 继续 · 标记重点 · 速记 · 字幕 | 结束`；速记展开一个内嵌编辑区。
 @MainActor
 final class MeetingControlBarController {
     private var panel: MeetingControlPanel?
     private var observers: [NSObjectProtocol] = []
+    /// 挂在宠物头顶：位置归宠物管，自己不能拖、不记位置。
+    private var docked = false
+    /// 程序自己在摆位置（不是用户拖的），别记下来。
+    private var placing = false
 
     func show() {
         if let panel {
             panel.orderFrontRegardless()
+            if docked { PetController.shared.refreshAccessory() }
             return
         }
         let hosting = NSHostingView(rootView: Self.makeView())
@@ -40,7 +46,6 @@ final class MeetingControlBarController {
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
         panel.setFrame(Self.initialFrame(size: size), display: false)
-        panel.orderFrontRegardless()
         self.panel = panel
         let observer = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel,
                                                               queue: .main) { [weak self] _ in
@@ -49,6 +54,22 @@ final class MeetingControlBarController {
             }
         }
         observers.append(observer)
+        // 宠物开着就挂到它头顶；宠物关着、或开会中途被关掉时，回到上面摆的位置。先挂好再显示，免得从屏幕顶上跳过去。
+        PetController.shared.dockAccessory(panel) { [weak self] docked in
+            self?.setDocked(docked)
+        }
+        panel.orderFrontRegardless()
+    }
+
+    private func setDocked(_ docked: Bool) {
+        self.docked = docked
+        guard let panel else { return }
+        panel.isMovableByWindowBackground = !docked
+        guard !docked else { return }
+        placing = true
+        panel.setFrame(Self.initialFrame(size: Self.measure()), display: true)
+        placing = false
+        panel.orderFrontRegardless()
     }
 
     func hide() {
@@ -56,6 +77,8 @@ final class MeetingControlBarController {
             NotificationCenter.default.removeObserver(observer)
         }
         observers = []
+        if let panel { PetController.shared.undockAccessory(panel) }
+        docked = false
         panel?.acceptsKey = false
         panel?.orderOut(nil)
         panel = nil
@@ -70,6 +93,8 @@ final class MeetingControlBarController {
         } else if panel.isKeyWindow {
             panel.orderOut(nil)
             panel.orderFrontRegardless()
+            // orderOut 会把子窗口从宠物窗上摘下来：挂着的话重新挂回去。
+            if docked { PetController.shared.refreshAccessory() }
         }
     }
 
@@ -88,6 +113,11 @@ final class MeetingControlBarController {
         let size = Self.measure()
         let frame = panel.frame
         guard abs(frame.width - size.width) > 0.5 || abs(frame.height - size.height) > 0.5 else { return }
+        if docked {
+            // 在宠物头顶时底边贴着头顶往上长（在脚下时往下长）：交给宠物按新大小重新贴位。
+            PetController.shared.refreshAccessory(size: size)
+            return
+        }
         panel.setFrame(NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height),
                        display: true)
     }
@@ -105,7 +135,7 @@ final class MeetingControlBarController {
 
     /// 记住位置（左上角：展开速记会改高度，记左下角的话下次位置会跳）。
     func saveOrigin() {
-        guard let panel else { return }
+        guard let panel, !docked, !placing else { return }
         let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         UserDefaults.standard.set(NSStringFromPoint(topLeft), forKey: MeetingSettings.controlBarOriginKey)
     }

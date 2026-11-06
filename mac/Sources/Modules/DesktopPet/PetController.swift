@@ -68,6 +68,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.engine.setOrigin(origin)
             self?.saveOrigin(origin)
             self?.bubble.relayout()
+            self?.layoutAccessory()
         }
         panel.onDragState = { [weak self] dragging in self?.engine.setDragged(dragging) }
         engine.petSize = side
@@ -76,7 +77,11 @@ final class PetController: ObservableObject, NotifyPresenting {
             // 站在窗口上 / 在空中时窗口列表刷得勤一些，窗口被拖动时跟得上。
             self.windowWatcher.fast = self.engine.isOnLedge || pose.state == .jump || pose.state == .fall
             // 拖拽时窗口由 PetPanel 跟手移动；引擎里的位置松手才更新，这时不能按它把窗口拽回去。
-            if pose.state != .dragged, panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+            if pose.state != .dragged, panel.frame.origin != origin {
+                panel.setFrameOrigin(origin)
+                // 头顶挂件跟着宠物窗平移；落地、跟着窗口挪走以后，头顶还放不放得下可能变了。
+                if self.accessory != nil { self.layoutAccessory() }
+            }
             // 渲染视图借给休息画面期间（#43），姿态由休息画面驱动。
             guard !self.isLent else { return }
             if self.shownModelID != nil {
@@ -160,7 +165,10 @@ final class PetController: ObservableObject, NotifyPresenting {
     func applyVisibility() {
         if PetSettings.enabled {
             panel?.orderFrontRegardless()
+            updateAccessory()
         } else {
+            // 先把头顶挂件摘下来交还：子窗口会跟着宠物窗一起收起。
+            updateAccessory()
             radial.close(animated: false)
             bubble.dismissAll()
             panel?.orderOut(nil)
@@ -190,6 +198,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         panel.setFrame(frame, display: true)
         engine.setOrigin(frame.origin)
         bubble.relayout()
+        layoutAccessory()
     }
 
     // MARK: - 点击穿透（VRM：只有人身上接鼠标）
@@ -220,6 +229,93 @@ final class PetController: ObservableObject, NotifyPresenting {
             }
         }
         if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
+    }
+
+    // MARK: - 头顶挂件（会议控制条，docs/meeting/TECH_DESIGN.md §3）
+
+    /// 挂在宠物头顶的窗口，一次一个。挂上 = 宠物窗的子窗口：宠物被拖、跟着窗口挪、掉下来时一起动；气泡排在它外侧。
+    private weak var accessory: NSWindow?
+    private var accessoryOnChange: ((Bool) -> Void)?
+    /// 上次告诉挂件方的状态；nil = 还没告诉过。
+    private var accessoryDocked: Bool?
+    private static let accessoryGap: CGFloat = 4
+
+    /// 把窗口挂到宠物头顶。宠物在（开着、窗口显示着、没借给休息画面）就挂上，否则不挂。挂上 / 摘下都回调
+    /// `onChange(挂着没有)`：登记时先回调一次，之后宠物开关、借出归还时再回调 —— 没挂上时位置由调用方自己摆。
+    func dockAccessory(_ window: NSWindow, onChange: @escaping (Bool) -> Void) {
+        if let old = accessory, old !== window { undockAccessory(old) }
+        accessory = window
+        accessoryOnChange = onChange
+        accessoryDocked = nil
+        updateAccessory()
+    }
+
+    /// 摘下来、不再跟着宠物（不回调，调用方自己收起窗口）。
+    func undockAccessory(_ window: NSWindow) {
+        guard accessory === window else { return }
+        detachAccessory(window)
+        accessory = nil
+        accessoryOnChange = nil
+        accessoryDocked = nil
+    }
+
+    /// 挂件要换大小（`size`），或者自己重新排过一次窗口（orderOut 会把子窗口从宠物窗上摘掉）：重新挂好、贴位。
+    func refreshAccessory(size: CGSize? = nil) {
+        updateAccessory(size: size)
+    }
+
+    private func updateAccessory(size: CGSize? = nil) {
+        guard let accessory else { return }
+        if PetSettings.enabled, !isLent, let panel, panel.isVisible {
+            // 先告诉挂件方（它据此停掉自己的拖动和记位置），再挂上、贴位。
+            if accessoryDocked != true {
+                accessoryDocked = true
+                accessoryOnChange?(true)
+            }
+            if accessory.parent !== panel {
+                accessory.parent?.removeChildWindow(accessory)
+                panel.addChildWindow(accessory, ordered: .above)
+            }
+            layoutAccessory(size: size)
+        } else {
+            detachAccessory(accessory)
+            if accessoryDocked != false {
+                accessoryDocked = false
+                accessoryOnChange?(false)
+            }
+        }
+    }
+
+    private func detachAccessory(_ window: NSWindow) {
+        window.parent?.removeChildWindow(window)
+        bubble.accessoryClearance = .none
+    }
+
+    /// 头顶正上方、跟宠物居中对齐；头顶放不下（宠物在屏幕上沿附近）就放到脚下。左右挪进屏内。
+    private func layoutAccessory(size: CGSize? = nil) {
+        guard let accessory, let panel, accessory.parent === panel else { return }
+        let pet = panel.frame
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(pet) }) ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let top = screen.map { Self.usableTop($0) } ?? visible.maxY
+        let size = size ?? accessory.frame.size
+        let head = pet.minY + pet.height * BubbleController.headFraction
+        let fitsAbove = head + Self.accessoryGap + size.height <= top - 4
+        let x = min(max((pet.midX - size.width / 2).rounded(), visible.minX + 4), visible.maxX - size.width - 4)
+        let y = fitsAbove
+            ? head + Self.accessoryGap
+            : max(pet.minY + pet.height * BubbleController.feetFraction - Self.accessoryGap - size.height,
+                  visible.minY + 4)
+        let frame = NSRect(x: x, y: y.rounded(), width: size.width, height: size.height)
+        if accessory.frame != frame { accessory.setFrame(frame, display: true) }
+        let clearance = size.height + Self.accessoryGap * 2
+        bubble.accessoryClearance = fitsAbove ? .above(clearance) : .below(clearance)
+    }
+
+    /// 屏幕上沿能放东西到哪：让开菜单栏；全屏 App 里菜单栏收起时还要让开刘海那条黑带（safeAreaInsets）。
+    private static func usableTop(_ screen: NSScreen) -> CGFloat {
+        screen.frame.maxY - max(screen.frame.maxY - screen.visibleFrame.maxY, screen.safeAreaInsets.top,
+                                NSStatusBar.system.thickness)
     }
 
     // MARK: - 通知呈现（NotifyPresenting）
@@ -309,6 +405,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         radial.close(animated: false)
         isLent = true
         updateHeld()
+        updateAccessory()
         panel.ignoresMouseEvents = true
         view.removeFromSuperview()
         return Loan(view: view, frame: panel.frame, is3D: shownModelID != nil)
@@ -335,6 +432,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     func returnRenderView() {
         guard isLent else { return }
         isLent = false
+        updateAccessory()
         panel?.ignoresMouseEvents = false
         let view: NSView = shownModelID != nil ? modelView : petView
         stage.show(view)
