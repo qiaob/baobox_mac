@@ -91,6 +91,12 @@ struct PetSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let package = pet.packages.first(where: { $0.id == pet.currentCharacterID }) {
+                PetCharacterVoiceSection(package: package)
+            }
+
+            PetAIServiceSection()
+
             if !PetCatalog.downloadable.isEmpty {
                 Section("pet.settings.moreSection") {
                     ForEach(PetCatalog.downloadable, id: \.id) { pack in

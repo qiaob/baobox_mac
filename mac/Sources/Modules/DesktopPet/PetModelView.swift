@@ -386,6 +386,26 @@ final class PetModelView: SCNView {
         return play(sequence: sequence)
     }
 
+    /// 说话的嘴型（#55）：VRM 的 `aa` 表情，0 = 合上。直接设形变权重，不走动画（动作片段不碰嘴型）。
+    func setMouth(_ open: CGFloat) {
+        guard let rig = model?.vrm else { return }
+        for target in rig.expressions["aa"] ?? [] {
+            target.node.morpher?.setWeight(open * CGFloat(target.weight), forTargetAt: target.index)
+        }
+    }
+
+    /// 回复的情绪（#55）：happy / sad / surprised / angry / relaxed 换成对应表情，nil 复原。
+    /// 正在播带同一表情的动作片段（挥手时笑）时，片段的动画盖过它，播完就看得见了。
+    func setMood(_ mood: String?) {
+        guard let rig = model?.vrm else { return }
+        for name in ["happy", "sad", "surprised", "angry", "relaxed"] {
+            let weight: CGFloat = name == mood ? 0.7 : 0
+            for target in rig.expressions[name] ?? [] {
+                target.node.morpher?.setWeight(weight * CGFloat(target.weight), forTargetAt: target.index)
+            }
+        }
+    }
+
     /// 有没有出场 / 退场片段（编排据此决定要不要留时间给它）。
     func hasEntranceClip(leaving: Bool) -> Bool {
         !(leaving ? leaveSequence : enterSequence).isEmpty
