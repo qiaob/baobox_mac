@@ -47,15 +47,16 @@ struct PetEntrancePlan {
             }
             if t < tFall {
                 // 从洞里往上冲（先快后慢），身子被拉长。
-                let u = (t - tRise) / rise
+                let u = CGFloat((t - tRise) / rise)
                 let y = below.y + (peak - below.y) * (1 - (1 - u) * (1 - u))
-                let stretch = CGFloat(1 - u) * 0.18
+                let stretch = (1 - u) * 0.18
                 return Frame(origin: NSPoint(x: home.x, y: y), look: .jump, attentive: false,
                              scale: CGSize(width: 1 - stretch * 0.5, height: 1 + stretch), hole: 1, swallowLine: line)
             }
             if t < tLand {
                 let u = (t - tFall) / fall
-                let y = peak + (home.y - peak) * u * u
+                let k = CGFloat(u)
+                let y = peak + (home.y - peak) * k * k
                 return Frame(origin: NSPoint(x: home.x, y: y), look: .fall, attentive: false,
                              hole: CGFloat(1 - ease(u)), swallowLine: nil)
             }
@@ -103,9 +104,11 @@ struct PetEntrancePlan {
             }
             if t < tClose {
                 // 钻进去：先往上一窜再一头扎下去，越来越快；身子被洞挤长。
-                let u = (t - tDive) / dive
-                let y = home.y + side * 0.12 * 4 * u * (1 - u) + (bottom - home.y) * u * u
-                let squeeze = CGFloat(u) * 0.25
+                let u = CGFloat((t - tDive) / dive)
+                let hop: CGFloat = side * 0.48 * u * (1 - u)
+                let sink: CGFloat = (bottom - home.y) * u * u
+                let y = home.y + hop + sink
+                let squeeze = u * 0.25
                 return Frame(origin: NSPoint(x: home.x, y: y), look: .fall, attentive: false,
                              scale: CGSize(width: 1 - squeeze, height: 1 + squeeze), hole: 1, swallowLine: line)
             }
