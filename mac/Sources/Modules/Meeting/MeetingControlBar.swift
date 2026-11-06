@@ -113,21 +113,31 @@ final class MeetingControlBarController {
     /// 量不出来时的初始大小（内容报上来尺寸后马上改成实际的）。
     private static let fallbackSize = CGSize(width: 520, height: 40)
 
-    /// 上次的位置还在某块屏内就沿用；否则放鼠标所在屏的顶部居中（菜单栏下面）。
+    /// 上次的位置还在某块屏内就沿用；否则放鼠标所在屏的顶部居中（菜单栏下面）。两种都不进屏幕顶上那条（`topInset`）。
     private static func initialFrame(size: CGSize) -> NSRect {
         if let saved = UserDefaults.standard.string(forKey: MeetingSettings.controlBarOriginKey) {
             let topLeft = NSPointFromString(saved)
-            let frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+            var frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
             let probe = NSPoint(x: frame.minX + 20, y: frame.maxY - 10)
-            if NSScreen.screens.contains(where: { NSMouseInRect(probe, $0.visibleFrame, false) }) {
+            if let screen = NSScreen.screens.first(where: { NSMouseInRect(probe, $0.visibleFrame, false) }) {
+                frame.origin.y = min(frame.origin.y, screen.frame.maxY - topInset(of: screen) - size.height)
                 return frame
             }
         }
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return NSRect(origin: .zero, size: size) }
-        return NSRect(x: visible.midX - size.width / 2, y: visible.maxY - 12 - size.height,
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else {
+            return NSRect(origin: .zero, size: size)
+        }
+        return NSRect(x: screen.visibleFrame.midX - size.width / 2,
+                      y: screen.frame.maxY - topInset(of: screen) - 12 - size.height,
                       width: size.width, height: size.height)
+    }
+
+    /// 屏幕顶上要让开的高度。平时就是菜单栏；可全屏 App 里菜单栏收起，visibleFrame 一直顶到屏幕边，
+    /// 带刘海的屏顶上那条（safeAreaInsets）全屏时是黑的 —— 2026-11-06 真机：Chrome 全屏开 Google Meet，
+    /// 黑底的控制条落进刘海那条黑带，整个看不见。没刘海的屏全屏时菜单栏也会滑下来盖住顶上，至少让开一个菜单栏高。
+    private static func topInset(of screen: NSScreen) -> CGFloat {
+        max(screen.frame.maxY - screen.visibleFrame.maxY, screen.safeAreaInsets.top, NSStatusBar.system.thickness)
     }
 }
 
