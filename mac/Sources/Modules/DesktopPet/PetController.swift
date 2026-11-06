@@ -197,84 +197,83 @@ final class PetController: ObservableObject, NotifyPresenting {
             radial.close()
             return
         }
-        radial.open(around: panel.frame, items: radialItems())
+        let (inner, outer) = radialItems()
+        radial.open(around: panel.frame, inner: inner, outer: outer)
     }
 
-    /// 一圈按钮：常用工具（按快捷键定义调用，宠物模块不认识具体工具）+ 宠物自己的动作 + 「更多」。
-    private func radialItems() -> [RadialMenuItem] {
-        var items: [RadialMenuItem] = []
+    /// 内圈 7 格（最后一格由菜单补「更多」）：最常用的工具 + 宠物动作；外圈：其他功能的快捷操作 + 宠物设置。
+    /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
+    /// 当前形象没有喂食 / 陪玩动作时，从外圈挪工具进内圈，保证内圈是满的。
+    private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
         let hotkeys = (NSApp.delegate as? AppDelegate)?.registry.allHotkeys().flatMap(\.defs) ?? []
-        func tool(_ id: String, _ symbol: String, _ title: String) {
-            guard let def = hotkeys.first(where: { $0.id == id }) else { return }
+        func tool(_ id: String, _ symbol: String, _ title: String) -> RadialMenuItem? {
+            guard let def = hotkeys.first(where: { $0.id == id }) else { return nil }
             let action = def.action
-            items.append(RadialMenuItem(id: id, symbol: symbol, title: title) { action() })
+            return RadialMenuItem(id: id, symbol: symbol, title: title) { action() }
         }
-        tool("screenshot.capture", "camera.viewfinder", L("pet.ring.screenshot"))
-        tool("screenshot.ocr", "text.viewfinder", L("pet.ring.ocr"))
-        tool("clipboard.togglePanel", "doc.on.clipboard", L("pet.ring.clipboard"))
-        tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate"))
+        let quiet = PetSettings.quietUntil.map { $0 > Date() } ?? false
+
+        var inner: [RadialMenuItem] = [
+            tool("screenshot.capture", "camera.viewfinder", L("pet.ring.screenshot")),
+            tool("screenshot.ocr", "text.viewfinder", L("pet.ring.ocr")),
+            tool("clipboard.togglePanel", "doc.on.clipboard", L("pet.ring.clipboard")),
+            tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate")),
+        ].compactMap { $0 }
         if supports("feed") {
-            items.append(RadialMenuItem(id: "pet.feed", symbol: "fork.knife", title: L("pet.ring.feed")) { [weak self] in
+            inner.append(RadialMenuItem(id: "pet.feed", symbol: "fork.knife", title: L("pet.ring.feed")) { [weak self] in
                 self?.interact("feed")
             })
         }
         if supports("play") {
-            items.append(RadialMenuItem(id: "pet.play", symbol: "gamecontroller.fill", title: L("pet.ring.play")) { [weak self] in
+            inner.append(RadialMenuItem(id: "pet.play", symbol: "gamecontroller.fill", title: L("pet.ring.play")) { [weak self] in
                 self?.interact("play")
             })
         }
-        let quiet = PetSettings.quietUntil.map { $0 > Date() } ?? false
-        items.append(RadialMenuItem(id: "pet.quiet", symbol: quiet ? "bell.fill" : "moon.zzz.fill",
+        inner.append(RadialMenuItem(id: "pet.quiet", symbol: quiet ? "bell.fill" : "moon.zzz.fill",
                                     title: quiet ? L("pet.ring.unquiet") : L("pet.ring.quiet")) { [weak self] in
             if quiet { self?.clearQuiet() } else { self?.quietForOneHour() }
         })
-        items.append(RadialMenuItem(id: "pet.more", symbol: "ellipsis", title: L("pet.ring.more")) { [weak self] in
-            self?.showMoreMenu()
+
+        var outer: [RadialMenuItem] = [
+            tool("screenshot.record", "record.circle", L("pet.ring.record")),
+            tool("screenshot.draw", "scribble", L("pet.ring.draw")),
+            tool("selectiontranslate.regionOCR", "rectangle.and.text.magnifyingglass", L("pet.ring.regionTranslate")),
+            tool("claudecode.center", "sparkle", "Claude"),
+            tool("aitools.center", "chevron.left.forwardslash.chevron.right", "Codex"),
+            tool("keyboardnav.click", "keyboard", L("pet.ring.keyboard")),
+            tool("windowmanager.maximize", "macwindow", L("pet.ring.maximize")),
+            tool("caffeinate.toggle", "cup.and.saucer.fill", L("pet.ring.caffeinate")),
+        ].compactMap { $0 }
+        outer.append(RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
+            self?.nextCharacter()
         })
-        return items
-    }
-
-    /// 「更多」：换形象、测试三种通知、安静、设置、隐藏。
-    private func showMoreMenu() {
-        guard let panel else { return }
-        let menu = NSMenu()
-
-        let characterItem = NSMenuItem(title: L("pet.menu.character"), action: nil, keyEquivalent: "")
-        let characterMenu = NSMenu()
-        let current = currentCharacterID
-        for package in packages {
-            let item = ClosureMenuItem(title: package.name) { [weak self] in self?.selectCharacter(package.id) }
-            item.state = package.id == current ? .on : .off
-            characterMenu.addItem(item)
-        }
-        characterItem.submenu = characterMenu
-        menu.addItem(characterItem)
-
-        let testItem = NSMenuItem(title: L("pet.menu.test"), action: nil, keyEquivalent: "")
-        let testMenu = NSMenu()
-        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testToast")) { [weak self] in self?.sendTestNotification(.toast) })
-        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testCard")) { [weak self] in self?.sendTestNotification(.card) })
-        testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testSticky")) { [weak self] in self?.sendTestNotification(.sticky) })
-        testItem.submenu = testMenu
-        menu.addItem(testItem)
-
-        let quietItem = NSMenuItem(title: L("pet.menu.quiet"), action: nil, keyEquivalent: "")
-        let quietMenu = NSMenu()
-        quietMenu.addItem(ClosureMenuItem(title: L("pet.menu.quiet1h")) { [weak self] in self?.quietForOneHour() })
-        quietMenu.addItem(ClosureMenuItem(title: L("pet.menu.quietToday")) { [weak self] in self?.quietForToday() })
-        if PetSettings.quietUntil != nil {
-            quietMenu.addItem(ClosureMenuItem(title: L("pet.menu.quietOff")) { [weak self] in self?.clearQuiet() })
-        }
-        quietItem.submenu = quietMenu
-        menu.addItem(quietItem)
-
-        menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: L("pet.menu.settings")) {
+        outer.append(RadialMenuItem(id: "pet.test", symbol: "bell.badge", title: L("pet.ring.test")) { [weak self] in
+            self?.sendTestNotification(.toast)
+            self?.sendTestNotification(.card)
+            self?.sendTestNotification(.sticky)
+        })
+        outer.append(RadialMenuItem(id: "pet.settings", symbol: "gearshape", title: L("pet.ring.settings")) {
             guard let registry = (NSApp.delegate as? AppDelegate)?.registry else { return }
             SettingsWindowController.shared.show(registry: registry, tab: "desktop-pet")
         })
-        menu.addItem(ClosureMenuItem(title: L("pet.menu.hide")) { [weak self] in self?.setEnabled(false) })
-        menu.popUp(positioning: nil, at: NSPoint(x: panel.frame.width / 2, y: panel.frame.height), in: panel.contentView)
+        outer.append(RadialMenuItem(id: "pet.hide", symbol: "eye.slash", title: L("pet.ring.hide")) { [weak self] in
+            self?.setEnabled(false)
+        })
+
+        // 内圈凑满 7 格（第 8 格是「更多」）。
+        while inner.count < 7, !outer.isEmpty {
+            inner.insert(outer.removeFirst(), at: max(inner.count - 1, 0))
+        }
+        return (inner, outer)
+    }
+
+    /// 换到下一个形象，并让新形象报个名。
+    private func nextCharacter() {
+        guard !packages.isEmpty else { return }
+        let index = packages.firstIndex { $0.id == currentCharacterID } ?? -1
+        let next = packages[(index + 1) % packages.count]
+        selectCharacter(next.id)
+        say(next.name)
     }
 
     // MARK: - 形象

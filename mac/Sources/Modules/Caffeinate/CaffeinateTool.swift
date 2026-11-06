@@ -65,7 +65,22 @@ final class CaffeinateTool: ToolModule {
     }
 
     func hotkeys() -> [HotkeyDefinition] {
-        [] // 纯菜单操作，不占用组合键。
+        // 出厂不绑键（不占组合键）；桌面宠物的环形菜单也经它开关防休眠。
+        [
+            HotkeyDefinition(
+                id: "caffeinate.toggle",
+                title: L("caffeinate.hotkey.toggle"),
+                subtitle: nil,
+                defaultCombo: nil
+            ) {
+                let controller = CaffeinateController.shared
+                if controller.isActive {
+                    controller.stop()
+                } else {
+                    controller.start(duration: nil)
+                }
+            }
+        ]
     }
 
     func settingsTab() -> AnyView {
