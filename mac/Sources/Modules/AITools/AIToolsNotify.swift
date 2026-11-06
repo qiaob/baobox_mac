@@ -130,7 +130,9 @@ final class CodexNotify: ObservableObject {
 
     /// 后台读 config.toml 判定 notify 是否指向本模块脚本，回主线程刷新缓存。
     func refreshState() {
+        let scriptURL = self.scriptURL
         let scriptPath = scriptURL.path
+        let eventsPath = eventsURL.path
         DispatchQueue.global(qos: .utility).async {
             let value = CodexEnv.notify()
             var installed = false
@@ -139,6 +141,11 @@ final class CodexNotify: ObservableObject {
             case .array(let programs): installed = programs.contains(scriptPath)
             case .uneditable: uneditable = true
             case .absent: break
+            }
+            // 已装的是旧版脚本（比如还不记终端位置）：换成新版。只动自家脚本，不碰 config.toml。
+            if installed,
+               (try? String(contentsOf: scriptURL, encoding: .utf8)) != Self.scriptContent(eventsPath: eventsPath) {
+                _ = Self.writeScript(to: scriptURL, eventsPath: eventsPath)
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -275,7 +282,7 @@ final class CodexNotify: ObservableObject {
         let message = lastAssistantMessage(from: object)
         let cwd = CodexJSONLParsing.extractMeta(from: object).cwd
         let project = cwd.flatMap { $0.isEmpty ? nil : CodexSessionIndex.projectName(fromPath: $0) }
-        postTurnComplete(project: project, summary: message)
+        postTurnComplete(project: project, summary: message, terminal: TerminalLocation(json: object["baobox_terminal"]))
         // 回合完成 → 节流刷新用量（≥60s 才真正刷），使菜单/用量页近实时。
         CodexUsageStore.shared.refreshThrottledFromEvent()
     }
@@ -294,7 +301,8 @@ final class CodexNotify: ObservableObject {
         return ""
     }
 
-    private func postTurnComplete(project: String?, summary: String) {
+    /// `terminal`：notify 脚本记下的会话所在终端；点通知卡片（或系统通知）时跳回那个窗口。
+    private func postTurnComplete(project: String?, summary: String, terminal: TerminalLocation?) {
         let title: String
         if let project, !project.isEmpty {
             title = L("aitools.notify.turnComplete.titleProject \(project)")
@@ -309,22 +317,35 @@ final class CodexNotify: ObservableObject {
             title: title,
             body: body,
             playSound: AIToolsNotifierSettings.soundEnabled
-        ))
+        ), onAction: terminal.map { location in { action in if action == "open" { TerminalFocus.focus(location) } } })
     }
 
     // MARK: 脚本生成 / 事件文件维护（nonisolated static）
 
-    /// 写 notify 脚本。事件 JSON 是最后一个参数，用 `for` 循环取末位后追加到 events 文件。
-    nonisolated static func writeScript(to url: URL, eventsPath: String) -> Bool {
-        CodexEnv.ensureSupportDir()
-        let script = """
+    /// notify 脚本内容。事件 JSON 是最后一个参数，用 `for` 循环取末位后追加到 events 文件。
+    /// 顺带在同一个 JSON 里补上 `baobox_terminal`：会话开在哪个终端（终端 App、Otty 面板、控制终端），
+    /// 点通知时据此跳回那个窗口（docs/claude-code-assistant/NOTIFY_JUMP.md）。与 Claude 的 reporter 同一写法。
+    nonisolated static func scriptContent(eventsPath: String) -> String {
+        #"""
         #!/bin/sh
         # Baobox Codex notify hook —— Codex 把事件 JSON 作为最后一个参数传入。
         last=""
         for a in "$@"; do last=$a; done
-        printf '%s\\n' "$last" >> \(shellSingleQuote(eventsPath))
+        clean() { printf '%s' "$1" | tr -d '"\\\r\n'; }
+        tty=$(ps -o tty= -p "$PPID" 2>/dev/null)
+        term="\"baobox_terminal\":{\"app\":\"$(clean "$__CFBundleIdentifier")\",\"otty_pane\":\"$(clean "$OTTY_PANE_ID")\",\"tty\":\"$(clean "$tty" | tr -d ' ')\"}"
+        case "$last" in
+            \{*\}) printf '%s,%s}\n' "${last%\}}" "$term" >> \#(shellSingleQuote(eventsPath)) ;;
+            *) printf '%s\n' "$last" >> \#(shellSingleQuote(eventsPath)) ;;
+        esac
         exit 0
-        """
+        """#
+    }
+
+    /// 写 notify 脚本。
+    nonisolated static func writeScript(to url: URL, eventsPath: String) -> Bool {
+        CodexEnv.ensureSupportDir()
+        let script = scriptContent(eventsPath: eventsPath)
         guard let data = script.data(using: .utf8) else { return false }
         do {
             try data.write(to: url)

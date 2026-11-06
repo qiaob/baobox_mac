@@ -8,7 +8,9 @@ import simd
 /// 用户自己放模型时也做不到，所以在 App 里直接读。只覆盖宠物模型用得到的部分：
 /// 三角形网格、PBR 基色（颜色 / 贴图）、骨骼蒙皮、位置 / 旋转 / 缩放动画（LINEAR / STEP，CUBICSPLINE 取关键值）。
 /// 不支持 Draco / meshopt 压缩、KTX2 贴图、稀疏访问器、形变（morph）动画：必需扩展直接报错，其余跳过对应部分。
-/// 解析全程容错：字段缺失 / 越界只丢掉那一块，不 crash。
+/// VRM（带 VRM / VRMC_vrm 扩展的 GLB）额外读表情用到的形变目标、透明模式、自发光，材质换成卡通光影，
+/// 并按人形骨骼生成程序化动作（docs/desktop-pet/VRM.md）。
+/// 解析全程容错：字段缺失 / 越界只丢掉那一块，不 crash。可以在后台线程调用（只建节点树，不碰正在渲染的场景）。
 enum GLTFLoader {
     static func load(contentsOf url: URL) throws -> GLTFModel {
         let file = try Data(contentsOf: url)
@@ -17,6 +19,10 @@ enum GLTFLoader {
         if let required = doc.extensionsRequired, !required.isEmpty {
             throw GLTFError.unsupported(required.joined(separator: ", "))
         }
+        let used = doc.extensionsUsed ?? []
+        let vrm = used.contains("VRM") || used.contains("VRMC_vrm")
+            ? VRMSpec.parse(json: json, nodeMeshes: (doc.nodes ?? []).map(\.mesh))
+            : nil
         var buffers: [Data] = []
         for (i, buffer) in (doc.buffers ?? []).enumerated() {
             if let uri = buffer.uri {
@@ -26,7 +32,7 @@ enum GLTFLoader {
                 buffers.append(i == 0 ? (bin ?? Data()) : Data())
             }
         }
-        let builder = GLTFSceneBuilder(doc: doc, reader: GLTFAccessorReader(doc: doc, buffers: buffers), fileURL: url)
+        let builder = GLTFSceneBuilder(doc: doc, reader: GLTFAccessorReader(doc: doc, buffers: buffers), fileURL: url, vrm: vrm)
         return builder.build()
     }
 
@@ -85,14 +91,17 @@ enum GLTFError: LocalizedError {
     }
 }
 
-/// 读出来的模型：节点树 + 按名字索引的动画片段。
+/// 读出来的模型：节点树 + 按名字索引的动画片段（VRM 还带程序化动作与表情，见 `vrm`）。
 final class GLTFModel {
     let root: SCNNode
     let clips: [String: GLTFClip]
+    /// 非 nil = VRM 人形模型。
+    let vrm: VRMRig?
 
-    init(root: SCNNode, clips: [String: GLTFClip]) {
+    init(root: SCNNode, clips: [String: GLTFClip], vrm: VRMRig? = nil) {
         self.root = root
         self.clips = clips
+        self.vrm = vrm
     }
 
     /// 播放一段动画（同名片段重复播放 = 从头开始）。`hold` = 播完停在最后一帧（坐下 / 躺下这类过渡动作）。
@@ -147,6 +156,7 @@ private struct GLTFDocument: Decodable {
     var images: [GLTFImage]?
     var skins: [GLTFSkin]?
     var animations: [GLTFAnimation]?
+    var extensionsUsed: [String]?
     var extensionsRequired: [String]?
 }
 
@@ -174,6 +184,8 @@ private struct GLTFPrimitive: Decodable {
     var indices: Int?
     var material: Int?
     var mode: Int?
+    /// 形变目标：属性名（POSITION / NORMAL）→ 访问器，存的是相对基础网格的增量。
+    var targets: [[String: Int]]?
 }
 
 private struct GLTFAccessor: Decodable {
@@ -208,6 +220,11 @@ private struct GLTFMaterial: Decodable {
 
     var pbrMetallicRoughness: PBR?
     var doubleSided: Bool?
+    /// OPAQUE / MASK / BLEND（只有 VRM 材质按它处理，毛绒形象照旧）。
+    var alphaMode: String?
+    var alphaCutoff: Float?
+    var emissiveFactor: [Float]?
+    var emissiveTexture: TextureRef?
 }
 
 private struct GLTFTexture: Decodable {
@@ -367,6 +384,8 @@ private struct GLTFSceneBuilder {
     let doc: GLTFDocument
     let reader: GLTFAccessorReader
     let fileURL: URL
+    /// 非 nil = VRM：建表情用到的形变目标、材质走卡通光影，最后生成人形动作。
+    let vrm: VRMSpec?
 
     func build() -> GLTFModel {
         let specs = doc.nodes ?? []
@@ -380,12 +399,16 @@ private struct GLTFSceneBuilder {
         }
         var materialCache: [Int: SCNMaterial] = [:]
         var skinned: [SCNNode] = []
+        let morphTargets = vrm?.morphTargets ?? [:]
+        var morphs: [Int: [(node: SCNNode, map: [Int: Int])]] = [:]
         for (i, spec) in specs.enumerated() {
             guard let meshIndex = spec.mesh, let mesh = doc.meshes?[safe: meshIndex] else { continue }
             let skin = spec.skin.flatMap { doc.skins?[safe: $0] }
             for primitive in mesh.primitives ?? [] {
-                guard let child = makePrimitive(primitive, skin: skin, meshWorld: nodes[i].simdWorldTransform,
-                                                nodes: nodes, materials: &materialCache) else { continue }
+                guard let (child, morphMap) = makePrimitive(primitive, skin: skin, meshWorld: nodes[i].simdWorldTransform,
+                                                            nodes: nodes, morphTargets: morphTargets[meshIndex] ?? [],
+                                                            materials: &materialCache) else { continue }
+                if !morphMap.isEmpty { morphs[meshIndex, default: []].append((child, morphMap)) }
                 if child.skinner != nil {
                     skinned.append(child)
                 } else {
@@ -403,7 +426,14 @@ private struct GLTFSceneBuilder {
         // 实测 RobotExpressive 的手（节点带 100 倍缩放）被放大一百倍。蒙皮网格统一挂到模型根下（单位变换），
         // 节点变换已在 makePrimitive 里烘进顶点。
         for node in skinned { root.addChildNode(node) }
-        return GLTFModel(root: root, clips: makeClips(nodes: nodes))
+        var clips = makeClips(nodes: nodes)
+        var rig: VRMRig?
+        if let vrm, let made = VRMRig(spec: vrm, nodes: nodes, root: root, morphs: morphs) {
+            rig = made
+            // 模型自带同名动画时以模型的为准。
+            for (name, clip) in VRMMotion.clips(for: made) where clips[name] == nil { clips[name] = clip }
+        }
+        return GLTFModel(root: root, clips: clips, vrm: rig)
     }
 
     private func makeNode(_ spec: GLTFNode) -> SCNNode {
@@ -433,8 +463,10 @@ private struct GLTFSceneBuilder {
     }
 
     /// `meshWorld` = 网格所在节点相对模型根的变换（蒙皮时要烘进顶点，见下）。
+    /// `morphTargets` = 要建的形变目标（glTF 下标）；返回的 map 是「glTF 下标 → SCNMorpher 下标」。
     private func makePrimitive(_ primitive: GLTFPrimitive, skin: GLTFSkin?, meshWorld: simd_float4x4, nodes: [SCNNode],
-                               materials: inout [Int: SCNMaterial]) -> SCNNode? {
+                               morphTargets: Set<Int>,
+                               materials: inout [Int: SCNMaterial]) -> (SCNNode, [Int: Int])? {
         let attributes = primitive.attributes ?? [:]
         guard (primitive.mode ?? 4) == 4,
               reader.componentCount(attributes["POSITION"]) == 3,
@@ -478,6 +510,38 @@ private struct GLTFSceneBuilder {
             geometry.materials = [material]
         }
         let node = SCNNode(geometry: geometry)
+        // VRM 的 BLEND 材质（睫毛、眼线、眼睛高光）不写深度，排在不透明部分之后画。
+        if vrm != nil, doc.materials?[safe: materialIndex]?.alphaMode == "BLEND" {
+            node.renderingOrder = 10
+        }
+        // 形变目标：glTF 存的就是相对基础网格的增量，SceneKit 用 additive 模式直接叠加。
+        var morphMap: [Int: Int] = [:]
+        if !morphTargets.isEmpty, let targets = primitive.targets {
+            var geometries: [SCNGeometry] = []
+            for index in morphTargets.sorted() where targets.indices.contains(index) {
+                guard reader.componentCount(targets[index]["POSITION"]) == 3,
+                      var delta = reader.floats(targets[index]["POSITION"]), delta.count == vertexCount * 3 else { continue }
+                var normalDelta = reader.componentCount(targets[index]["NORMAL"]) == 3 ? reader.floats(targets[index]["NORMAL"]) : nil
+                if normalDelta?.count != delta.count { normalDelta = nil }
+                if skinning != nil, meshWorld != matrix_identity_float4x4 {
+                    // 与基础顶点一样烘进网格节点的变换（增量只随线性部分变，不加平移）。
+                    delta = Self.transformVectors(delta, by: meshWorld)
+                    normalDelta = normalDelta.map { Self.transformVectors($0, by: meshWorld) }
+                }
+                let sources = [
+                    Self.source(delta, semantic: .vertex, components: 3),
+                    Self.source(normalDelta ?? [Float](repeating: 0, count: delta.count), semantic: .normal, components: 3),
+                ]
+                morphMap[index] = geometries.count
+                geometries.append(SCNGeometry(sources: sources, elements: nil))
+            }
+            if !geometries.isEmpty {
+                let morpher = SCNMorpher()
+                morpher.calculationMode = .additive
+                morpher.targets = geometries
+                node.morpher = morpher
+            }
+        }
         if let skinning {
             let indexData = skinning.joints.withUnsafeBufferPointer { Data(buffer: $0) }
             let indexSource = SCNGeometrySource(data: indexData, semantic: .boneIndices, vectorCount: vertexCount,
@@ -490,7 +554,7 @@ private struct GLTFSceneBuilder {
                 boneIndices: indexSource
             )
         }
-        return node
+        return (node, morphMap)
     }
 
     private func makeSkinning(_ skin: GLTFSkin, attributes: [String: Int], vertexCount: Int, nodes: [SCNNode]) -> Skinning? {
@@ -535,6 +599,20 @@ private struct GLTFSceneBuilder {
             out[i] = p.x
             out[i + 1] = p.y
             out[i + 2] = p.z
+            i += 3
+        }
+        return out
+    }
+
+    /// 只乘线性部分（形变目标的位移增量）。
+    private static func transformVectors(_ values: [Float], by m: simd_float4x4) -> [Float] {
+        var out = values
+        var i = 0
+        while i + 2 < values.count {
+            let v = simd_mul(m, SIMD4(values[i], values[i + 1], values[i + 2], 0))
+            out[i] = v.x
+            out[i + 1] = v.y
+            out[i + 2] = v.z
             i += 3
         }
         return out
@@ -621,7 +699,25 @@ private struct GLTFSceneBuilder {
         } else {
             material.diffuse.contents = color
         }
+        if let vrm { applyVRM(material, spec: spec, toon: vrm.toon[index]) }
         return material
+    }
+
+    /// VRM 材质：卡通光影 + 透明模式 + 自发光（设计 §2 / §5）。没有 MToon 参数的（Unlit）阴影色取白 = 不变暗。
+    private func applyVRM(_ material: SCNMaterial, spec: GLTFMaterial, toon: VRMToonParams?) {
+        if let textureIndex = spec.emissiveTexture?.index, let image = image(forTexture: textureIndex) {
+            material.emission.contents = image
+            material.emission.intensity = CGFloat(spec.emissiveFactor?.max() ?? 1)
+        } else if let factor = spec.emissiveFactor, factor.contains(where: { $0 > 0 }) {
+            material.emission.contents = Self.linearColor(factor)
+        }
+        let alpha: VRMToon.AlphaMode
+        switch spec.alphaMode {
+        case "MASK": alpha = .mask(spec.alphaCutoff ?? 0.5)
+        case "BLEND": alpha = .blend
+        default: alpha = .opaque
+        }
+        VRMToon.apply(to: material, params: toon ?? VRMToonParams(shade: SIMD3(repeating: 1), shift: 0, toony: 0.9), alpha: alpha)
     }
 
     /// glTF 的颜色因子是线性空间。

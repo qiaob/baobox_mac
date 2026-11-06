@@ -504,6 +504,15 @@ enum TerminalLauncher {
         return true
     }
 
+    /// 只按 tty 选中 iTerm2 / 系统 Terminal 里承载会话的窗口与标签页（App 本身由调用方前台化）；
+    /// 其他终端没有按 tty 选标签页的脚本接口，什么都不做。点通知跳回会话用（Core/TerminalFocus.swift）。
+    static func selectTab(bundleID: String, ttyPath: String) {
+        guard let script = tabSelectScript(bundleID: bundleID, ttyPath: ttyPath) else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = runForOutput("/usr/bin/osascript", ["-e", script])
+        }
+    }
+
     /// 从进程命令行解析终端 App：命令路径形如 `/Applications/iTerm.app/Contents/MacOS/...`。
     nonisolated private static func terminalApp(inCommand command: String) -> (URL, String)? {
         guard let range = command.range(of: ".app/Contents/MacOS/") else { return nil }

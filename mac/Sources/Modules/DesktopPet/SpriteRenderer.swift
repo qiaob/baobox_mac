@@ -23,7 +23,7 @@ struct PetManifest: Decodable {
     var facing: String?
     /// 2D 帧图（与 model 二选一）。
     var states: [String: PetStateSpec]?
-    /// 3D：模型文件名（.glb / .gltf）。
+    /// 3D：模型文件名（.glb / .gltf / .vrm）。
     var model: String?
     /// 3D：状态 → 动画片段；不写的按片段名猜。
     var clips: [String: PetClipSpec]?
@@ -107,10 +107,10 @@ enum PetPackageLoader {
         return packages
     }
 
-    /// 文件夹里第一个 .glb / .gltf（按文件名排序）。
+    /// 文件夹里第一个 .glb / .gltf / .vrm（按文件名排序）。
     private static func firstModelFile(in dir: URL) -> String? {
         let items = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return items.sorted().first { ["glb", "gltf"].contains(($0 as NSString).pathExtension.lowercased()) }
+        return items.sorted().first { ["glb", "gltf", "vrm"].contains(($0 as NSString).pathExtension.lowercased()) }
     }
 
     /// 不含隐藏目录（下载暂存目录以 `.` 开头，不会被当成形象）。
@@ -337,10 +337,10 @@ final class SpritePetView: NSView {
 
     private var stateKey: String {
         switch pose.state {
-        case .sleep: return "sleep"
+        case .sleep, .rest: return "sleep"
         case .wander: return "walk"
-        case .notify: return "happy"
-        case .idle, .dragged: return "idle"
+        case .notify, .jump: return "happy"
+        case .idle, .dragged, .fall: return "idle"
         }
     }
 

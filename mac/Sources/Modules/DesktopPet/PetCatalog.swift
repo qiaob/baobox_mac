@@ -30,7 +30,7 @@ struct PetPackInfo {
 
 enum PetCatalog {
     /// 可下载素材所在的提交。素材只增不改：要换图就提交新文件、改这里和下面的校验值。
-    static let revision = "25bbb38f19fe239838effc7a069a95ab81bb919d"
+    static let revision = "1c39c54a57497f487e296d33de96927db9f734be"
 
     /// 按顺序尝试：GitHub 原始文件 → jsDelivr（国内网络更稳）。
     static var mirrors: [String] {
@@ -110,6 +110,16 @@ enum PetCatalog {
         PetPackInfo(id: "robot", name: L("pet.pack.robot"), credit: "three.js · Tomás Laulhé", files: [
             .init(name: "pet.json", size: 642, sha256: "41a8ae59d34a8a8099a32765b8b5f30eedc5ea65e501590c011fbd994daa4364"),
             .init(name: "model.glb", size: 463988, sha256: "047f5e5fb3bb6d378bd1df16ca6137f2a596c99b3a1b5690b4020c05aaf6f319"),
+        ]),
+        // VRM 人形（docs/desktop-pet/VRM.md §7）：作者在 VRoid Hub 上允许他人使用、改模、再分发；
+        // 贴图已从 2048 压到 1024（< 20 MB，jsDelivr 单文件上限），其余原样。
+        PetPackInfo(id: "vroid-toka", name: L("pet.pack.vroid-toka"), credit: "あわ · VRoid Hub", files: [
+            .init(name: "pet.json", size: 27, sha256: "3a9e0afc4b531c9986c04d4238cadbbabe611e4c16888e8c102e820453d2ab73"),
+            .init(name: "model.vrm", size: 14653092, sha256: "5f718b2cdc846ccaee5b98aefcafecce784f8a5a873062dafe022a940fcba2eb"),
+        ]),
+        PetPackInfo(id: "vroid-alchemist", name: L("pet.pack.vroid-alchemist"), credit: "マユラ · VRoid Hub", files: [
+            .init(name: "pet.json", size: 27, sha256: "3a9e0afc4b531c9986c04d4238cadbbabe611e4c16888e8c102e820453d2ab73"),
+            .init(name: "model.vrm", size: 14079256, sha256: "c4f6e85326dc02d4ca7605f67fa0dde61b6139acc4d347665d9482517ad0440e"),
         ]),
     ]
 
