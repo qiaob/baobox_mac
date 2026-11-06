@@ -152,12 +152,14 @@ struct DictationBarView: View {
                 .buttonStyle(.plain)
                 .help(L("dictation.bar.cancel"))
             }
-            Text(verbatim: secondLine)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.white.opacity(secondLineIsPlaceholder ? 0.45 : 0.85))
-                .lineLimit(1)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if !isMessage {
+                Text(verbatim: secondLine)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.white.opacity(secondLineIsPlaceholder ? 0.45 : 0.85))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -227,6 +229,12 @@ struct DictationBarView: View {
         case .message:
             return model.preview
         }
+    }
+
+    /// 只有一句话（没听到内容、出错）：不留第二行，整条居中。
+    private var isMessage: Bool {
+        if case .message = model.phase { return true }
+        return false
     }
 
     private var secondLineIsPlaceholder: Bool {

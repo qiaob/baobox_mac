@@ -177,12 +177,14 @@ struct DictationCollectView: View {
 private struct DictationCollectMeter: View {
     let level: Float
 
+    private static let heights: [CGFloat] = [6, 10, 14, 10, 6]
+
     var body: some View {
         HStack(alignment: .center, spacing: 2) {
             ForEach(0..<5, id: \.self) { index in
                 Capsule()
                     .fill(Float(index) < level * 5 - 0.25 ? DictationCollectView.accent : Color.secondary.opacity(0.3))
-                    .frame(width: 3, height: CGFloat(6 + index % 3 * 4))
+                    .frame(width: 3, height: Self.heights[index])
             }
         }
         .frame(height: 16)

@@ -45,6 +45,8 @@ final class DictationController: ObservableObject {
     private var recognizer: DictationRecognizer?
     private var bar: DictationBarController?
     private var collect: DictationCollectPanelController?
+    /// 正在被用户关掉的收集面板（关闭回调期间保活，见 `collectClosed`）。
+    private var closingCollect: DictationCollectPanelController?
     private let escape = DictationEscapeTap()
     private var uiTimer: Timer?
     private var startedAt = Date()
@@ -748,10 +750,17 @@ final class DictationController: ObservableObject {
         if mode == .long, phase != .idle { cancelSession() }
         guard let collect else { return }
         if !collect.model.isEmpty { record(collect.model.text, app: longTarget()) }
+        // 这是在面板自己的 windowWillClose 里：先留着它，下一拍再放，别在关闭过程中把窗口释放掉。
+        closingCollect = collect
         self.collect = nil
         collecting = false
         longPipeline = nil
         coolModel()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                DictationController.shared.closingCollect = nil
+            }
+        }
     }
 
     // MARK: - 历史与菜单
