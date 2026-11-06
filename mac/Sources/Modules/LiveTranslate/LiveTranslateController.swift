@@ -270,6 +270,9 @@ final class LiveTranslateController: ObservableObject {
         var draftUnits: Set<Int> = []
         /// 这句第一次出字的时刻（记录里的时间）。
         var startedAt = Date()
+        /// 线上会议定稿时按两路音量判的「我 / 对方」（`speakerSettled` 之后不再变；判不准为 nil）。
+        var speaker: LiveTranslateSpeaker?
+        var speakerSettled = false
     }
 
     /// 翻译任务 id = 句 id × 1000 + 单元序号；999 = 最后那截还在说的（草稿）。
@@ -324,6 +327,8 @@ final class LiveTranslateController: ObservableObject {
     let translator = LiveTranslateTranslator()
 
     private var isStarting = false
+    /// `finish()` 正在等最后一句定稿：这期间不因改设置重启。
+    private var isFinishing = false
     private var recognizer: LiveTranslateRecognizer?
     private let router = LiveTranslateAudioRouter()
     private var audioSource: LiveTranslateAudioSource?
@@ -361,6 +366,27 @@ final class LiveTranslateController: ObservableObject {
     /// App 正在退出：记录同步写完，不整理纪要。
     private var terminating = false
 
+    // MARK: 会话配置（docs/meeting/TECH_DESIGN.md §2.1）
+
+    /// 本次会话的配置（开始时定下；改设置重启时按 `rebuild` 重组）。
+    private var sessionConfig = LiveTranslateSessionConfig.fromSettings()
+    /// 本次会话还没报过 `.ended`（改设置引起的重启不算结束）。
+    private var sessionOpen = false
+    /// 会议的混音链路（电平、说话人能量、暂停）；实时翻译的单路音源时为 nil。
+    private var mixedSource: LiveTranslateMixedSource?
+    /// 会议暂停中：不往识别器送音频（会话不停）。跨改设置的重启保留。
+    private var audioPaused = false
+    /// 会议里单独不录的那几路（`LiveTranslateMixerCore` 的 lane），跟暂停一样跨「改设置引起的重启」保留。
+    private var mutedLanes: Set<Int> = []
+    /// 上一句定稿时两路的累计人声时长：这一句的说话人按「定稿时 − 它」判。
+    private var speakerBaseline = LiveTranslateLaneStats()
+    /// 字幕条此刻显示着（会议的「字幕」开关据此同步）。
+    @Published private(set) var barVisible = false
+    /// 运行中切字幕条：后来的切换让还在路上的那次作废。
+    private var barGeneration = 0
+    /// 自由听译的新记录写进会议库（Meeting 模块启动时装上；没装 = 写到原来的 `livetranslate.record.folder`）。
+    static var recordLibrary: LiveTranslateRecordLibrary?
+
     private init() {
         translator.onResult = { [weak self] job, source, target, text in
             self?.applyTranslation(job: job, source: source, target: target, text: text)
@@ -388,23 +414,58 @@ final class LiveTranslateController: ObservableObject {
     // MARK: - 开关
 
     func toggle() {
+        // 会议记录中：开关 = 打开 / 收起字幕（docs/meeting/REQUIREMENTS.md §1：记录中再点「自由听译」不另开）。
+        if isRunning, let onUserRequest = sessionConfig.onUserRequest {
+            onUserRequest(.toggle)
+            return
+        }
         if isRunning { stop() } else { start() }
     }
 
+    /// 实时翻译（自由听译）：按原来的设置开。
     func start() {
-        guard !isRunning, !isStarting else { return }
+        start(config: .fromSettings())
+    }
+
+    /// 按给定配置开一次会话。正在运行 / 正在开始、或麦克风被别的会话占着时返回 false（后者发一条宠物提示）。
+    @discardableResult
+    func start(config: LiveTranslateSessionConfig) -> Bool {
+        guard !isRunning, !isStarting else { return false }
+        // 与会议记录、听写互斥（设备端识别同一时间只能跑一个请求），见 Core/AudioCaptureCoordinator。
+        guard AudioCaptureCoordinator.shared.claim(owner: config.owner, label: config.label,
+                                                   microphone: config.sources.usesMicrophone) else {
+            if let message = AudioCaptureCoordinator.shared.busyMessage() {
+                NotifyCenter.shared.post(PetNotification(source: config.owner, level: .ambient, title: message))
+            }
+            return false
+        }
+        if !sessionOpen {
+            // 新的一次会话（不是改设置引起的重启）：暂停、单路静音都从头来。
+            audioPaused = false
+            mutedLanes = []
+        }
+        sessionConfig = config
+        sessionOpen = true
         isStarting = true
         Task { await self.startFlow() }
+        return true
     }
 
     /// 改了音源 / 语言 / 翻译开关等需要重建识别链路的设置后调用。本地记录接着写同一份。
     func restartIfRunning() {
-        guard isRunning else { return }
+        guard isRunning, !isFinishing else { return }
+        let next = sessionConfig.rebuild?() ?? .fromSettings()
         restarting = true
         stop()
         restarting = false
-        start()
+        start(config: next)
     }
+
+    /// 这次是别的模块托管的会话（会议记录），不是实时翻译自己。
+    var isHostedSession: Bool { (isRunning || isStarting) && !sessionConfig.followsSettings }
+
+    /// 字幕条上能换音源（实时翻译）；会议的音源由会议类型定。
+    var showsSourceMenu: Bool { sessionConfig.followsSettings }
 
     /// App 退出：停下来，记录同步写完；上一次还在整理的纪要标成「没整理完」。
     func terminate() {
@@ -417,6 +478,11 @@ final class LiveTranslateController: ObservableObject {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        AudioCaptureCoordinator.shared.release(owner: sessionConfig.owner)
+        // 线上会议：最后那句还没定稿也判一下说话人（音源还没停，累计值还在）。
+        for index in lines.indices where !lines[index].isFinal {
+            settleSpeaker(index)
+        }
         // 记录：最后那句还没定稿也记上；改设置重启时接着写，否则收尾（结束时间、整理纪要）。
         for line in lines {
             record(line, force: true)
@@ -426,6 +492,7 @@ final class LiveTranslateController: ObservableObject {
         }
         audioSource?.stop()
         audioSource = nil
+        mixedSource = nil
         recognizer?.stop()
         recognizer = nil
         router.setSink(nil)
@@ -453,6 +520,7 @@ final class LiveTranslateController: ObservableObject {
         resetLatency()
         bar?.hide()
         bar = nil
+        barVisible = false
         if restarting {
             // 改设置引起的重启（2026-11-05 用户：切换语言 / 音源后历史记录就没了）：字幕历史留着，新开的字幕条接着显示。
             // 旧句子不会再变了，按定稿显示。
@@ -466,20 +534,42 @@ final class LiveTranslateController: ObservableObject {
         notice = nil
         channelStates = []
         sessionEngine = nil
+        if !restarting {
+            endSession()
+        }
+    }
+
+    /// 会话真的结束了（不是改设置引起的重启）：告诉托管方一次。
+    private func endSession() {
+        guard sessionOpen else { return }
+        sessionOpen = false
+        audioPaused = false
+        mutedLanes = []
+        sessionConfig.onLifecycle?(.ended)
     }
 
     private func startFlow() async {
+        var config = sessionConfig
+        if config.followsSettings {
+            // 实时翻译：音源、语言就在这里现读 —— 与改造前读设置的时刻一样（`start()` 到这里之间改了也算数）。
+            config.sources = LiveTranslateSessionConfig.Sources(LiveTranslateSettings.source)
+            config.speech = LiveTranslateSettings.speech
+            config.target = LiveTranslateSettings.target
+        }
         // 没能开起来（权限被拒、识别不可用…）：改设置重启时留着的记录也就此收尾。
         defer {
             isStarting = false
             if !isRunning {
                 finishTranscript()
                 lines = []
+                // 没开起来（权限被拒、识别不可用…）：让出占用。
+                AudioCaptureCoordinator.shared.release(owner: config.owner)
+                endSession()
             }
         }
-        let source = LiveTranslateSettings.source
-        let speech = LiveTranslateSettings.speech
-        let target = LiveTranslateSettings.target
+        let source = config.sources
+        let speech = config.speech
+        let target = config.target
 
         // 新引擎本身不一定要这项授权，但回退到旧引擎时要；统一先问，免得运行中途弹窗。
         guard await Self.ensureSpeechPermission() else {
@@ -489,15 +579,16 @@ final class LiveTranslateController: ObservableObject {
             return
         }
 
-        switch source {
-        case .microphone:
+        // 线上会议两样都要：先麦克风，再屏幕录制（系统声音）。
+        if source.usesMicrophone {
             guard await Self.ensureMicrophonePermission() else {
                 presentAlert(title: L("livetranslate.alert.micDeniedTitle"),
                              message: L("livetranslate.alert.micDeniedMessage"),
                              settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
                 return
             }
-        case .system:
+        }
+        if source.usesSystemAudio {
             guard Permissions.hasScreenRecording else {
                 Permissions.requestScreenRecording()
                 presentAlert(title: L("livetranslate.alert.screenTitle"),
@@ -507,15 +598,26 @@ final class LiveTranslateController: ObservableObject {
             }
         }
 
-        // 翻译引擎与方向：每种可能出现的语言各一个方向（自动模式两个）；本来就是「译成」那种的不用翻。
-        let directions = speech.languages.compactMap { language -> (source: TranslationLanguage,
-                                                                   target: TranslationLanguage)? in
-            LiveTranslateSettings.target(for: language, target: target).map { (source: language, target: $0) }
+        if config.followsSettings {
+            // 同上：翻译、纠错开关在权限都问完之后现读（改造前就是在这里读的）。
+            config.translate = LiveTranslateSettings.translateEnabled
+            config.correction = LiveTranslateSettings.aiCorrection ? .whenTranslating : .off
+            sessionConfig.sources = config.sources
+            sessionConfig.speech = config.speech
+            sessionConfig.target = config.target
+            sessionConfig.translate = config.translate
+            sessionConfig.correction = config.correction
         }
-        var engine: TranslationEngineKind? = LiveTranslateSettings.translateEnabled ? TranslationSettings.resolve() : nil
+        // 翻译引擎与方向：每种可能出现的语言各一个方向（自动模式两个）；本来就是「译成」那种的不用翻。
+        let directions = Self.directions(speech: speech, target: target)
+        var engine: TranslationEngineKind? = config.translate ? TranslationSettings.resolve() : nil
         if engine == .system, TranslationSettings.canFallBackToOffline,
            await !TranslationSettings.systemSupports(directions) {
             engine = .offline
+        }
+        // 系统翻译的会话挂在字幕条上：这次不显示字幕条（会议默认）就只能用离线模型翻，或者不翻。
+        if engine == .system, !config.showsBar {
+            engine = TranslationSettings.canFallBackToOffline ? .offline : nil
         }
 
         // 字幕历史：手动停止时已经清空；改设置重启时留着（见 stop）。新句子的 id 排在留下的后面。
@@ -529,33 +631,26 @@ final class LiveTranslateController: ObservableObject {
         sessionEngine = engine
         channelStates = []
         corrector.reset()
-        // 纠错跟着翻译走（按单元纠、纠完再翻）；模型常驻，免得每句都等加载。
-        correcting = engine != nil && LiveTranslateSettings.aiCorrection && OfflineTranslator.corrector.isReady
+        // 纠错：实时翻译跟着翻译走（按单元纠、纠完再翻）；会议只转录原文时也纠（与翻译解耦）。模型常驻，免得每句都等加载。
+        switch config.correction {
+        case .off: correcting = false
+        case .always: correcting = OfflineTranslator.corrector.isReady
+        case .whenTranslating: correcting = engine != nil && OfflineTranslator.corrector.isReady
+        }
         if correcting {
             OfflineTranslator.corrector.beginKeepAlive()
         }
-        // 朗读译文：送会议（虚拟声卡）/ 外放。只有音源是麦克风（说话的是我）才送会议 —— 音源是系统声音时说话的是
-        // 会议里的别人，再送回会议，对方会听到自己的话被译过来读回去。原声混入同理只在麦克风时有。
         virtualDevices = LiveTranslateAudioDevice.virtualDevices()
         if engine != nil, LiveTranslateVoiceSettings.enabled {
-            let meeting = source == .microphone
-                ? LiveTranslateAudioDevice.device(uid: LiveTranslateVoiceSettings.meetingDeviceUID) : nil
-            let mixOriginal = source == .microphone && meeting != nil && LiveTranslateVoiceSettings.mixOriginal
-            // 不送会议就只能外放：「同时从音响播放」只在送会议时才有得选（2026-11-05 两个都关着 = 朗读没声音）。
-            let speakers = meeting == nil || LiveTranslateVoiceSettings.speakers
-            voice.start(meetingDevice: meeting, speakers: speakers, mixOriginal: mixOriginal)
-            voice.prewarm(target)
-            router.setMonitor(voice.originalSink)
-            speaksTranslations = voice.isActive
-            muteWhileSpeaking = source == .microphone && speakers && !LiveTranslateVoiceSettings.keepListening
+            startVoice(source: source, target: target)
         }
         defaultLineLanguage = speech.languages.first ?? .english
         run += 1
-        let config = LiveTranslateTranscript.Config(
+        let recordConfig = LiveTranslateTranscript.Config(
             source: source.title, speech: speech.title,
-            target: LiveTranslateSettings.translateEnabled && engine != nil ? target.endonym : nil)
-        transcriptConfig = config
-        startTranscript(config)
+            target: config.translate && engine != nil ? target.endonym : nil)
+        transcriptConfig = recordConfig
+        startTranscript(recordConfig)
         isRunning = true
         beat = Beat()
         _ = router.takeStats()
@@ -565,22 +660,21 @@ final class LiveTranslateController: ObservableObject {
             }
         }
 
-        if LiveTranslateSettings.translateEnabled && engine == nil {
+        if config.translate && engine == nil {
             notice = L("livetranslate.notice.needsOfflineModel")
         } else if engine != nil, directions.isEmpty {
             // 说的就是「译成」的语言：只显示原文，提示一下免得以为坏了。
             notice = L("livetranslate.notice.sameLanguage \(target.endonym)")
         }
-        let bar = LiveTranslateBarController(controller: self, translates: engine != nil,
-                                             systemPairs: engine == .system ? directions : [])
-        self.bar = bar
-        bar.show()
+        if config.showsBar {
+            let bar = LiveTranslateBarController(controller: self, translates: engine != nil,
+                                                 systemPairs: engine == .system ? directions : [])
+            self.bar = bar
+            bar.show()
+        }
+        barVisible = config.showsBar
         if engine == .offline {
-            OfflineTranslator.shared.beginKeepAlive()
-            keepsOfflineAlive = true
-            offlineTask = Task { [translator] in
-                await translator.serveOffline()
-            }
+            startOfflineTranslation()
         }
 
         // 识别引擎先就绪（新引擎可能要下载模型），再开音源。
@@ -597,10 +691,19 @@ final class LiveTranslateController: ObservableObject {
         }
         self.recognizer = recognizer
 
+        // 实时翻译：原来的单路音源。会议：混音链路（线上两路，线下只有麦克风）。
         let audio: LiveTranslateAudioSource
+        var mixed: LiveTranslateMixedSource?
         switch source {
-        case .microphone: audio = LiveTranslateMicSource(router: router)
-        case .system: audio = LiveTranslateSystemAudioSource(router: router)
+        case .microphone where !config.usesMixer: audio = LiveTranslateMicSource(router: router)
+        case .system where !config.usesMixer: audio = LiveTranslateSystemAudioSource(router: router)
+        default:
+            let created = LiveTranslateMixedSource(router: router, microphone: source.usesMicrophone,
+                                                   system: source.usesSystemAudio)
+            created.setPaused(audioPaused)
+            for lane in mutedLanes { created.setMuted(true, lane: lane) }
+            mixed = created
+            audio = created
         }
         do {
             try await audio.start()
@@ -617,6 +720,43 @@ final class LiveTranslateController: ObservableObject {
             return
         }
         audioSource = audio
+        mixedSource = mixed
+        speakerBaseline = mixed?.laneTotals ?? LiveTranslateLaneStats()
+        config.onLifecycle?(.started)
+    }
+
+    /// 每种可能出现的语言各一个翻译方向（自动模式两个）；本来就是「译成」那种的不用翻。
+    private static func directions(speech: LiveTranslateSpeech,
+                                   target: TranslationLanguage) -> [(source: TranslationLanguage,
+                                                                     target: TranslationLanguage)] {
+        speech.languages.compactMap { language -> (source: TranslationLanguage, target: TranslationLanguage)? in
+            LiveTranslateSettings.target(for: language, target: target).map { (source: language, target: $0) }
+        }
+    }
+
+    /// 朗读译文：送会议（虚拟声卡）/ 外放。只有音源是麦克风（说话的是我）才送会议 —— 音源是系统声音时说话的是
+    /// 会议里的别人，再送回会议，对方会听到自己的话被译过来读回去。原声混入同理只在麦克风时有。
+    /// 线上会议的混音里也有对方的声音，同样不送会议；麦克风在混音里，外放时照样暂停识别防回授。
+    private func startVoice(source: LiveTranslateSessionConfig.Sources, target: TranslationLanguage) {
+        let meeting = source == .microphone
+            ? LiveTranslateAudioDevice.device(uid: LiveTranslateVoiceSettings.meetingDeviceUID) : nil
+        let mixOriginal = source == .microphone && meeting != nil && LiveTranslateVoiceSettings.mixOriginal
+        // 不送会议就只能外放：「同时从音响播放」只在送会议时才有得选（2026-11-05 两个都关着 = 朗读没声音）。
+        let speakers = meeting == nil || LiveTranslateVoiceSettings.speakers
+        voice.start(meetingDevice: meeting, speakers: speakers, mixOriginal: mixOriginal)
+        voice.prewarm(target)
+        router.setMonitor(voice.originalSink)
+        speaksTranslations = voice.isActive
+        muteWhileSpeaking = source.usesMicrophone && speakers && !LiveTranslateVoiceSettings.keepListening
+    }
+
+    /// 离线模型翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
+    private func startOfflineTranslation() {
+        OfflineTranslator.shared.beginKeepAlive()
+        keepsOfflineAlive = true
+        offlineTask = Task { [translator] in
+            await translator.serveOffline()
+        }
     }
 
     /// 自动模式：双识别器；某一种语言的识别器不可用就退回单语言。
@@ -725,6 +865,156 @@ final class LiveTranslateController: ObservableObject {
         }
     }
 
+    // MARK: - 托管会话（会议记录，docs/meeting/TECH_DESIGN.md §2.1）
+
+    /// 结束并等最后一句定稿（会议结束、听写结束用；实时翻译的 ✕ / `stop` 不变）：先停音频 → 识别器 endAudio →
+    /// 等最后一个 final（最多 1.5 秒）→ 再停（记录收尾、整理纪要照常）。
+    func finish() async {
+        guard isRunning, !isFinishing else { return }
+        isFinishing = true
+        defer { isFinishing = false }
+        // 混音链路停的时候会把缓冲里剩下的那点声音送完（同步），之后识别器手里就是全部的音频了。
+        audioSource?.stop()
+        audioSource = nil
+        if recognizer != nil {
+            let gate = LiveTranslateOnceGate()
+            Task { [weak self] in
+                await self?.recognizer?.flush()
+                gate.open()
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(Self.finishTimeout * 1_000_000_000))
+                gate.open()
+            }
+            await gate.wait()
+        }
+        stop()
+    }
+
+    private static let finishTimeout: TimeInterval = 1.5
+
+    /// 字幕条右上角的 ✕：实时翻译 = 停止（原行为）；会议 = 收起字幕，会议照常记录。
+    func closeBar() {
+        if let onUserRequest = sessionConfig.onUserRequest {
+            onUserRequest(.closeBar)
+        } else {
+            stop()
+        }
+    }
+
+    /// 运行中显示 / 收起字幕条（会议控制条的「字幕」开关）。`translate`：同时开 / 关翻译 —— 系统翻译的会话挂在
+    /// 字幕条上，收起字幕条翻译也就停了；已经翻好的留在字幕历史和记录里。只给托管会话用（实时翻译的字幕条一直在）。
+    func setBarVisible(_ visible: Bool, translate: Bool) {
+        guard isRunning, !sessionConfig.followsSettings else { return }
+        sessionConfig.showsBar = visible
+        sessionConfig.translate = visible && translate
+        barGeneration += 1
+        let generation = barGeneration
+        Task { await self.applyBar(generation: generation) }
+    }
+
+    private func applyBar(generation: Int) async {
+        let config = sessionConfig
+        let directions = Self.directions(speech: config.speech, target: config.target)
+        var engine: TranslationEngineKind?
+        if config.translate {
+            engine = TranslationSettings.resolve()
+            if engine == .system, TranslationSettings.canFallBackToOffline,
+               await !TranslationSettings.systemSupports(directions) {
+                engine = .offline
+            }
+        }
+        // 等系统翻译回话期间又切了一次 / 停了：以后来的为准。
+        guard isRunning, generation == barGeneration else { return }
+        if engine != sessionEngine {
+            stopTranslation()
+            sessionEngine = engine
+            if engine == .offline {
+                startOfflineTranslation()
+            }
+            if engine != nil, LiveTranslateVoiceSettings.enabled {
+                startVoice(source: config.sources, target: config.target)
+            }
+        }
+        bar?.hide()
+        bar = nil
+        if config.showsBar {
+            let bar = LiveTranslateBarController(controller: self, translates: engine != nil,
+                                                 systemPairs: engine == .system ? directions : [])
+            self.bar = bar
+            bar.show()
+        }
+        barVisible = config.showsBar
+        if config.translate && engine == nil {
+            notice = L("livetranslate.notice.needsOfflineModel")
+        } else if engine != nil, directions.isEmpty {
+            notice = L("livetranslate.notice.sameLanguage \(config.target.endonym)")
+        } else if notice == L("livetranslate.notice.needsOfflineModel") {
+            notice = nil
+        }
+    }
+
+    /// 关掉这次的翻译（会议收起字幕）：排着的作废、离线模型不再常驻、朗读停下。
+    private func stopTranslation() {
+        translator.reset()
+        offlineTask?.cancel()
+        offlineTask = nil
+        if keepsOfflineAlive {
+            OfflineTranslator.shared.endKeepAlive()
+            keepsOfflineAlive = false
+        }
+        voice.stop()
+        router.setMonitor(nil)
+        router.setMuted(false)
+        speaksTranslations = false
+        muteWhileSpeaking = false
+        listeningPaused = false
+        pausedAt = nil
+        unitSubmittedAt = [:]
+        translationPendingSince = nil
+        sessionEngine = nil
+    }
+
+    /// 会议暂停 / 继续：暂停 = 不往识别器送音频，会话不停（手头那句照常定稿）。字幕条的「记录」按钮跟着变，
+    /// 记录里记一行「暂停 / 继续」。
+    func setPaused(_ paused: Bool) {
+        guard isRunning || isStarting, audioPaused != paused else { return }
+        audioPaused = paused
+        mixedSource?.setPaused(paused)
+        if transcript != nil, !sessionConfig.followsSettings {
+            recording = !paused
+        }
+        transcript?.note(paused ? L("livetranslate.record.doc.paused") : L("livetranslate.record.doc.resumed"), at: Date())
+    }
+
+    /// 会议里单独不录某一路（麦克风 = 你的声音，系统声音 = 对方的声音）：这一路换成静音送进去，另一路照录；
+    /// 记录里记一行。只是 Baobox 不录，会议软件里照样听得到。
+    func setLaneMuted(_ muted: Bool, lane: Int) {
+        guard isRunning || isStarting, mutedLanes.contains(lane) != muted else { return }
+        if muted { mutedLanes.insert(lane) } else { mutedLanes.remove(lane) }
+        mixedSource?.setMuted(muted, lane: lane)
+        let microphone = lane == LiveTranslateMixerCore.microphoneLane
+        let note = microphone
+            ? (muted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"))
+            : (muted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"))
+        transcript?.note(note, at: Date())
+    }
+
+    /// 两路此刻的电平（控制条的电平点，取一次清一次）；不是混音链路时为 nil。
+    func takeInputLevels() -> LiveTranslateInputLevels? {
+        mixedSource?.takeLevels()
+    }
+
+    /// 会议的 🔖 标记重点：记录里记一行，整理纪要时这一刻前后的句子加「【重点】」。
+    func addTranscriptMark(at time: Date) {
+        transcript?.mark(at: time)
+    }
+
+    /// 会议速记：写进记录的「速记」一节，整理纪要时作为上下文。
+    func setTranscriptNotes(_ notes: String) {
+        transcript?.setNotes(notes)
+    }
+
     // MARK: - 字幕
 
     private func upsert(id: Int, text: String, isFinal: Bool) {
@@ -745,6 +1035,7 @@ final class LiveTranslateController: ObservableObject {
             // 新的一句开始了：之前没收到 final 的句子也不会再变，按定稿显示（也就可以记下了）。
             for index in lines.indices where lines[index].id < id && !lines[index].isFinal {
                 lines[index].isFinal = true
+                settleSpeaker(index)
                 record(lines[index])
             }
             beat.newLines += 1
@@ -756,11 +1047,26 @@ final class LiveTranslateController: ObservableObject {
         }
         if notice == L("livetranslate.notice.downloadingModel") { notice = nil }
         if let index = lines.firstIndex(where: { $0.id == id }) {
-            if bar?.translates == true {
+            if isFinal {
+                settleSpeaker(index)
+            }
+            // 在翻译，或会议只转录但开着 AI 纠错：按单元处理（实时翻译里纠错只在翻译时开，两个条件等价于原来的「字幕条在翻译」）。
+            if sessionEngine != nil || correcting {
                 submitUnits(lineIndex: index)
             }
             record(lines[index])
         }
+    }
+
+    /// 线上会议：一句定稿时按这句期间两路的人声时长判「我 / 对方」（docs/meeting/TECH_DESIGN.md §2.2）。
+    /// 这句的期间 = 上一句定稿到这句定稿（识别单元一个接一个）。不标说话人的会话什么也不做。
+    private func settleSpeaker(_ index: Int) {
+        guard let mixedSource, sessionConfig.transcript?.speakers == true,
+              lines.indices.contains(index), !lines[index].speakerSettled else { return }
+        let totals = mixedSource.laneTotals
+        lines[index].speaker = LiveTranslateSpeakerJudge.decide(totals - speakerBaseline)
+        lines[index].speakerSettled = true
+        speakerBaseline = totals
     }
 
     // MARK: - 本地记录
@@ -771,8 +1077,17 @@ final class LiveTranslateController: ObservableObject {
             transcript.continueWith(config, at: Date())
             return
         }
-        guard LiveTranslateRecordSettings.enabled else { return }
-        let transcript = LiveTranslateTranscript(start: Date(), config: config)
+        let start = Date()
+        let destination: LiveTranslateTranscript.Destination
+        if let given = sessionConfig.transcript {
+            // 会议：这次一定记，写到会议库里这场会议的目录。
+            destination = given
+        } else {
+            guard LiveTranslateRecordSettings.enabled else { return }
+            // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3）；会议模块没装就写到原来的文件夹。
+            destination = Self.recordLibrary?.freeListeningDestination(start: start) ?? .legacy(start: start)
+        }
+        let transcript = LiveTranslateTranscript(start: start, config: config, destination: destination)
         transcript.onWriteError = { [weak self] message in
             guard let self, self.isRunning else { return }
             self.notice = L("livetranslate.record.writeFailed \(message)")
@@ -798,7 +1113,8 @@ final class LiveTranslateController: ObservableObject {
         if LiveTranslateRecordSettings.enabled != on {
             LiveTranslateRecordSettings.enabled = on
         }
-        guard isRunning else { return }
+        // 会议记录中：这个开关只管自由听译的记录，不动会议的转录。
+        guard isRunning, sessionConfig.transcript == nil else { return }
         if on {
             guard transcript == nil, let transcriptConfig else { return }
             startTranscript(transcriptConfig)
@@ -813,18 +1129,34 @@ final class LiveTranslateController: ObservableObject {
         }
     }
 
-    /// 记进本地记录：说完（定稿）的句子；停止时 `force` 把最后那句没定稿的也记上。
+    /// 字幕条上的「记录」按钮：实时翻译 = 开 / 关保存记录（原行为）；会议 = 暂停 / 继续记录（交给会议，与控制条同步）。
+    func toggleBarRecording() {
+        if let onUserRequest = sessionConfig.onUserRequest {
+            onUserRequest(.toggleRecording)
+        } else {
+            setRecording(!recording)
+        }
+    }
+
+    /// 记进本地记录：说完（定稿）的句子；停止时 `force` 把最后那句没定稿的也记上。会议另外经 `onFinalLine` 报给会议会话。
     private func record(_ line: Line, force: Bool = false) {
-        guard let transcript, line.isFinal || force else { return }
+        guard transcript != nil || sessionConfig.onFinalLine != nil, line.isFinal || force else { return }
         let original = line.original.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !original.isEmpty else { return }
-        transcript.update(key: "\(run)-\(line.id)", time: line.startedAt, original: original,
-                          translation: line.translates ? line.translation : "")
+        let key = "\(run)-\(line.id)"
+        let translation = line.translates ? line.translation : ""
+        sessionConfig.onFinalLine?(LiveTranslateSessionConfig.FinalLine(
+            key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker))
+        guard let transcript else { return }
+        transcript.update(key: key, time: line.startedAt, original: original, translation: translation,
+                          speaker: line.speaker)
         if transcriptURL == nil, isRunning { transcriptURL = transcript.fileURL }
     }
 
-    /// 这句此刻译成什么语言；nil = 它本来就是「译成」的语言，不翻。
+    /// 这句此刻译成什么语言；nil = 它本来就是「译成」的语言，不翻（这次不翻译时一律 nil）。
     private func target(forLine id: Int) -> TranslationLanguage? {
+        // 会议只转录、或字幕收起了：不翻。实时翻译只在翻译时才会走到这里，不受影响。
+        guard sessionEngine != nil else { return nil }
         let language = lineLanguages[id] ?? defaultLineLanguage
         return LiveTranslateSettings.target(for: language, target: sessionTarget)
     }

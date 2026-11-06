@@ -1,8 +1,33 @@
 import AppKit
 import SwiftUI
 
-/// 实时翻译设置：音源、语言、翻译开关、字幕样式。
+/// 实时翻译设置：音源、语言、翻译开关、字幕样式。Tab 已改名「字幕与同传」，第一行注明已并入「会议」
+/// （docs/meeting/TECH_DESIGN.md §7），其余不变。
 struct LiveTranslateSettingsView: View {
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Text("livetranslate.settings.merged")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("livetranslate.settings.openMeeting") {
+                        SettingsTabSelection.shared.selectedTab = "meeting"
+                    }
+                }
+            }
+            LiveTranslateSettingsSections(embedded: false)
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// 实时翻译的全部设置分组。`embedded`：嵌在「会议」设置的「字幕与同传」里（docs/meeting/TECH_DESIGN.md §6）时，
+/// 不要开头那一组（介绍、开始按钮、快捷键 —— 会议设置有自己的快捷键分组）。
+struct LiveTranslateSettingsSections: View {
+    let embedded: Bool
+
     @AppStorage(LiveTranslateSettings.sourceKey) private var source = LiveTranslateSource.system.rawValue
     /// `auto` 或识别 locale（`en-US`、`zh-CN`…）。
     @AppStorage(LiveTranslateSettings.languageKey) private var language = "en-US"
@@ -24,7 +49,7 @@ struct LiveTranslateSettingsView: View {
     }
 
     var body: some View {
-        Form {
+        if !embedded {
             Section {
                 Text("livetranslate.settings.intro")
                     .font(.callout)
@@ -35,131 +60,130 @@ struct LiveTranslateSettingsView: View {
                 // id 与 LiveTranslateTool.hotkeys() 一致。
                 ModuleHotkeyRows(ids: ["livetranslate.toggle"])
             }
+        }
 
-            Section("livetranslate.settings.audioSection") {
-                Picker("livetranslate.settings.source", selection: $source) {
-                    ForEach(LiveTranslateSource.allCases) { item in
-                        Text(item.title).tag(item.rawValue)
-                    }
+        Section("livetranslate.settings.audioSection") {
+            Picker("livetranslate.settings.source", selection: $source) {
+                ForEach(LiveTranslateSource.allCases) { item in
+                    Text(item.title).tag(item.rawValue)
                 }
-                .onChange(of: source) { _, _ in controller.restartIfRunning() }
-                Text("livetranslate.settings.sourceHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            }
+            .onChange(of: source) { _, _ in controller.restartIfRunning() }
+            Text("livetranslate.settings.sourceHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-                Picker("livetranslate.settings.language", selection: $language) {
-                    Text(LiveTranslateSpeech.auto(LiveTranslateSettings.autoA, LiveTranslateSettings.autoB).title)
-                        .tag(LiveTranslateSettings.autoValue)
+            Picker("livetranslate.settings.language", selection: $language) {
+                Text(LiveTranslateSpeech.auto(LiveTranslateSettings.autoA, LiveTranslateSettings.autoB).title)
+                    .tag(LiveTranslateSettings.autoValue)
+                ForEach(LiveTranslateSettings.speechLanguages) { item in
+                    Text(item.endonym).tag(item.speechLocale ?? item.code)
+                }
+            }
+            .onChange(of: language) { _, _ in controller.restartIfRunning() }
+
+            if language == LiveTranslateSettings.autoValue {
+                Picker("livetranslate.settings.autoA", selection: $autoA) {
                     ForEach(LiveTranslateSettings.speechLanguages) { item in
-                        Text(item.endonym).tag(item.speechLocale ?? item.code)
-                    }
-                }
-                .onChange(of: language) { _, _ in controller.restartIfRunning() }
-
-                if language == LiveTranslateSettings.autoValue {
-                    Picker("livetranslate.settings.autoA", selection: $autoA) {
-                        ForEach(LiveTranslateSettings.speechLanguages) { item in
-                            Text(item.endonym).tag(item.code)
-                        }
-                    }
-                    .onChange(of: autoA) { _, _ in controller.restartIfRunning() }
-                    Picker("livetranslate.settings.autoB", selection: $autoB) {
-                        ForEach(LiveTranslateSettings.speechLanguages) { item in
-                            Text(item.endonym).tag(item.code)
-                        }
-                    }
-                    .onChange(of: autoB) { _, _ in controller.restartIfRunning() }
-                    Text("livetranslate.settings.autoHelp")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if LiveTranslateSettings.analyzerSupported {
-                    Text("livetranslate.settings.engineAnalyzer")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Toggle("livetranslate.settings.onDevice", isOn: $onDevice)
-                        .onChange(of: onDevice) { _, _ in controller.restartIfRunning() }
-                    Text("livetranslate.settings.onDeviceHelp")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    LiveTranslateRouteStatus(speech: LiveTranslateSettings.speech, preferOnDevice: onDevice)
-                }
-            }
-
-            Section("livetranslate.settings.vocabularySection") {
-                LiveTranslateGlossaryEditor()
-                Text("livetranslate.settings.vocabularyHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("livetranslate.settings.translateSection") {
-                Toggle("livetranslate.settings.translate", isOn: $translate)
-                    .onChange(of: translate) { _, _ in controller.restartIfRunning() }
-                Text("livetranslate.settings.translateHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("livetranslate.settings.target", selection: $target) {
-                    ForEach(TranslationLanguage.all) { item in
                         Text(item.endonym).tag(item.code)
                     }
                 }
-                .onChange(of: target) { _, _ in controller.restartIfRunning() }
-                Text("livetranslate.settings.targetHelp")
+                .onChange(of: autoA) { _, _ in controller.restartIfRunning() }
+                Picker("livetranslate.settings.autoB", selection: $autoB) {
+                    ForEach(LiveTranslateSettings.speechLanguages) { item in
+                        Text(item.endonym).tag(item.code)
+                    }
+                }
+                .onChange(of: autoB) { _, _ in controller.restartIfRunning() }
+                Text("livetranslate.settings.autoHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            TranslationEngineSection {
-                controller.restartIfRunning()
-            }
-
-            Section("livetranslate.settings.correctionSection") {
-                Toggle("livetranslate.settings.aiCorrection", isOn: $aiCorrection)
-                    .onChange(of: aiCorrection) { _, _ in controller.restartIfRunning() }
-                Text("livetranslate.settings.aiCorrectionHelp")
+            if LiveTranslateSettings.analyzerSupported {
+                Text("livetranslate.settings.engineAnalyzer")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                OfflineModelRow(translator: .corrector,
-                                title: "livetranslate.correction.modelTitle",
-                                notInstalledHelp: "livetranslate.correction.notInstalledHelp",
-                                installedHelp: "livetranslate.correction.installedHelp")
-            }
-
-            LiveTranslateVoiceSection(languages: voiceLanguages) {
-                controller.restartIfRunning()
-            }
-
-            LiveTranslateRecordSection()
-
-            Section("livetranslate.settings.barSection") {
-                Picker("livetranslate.settings.display", selection: $display) {
-                    Text("livetranslate.display.both").tag(LiveTranslateDisplay.both.rawValue)
-                    Text("livetranslate.display.translation").tag(LiveTranslateDisplay.translation.rawValue)
-                    Text("livetranslate.display.original").tag(LiveTranslateDisplay.original.rawValue)
-                }
-                HStack {
-                    Text("livetranslate.settings.fontSize")
-                    Slider(value: $fontSize, in: 16...40, step: 1)
-                    Text(verbatim: "\(Int(fontSize))")
-                        .monospacedDigit()
-                        .frame(width: 28, alignment: .trailing)
-                }
-                HStack {
-                    Text("livetranslate.settings.opacity")
-                    Slider(value: $opacity, in: 0.3...1.0)
-                    Text(verbatim: "\(Int(opacity * 100))%")
-                        .monospacedDigit()
-                        .frame(width: 40, alignment: .trailing)
-                }
-                Text("livetranslate.settings.barHelp")
+            } else {
+                Toggle("livetranslate.settings.onDevice", isOn: $onDevice)
+                    .onChange(of: onDevice) { _, _ in controller.restartIfRunning() }
+                Text("livetranslate.settings.onDeviceHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                LiveTranslateRouteStatus(speech: LiveTranslateSettings.speech, preferOnDevice: onDevice)
             }
         }
-        .formStyle(.grouped)
+
+        Section("livetranslate.settings.vocabularySection") {
+            LiveTranslateGlossaryEditor()
+            Text("livetranslate.settings.vocabularyHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section("livetranslate.settings.translateSection") {
+            Toggle("livetranslate.settings.translate", isOn: $translate)
+                .onChange(of: translate) { _, _ in controller.restartIfRunning() }
+            Text("livetranslate.settings.translateHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("livetranslate.settings.target", selection: $target) {
+                ForEach(TranslationLanguage.all) { item in
+                    Text(item.endonym).tag(item.code)
+                }
+            }
+            .onChange(of: target) { _, _ in controller.restartIfRunning() }
+            Text("livetranslate.settings.targetHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        TranslationEngineSection {
+            controller.restartIfRunning()
+        }
+
+        Section("livetranslate.settings.correctionSection") {
+            Toggle("livetranslate.settings.aiCorrection", isOn: $aiCorrection)
+                .onChange(of: aiCorrection) { _, _ in controller.restartIfRunning() }
+            Text("livetranslate.settings.aiCorrectionHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            OfflineModelRow(translator: .corrector,
+                            title: "livetranslate.correction.modelTitle",
+                            notInstalledHelp: "livetranslate.correction.notInstalledHelp",
+                            installedHelp: "livetranslate.correction.installedHelp")
+        }
+
+        LiveTranslateVoiceSection(languages: voiceLanguages) {
+            controller.restartIfRunning()
+        }
+
+        LiveTranslateRecordSection()
+
+        Section("livetranslate.settings.barSection") {
+            Picker("livetranslate.settings.display", selection: $display) {
+                Text("livetranslate.display.both").tag(LiveTranslateDisplay.both.rawValue)
+                Text("livetranslate.display.translation").tag(LiveTranslateDisplay.translation.rawValue)
+                Text("livetranslate.display.original").tag(LiveTranslateDisplay.original.rawValue)
+            }
+            HStack {
+                Text("livetranslate.settings.fontSize")
+                Slider(value: $fontSize, in: 16...40, step: 1)
+                Text(verbatim: "\(Int(fontSize))")
+                    .monospacedDigit()
+                    .frame(width: 28, alignment: .trailing)
+            }
+            HStack {
+                Text("livetranslate.settings.opacity")
+                Slider(value: $opacity, in: 0.3...1.0)
+                Text(verbatim: "\(Int(opacity * 100))%")
+                    .monospacedDigit()
+                    .frame(width: 40, alignment: .trailing)
+            }
+            Text("livetranslate.settings.barHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -248,8 +272,16 @@ private struct LiveTranslateRecordSection: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Button("livetranslate.record.choose") { chooseFolder() }
+                    // 新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3），原来的文件夹设置只用于迁移，这里不再能改。
+                    if !writesToLibrary {
+                        Button("livetranslate.record.choose") { chooseFolder() }
+                    }
                     Button("livetranslate.record.openFolder") { LiveTranslateRecordSettings.openFolder() }
+                }
+                if writesToLibrary {
+                    Text("livetranslate.record.libraryHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Toggle("livetranslate.record.summary", isOn: $summary)
                 Group {
@@ -265,7 +297,12 @@ private struct LiveTranslateRecordSection: View {
         }
     }
 
+    private var writesToLibrary: Bool { LiveTranslateController.recordLibrary != nil }
+
     private var displayPath: String {
+        if writesToLibrary {
+            return (LiveTranslateRecordSettings.effectiveFolder.path as NSString).abbreviatingWithTildeInPath
+        }
         let path = folder.isEmpty ? LiveTranslateRecordSettings.defaultFolder.path : folder
         return (path as NSString).abbreviatingWithTildeInPath
     }

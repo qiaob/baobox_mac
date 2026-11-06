@@ -344,7 +344,8 @@ private struct LiveTranslateBarView: View {
                 linesArea
             }
             Button {
-                controller.stop()
+                // 实时翻译：停止；会议：收起字幕（会议照常记录）。
+                controller.closeBar()
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14))
@@ -364,7 +365,10 @@ private struct LiveTranslateBarView: View {
     /// 顶上一行：快捷菜单 + 状态（识别方式 / 翻译引擎）+ 右上角的延迟监控。
     private var topRow: some View {
         HStack(spacing: 12) {
-            sourceMenu
+            // 会议的音源由会议类型定，不在这里换。
+            if controller.showsSourceMenu {
+                sourceMenu
+            }
             speechMenu
             if translates {
                 targetMenu
@@ -727,14 +731,15 @@ private struct LiveTranslateBarView: View {
         let url = controller.transcriptURL
         return HStack(spacing: 6) {
             Button {
-                controller.setRecording(!on)
+                // 实时翻译：开 / 关保存记录；会议：暂停 / 继续记录（与控制条同步）。
+                controller.toggleBarRecording()
             } label: {
                 Label(on ? L("livetranslate.record.barOn") : L("livetranslate.record.barOff"),
                       systemImage: on ? "record.circle.fill" : "record.circle")
                     .foregroundStyle(on ? Color.red.opacity(0.9) : Color.white.opacity(0.85))
             }
             .buttonStyle(.plain)
-            .help(L("livetranslate.record.toggleHelp"))
+            .help(controller.isHostedSession ? L("livetranslate.record.toggleHelpMeeting") : L("livetranslate.record.toggleHelp"))
             Button {
                 if let url {
                     NSWorkspace.shared.open(url)

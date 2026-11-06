@@ -30,20 +30,25 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         CFBundleIconFile: AppIcon
         NSHumanReadableCopyright: "© 2026 Baobox"
-        NSMicrophoneUsageDescription: "录屏时录制你的声音（可选开启），以及实时翻译选麦克风作音源时识别你说的话。Used to record your voice during screen recording (optional) and to transcribe speech when Live Translate uses the microphone."
-        # 实时翻译用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
-        NSSpeechRecognitionUsageDescription: "实时翻译需要把麦克风或系统声音里的语音转成文字。Live Translate converts speech from the microphone or system audio into text."
+        NSMicrophoneUsageDescription: "录屏时录制你的声音（可选开启）、会议记录与实时翻译转写你说的话，以及语音听写把你说的话转成文字。Used to record your voice during screen recording (optional), to transcribe what you say in meeting recordings and Live Translate, and for Dictation."
+        # 会议记录、实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
+        NSSpeechRecognitionUsageDescription: "会议记录、实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Meeting recording, Live Translate and Dictation convert speech into text (on this Mac when possible)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
         NSLocalNetworkUsageDescription: "网络抓包代理需要绑定局域网接口，供同网手机连接调试。The packet-capture proxy binds local-network interfaces so phones on the same network can connect for debugging."
+        # 会议读本机日历（只读、数据不出本机）：下一场会议、会前提醒、一键入会、会议绑定日历事件。
+        # 缺这条描述，申请日历权限时进程会被系统直接杀掉。
+        NSCalendarsFullAccessUsageDescription: "会议需要读取你选中的日历，用来显示下一场会议、会前提醒、一键入会，并把会议记录与日历事件对应起来；只读，数据不出本机。Meeting reads the calendars you choose to show your next meeting, remind you before it starts, join it in one click and link recordings to calendar events. Read-only; nothing leaves this Mac."
     # Hardened Runtime 下访问麦克风必须显式声明 audio-input entitlement，
     # 只有 Info.plist 的用途描述是不够的。
     # 同理,向 iTerm2 / Terminal 发送 AppleScript(按 tty 选中会话标签页)
-    # 需要 automation.apple-events entitlement。
+    # 需要 automation.apple-events entitlement；会议读日历（EventKit）需要 personal-information.calendars，
+    # 缺了系统直接拒绝、连授权框都不弹。
     entitlements:
       path: Baobox.entitlements
       properties:
         com.apple.security.device.audio-input: true
         com.apple.security.automation.apple-events: true
+        com.apple.security.personal-information.calendars: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app

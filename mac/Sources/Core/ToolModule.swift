@@ -10,7 +10,11 @@ struct HotkeyDefinition {
     let subtitle: String?
     /// nil = 出厂不绑定（易冲突的组合出厂留空，由用户在快捷键页自行设置）。
     let defaultCombo: KeyCombo?
+    /// 按下时调用（每按一次只调一次）。
     let action: @MainActor () -> Void
+    /// 松开时调用；nil = 不关心松开（绝大多数快捷键）。「按住说话」= `action` 开始 + `onRelease` 结束，
+    /// 见 docs/dictation/TECH_DESIGN.md §1。
+    var onRelease: (@MainActor () -> Void)? = nil
 }
 
 /// 工具模块协议：新增工具只需实现本协议并在 AppDelegate 中注册，

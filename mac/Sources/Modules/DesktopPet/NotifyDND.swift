@@ -27,6 +27,11 @@ final class NotifyDND {
         if on { tokens.insert(token) } else { tokens.remove(token) }
     }
 
+    /// 某个令牌挂着没有（会议检测看「录屏中」用；不像 `reasons()` 那样要遍历窗口列表查全屏）。
+    func hasToken(_ token: String) -> Bool {
+        tokens.contains(token)
+    }
+
     /// 宠物与通知内核用：令牌、手动安静、前台全屏。麦克风占用不算在内 —— Baobox 自己的
     /// 实时翻译也会占用麦克风，分不清是谁在用，不能因此让宠物睡着、把别的通知攒起来。
     var isSuppressed: Bool {
@@ -61,7 +66,9 @@ final class NotifyDND {
         }
     }
 
-    private nonisolated static func defaultInputIsRunning() -> Bool {
+    /// 默认输入设备正被使用（不管是谁在用）。会调 CoreAudio HAL，不要在主线程调。
+    /// 会议检测在系统不支持按进程查麦克风时也用它兜底（MeetingMicrophoneProbe）。
+    nonisolated static func defaultInputIsRunning() -> Bool {
         var deviceID = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,

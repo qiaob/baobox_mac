@@ -44,8 +44,12 @@ final class HotkeyCenter: ObservableObject {
 
     private func installHandlerIfNeeded() {
         guard !handlerInstalled else { return }
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                      eventKind: UInt32(kEventHotKeyPressed))
+        // 按下 + 松开两种事件。松开只转给声明了 `onRelease` 的定义（按住说话），其余快捷键照旧
+        // 只在按下时触发一次（docs/dictation/TECH_DESIGN.md §1）。
+        let eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         // C 函数指针：不捕获任何局部上下文，只引用全局单例与全局常量。
         let callback: EventHandlerUPP = { _, eventRef, _ -> OSStatus in
             guard let eventRef else { return OSStatus(eventNotHandledErr) }
@@ -59,19 +63,20 @@ final class HotkeyCenter: ObservableObject {
                                            &hkID)
             if status == noErr {
                 let carbonID = hkID.id
+                let released = GetEventKind(eventRef) == UInt32(kEventHotKeyReleased)
                 // Carbon 应用级事件回调本就在主线程执行，这里直接同步派发到 handle，不经任何队列/RunLoop。
                 // 状态栏 NSMenu 打开时主 runloop 进入事件跟踪模式，DispatchQueue.main.async / RunLoop.perform
                 // 入队的 block 在该模式不被服务、要等菜单关闭才执行 —— 表现为「菜单开着时按快捷键无反应，
                 // 关掉菜单才触发」。同步执行则在回调栈内立即处理（含收起菜单 + 弹出截图浮层）。
                 MainActor.assumeIsolated {
-                    HotkeyCenter.shared.handle(carbonID: carbonID)
+                    HotkeyCenter.shared.handle(carbonID: carbonID, released: released)
                 }
             }
             return noErr
         }
         // 安装失败时所有热键都会「注册成功」却永远收不到回调，必须显式检查，
         // 否则是最难定位的一类静默失效。
-        let status = InstallEventHandler(GetApplicationEventTarget(), callback, 1, &eventType, nil, nil)
+        let status = InstallEventHandler(GetApplicationEventTarget(), callback, eventTypes.count, eventTypes, nil, nil)
         guard status == noErr else {
             NSLog("[HotkeyCenter] InstallEventHandler 失败(status=\(status))，全局快捷键将全部无响应")
             return
@@ -80,8 +85,13 @@ final class HotkeyCenter: ObservableObject {
     }
 
     @MainActor
-    private func handle(carbonID: UInt32) {
+    private func handle(carbonID: UInt32, released: Bool) {
         guard let id = idByCarbonID[carbonID], let reg = registrations[id] else { return }
+        if released {
+            // 松开：只有按住类的定义关心，不收菜单（按下时已经收过）。
+            reg.def.onRelease?()
+            return
+        }
         // 先收起可能正打开的状态栏菜单，再执行动作，避免菜单与动作窗口并存、抢占事件。
         onWillFireAction?()
         reg.def.action()
@@ -134,6 +144,8 @@ final class HotkeyCenter: ObservableObject {
     fileprivate func handleTapKeyDown(_ event: CGEvent) -> Bool {
         let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
+        // 按住不放时系统会补发自动重复的 keyDown：吞掉、不再触发（与 Carbon 路径一致，每按一次只触发一次）。
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         var carbon: UInt32 = 0
         if flags.contains(.maskCommand) { carbon |= KeyCombo.cmd }
         if flags.contains(.maskShift) { carbon |= KeyCombo.shift }
@@ -143,6 +155,7 @@ final class HotkeyCenter: ObservableObject {
             for (_, reg) in registrations {
                 guard let combo = reg.combo,
                       combo.keyCode == keyCode, combo.carbonModifiers == carbon else { continue }
+                if isRepeat { return true }
                 onBeforeFire?()      // 收菜单前：截图先抓含菜单整屏快照
                 onWillFireAction?()  // 收起菜单
                 reg.def.action()

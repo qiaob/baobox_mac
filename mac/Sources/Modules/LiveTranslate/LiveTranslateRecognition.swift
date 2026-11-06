@@ -235,6 +235,47 @@ protocol LiveTranslateRecognizer: AnyObject {
     var onLanguage: ((Int, TranslationLanguage) -> Void)? { get set }
     func start() async throws
     func stop()
+    /// 收尾（`LiveTranslateController.finish`，docs/meeting/TECH_DESIGN.md §2.1）：不再收音频、不再开新段，
+    /// 把手头这一句送去定稿，定稿经 `onUpdate(…, true)` 回调后返回。调用方限时等（最多 1.5 秒），到点直接 `stop()` ——
+    /// `stop()` 也会让这里返回。默认什么也不等（到点按 `stop` 的老办法收尾）。
+    func flush() async
+}
+
+extension LiveTranslateRecognizer {
+    func flush() async {}
+}
+
+/// 只放行一次的闸门：`wait()` 一直等到有人 `open()`（定稿回来了 / 超时 / 停止）；先 `open()` 后 `wait()` 立刻返回，
+/// 多次 `open()` 只算第一次。
+/// @unchecked Sendable 依据：可变状态都在 `lock` 内。
+final class LiveTranslateOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if opened {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    func open() {
+        lock.lock()
+        opened = true
+        let pending = waiters
+        waiters = []
+        lock.unlock()
+        for continuation in pending {
+            continuation.resume()
+        }
+    }
 }
 
 // MARK: - macOS 26+：SpeechAnalyzer
@@ -341,6 +382,17 @@ final class LiveTranslateAnalyzerRecognizer: LiveTranslateRecognizer {
         analyzer = nil
     }
 
+    /// 收尾：不再送音频，让识别器把手头没定稿的那句定稿后结束（结果照常经 `deliver` 回调），等结果流走完。
+    /// 调用方限时等，到点 `stop()`。
+    func flush() async {
+        guard running, let analyzer else { return }
+        router.setSink(nil)
+        inputBuilder?.finish()
+        inputBuilder = nil
+        try? await analyzer.finalizeAndFinishThroughEndOfInput()
+        await resultsTask?.value
+    }
+
     private func deliver(text: String, isFinal: Bool) {
         guard running else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -377,6 +429,8 @@ final class LiveTranslateLegacyRecognizer: LiveTranslateRecognizer {
     private var handoffDeadline: Date?
     private var watchdog: Timer?
     private var running = false
+    /// `flush()` 在等这一段的 final：回来了（或交接等超时）就放行，不再开新段。
+    private var flushGate: LiveTranslateOnceGate?
 
     private var segmentID = 0
     private var segmentStart = Date()
@@ -429,6 +483,24 @@ final class LiveTranslateLegacyRecognizer: LiveTranslateRecognizer {
         request = nil
         task = nil
         handoffDeadline = nil
+        flushGate?.open()
+        flushGate = nil
+    }
+
+    /// 收尾：这一段有字就 endAudio、等它的 final（交接中就等旧段的），没字直接返回。等的期限沿用交接的
+    /// `finalWait`，到点由看门狗按超时收尾。
+    func flush() async {
+        guard running, flushGate == nil, handoffDeadline != nil || segmentHasText else { return }
+        let flushing = LiveTranslateOnceGate()
+        flushGate = flushing
+        if handoffDeadline == nil {
+            segmentEndReason = "finish"
+            gate.hold()
+            request?.endAudio()
+            request = nil
+            handoffDeadline = Date().addingTimeInterval(Self.finalWait)
+        }
+        await flushing.wait()
     }
 
     private func beginSegment() {
@@ -489,6 +561,12 @@ final class LiveTranslateLegacyRecognizer: LiveTranslateRecognizer {
         handoffDeadline = nil
         task?.cancel()
         task = nil
+        // 收尾中：最后一句已经回来了，不再开新段。
+        if let flushGate {
+            self.flushGate = nil
+            flushGate.open()
+            return
+        }
         beginSegment()
     }
 

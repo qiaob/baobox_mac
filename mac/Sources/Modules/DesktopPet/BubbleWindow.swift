@@ -38,6 +38,21 @@ final class BubbleController: ObservableObject {
     /// 有常驻气泡没处理时，隔一会儿让宠物招手。
     var onStickyReminder: (() -> Void)?
 
+    /// 宠物头顶 / 脚下挂着东西（会议控制条）时，气泡往外让开的距离（PetController 贴挂件时设）。
+    enum AccessoryClearance: Equatable {
+        case none
+        case above(CGFloat)
+        case below(CGFloat)
+    }
+
+    var accessoryClearance: AccessoryClearance = .none {
+        didSet { if accessoryClearance != oldValue { relayout() } }
+    }
+
+    /// 宠物窗里头顶 / 脚底所在的高度比例：气泡尾巴、头顶挂件都贴这里。
+    static let headFraction: CGFloat = 0.86
+    static let feetFraction: CGFloat = 0.12
+
     static let panelWidth: CGFloat = 300
     private static let maxVisible = 3
     private static let stickyReminderInterval: TimeInterval = 25
@@ -202,11 +217,17 @@ final class BubbleController: ObservableObject {
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = max(hosting.fittingSize.height, 44)
         let width = Self.panelWidth
-        let headTop = pet.minY + pet.height * 0.86
+        var headTop = pet.minY + pet.height * Self.headFraction
+        var feet = pet.minY + pet.height * Self.feetFraction
+        switch accessoryClearance {
+        case .above(let clearance): headTop += clearance
+        case .below(let clearance): feet -= clearance
+        case .none: break
+        }
         let fitsAbove = headTop + height <= visible.maxY - 4
         var x = pet.midX - width * 0.28
         x = min(max(x, visible.minX + 4), visible.maxX - width - 4)
-        let y = fitsAbove ? headTop : max(pet.minY + pet.height * 0.12 - height, visible.minY + 4)
+        let y = fitsAbove ? headTop : max(feet - height, visible.minY + 4)
         let newTail = pet.midX - x
         if abs(newTail - tailX) > 0.5 { tailX = newTail }
         if below == fitsAbove { below = !fitsAbove }

@@ -27,8 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())
+        // 会议在实时翻译前面：启动时先装好会议库，自由听译的新记录才写得进去（docs/meeting/TECH_DESIGN.md §7）。
+        registry.register(MeetingTool())
         registry.register(LiveTranslateTool())
         registry.register(SelectionTranslateTool())
+        registry.register(DictationTool())
         registry.register(DesktopPetTool())
         // 0.0.2 暂不发布抓包工具（NetCapture 尚在完善）：模块代码保留在仓库，仅此版本不注册/不激活，
         // 后续完善后取消下一行注释即可恢复。

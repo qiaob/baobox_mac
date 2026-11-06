@@ -111,12 +111,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return image
     }
 
-    /// 把 ClosureMenuItem 声明的快捷键渲染到该项右侧。
+    /// 把 ClosureMenuItem 声明的快捷键渲染到该项右侧（模块自己的菜单栏项，如会议的录音指示，也用这个）。
     ///
     /// 这里刻意只做「展示」而不设置真正的 keyEquivalent：菜单打开时 AppKit 会响应
     /// key equivalent，与常驻的 Carbon 全局热键叠加会导致同一动作触发两次
     /// （剪贴板面板这类 toggle 动作会开了又立刻关）。
-    private static func showHotkeyIfTagged(_ item: NSMenuItem) {
+    static func showHotkeyIfTagged(_ item: NSMenuItem) {
         guard let closure = item as? ClosureMenuItem,
               let hkID = closure.hotkeyID,
               let combo = HotkeyCenter.shared.combo(for: hkID) else { return }
