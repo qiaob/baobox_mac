@@ -58,6 +58,8 @@ final class LiveTranslateDualRecognizer: LiveTranslateRecognizer {
     private var handingOff = false
     private var watchdog: Timer?
     private var running = false
+    /// `flush()` 在等最后一段两路的 final：定稿了（或等超时）就放行，不再开新段。
+    private var flushGate: LiveTranslateOnceGate?
 
     private var segmentID = 0
     private var segments: [Int: Segment] = [:]
@@ -135,6 +137,31 @@ final class LiveTranslateDualRecognizer: LiveTranslateRecognizer {
             segment.tasks.forEach { $0.cancel() }
         }
         segments = [:]
+        flushGate?.open()
+        flushGate = nil
+    }
+
+    /// 收尾：当前段有字就照切段那样 endAudio、等两路的 final（最多 `finalWait`，到点由看门狗定稿）；交接中就等交接完；
+    /// 没字时只把之前还在等 final 的段按手头结果定稿。之后不再开新段。
+    func flush() async {
+        guard running, flushGate == nil else { return }
+        guard handingOff || segmentHasText else {
+            decideOlderSegments()
+            return
+        }
+        let flushing = LiveTranslateOnceGate()
+        flushGate = flushing
+        if !handingOff {
+            rollSegment()
+        }
+        await flushing.wait()
+    }
+
+    /// 之前切走、还在等 final 的段：按手头的结果定稿。
+    private func decideOlderSegments() {
+        for id in segments.keys.sorted() where id != segmentID {
+            decide(id)
+        }
     }
 
     // MARK: - 切段
@@ -238,6 +265,13 @@ final class LiveTranslateDualRecognizer: LiveTranslateRecognizer {
         guard handingOff else { return }
         decide(segmentID)
         handingOff = false
+        // 收尾中：最后一句定稿了，不再开新段。
+        if let flushGate {
+            self.flushGate = nil
+            decideOlderSegments()
+            flushGate.open()
+            return
+        }
         guard running else { return }
         beginSegment()
     }

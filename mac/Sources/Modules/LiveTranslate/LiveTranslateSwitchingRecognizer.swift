@@ -30,6 +30,8 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
 
     private var running = false
     private var watchdog: Timer?
+    /// `flush()` 在等这一句定稿（交接 / 重认）：定稿了就放行，不再开新段。
+    private var flushGate: LiveTranslateOnceGate?
     private var segmentID = 0
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -118,6 +120,31 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
         handoffDeadline = nil
         recheckDeadline = nil
         _ = recorder.take()
+        flushGate?.open()
+        flushGate = nil
+    }
+
+    /// 收尾：这一句有字就照切段那样 endAudio、等 final（交接 / 重认中就等它们完），定稿时不再拿录音重认
+    /// （没时间了，用当前语言的结果）；没字直接返回。到点由看门狗按超时收尾。之后不再开新段。
+    func flush() async {
+        guard running, flushGate == nil,
+              handoffDeadline != nil || recheckDeadline != nil || segmentHasText else { return }
+        let flushing = LiveTranslateOnceGate()
+        flushGate = flushing
+        if handoffDeadline == nil, recheckDeadline == nil {
+            rollSegment()
+        }
+        await flushing.wait()
+    }
+
+    /// 这一句定稿了：收尾中就放行 `flush()`，否则开下一段。
+    private func nextSegmentOrEndFlush() {
+        if let flushGate {
+            self.flushGate = nil
+            flushGate.open()
+            return
+        }
+        beginSegment()
     }
 
     // MARK: - 切段
@@ -230,12 +257,12 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
         // 每句一行（排查「识别不到 / 卡在错的语言上」用）：只记字数、时长、分数，不记内容。
         LiveTranslateLog.recognition.notice(
             "auto seg \(id) [\(language.code, privacy: .public)]: \(LiveTranslateScoring.units(own.text, cjk: language.isChinese)) units, voiced \(String(format: "%.1f", voiced), privacy: .public)s, density \(String(format: "%.2f", LiveTranslateScoring.density(text: own.text, voiced: voiced, language: language)), privacy: .public), conf \(String(format: "%.2f", own.confidence), privacy: .public)\(self.forceRecheck ? " (\(self.forceReason))" : "", privacy: .public) -> \(wrong || self.forceRecheck ? "recheck" : "keep", privacy: .public)")
-        if !audio.isEmpty, forceRecheck || wrong {
+        if flushGate == nil, !audio.isEmpty, forceRecheck || wrong {
             recheck(segment: id, own: own, voiced: voiced, audio: audio)
             return
         }
         publish(segment: id, text: own.text, languageIndex: active)
-        beginSegment()
+        nextSegmentOrEndFlush()
     }
 
     /// 像不像当前语言：说了 1.5 秒以上却几乎没字（英文识别器听中文常常只吐 "You"、"I" 这种短词，置信度还不低）；
@@ -309,7 +336,7 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
         } else {
             publish(segment: id, text: own.text, languageIndex: active)
         }
-        beginSegment()
+        nextSegmentOrEndFlush()
     }
 
     private func publish(segment id: Int, text: String, languageIndex: Int) {

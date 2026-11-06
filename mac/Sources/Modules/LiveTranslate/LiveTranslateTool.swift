@@ -20,7 +20,13 @@ final class LiveTranslateTool: ToolModule {
     func submenuItems() -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
-        let toggleTitle = controller.isRunning ? L("livetranslate.menu.stop") : L("livetranslate.menu.start")
+        let toggleTitle: String
+        if controller.isHostedSession {
+            // 会议记录中：开关 = 打开 / 收起字幕（见 LiveTranslateController.toggle）。
+            toggleTitle = controller.barVisible ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
+        } else {
+            toggleTitle = controller.isRunning ? L("livetranslate.menu.stop") : L("livetranslate.menu.start")
+        }
         items.append(ClosureMenuItem(title: toggleTitle, hotkeyID: "livetranslate.toggle") { [weak self] in
             self?.controller.toggle()
         })
