@@ -1,0 +1,60 @@
+{
+  "model": "model.glb",
+  "clips": {
+    "idle": "CharacterArmature|CharacterArmature|CharacterArmature|Idle",
+    "walk": "CharacterArmature|CharacterArmature|CharacterArmature|Walk",
+    "happy": "CharacterArmature|CharacterArmature|CharacterArmature|Wave",
+    "sleep": "CharacterArmature|CharacterArmature|CharacterArmature|Sitting_Idle",
+    "drag": "CharacterArmature|CharacterArmature|CharacterArmature|Jump_Idle"
+  },
+  "fidgets": [
+    "CharacterArmature|CharacterArmature|CharacterArmature|Yes",
+    "CharacterArmature|CharacterArmature|CharacterArmature|No"
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Yes"
+      ],
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Jump"
+      ],
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|HitReact"
+      ]
+    ],
+    "highFive": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Wave"
+      ]
+    ],
+    "pet": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Yes"
+      ]
+    ],
+    "feed": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Sitting_Start",
+        "CharacterArmature|CharacterArmature|CharacterArmature|Sitting_Eating",
+        "CharacterArmature|CharacterArmature|CharacterArmature|Sitting_End"
+      ]
+    ],
+    "play": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Punch"
+      ],
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Jump"
+      ],
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Duck"
+      ]
+    ],
+    "wake": [
+      [
+        "CharacterArmature|CharacterArmature|CharacterArmature|Sitting_End"
+      ]
+    ]
+  }
+}

@@ -14,5 +14,41 @@
     "Yes",
     "ThumbsUp",
     "Dance"
-  ]
+  ],
+  "interactions": {
+    "poke": [
+      [
+        "Yes"
+      ],
+      [
+        "No"
+      ],
+      [
+        "ThumbsUp"
+      ]
+    ],
+    "highFive": [
+      [
+        "Wave"
+      ]
+    ],
+    "pet": [
+      [
+        "Yes"
+      ]
+    ],
+    "play": [
+      [
+        "Dance"
+      ],
+      [
+        "Punch"
+      ]
+    ],
+    "wake": [
+      [
+        "Standing"
+      ]
+    ]
+  }
 }
