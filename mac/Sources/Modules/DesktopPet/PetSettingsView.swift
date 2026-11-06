@@ -5,6 +5,7 @@ struct PetSettingsView: View {
     @AppStorage(PetSettings.enabledKey) private var enabled = true
     @AppStorage(PetSettings.roamKey) private var roam = true
     @AppStorage(PetSettings.sizeKey) private var size = 1.0
+    @AppStorage(PetSettings.rangeKey) private var range = PetRange.bottom.rawValue
     @AppStorage(PetSettings.soundKey) private var sound = false
     @AppStorage("notify.source.claudecode") private var sourceClaude = true
     @AppStorage("notify.source.codex") private var sourceCodex = true
@@ -27,7 +28,32 @@ struct PetSettingsView: View {
                         PetController.shared.applyVisibility()
                     }
                 Toggle("pet.settings.roam", isOn: $roam)
-                Slider(value: $size, in: 0.7...1.6) {
+                Picker("pet.settings.range", selection: $range) {
+                    Text("pet.range.bottom").tag(PetRange.bottom.rawValue)
+                    Text("pet.range.windows").tag(PetRange.windows.rawValue)
+                    Text("pet.range.custom").tag(PetRange.custom.rawValue)
+                    Text("pet.range.screen").tag(PetRange.screen.rawValue)
+                }
+                .onChange(of: range) { _, newValue in
+                    // 第一次选「自定义区域」还没框过：直接进框选。
+                    if newValue == PetRange.custom.rawValue, PetSettings.rangeRect == nil {
+                        PetController.shared.pickRegion()
+                    } else {
+                        PetController.shared.applyRange()
+                    }
+                }
+                if range == PetRange.custom.rawValue {
+                    HStack {
+                        Button("pet.settings.pickRegion") {
+                            PetController.shared.pickRegion()
+                        }
+                        Spacer()
+                    }
+                }
+                Text("pet.settings.rangeHint")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $size, in: 0.6...3.5) {
                     Text("pet.settings.size")
                 }
                 .onChange(of: size) { _, _ in

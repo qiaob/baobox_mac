@@ -73,6 +73,8 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.petSize = side
         engine.onPose = { [weak self] pose, origin in
             guard let self, let panel = self.panel else { return }
+            // 站在窗口上 / 在空中时窗口列表刷得勤一些，窗口被拖动时跟得上。
+            self.windowWatcher.fast = self.engine.isOnLedge || pose.state == .jump || pose.state == .fall
             // 拖拽时窗口由 PetPanel 跟手移动；引擎里的位置松手才更新，这时不能按它把窗口拽回去。
             if pose.state != .dragged, panel.frame.origin != origin { panel.setFrameOrigin(origin) }
             // 渲染视图借给休息画面期间（#43），姿态由休息画面驱动。
@@ -87,8 +89,42 @@ final class PetController: ObservableObject, NotifyPresenting {
         reloadCharacter()
         let origin = restoredOrigin()
         panel.setFrameOrigin(origin)
+        engine.ledges = { [weak self] in self?.windowWatcher.ledges ?? [] }
+        configureRange()
         engine.start(at: origin)
         applyVisibility()
+        startClickThroughTracking()
+    }
+
+    // MARK: - 活动范围（docs/desktop-pet/ROAM.md）
+
+    /// 窗口上的顶边从这里来（只在「窗口上」模式时运行）。
+    private let windowWatcher = PetWindowWatcher()
+
+    private func configureRange() {
+        engine.range = PetSettings.range
+        engine.customRect = PetSettings.rangeRect
+        if engine.range == .windows {
+            if !windowWatcher.isRunning { windowWatcher.start() }
+        } else {
+            windowWatcher.stop()
+        }
+    }
+
+    /// 设置页改了活动范围：重新找脚下的台面（离开随意放模式时会掉到地上）。
+    func applyRange() {
+        configureRange()
+        engine.rangeChanged()
+    }
+
+    /// 框选自定义区域；选好后自动切到「自定义区域」。
+    func pickRegion() {
+        PetRegionPicker.shared.pick { [weak self] rect in
+            guard let rect else { return }
+            PetSettings.setRangeRect(rect)
+            UserDefaults.standard.set(PetRange.custom.rawValue, forKey: PetSettings.rangeKey)
+            self?.applyRange()
+        }
     }
 
     func stop() {
@@ -105,7 +141,12 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     // MARK: - 启用 / 尺寸
 
-    private var panelSide: CGFloat { 104 * CGFloat(PetSettings.size) }
+    /// 宠物窗边长。VRM 人形又高又瘦，方窗里只占一小条：窗口放大 1.55 倍（docs/desktop-pet/VRM.md §6），
+    /// 人身以外的地方点击穿透（见 updateClickThrough），大窗口不挡下面的东西。
+    private var panelSide: CGFloat {
+        let humanoid = shownModelID != nil && modelView.isHumanoid
+        return (104 * CGFloat(PetSettings.size) * (humanoid ? 1.55 : 1)).rounded()
+    }
 
     func setEnabled(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: PetSettings.enabledKey)
@@ -129,15 +170,56 @@ final class PetController: ObservableObject, NotifyPresenting {
         if shownModelID != nil { modelView.setActive(PetSettings.enabled) }
     }
 
+    /// 按尺寸设置与当前形象调整宠物窗：底边中点不动（换成更大的 VRM 窗时脚还踩在原地），不出屏。
     func applySize() {
         guard let panel else { return }
         let side = panelSide
         engine.petSize = side
+        // 脚离窗口底边多远（站到台面上时对齐用）与走路速度（3D 按步幅算，脚不打滑）。
+        let model = shownModelID != nil ? modelView : nil
+        engine.footInset = (model?.footInsetFraction ?? 0) * side
+        engine.walkSpeed = model?.walkSpeed(viewHeight: side) ?? 34 * side / 104
         var frame = panel.frame
+        guard frame.width != side || frame.height != side else { return }
+        frame.origin.x = (frame.midX - side / 2).rounded()
         frame.size = NSSize(width: side, height: side)
+        if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - side)
+            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - side)
+        }
         panel.setFrame(frame, display: true)
         engine.setOrigin(frame.origin)
         bubble.relayout()
+    }
+
+    // MARK: - 点击穿透（VRM：只有人身上接鼠标）
+
+    private var clickThroughTimer: Timer?
+
+    /// 每秒 20 次看鼠标在不在人身上：不在就让整个窗口不接鼠标，点击落到下面的窗口。
+    /// 拖拽中、借给休息画面时不动（借出时窗口本来就不接鼠标）。2D / 毛绒形象整个窗口都接，与原来一样。
+    private func startClickThroughTracking() {
+        clickThroughTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateClickThrough() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clickThroughTimer = timer
+    }
+
+    private func updateClickThrough() {
+        guard let panel, !isLent, panel.isVisible, !panel.isTracking else { return }
+        var ignore = false
+        if shownModelID != nil, modelView.isHumanoid {
+            let mouse = NSEvent.mouseLocation
+            if panel.frame.contains(mouse) {
+                let point = modelView.convert(panel.convertPoint(fromScreen: mouse), from: nil)
+                ignore = !modelView.hitsBody(at: point)
+            } else {
+                ignore = true
+            }
+        }
+        if panel.ignoresMouseEvents != ignore { panel.ignoresMouseEvents = ignore }
     }
 
     // MARK: - 通知呈现（NotifyPresenting）
@@ -275,7 +357,12 @@ final class PetController: ObservableObject, NotifyPresenting {
             return
         }
         let (inner, outer) = radialItems()
-        radial.open(around: panel.frame, inner: inner, outer: outer)
+        // VRM 人形：圈围着人身（又高又瘦）排，不围着放大了的方窗口；其他形象围着宠物窗。
+        var body = panel.frame
+        if shownModelID != nil, modelView.isHumanoid, let rect = modelView.bodyBounds() {
+            body = panel.convertToScreen(modelView.convert(rect, to: nil))
+        }
+        radial.open(around: body, inner: inner, outer: outer)
     }
 
     /// 内圈 7 格（最后一格由菜单补「更多」）：最常用的工具 + 宠物动作；外圈：其他功能的快捷操作 + 宠物设置。
@@ -376,6 +463,9 @@ final class PetController: ObservableObject, NotifyPresenting {
         if reload { reloadCharacter() } else { applyCharacter() }
     }
 
+    /// 正在后台读的 3D 形象：读完前不重复发起；期间换成了别的形象，读完的结果作废。
+    private var loadingModelID: String?
+
     private func applyCharacter() {
         // 渲染视图借出去了：等休息画面还回来再换，免得把视图从休息画面里抢回来。
         if isLent {
@@ -386,27 +476,59 @@ final class PetController: ObservableObject, NotifyPresenting {
         let package = packages.first { $0.id == id }
         if let package, package.model != nil {
             // 设置页每次打开都会重扫素材包；同一个 3D 形象不重新读模型（否则动画从头来、还白读一遍文件）。
-            if shownModelID != package.id {
-                shownModelID = modelView.setPackage(package) ? package.id : nil
-            }
-            if shownModelID != nil {
+            if shownModelID == package.id {
+                loadingModelID = nil
                 petView.setPackage(nil)
                 stage.show(modelView)
                 modelView.setActive(PetSettings.enabled)
                 return
             }
-            // 模型读不出来：回退 2D 占位。
-            petView.setPackage(nil)
-            stage.show(petView)
+            // 模型在后台读（VRM 一读就是好几秒，docs/desktop-pet/VRM.md §6），读好之前旧形象照常显示。
+            guard loadingModelID != package.id else { return }
+            loadingModelID = package.id
+            PetModelView.loadModel(for: package) { [weak self] model in
+                MainActor.assumeIsolated {
+                    guard let self, self.loadingModelID == package.id else { return }
+                    self.loadingModelID = nil
+                    if self.isLent {
+                        self.characterChangePending = true
+                        return
+                    }
+                    self.showModel(package, model: model)
+                }
+            }
             return
         }
+        loadingModelID = nil
         if shownModelID != nil {
-            modelView.setPackage(nil)
+            modelView.setPackage(nil, model: nil)
             modelView.setActive(false)
             shownModelID = nil
         }
         petView.setPackage(package)
         stage.show(petView)
+        applySize()
+    }
+
+    /// 后台读好的 3D 形象换上；读不出来回退 2D 占位。
+    private func showModel(_ package: PetPackage, model: GLTFModel?) {
+        guard let model else {
+            if shownModelID != nil {
+                modelView.setPackage(nil, model: nil)
+                modelView.setActive(false)
+                shownModelID = nil
+            }
+            petView.setPackage(nil)
+            stage.show(petView)
+            applySize()
+            return
+        }
+        modelView.setPackage(package, model: model)
+        shownModelID = package.id
+        petView.setPackage(nil)
+        stage.show(modelView)
+        modelView.setActive(PetSettings.enabled)
+        applySize()
     }
 
     func openPetsFolder() {

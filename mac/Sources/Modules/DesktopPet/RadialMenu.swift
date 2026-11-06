@@ -27,9 +27,31 @@ final class RadialMenuController: ObservableObject {
     /// 菜单开 / 关（宠物据此站住面向用户）。
     var onVisibilityChange: ((Bool) -> Void)?
 
-    static let innerRadius: CGFloat = 104
-    static let outerRadius: CGFloat = 178
-    static let size: CGFloat = 2 * (outerRadius + 42)
+    /// 内外圈之间的距离。两圈的大小跟着宠物身体走（见 open）：宠物窗更大时圈不放大的话，
+    /// 内圈整圈都落在宠物的避让区里，所有按钮挤到同一个点上（试用时的「按钮都重叠了」）。
+    static let ringGap: CGFloat = 74
+    /// 按钮半径 + 标签。
+    static let buttonRoom: CGFloat = 42
+    /// 菜单窗口大小（包住外圈）。
+    @Published private(set) var size = NSSize(width: 2 * (104 + 74 + 42), height: 2 * (104 + 74 + 42))
+
+    /// 排按钮用的椭圆（屏幕坐标）。
+    struct Ellipse {
+        let center: NSPoint
+        let radiusX: CGFloat
+        let radiusY: CGFloat
+
+        func point(at degrees: Double) -> NSPoint {
+            let a = degrees * .pi / 180
+            return NSPoint(x: center.x + CGFloat(cos(a)) * radiusX, y: center.y + CGFloat(sin(a)) * radiusY)
+        }
+
+        func contains(_ p: NSPoint) -> Bool {
+            let dx = (p.x - center.x) / max(radiusX, 1)
+            let dy = (p.y - center.y) / max(radiusY, 1)
+            return dx * dx + dy * dy < 1
+        }
+    }
     /// 按钮中心离屏幕边至少这么远（按钮半径 + 标签）。
     private static let edgeMargin: CGFloat = 34
 
@@ -50,31 +72,39 @@ final class RadialMenuController: ObservableObject {
         self.outer = outerItems
         outerShown = false
 
-        let petCenter = NSPoint(x: pet.midX, y: pet.minY + pet.height * 0.45)
+        let petCenter = NSPoint(x: pet.midX, y: pet.midY)
         let screen = NSScreen.screens.first(where: { $0.frame.contains(petCenter) }) ?? NSScreen.main
         let bounds = (screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900))
             .insetBy(dx: Self.edgeMargin, dy: Self.edgeMargin)
+        // `pet` 是宠物身体所占的矩形（VRM 人形按骨骼投影，又高又瘦；其他形象是整个宠物窗）。
+        // 两圈都是围着它的椭圆：横竖半径分开算，人形不会两边空出一大片（试用反馈「左右空的特别多」）。
+        // 内圈每个方向都比避让区（身体外扩 18 点）大一个按钮：宠物多大、多瘦，圈就多大、多瘦。
+        let radiusX = max(pet.width / 2 + 46, 80)
+        let radiusY = max(pet.height / 2 + 40, 80)
+        let outerX = radiusX + Self.ringGap
+        let outerY = radiusY + Self.ringGap
+        let panelSize = NSSize(width: 2 * (outerX + Self.buttonRoom), height: 2 * (outerY + Self.buttonRoom))
+        size = panelSize
         // 内圈尽量整圈：中心只在内圈会出屏时才往里挪（可以压在 Dock 上，Dock 在它下面一层）。
-        let r = Self.innerRadius
-        let center = NSPoint(x: min(max(petCenter.x, bounds.minX + r), bounds.maxX - r),
-                             y: min(max(petCenter.y, bounds.minY + r), bounds.maxY - r))
-        // 中心被挪开（宠物贴着屏幕最底、Dock 隐藏）时，挡在宠物身上的角度不放按钮（内圈成马蹄形围着头顶）。
-        // 圆形避让区（方形会把正常整圈的 45° 斜角也挖掉）：宠物中心为圆心，半身高再加按钮半径左右。
-        let avoid = (center: NSPoint(x: pet.midX, y: pet.midY), radius: pet.height / 2 + 18)
+        let center = NSPoint(x: min(max(petCenter.x, bounds.minX + radiusX), bounds.maxX - radiusX),
+                             y: min(max(petCenter.y, bounds.minY + radiusY), bounds.maxY - radiusY))
+        // 中心被挪开（宠物贴着屏幕边）时，挡在宠物身上的那段不放按钮（内圈成马蹄形围着头顶）。
+        // 避让区也是椭圆（矩形会把正常整圈的斜角也挖掉），比内圈小一圈，中心不挪时整圈都放得下。
+        let avoid = Ellipse(center: petCenter, radiusX: pet.width / 2 + 18, radiusY: pet.height / 2 + 18)
         var positions: [String: CGPoint] = [:]
-        for (item, point) in zip(inner, Self.layout(count: inner.count, radius: r, center: center,
-                                                    bounds: bounds, avoid: avoid)) {
+        let innerRing = Ellipse(center: center, radiusX: radiusX, radiusY: radiusY)
+        for (item, point) in zip(inner, Self.layout(count: inner.count, on: innerRing, bounds: bounds, avoid: avoid)) {
             positions[item.id] = point
         }
-        for (item, point) in zip(outerItems, Self.layout(count: outerItems.count, radius: Self.outerRadius,
-                                                          center: center, bounds: bounds, avoid: avoid)) {
+        let outerRing = Ellipse(center: center, radiusX: outerX, radiusY: outerY)
+        for (item, point) in zip(outerItems, Self.layout(count: outerItems.count, on: outerRing, bounds: bounds, avoid: avoid)) {
             positions[item.id] = point
         }
         self.positions = positions
 
-        let size = Self.size
         let panel = ensurePanel()
-        panel.setFrame(NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size), display: false)
+        panel.setFrame(NSRect(x: center.x - panelSize.width / 2, y: center.y - panelSize.height / 2,
+                              width: panelSize.width, height: panelSize.height), display: false)
         panel.orderFrontRegardless()
         panel.makeKey()
         expanded = false
@@ -118,44 +148,62 @@ final class RadialMenuController: ObservableObject {
         }
     }
 
-    /// 一圈上的按钮位置：整圈放得下就从正上方顺时针均分；放不下（出屏 / 压在宠物身上）就只用最长的那段可用弧，从左到右排。
-    private static func layout(count: Int, radius: CGFloat, center: NSPoint, bounds: NSRect,
-                               avoid: (center: NSPoint, radius: CGFloat)) -> [CGPoint] {
+    /// 一圈上的按钮位置（相对椭圆中心，SwiftUI 坐标 y 朝下）：整圈放得下就从正上方顺时针、按弧长均分
+    /// （椭圆上按角度均分，长轴两头会挤在一起）；放不下（出屏 / 压在宠物身上）就只用最长的那段可用弧，从左到右排。
+    private static func layout(count: Int, on ring: Ellipse, bounds: NSRect, avoid: Ellipse) -> [CGPoint] {
         guard count > 0 else { return [] }
-        let step = 5.0
-        let steps = Int(360 / step)
-        let allowed = (0..<steps).map { i -> Bool in
-            let a = Double(i) * step * .pi / 180
-            let p = NSPoint(x: center.x + CGFloat(cos(a)) * radius, y: center.y + CGFloat(sin(a)) * radius)
-            return bounds.contains(p) && hypot(p.x - avoid.center.x, p.y - avoid.center.y) >= avoid.radius
+        let samples = 360
+        // 从正上方开始顺时针采样一圈，并累计弧长。
+        let points = (0..<samples).map { ring.point(at: 90 - Double($0)) }
+        var arc = [CGFloat](repeating: 0, count: samples + 1)
+        for i in 0..<samples {
+            let next = points[(i + 1) % samples]
+            arc[i + 1] = arc[i] + hypot(next.x - points[i].x, next.y - points[i].y)
         }
-        var degrees: [Double]
+        let total = max(arc[samples], 1)
+        func point(atArc length: CGFloat) -> NSPoint {
+            var s = length.truncatingRemainder(dividingBy: total)
+            if s < 0 { s += total }
+            var i = 0
+            while i < samples - 1, arc[i + 1] <= s { i += 1 }
+            let f = (s - arc[i]) / max(arc[i + 1] - arc[i], 0.0001)
+            let a = points[i]
+            let b = points[(i + 1) % samples]
+            return NSPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f)
+        }
+        let allowed = points.map { bounds.contains($0) && !avoid.contains($0) }
+        var placed: [NSPoint]
         if allowed.allSatisfy({ $0 }) {
-            degrees = (0..<count).map { 90 - Double($0) * 360 / Double(count) }
+            placed = (0..<count).map { point(atArc: total * CGFloat($0) / CGFloat(count)) }
         } else {
-            // 环形数组里最长的一段连续可用角度。
+            // 环形数组里最长的一段连续可用弧。
             var bestStart = 0, bestLength = 0
-            for start in 0..<steps where allowed[start] && !allowed[(start - 1 + steps) % steps] {
+            for start in 0..<samples where allowed[start] && !allowed[(start - 1 + samples) % samples] {
                 var length = 0
-                while length < steps && allowed[(start + length) % steps] { length += 1 }
+                while length < samples && allowed[(start + length) % samples] { length += 1 }
                 if length > bestLength { bestStart = start; bestLength = length }
             }
-            let first = Double(bestStart) * step
-            let span = Double(max(bestLength - 1, 0)) * step
-            degrees = count == 1
-                ? [first + span / 2]
-                : (0..<count).map { first + span - Double($0) * span / Double(count - 1) }
+            if bestLength == 0 {
+                placed = (0..<count).map { point(atArc: total * CGFloat($0) / CGFloat(count)) }
+            } else {
+                var span: CGFloat = 0
+                for k in 0..<max(bestLength - 1, 0) {
+                    let i = (bestStart + k) % samples
+                    span += arc[i + 1] - arc[i]
+                }
+                let start = arc[bestStart]
+                placed = count == 1
+                    ? [point(atArc: start + span / 2)]
+                    : (0..<count).map { point(atArc: start + span * CGFloat($0) / CGFloat(count - 1)) }
+            }
         }
-        return degrees.map { d in
-            let a = d * .pi / 180
-            return CGPoint(x: CGFloat(cos(a)) * radius, y: -CGFloat(sin(a)) * radius)
-        }
+        return placed.map { CGPoint(x: $0.x - ring.center.x, y: -($0.y - ring.center.y)) }
     }
 
     private func ensurePanel() -> RadialMenuPanel {
         if let panel { return panel }
         let panel = RadialMenuPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.size, height: Self.size),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
@@ -246,7 +294,7 @@ struct RadialMenuView: View {
                            value: controller.expanded)
             }
         }
-        .frame(width: RadialMenuController.size, height: RadialMenuController.size)
+        .frame(width: controller.size.width, height: controller.size.height)
     }
 
     /// 「更多」展开后显示成「收起」。
