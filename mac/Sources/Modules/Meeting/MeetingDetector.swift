@@ -7,7 +7,8 @@ private let detectorLog = Logger(subsystem: "com.baobox.app", category: "meeting
 ///
 /// 1. 日历事件已开始（15 分钟内）、带会议链接、还没在记录 → 气泡 [加入并记录][开始记录][忽略]。会前提醒问过的那场不再问。
 /// 2. 会议 App 正在开会 → 气泡 [开始记录][忽略][不再检测此 App]。「正在开会」= 它开会时才起的进程开着（钉钉的 Tblive，
-///    静音也算），或按进程查出来是它在用麦克风（`MeetingMicrophoneProbe`）；每个 App 一场只问一次（`MeetingDetectionMachine`）；
+///    静音也算），或按进程查出来是它在用麦克风（`MeetingMicrophoneProbe`）；浏览器在用麦克风、窗口标题又是会议网站
+///    （Google Meet 等，`MeetingWebSites`）算这个网站在开会。每个 App / 网站一场只问一次（`MeetingDetectionMachine`）；
 ///    正在进行的日历会议被「忽略」过就不问。
 ///
 /// 「命中日历会议时自动开始记录」（默认关）开着时，上面两种碰到日历会议都不问、直接开始（绑这场），并说一声。
@@ -48,11 +49,11 @@ final class MeetingDetector {
     }
 
     /// 后台读一次谁在用麦克风，结果回主线程缓存（下一次采样用）。
-    private func refreshMicrophoneUsage() {
+    private func refreshMicrophoneUsage(frontmost: String?) {
         guard !microphoneRefreshing else { return }
         microphoneRefreshing = true
         DispatchQueue.global(qos: .utility).async {
-            let usage = MeetingMicrophoneProbe.sample()
+            let usage = MeetingMicrophoneProbe.sample(frontmost: frontmost)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let detector = MeetingDetector.shared
@@ -122,15 +123,16 @@ final class MeetingDetector {
         let enabled = MeetingSettings.detectionEnabled || MeetingSettings.autoStart
         var signals: [String: MeetingSignal] = [:]
         if enabled {
-            // 没有会议 App 在跑就不去读 CoreAudio。
-            if runningIDs.contains(where: MeetingDetectionApps.isMeetingApp) {
-                refreshMicrophoneUsage()
+            // 没有会议 App、也没有浏览器在跑就不去读 CoreAudio。
+            if runningIDs.contains(where: { MeetingDetectionApps.isMeetingApp($0) || MeetingWebSites.browsers.contains($0) }) {
+                refreshMicrophoneUsage(frontmost: frontmost)
             } else {
                 microphoneUsage = MeetingMicrophoneUsage()
             }
             signals = MeetingDetectionApps.signals(runningBundleIDs: runningIDs,
                                                    microphoneApps: microphoneUsage.apps,
                                                    unattributedMicrophone: microphoneUsage.unattributed,
+                                                   webMeetings: microphoneUsage.webMeetings,
                                                    frontmost: frontmost,
                                                    ignored: Set(MeetingSettings.ignoredApps.keys))
         }
@@ -153,7 +155,8 @@ final class MeetingDetector {
             }
         }
         guard MeetingSettings.detectionEnabled else { return }
-        let name = running.first(where: { $0.bundleIdentifier == bundleID })?.localizedName
+        let name = Self.webSiteName(bundleID)
+            ?? running.first(where: { $0.bundleIdentifier == bundleID })?.localizedName
         askApp(bundleID: bundleID, name: name ?? bundleID, event: calendarEvent)
     }
 
@@ -194,6 +197,20 @@ final class MeetingDetector {
                                                  title: L("meeting.detect.autoStarted \(event.info.title)"),
                                                  style: .toast, icon: "record.circle"))
         MeetingSessionController.shared.start(type: .online, event: event.info)
+    }
+
+    /// 浏览器里的会议网站（`MeetingWebSites` 的 key）的显示名；不是网站返回 nil。
+    static func webSiteName(_ key: String) -> String? {
+        switch key {
+        case MeetingWebSites.meet: return L("meeting.web.meet")
+        case MeetingWebSites.teams: return L("meeting.web.teams")
+        case MeetingWebSites.zoom: return L("meeting.web.zoom")
+        case MeetingWebSites.tencent: return L("meeting.web.tencent")
+        case MeetingWebSites.feishu: return L("meeting.web.feishu")
+        case MeetingWebSites.webex: return L("meeting.web.webex")
+        case MeetingWebSites.jitsi: return L("meeting.web.jitsi")
+        default: return nil
+        }
     }
 
     /// 「不再检测此 App」/ 设置里移除。

@@ -6,6 +6,7 @@ import Foundation
 // 每个会议 App 单独判断「是不是正在开会」，信号两种：
 // - 会议进程：会议 App 开会时才起的进程开着（如钉钉的 Tblive）—— 入会就静音也算，看到 3 秒就问；
 // - 麦克风：按进程查出来是这个 App（含它包里的辅助进程）在录音 —— 专门开会的 App 连续 5 秒、聊天 App 连续 10 秒才问
+//   （浏览器在录音、窗口标题又是会议网站 —— Google Meet、Teams 网页版等 —— 算这个网站在开会，同专门开会的 App）
 //   （微信语音消息、Slack 试麦这类短占用不算）。说不清是谁在录（WebKit 网页通话、系统不支持按进程查）时只算到前台的会议 App。
 // 同一场只问一次（同时有几个 App 在开会也只弹一个）：信号断开不超过一段时间还算同一场（会议进程 15 秒；麦克风 3 分钟 —— 有的软件静音时会松开麦克风）。
 // Baobox 自己在记录会议时，正在开的会都算问过（结束记录后同一场不再来问）；Baobox 在用麦克风做别的（听写、字幕、自检）
@@ -40,14 +41,17 @@ enum MeetingDetectionApps {
         "5ZSL2CJU2T.com.dingtalk.meeting": "com.alibaba.DingTalkMac",
     ]
 
-    static var all: [String] { dedicated + chat }
+    /// 先问谁的顺序：专门开会的 App、浏览器里的会议网站、聊天 App。
+    static var all: [String] { dedicated + MeetingWebSites.keys + chat }
 
+    /// 会议 App 或浏览器里的会议网站（`MeetingWebSites` 的 key）。
     static func isMeetingApp(_ bundleID: String) -> Bool {
         all.contains(bundleID)
     }
 
+    /// 用麦克风 5 秒就问的（专门开会的 App、会议网站）；其余（聊天 App）要 10 秒。
     static func isDedicated(_ bundleID: String) -> Bool {
-        dedicated.contains(bundleID)
+        dedicated.contains(bundleID) || MeetingWebSites.keys.contains(bundleID)
     }
 
     /// 按「先问谁」排（只留会议 App）：前台那个、专门开会的、聊天 App。
@@ -76,14 +80,18 @@ enum MeetingDetectionApps {
     ///   - runningBundleIDs: 在跑的进程的 bundle id（找会议进程）。
     ///   - microphoneApps: 在录音的进程所属 App 的 bundle id（不含 Baobox 自己）。
     ///   - unattributedMicrophone: 有进程在录音但说不清是谁（只算到前台的会议 App 头上）。
+    ///   - webMeetings: 在用麦克风的浏览器窗口标题认出来的会议网站（`MeetingWebSites` 的 key）。
     static func signals(runningBundleIDs: [String], microphoneApps: Set<String>, unattributedMicrophone: Bool,
-                        frontmost: String?, ignored: Set<String>) -> [String: MeetingSignal] {
+                        webMeetings: Set<String> = [], frontmost: String?, ignored: Set<String>) -> [String: MeetingSignal] {
         var result: [String: MeetingSignal] = [:]
         for bundleID in runningBundleIDs {
             if let owner = meetingProcesses[bundleID] { result[owner] = .meetingProcess }
         }
         for app in microphoneApps where isMeetingApp(app) && result[app] == nil {
             result[app] = .microphone
+        }
+        for site in webMeetings where MeetingWebSites.keys.contains(site) {
+            result[site] = .microphone
         }
         if unattributedMicrophone, let frontmost, isMeetingApp(frontmost), result[frontmost] == nil {
             result[frontmost] = .microphone
@@ -92,6 +100,58 @@ enum MeetingDetectionApps {
             result[app] = nil
         }
         return result
+    }
+}
+
+/// 浏览器里开的会（2026-11-06 真机：Google Meet 在 Chrome 里开，录音的是 Chrome 的音频辅助进程）。
+/// 浏览器用麦克风不一定是开会（网页录音、语音输入），所以还要窗口标题是会议网站 —— 标题就是当前标签页的标题。
+enum MeetingWebSites {
+    /// 浏览器（bundle id）。
+    static let browsers: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+        "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
+        "company.thebrowser.Browser", "com.brave.Browser", "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.chromium.Chromium",
+    ]
+
+    /// 会议网站的 key（当作「会议 App」的 id 用：检测记录、忽略名单都按它）。
+    static let meet = "web.meet"
+    static let teams = "web.teams"
+    static let zoom = "web.zoom"
+    static let tencent = "web.tencentmeeting"
+    static let feishu = "web.feishu"
+    static let webex = "web.webex"
+    static let jitsi = "web.jitsi"
+    static let keys = [meet, teams, zoom, tencent, feishu, webex, jitsi]
+
+    /// 从窗口标题认会议网站。浏览器会在标题后面加「 - Google Chrome」「 - 用户名」之类，所以前缀按第一段判断。
+    static func site(forTitle title: String) -> String? {
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        var head = text
+        for separator in [" - ", " – ", " — ", " | "] {
+            if let range = head.range(of: separator) { head = String(head[..<range.lowerBound]) }
+        }
+        // Google Meet 会议中的标签页标题：「Meet - abc-defg-hij」「Meet – 会议名」；落地页「Google Meet」。
+        if text.contains("Google Meet") || head == "Meet" || text.hasPrefix("Meet - ") || text.hasPrefix("Meet – ")
+            || text.hasPrefix("Meet — ") {
+            return meet
+        }
+        if text.contains("Microsoft Teams") { return teams }
+        let zoomHeads = ["Zoom", "Zoom Meeting", "Zoom Meetings", "Zoom Webinar", "Zoom Workplace", "Zoom 会议"]
+        if zoomHeads.contains(head) { return zoom }
+        if text.contains("腾讯会议") || text.contains("VooV Meeting") || text.contains("Tencent Meeting") { return tencent }
+        if text.contains("飞书会议") || text.contains("Feishu Meetings") || text.contains("Lark Meetings")
+            || text.contains("Lark Meeting") { return feishu }
+        if text.contains("Webex") { return webex }
+        if text.contains("Jitsi Meet") { return jitsi }
+        return nil
+    }
+
+    /// 这些窗口标题里认出来的会议网站。
+    static func sites(inTitles titles: [String]) -> Set<String> {
+        Set(titles.compactMap(site(forTitle:)))
     }
 }
 
