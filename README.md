@@ -5,7 +5,8 @@
 [![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
 **A menu-bar toolbox for macOS** — screenshots, clipboard, window management, keyboard
-clicking, sleep prevention, plus dashboards for the Claude Code and Codex CLIs. One app
+clicking, sleep prevention, meeting notes, voice dictation, a desktop pet, focus and health
+reminders, selection translation, plus dashboards for the Claude Code and Codex CLIs. One app
 instead of five, with one shortcut system and one settings window.
 
 [简体中文](README.zh-CN.md) · [User manual](docs/manual/en/README.md) · [Shortcuts](docs/manual/en/shortcuts.md)
@@ -50,7 +51,12 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 | [Clipboard](docs/manual/en/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
 | [Window manager](docs/manual/en/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
 | [Keyboard clicking](docs/manual/en/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
-| [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar |
+| [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar, transcripts; offline model fallback on macOS 14 |
+| [Selection translate](docs/selection-translate/DESIGN.md) | unbound | Select text in any app → floating panel with English ⇄ Chinese translation and read-aloud |
+| [Meeting](docs/meeting/REQUIREMENTS.md) | unbound | Next-meeting countdown, one-click join, auto-detects meetings, local transcript and minutes, action items |
+| [Voice dictation](docs/dictation/REQUIREMENTS.md) | unbound | Hold-to-talk or toggle, speak and the text lands at your cursor in any app, with history |
+| [Focus & health](docs/focus-health/REQUIREMENTS.md) | unbound | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
+| [Desktop pet](docs/desktop-pet/DESIGN.md) | unbound | A pet on your desktop that is also Baobox's unified notification center |
 | [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
 | [Claude Code assistant](docs/manual/en/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](docs/manual/en/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
@@ -146,7 +152,101 @@ clicks prefer `AXPress` — **your actual mouse never moves**.
 Pick the **microphone** or **system audio** as the source; speech becomes live captions translated
 **English ⇄ Chinese**, shown in a draggable translucent bar at the bottom of the screen (bilingual /
 translation only / original only). Recognition uses the system Speech framework (on-device when
-available); translation uses the built-in on-device Apple Translation (macOS 15+). No third-party services.
+available); translation uses the built-in on-device Apple Translation (macOS 15+), with a
+downloadable offline model (Hy-MT2-1.8B) as the fallback on macOS 14 — so translation works
+there too. No third-party services. Sessions can be saved as **transcripts**, with read-aloud.
+
+Live Translate is also the engine behind Meeting's free-listening sessions: start one from the
+Meeting menu and the same caption bar appears, with the transcript filed in the meeting library.
+
+### Selection translate
+
+Select text in **any app** and a floating panel appears right at the selection with the
+**English ⇄ Chinese** translation, plus read-aloud. Translation direction is detected
+automatically. Three ways to grab the text, in order of reliability: the accessibility tree
+(auto-popup on mouse-up), a simulated ⌘C fallback (manual trigger only, clipboard
+snapshot-and-restore), and region OCR for text that can't be selected at all (drag a frozen
+frame, Vision reads it). Same translation engines as Live Translate — system translation on
+macOS 15+, offline model on macOS 14.
+
+### Meeting
+
+One tool, three kinds of session — **online meeting, in-person meeting, free listening**
+(the old Live Translate scenario). The menu shows the **next meeting with a countdown**,
+and **one-click join** opens its link (Zoom, Tencent Meeting, DingTalk, Google Meet, Teams,
+Feishu, Webex) straight from the calendar event. Baobox reads your local calendars via
+EventKit (read-only, nothing leaves the Mac) and can also **detect a meeting on its own** —
+a calendar event starting, or a meeting app holding the microphone — and offers to record it.
+
+- **Before**: pre-meeting brief (last session's summary plus unfinished action items),
+  reminder shortly before start, device check that records 3 seconds of mic + system audio
+- **During**: a small floating control bar (● REC + elapsed time + mic/system-audio levels,
+  mute either channel, pause, mark a highlight, jot a quick note that lands in the minutes).
+  The menu bar shows a recording indicator; focus and health reminders are deferred while
+  you record
+- **After**: local transcript → locally generated minutes (summary, decisions, action items
+  with owners and due dates, highlighted passages), kept in a searchable **meeting library**
+  with a cross-meeting action-item view, per-series timeline, and weekly report. If the
+  local model isn't downloaded, the transcript is still saved and marked "transcript only"
+
+Meetings, free listening, and dictation share one microphone, so only one of them records
+at a time.
+
+### Voice dictation
+
+Speak anywhere and the words land **at the cursor in whatever app you're in** — no
+switching windows, no pasting. Three modes: **hold to talk** (press and hold, release to
+insert), **toggle** (press once to start, press again or pause ~3 seconds to finish), and
+**long dictation** (keeps going until you stop; results collect in a panel you can edit
+before inserting). Recognition prefers on-device, shares Live Translate's language settings
+and glossary, and auto-detects Chinese vs English.
+
+- **Text cleanup before it lands**: voice commands ("new line", "句号", "delete last
+  sentence"), filler-word filtering, punctuation tidied for the language
+- **Insertion degrades gracefully**: direct write into the text field (Accessibility) →
+  simulated paste via a clipboard snapshot that never enters clipboard history → copy to
+  clipboard with a prompt, if there's nowhere to type (e.g. a password field). Text is
+  never lost: the recording bar offers one-click copy, and everything is in dictation history
+- **History**: recent dictations (text only, never audio) — search, copy, re-insert, delete
+
+### Desktop pet
+
+A cat, dog, bunny — or a 2D anime character — that lives on your desktop, walks around,
+sleeps when you're away, and **is Baobox's notification center**: instead of every module
+firing its own system notifications, they all come through the pet as bubbles, with buttons
+you can act on. Clicking a Claude Code / Codex notification jumps straight to its terminal.
+
+- **Looks**: 3 built-in plush 3D pets, more downloadable from Settings, plus VRM anime
+  figures with procedural motions — the pet roams the bottom of the screen and can perch
+  on window edges. Sprite packs (frame sequences + `pet.json`) work too
+- **Notifications**: three levels (ambient / bubble / alert), do-not-disturb, de-duplication
+  and batching. Meeting reminders, focus and health nudges, AI task completions, and
+  minutes-ready all arrive here; with the pet off, they fall back to system notifications
+- **Open to other apps on this Mac**: local processes can send notifications through a
+  Unix socket (`~/Library/Application Support/Baobox/pet.sock`, JSON, one line per message)
+  with a small `baobox-pet` CLI wrapper, or a `baobox://notify` URL. Same-user only, no
+  network port, first-time sources need your approval, and Baobox never runs commands for
+  another process — a button click only reports the choice back
+- **Radial menu**: click the pet for the Baobox menu; right-click for the pet menu
+  (switch pet, size, quiet for a while, notification history, settings). The radial menu
+  also holds shortcuts to the other tools
+
+### Focus & health
+
+Focus timing and health reminders are **one tool**: focus runs the work block, reminders
+and breaks run the gaps between them.
+
+- **Focus timer**: 25 / 50 / 90 minute presets, do-not-disturb while focusing, and when
+  time's up the pet announces it and flows straight into the break — rounds loop
+- **Reminders**: water (45 min), stand up (60 min), eyes 20-20-20 (20 min), long break
+  (50 min) out of the box; add your own, by interval or by fixed time of day
+- **Breaks**: gentle (a pet bubble) or strong — the pet walks to the center of the screen,
+  grows big, and keeps you company through the countdown, dimming and blurring the
+  background on the strict setting. If the pet is off, a full-screen break card is the
+  fallback
+- **Smart about context**: reminders wait out meetings, full-screen apps, and recordings;
+  time away from the computer counts as a natural break, so you don't get nagged for a
+  break you already took; the menu bar shows the countdown
 
 ### Keep awake
 
@@ -212,7 +312,8 @@ Onboarding asks for two permissions:
 > one-click restart.
 
 Skipping is fine — you can grant them later under Settings → General → Permissions.
-Microphone access is only requested if you enable "record microphone" while recording.
+Microphone access is only requested when you use it: recording, live translation, meeting
+notes, or dictation.
 
 ## Shortcuts
 
@@ -229,9 +330,10 @@ Bound out of the box:
 | ⌃⌥ ← → ↑ ↓ / U I J K / ⏎ / C / ⌫ | The 13 window actions |
 | ⌃⌥⌘ ← → | Move window across displays |
 
-OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files, and
-both Codex panels ship **unbound** — assign them under Settings → Shortcuts. Full list in
-[Shortcuts](docs/manual/en/shortcuts.md).
+OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files,
+both Codex panels, and every shortcut of the Meeting, dictation, desktop pet, focus &
+health, and selection translate tools ship **unbound** — assign them under
+Settings → Shortcuts. Full list in [Shortcuts](docs/manual/en/shortcuts.md).
 
 ## Data and privacy
 
@@ -248,6 +350,10 @@ both Codex panels ship **unbound** — assign them under Settings → Shortcuts.
   always ignored
 - The Claude Code and Codex assistants **store nothing** — they read `~/.claude` and
   `~/.codex` live
+- Meeting recordings, transcripts, and minutes stay on this Mac; dictation history stores
+  text only, never audio
+- The desktop pet's socket for other local processes is same-user only (`0600`), opens no
+  network port, and Baobox never executes commands on another process's behalf
 - The only network access is the version check you trigger yourself (an npm lookup)
 
 See [Data and privacy](docs/manual/en/privacy-and-data.md).
@@ -258,14 +364,16 @@ See [Data and privacy](docs/manual/en/privacy-and-data.md).
 Three platform implementations live side by side:
 
 ```
-mac/       macOS (Swift + SwiftUI/AppKit) — the complete 0.0.6
-windows/   Windows (Rust + Win32/GDI) — screenshots, in progress
-linux/     Linux (Rust + X11) — screenshots, in progress
+mac/       macOS (Swift + SwiftUI/AppKit) — the complete 0.0.7
+windows/   Windows (Rust + Win32/GDI) — tray app: screenshot, clipboard, caffeinate,
+           window manager, both AI assistants, keyboard clicking
+linux/     Linux (Rust + X11) — tray app: same six tools as Windows
 shared/    Rust core shared by all three (geometry, selection, annotation, stitching, filenames)
 ```
 
-macOS is the only complete implementation today. Windows and Linux have just started: they
-cover screenshots through a command-line entry point for now. See
+macOS is the only complete implementation today. Windows and Linux are tray-resident apps
+covering the six tools above; the newer Mac-only tools (meeting, dictation, desktop pet,
+focus & health, live and selection translation) have not been ported. See
 [multi-platform architecture](docs/multiplatform/ARCHITECTURE.md) (Chinese).
 
 ## Build from source
@@ -304,6 +412,7 @@ mac/Sources/
 ├── Modules/                # one directory per tool
 │   ├── Screenshot/  Clipboard/  WindowManager/  KeyboardNav/
 │   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/  LiveTranslate/
+│   ├── SelectionTranslate/  Meeting/  Dictation/  FocusHealth/  DesktopPet/
 ├── Settings/               # settings window
 ├── Onboarding/             # first-launch permission flow
 └── Resources/              # Localizable.xcstrings, Assets
