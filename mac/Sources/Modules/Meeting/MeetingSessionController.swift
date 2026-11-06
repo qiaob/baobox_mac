@@ -59,13 +59,6 @@ final class MeetingSessionController: ObservableObject {
         startedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
     }
 
-    private struct PendingStart {
-        let type: MeetingType
-        let event: MeetingEventInfo?
-    }
-
-    /// 等合规说明确认后再开的那一场。
-    private var pendingStart: PendingStart?
     /// 还在开始中就点了结束：开起来马上收尾。
     private var finishWhenStarted = false
     /// 本场的转录去向（引擎重启时沿用同一份）。
@@ -102,8 +95,11 @@ final class MeetingSessionController: ObservableObject {
             postToast(busy)
             return
         }
-        guard MeetingSettings.consentAcknowledged else {
-            askConsent(PendingStart(type: type, event: event))
+        guard MeetingSettings.consentAcknowledged || askConsent() else { return }
+        // 对话框期间可能已经别处开了一场 / 占了麦克风。
+        guard phase == .idle else { return }
+        if let busy = AudioCaptureCoordinator.shared.busyMessage() {
+            postToast(busy)
             return
         }
         begin(type: type, event: event)
@@ -124,35 +120,27 @@ final class MeetingSessionController: ObservableObject {
         LiveTranslateController.shared.toggle()
     }
 
-    /// 合规说明：告知参会人是用户自己的事，这里只提醒、不代为通知（需求 §3）。确认一次后不再问。
-    private func askConsent(_ pending: PendingStart) {
-        pendingStart = pending
-        NotifyCenter.shared.post(PetNotification(
-            source: Self.source,
-            level: .alert,
-            title: L("meeting.consent.title"),
-            body: L("meeting.consent.body"),
-            actions: [.init(id: "ack", label: L("meeting.consent.ack"), role: .primary),
-                      .init(id: "cancel", label: L("meeting.consent.cancel"), role: .destructive)],
-            dedupeKey: "consent",
-            style: .sticky,
-            icon: "person.2.wave.2"
-        )) { action in
-            MeetingSessionController.shared.consentAnswered(action)
+    /// 合规说明：告知参会人是用户自己的事，这里只提醒、不代为通知（需求 §3）。确认一次后不再问；返回是否确认。
+    ///
+    /// 用模态对话框、不走通知：这是点了「开始」之后必须先回答的一步。宠物关着时通知会退成系统横幅，
+    /// 按钮藏在「选项」里、一闪就没，看起来就像点了没反应（2026-11-06 真机）。
+    private func askConsent() -> Bool {
+        let previous = NSWorkspace.shared.frontmostApplication
+        // LSUIElement 应用不先激活，对话框会排在别的 App 窗口后面，主线程却已进了模态循环（见 CaffeinateController）。
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = L("meeting.consent.title")
+        alert.informativeText = L("meeting.consent.body")
+        alert.addButton(withTitle: L("meeting.consent.ack"))
+        alert.addButton(withTitle: L("meeting.consent.cancel"))
+        let confirmed = alert.runModal() == .alertFirstButtonReturn
+        // 焦点还给原来的 App（多半是会议软件）。
+        if let previous, previous.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           !previous.isTerminated {
+            previous.activate()
         }
-    }
-
-    private func consentAnswered(_ action: String) {
-        guard let pending = pendingStart else { return }
-        pendingStart = nil
-        guard action == "ack" else { return }
-        MeetingSettings.consentAcknowledged = true
-        guard phase == .idle else { return }
-        if let busy = AudioCaptureCoordinator.shared.busyMessage() {
-            postToast(busy)
-            return
-        }
-        begin(type: pending.type, event: pending.event)
+        if confirmed { MeetingSettings.consentAcknowledged = true }
+        return confirmed
     }
 
     private func begin(type: MeetingType, event: MeetingEventInfo?) {
