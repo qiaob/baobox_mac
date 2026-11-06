@@ -15,6 +15,8 @@ enum MeetingMarkdown {
     static let summaryHeadings: Set<String> = ["摘要", "Summary", "要点", "Key points"]
     /// 「决议」那一节（自由听译的纪要是「结论」）。
     static let decisionHeadings: Set<String> = ["决议", "Decisions", "结论"]
+    /// 「行动项」那一节（会议纪要；会议库详情里换成可勾选的列表）。
+    static let actionHeadings: Set<String> = ["行动项", "Action items"]
     /// 模型在没有内容时写的占位。
     static let placeholders: Set<String> = [
         "无", "暂无", "没有", "无。", "none", "none.", "n/a", "na", "-", "—", "…", "...", "nil", "tbd",
@@ -91,6 +93,20 @@ enum MeetingMarkdown {
             if inside { result.append(line) }
         }
         return result
+    }
+
+    /// 去掉纪要里的某几节（`### 标题` 连同下面的行，到下一个小标题为止）。
+    static func removingSubsections(_ headings: Set<String>, from minutes: String) -> String {
+        var skipping = false
+        var kept: [String] = []
+        for line in minutes.components(separatedBy: "\n") {
+            if let heading = level3Heading(line) ?? level2Heading(line) {
+                skipping = headings.contains(heading)
+                if skipping { continue }
+            }
+            if !skipping { kept.append(line) }
+        }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 列表项的正文（`- ` / `* ` / `• ` / `1. ` 开头）；不是列表项为 nil。

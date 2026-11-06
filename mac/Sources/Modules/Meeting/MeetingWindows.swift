@@ -270,10 +270,16 @@ final class MeetingLibraryModel: ObservableObject {
         pendingDelete = id
     }
 
+    /// 记录中、整理纪要中（含重新生成）的不能删：转录 / 纪要写完时会把目录又建回来。
+    static func canDelete(_ record: MeetingRecord) -> Bool {
+        record.meta.status != .recording && record.meta.status != .summarizing
+            && !MeetingMinutesRegenerator.shared.running.contains(record.id)
+    }
+
     /// 删除：移到废纸篓（迁移来的旧记录连原文件）。
     func delete(_ id: String) {
         pendingDelete = nil
-        guard let record = MeetingStore.shared.record(id), record.meta.status != .recording else { return }
+        guard let record = MeetingStore.shared.record(id), Self.canDelete(record) else { return }
         if selectedID == id {
             let records = filtered(MeetingStore.shared.records)
             let index = records.firstIndex(where: { $0.id == id })

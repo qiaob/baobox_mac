@@ -26,22 +26,21 @@ final class MeetingMinutesRegenerator: ObservableObject {
             MeetingLibraryModel.shared.flash(L("meeting.regenerate.noModel"))
             return
         }
-        let previous = record.meta.status
+        // 「整理中」只在内存里（`running`）：不写进 meta.json —— 中途退出的话旧纪要还在文件里，启动修复不该把它降成「仅转录」。
         running.insert(id)
-        store.update(id) { $0.status = .summarizing }
         store.loadMarkdown(id) { text in
-            MeetingMinutesRegenerator.shared.generate(id, markdown: text, record: record, previous: previous)
+            MeetingMinutesRegenerator.shared.generate(id, markdown: text, record: record)
         }
     }
 
-    private func generate(_ id: String, markdown: String?, record: MeetingRecord, previous: MeetingStatus) {
+    private func generate(_ id: String, markdown: String?, record: MeetingRecord) {
         guard let markdown else {
-            fail(id, previous: previous, message: L("meeting.regenerate.unreadable"))
+            fail(id, message: L("meeting.regenerate.unreadable"))
             return
         }
         let transcript = MeetingMarkdown.transcript(markdown, start: record.meta.start)
         guard !transcript.lines.isEmpty else {
-            fail(id, previous: previous, message: L("meeting.regenerate.empty"))
+            fail(id, message: L("meeting.regenerate.empty"))
             return
         }
         let lines = transcript.lines.map {
@@ -61,20 +60,19 @@ final class MeetingMinutesRegenerator: ObservableObject {
                                                                heading: L("livetranslate.record.doc.minutes"))
                 MeetingStore.shared.writeMarkdown(id, text: updated) { succeeded in
                     MeetingMinutesRegenerator.shared.written(id, succeeded: succeeded, minutes: minutes, markdown: updated,
-                                                             template: template, previous: previous)
+                                                             template: template)
                 }
             } catch {
                 reportsLog.error("regenerate minutes failed: \(error.localizedDescription, privacy: .public)")
-                MeetingMinutesRegenerator.shared.fail(id, previous: previous,
-                                                      message: L("meeting.regenerate.failed \(error.localizedDescription)"))
+                MeetingMinutesRegenerator.shared.fail(id, message: L("meeting.regenerate.failed \(error.localizedDescription)"))
             }
         }
     }
 
     private func written(_ id: String, succeeded: Bool, minutes: String, markdown: String,
-                         template: LiveTranslateMinutesTemplate, previous: MeetingStatus) {
+                         template: LiveTranslateMinutesTemplate) {
         guard succeeded else {
-            fail(id, previous: previous, message: L("meeting.regenerate.writeFailed"))
+            fail(id, message: L("meeting.regenerate.writeFailed"))
             return
         }
         running.remove(id)
@@ -90,9 +88,9 @@ final class MeetingMinutesRegenerator: ObservableObject {
         MeetingLibraryModel.shared.flash(L("meeting.regenerate.done"))
     }
 
-    private func fail(_ id: String, previous: MeetingStatus, message: String) {
+    /// 没生成出来：文件、状态都没动过，只提示一句。
+    private func fail(_ id: String, message: String) {
         running.remove(id)
-        MeetingStore.shared.update(id) { $0.status = previous }
         MeetingLibraryModel.shared.flash(message)
     }
 }

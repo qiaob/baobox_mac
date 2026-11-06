@@ -122,3 +122,30 @@
 - **勿扰下的提示**：记录中挂着 `meeting` 令牌，普通提示会被攒起来，所以会中的轻提示（已在记录、超时）用 alert 级 + toast 样式；会后的「纪要已生成」晚一拍再发（等令牌撤掉）。
 
 文件：`Modules/LiveTranslate/` 新增 `LiveTranslateSessionConfig`、`LiveTranslateMixedSource`、`LiveTranslateMixing`（纯）、`LiveTranslateMinutesFormat`（纯）；`Modules/Meeting/`：`MeetingTool`（模块壳 + 菜单）、`MeetingSessionController`、`MeetingStore`、`MeetingModels`（纯）、`MeetingLibraryFiles`（纯）、`MeetingControlBar`、`MeetingStatusItem`、`MeetingSettings`、`MeetingSettingsView`、`MeetingText`。
+
+## 10. 第二段落地记录（2026-11-06）
+
+第二段 = 日历、链接解析、会前提醒、会议检测、会议库窗口（行动项 / 会前简报 / 系列时间线 / 周报）、设备自检、完整设置与菜单、菜单迁移。#42 至此全部落地。实现时定下的细节：
+
+- **日历**（`MeetingCalendar`）：「读取日历」默认关，打开时才 `requestFullAccessToEvents`（授权后换一个新的 `EKEventStore`，授权前建的读不到日历）；没打开不碰 EventKit。多选存的是「不读的日历」，新加的日历默认也读。查询窗口 = 现在往前 6 小时到往后 24 小时（含正在进行的长会），去掉全天事件（节假日、生日）、已取消、我已拒绝、已结束的。参会人按日历顺序取名字（没名字用邮箱 @ 前面那段），去掉我自己与会议室 / 设备；没参会人时用组织者。无标题事件显示「（无标题）」。EventKit 调用都在一条串行队列上，主线程只发布结果（没变不发布）。
+- **系列键**：重复事件和改过单次的那一次（`hasRecurrenceRules || isDetached`）用 `ext:` + `calendarItemExternalIdentifier`，否则 `title:` + 规范化标题。规范化 = 小写，去「第 3 期」「2026年11月6日」「周四」「#12 / W45 / Q4 / v2」与所有数字，标点当空格。「同系列」= 系列键相同或规范化同名；两个不同的重复事件即使同名（和不同人的「1:1」）不算，没绑日历时的默认标题（「线上会议」等）不按同名归系列。纯函数 `MeetingSeries`。
+- **下一场与绑定**：开始不到 15 分钟的仍算「下一场」（迟到也能一键入会，有链接的优先），否则最近一场未开始的。手动开始**线上**会议时自动绑正在进行或 5 分钟内开始的事件（有链接优先，离现在近的优先）；线下不自动绑（提醒 / 简报里点开始时才带上事件）。
+- **链接解析**（`MeetingLinkParser`，纯函数）：URL → 地点 → 备注，取第一个认得的。HTML 的 `&amp;`、尖括号 / 引号 / 中文标点当边界，末尾标点与不配对的右括号去掉，没写 scheme 的会议域名补 `https://`；剥 Outlook safelinks 与 Google 跳转。不认的：Zoom 拨号页 `/u/`、Teams 会议选项、Webex 官网 / 帮助页、腾讯会议下载页、钉钉文档 / 审批、飞书文档。
+- **会前提醒**（`MeetingReminder`）：15 秒心跳（提前量 1 分钟时 30 秒太粗）；窗口 = 开始前提前量到开始后 2 分钟（刚从睡眠醒来也补上），再晚交给「已开始」检测。气泡是 **alert 级 sticky**：勿扰时非 alert 会被攒起来、补发时没有按钮，等勿扰结束会议早开始了 —— 与桌面宠物的设计一致（`docs/desktop-pet/INTERACTION.md`：会议提醒 = sticky）；不想被打扰就「暂停会议提醒」。正在记这一场（提前开始、自动绑上了）不提醒；记录别的会议时主按钮换成 [加入会议]（不另开记录）。「上次有 N 项未完成」= 该系列此前会议的全部未完成行动项（与简报一致）。
+- **问过的记账**（`MeetingPromptBook`，UserDefaults `meeting.prompted` / `meeting.ignoredEvents`，过期 = 事件结束后一天）：会前提醒与「已开始」检测共用（同一场只问一次，重启后也不再问）；点 [忽略] = 这一场不再问、不自动开始，进行期间 App 检测也不问。自动开始另记一笔（提醒过的那场照样可以自动开始，但只自动开始一次）。
+- **暂停会议提醒**：1 小时 / 今天（到今天 24 点）/ 直到明天（到明天 24 点，后天恢复；菜单项 tooltip 写明）。暂停同时管会前提醒、检测的询问与自动开始；暂停中菜单换成「恢复会议提醒（已暂停到 …）」。存 `meeting.reminder.pausedUntil`。
+- **会议检测**（`MeetingDetector` 每 5 秒，顺手 `refreshMicrophoneState()`）：
+  - 规则 1 只在开始后 15 分钟内问（醒来时已开会半小时就不问了，交给规则 2）。
+  - 规则 2 的状态机（纯函数 `MeetingDetectionMachine`）：麦克风被占用（且有会议 App 在跑）连续 10 秒才问，中间断一下重新计；空闲 30 秒以上这段占用才算结束（会议软件换设备时会短暂松开）；问的时候在跑的会议 App 都算问过（Slack、微信常驻，不然会接着问它们），中途才打开的 App 自己满 10 秒后可以问；Baobox 自己在用麦克风（会议、自由听译、自检）或在录屏时这段算问过 —— 刚结束记录、会议软件还开着麦克风时不会马上又来问。
+  - 候选排序：前台那个 → 专门开会的（Zoom、腾讯会议、Teams、Webex、FaceTime）→ 常驻聊天 App（钉钉、飞书、微信、Slack）。忽略名单存 bundle id → 显示名（`meeting.detect.ignored`），设置里可移除。「自动检测会议」默认开（只问不自己开始）。
+  - 询问也是 alert 级：会议软件全屏时勿扰是开着的。
+- **自动开始**（`meeting.autoStart`，默认关，不受「自动检测」开关影响）：规则 1 命中（带链接的日历会议开始 15 分钟内）或规则 2 命中且有进行中的日历会议 → 不问，直接开始线上会议记录（绑这场），先 toast 一句。第一次用照样先弹合规说明。
+- **会议库窗口**（`MeetingWindowController` + `MeetingLibraryModel`）：一个窗口两种视图（会议 / 行动项），详情三页（纪要 / 原文 / 系列时间线）。全文搜索时把所有 meeting.md 后台读进内存缓存，按「状态 + 结束时间」判断要不要重读。纪要正文里不再列一遍行动项（下面是可勾选的列表，勾选写回 meta.json；复制、导出仍是原文）。删除前确认，记录中、整理中（含重新生成）的不能删（写完时会把目录建回来）。导出 = 整份 meeting.md（NSSavePanel）。通知「纪要已生成」的 [打开] 现在打开会议库并选中这场。
+- **重新生成纪要**（`MeetingMinutesRegenerator`）：从 meeting.md 读回转录（只有时:分:秒，按开始那天算、跨午夜往后挪）、🔖 与速记，按 meta 里的模板交给本地模型；只换纪要一节（没有就加在第一个二级标题前）；会议模板重解析行动项，同一条之前勾过的保留勾选。「整理中」只在内存里，不写进 meta.json（中途退出时旧纪要还在）。一次一场；没模型时提示去下载。
+- **周报**（`MeetingWeeklyReporter` + 纯函数 `MeetingWeeklyReport`）：ISO 周（周一到周日），只算线上 / 线下会议；决议取纪要「### 决议」（自由听译是「结论」）下的各条、去掉「无」；未完成行动项带来源会议。概述 = 本地模型写 2–4 句（材料截到约 2400 token），没装模型跳过这一节。同一周再生成就覆盖 `weekly/<yyyy-Www>.md`，写好用默认程序打开；本周没会议只提示一句。
+- **设备自检**（`MeetingDeviceTest`）：直接用线上会议同一条混音链路 `LiveTranslateMixedSource`（录到的就是识别器听到的那一路）；系统声音开不了（多半没给屏幕录制权限）就只录麦克风并说明。回放 = 只有输出的 `AVAudioEngine` + 播放节点（`.dataPlayedBack` 回调，另有超时兜底），**不碰 voice processing**。自检期间登记占用（owner `meetingSelfTest`）。
+- **菜单与菜单栏**：顺序同需求 §5；会前简报在下一场没有简报（无同系列上一场、也无未完成行动项）时置灰。录音指示与下一场倒计时共用一个菜单栏项（录音优先，`meeting.menuBarCountdown` 默认关），它的菜单也显示快捷键（`StatusItemController.showHotkeyIfTagged` 改成 internal 复用）。快捷键新增 `meeting.join`，全部出厂不绑定。
+- **迁移**：`LiveTranslateTool.name` 换成 `livetranslate.mergedName`（「字幕与同传」，设置 Tab 跟着改）；`livetranslate.name` 仍是占用登记里的「实时翻译」（「正在实时翻译，先停止再开始」）。菜单第一行置灰「已并入「会议」」+ 分隔线，其余不变；设置 Tab 第一行同样说明，并带「打开会议设置」。
+- 其他：`NotifyDND` 加了只读的 `hasToken(_:)`（检测看「录屏中」，不像 `reasons()` 要遍历窗口列表）；`MeetingStore` 加了批量读 Markdown、整份重写 Markdown、写周报。
+
+文件：`Modules/Meeting/` 新增 `MeetingCalendar`（EventKit）、`MeetingLinkParser`（纯）、`MeetingSchedule`（纯：下一场 / 绑定 / 提醒时间 / 暂停 / 记账）、`MeetingDetection`（纯：检测状态机）、`MeetingSeries`（纯：系列 / 简报）、`MeetingMarkdown`（纯：meeting.md 解析 / 周报）、`MeetingReminder`、`MeetingDetector`、`MeetingReports`（重新生成纪要 / 周报）、`MeetingDeviceTest`、`MeetingWindows`（窗口控制器与视图模型）、`MeetingLibraryView`、`MeetingBriefView`。`project.yml` 加 `NSCalendarsFullAccessUsageDescription` 与 entitlement `com.apple.security.personal-information.calendars`。

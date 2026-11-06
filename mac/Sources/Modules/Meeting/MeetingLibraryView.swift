@@ -218,7 +218,7 @@ struct MeetingRowActions: View {
                 .disabled(!regenerator.canRegenerate(record))
             icon("square.and.arrow.up", L("meeting.library.exportEllipsis")) { model.export(record.id) }
             icon("trash", L("meeting.library.delete")) { model.confirmDelete(record.id) }
-                .disabled(record.meta.status == .recording)
+                .disabled(!MeetingLibraryModel.canDelete(record))
         }
     }
 
@@ -250,7 +250,7 @@ struct MeetingRowMenu: View {
         Button(L("meeting.library.reveal")) { MeetingStore.shared.reveal(record.id) }
         Divider()
         Button(L("meeting.library.delete"), role: .destructive) { model.confirmDelete(record.id) }
-            .disabled(record.meta.status == .recording)
+            .disabled(!MeetingLibraryModel.canDelete(record))
     }
 }
 
@@ -405,7 +405,9 @@ struct MeetingLibraryDetail: View {
     private var minutesContent: some View {
         if let minutes = sections?.minutes {
             // 没整理成（没模型、太短、失败）时这一节写的是原因，照样显示；重新生成期间先显示旧的。
-            MeetingMarkdownBody(text: minutes)
+            // 行动项在下面换成可勾选的列表，纪要正文里就不再列一遍（复制、导出仍是原文）。
+            MeetingMarkdownBody(text: record.meta.actionItems.isEmpty
+                                ? minutes : MeetingMarkdown.removingSubsections(MeetingMarkdown.actionHeadings, from: minutes))
         } else if text == nil {
             loading
         } else {
@@ -459,6 +461,7 @@ struct MeetingLibraryDetail: View {
                 MeetingActionItemCheckRow(meetingID: record.id, item: item)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
     }

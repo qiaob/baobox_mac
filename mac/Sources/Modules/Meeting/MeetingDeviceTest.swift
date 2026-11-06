@@ -106,6 +106,8 @@ final class MeetingDeviceTest: ObservableObject {
             // 多半是没给屏幕录制权限：只录麦克风。
             selfTestLog.notice("system audio unavailable: \(error.localizedDescription, privacy: .public)")
             systemOK = false
+            // 第一次失败前麦克风可能已经送进来一点：从头录。
+            collector.reset()
             mixed = LiveTranslateMixedSource(router: router, microphone: true, system: false)
             do {
                 try await mixed.start()
