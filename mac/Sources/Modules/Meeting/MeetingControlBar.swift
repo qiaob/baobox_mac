@@ -266,22 +266,37 @@ struct MeetingControlBarView: View {
         }
     }
 
-    /// 麦克风 / 系统声音两个点：有声音亮（绿），静音或暂停变灰；线下会议没有系统声音那一个。
+    /// 麦克风 / 系统声音两个图标：有声音亮（绿），没声音或暂停变灰；点一下单独不录这一路（红色带斜杠），再点恢复。
+    /// 线下会议没有系统声音那一个。
     private var levelDots: some View {
-        HStack(spacing: 6) {
-            levelDot("mic.fill", active: levels.microphoneActive, help: L("meeting.bar.micLevel"))
+        HStack(spacing: 2) {
+            levelToggle(on: "mic.fill", off: "mic.slash.fill", active: levels.microphoneActive,
+                        muted: session.microphoneMuted,
+                        help: session.microphoneMuted ? L("meeting.bar.micUnmute") : L("meeting.bar.micMute")) {
+                session.toggleMicrophoneMuted()
+            }
             if session.type == .online {
-                levelDot("speaker.wave.2.fill", active: levels.systemActive, help: L("meeting.bar.systemLevel"))
+                levelToggle(on: "speaker.wave.2.fill", off: "speaker.slash.fill", active: levels.systemActive,
+                            muted: session.systemMuted,
+                            help: session.systemMuted ? L("meeting.bar.systemUnmute") : L("meeting.bar.systemMute")) {
+                    session.toggleSystemMuted()
+                }
             }
         }
     }
 
-    private func levelDot(_ symbol: String, active: Bool?, help: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 10))
-            .foregroundStyle(active == true ? Color.green : Color.white.opacity(0.3))
-            .frame(width: 14)
-            .help(help)
+    private func levelToggle(on: String, off: String, active: Bool?, muted: Bool, help: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: muted ? off : on)
+                .font(.system(size: 11))
+                .foregroundStyle(muted ? Color.red.opacity(0.9) : active == true ? Color.green : Color.white.opacity(0.35))
+                .frame(width: 20, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!session.isActive || session.phase == .finishing)
+        .help(help)
     }
 
     private var markButton: some View {

@@ -376,6 +376,8 @@ final class LiveTranslateController: ObservableObject {
     private var mixedSource: LiveTranslateMixedSource?
     /// 会议暂停中：不往识别器送音频（会话不停）。跨改设置的重启保留。
     private var audioPaused = false
+    /// 会议里单独不录的那几路（`LiveTranslateMixerCore` 的 lane），跟暂停一样跨「改设置引起的重启」保留。
+    private var mutedLanes: Set<Int> = []
     /// 上一句定稿时两路的累计人声时长：这一句的说话人按「定稿时 − 它」判。
     private var speakerBaseline = LiveTranslateLaneStats()
     /// 字幕条此刻显示着（会议的「字幕」开关据此同步）。
@@ -438,8 +440,9 @@ final class LiveTranslateController: ObservableObject {
             return false
         }
         if !sessionOpen {
-            // 新的一次会话（不是改设置引起的重启）：暂停状态从头来。
+            // 新的一次会话（不是改设置引起的重启）：暂停、单路静音都从头来。
             audioPaused = false
+            mutedLanes = []
         }
         sessionConfig = config
         sessionOpen = true
@@ -541,6 +544,7 @@ final class LiveTranslateController: ObservableObject {
         guard sessionOpen else { return }
         sessionOpen = false
         audioPaused = false
+        mutedLanes = []
         sessionConfig.onLifecycle?(.ended)
     }
 
@@ -697,6 +701,7 @@ final class LiveTranslateController: ObservableObject {
             let created = LiveTranslateMixedSource(router: router, microphone: source.usesMicrophone,
                                                    system: source.usesSystemAudio)
             created.setPaused(audioPaused)
+            for lane in mutedLanes { created.setMuted(true, lane: lane) }
             mixed = created
             audio = created
         }
@@ -980,6 +985,19 @@ final class LiveTranslateController: ObservableObject {
             recording = !paused
         }
         transcript?.note(paused ? L("livetranslate.record.doc.paused") : L("livetranslate.record.doc.resumed"), at: Date())
+    }
+
+    /// 会议里单独不录某一路（麦克风 = 你的声音，系统声音 = 对方的声音）：这一路换成静音送进去，另一路照录；
+    /// 记录里记一行。只是 Baobox 不录，会议软件里照样听得到。
+    func setLaneMuted(_ muted: Bool, lane: Int) {
+        guard isRunning || isStarting, mutedLanes.contains(lane) != muted else { return }
+        if muted { mutedLanes.insert(lane) } else { mutedLanes.remove(lane) }
+        mixedSource?.setMuted(muted, lane: lane)
+        let microphone = lane == LiveTranslateMixerCore.microphoneLane
+        let note = microphone
+            ? (muted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"))
+            : (muted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"))
+        transcript?.note(note, at: Date())
     }
 
     /// 两路此刻的电平（控制条的电平点，取一次清一次）；不是混音链路时为 nil。

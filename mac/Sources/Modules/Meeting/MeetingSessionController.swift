@@ -38,6 +38,9 @@ final class MeetingSessionController: ObservableObject {
     @Published private(set) var startedAt: Date?
     /// 字幕条（+ 译文）开着；与字幕条上的 ✕、实时翻译的开关同步。
     @Published private(set) var subtitlesOn = false
+    /// 单独不录你的声音 / 对方的声音（控制条上点麦克风 / 喇叭图标）。只是 Baobox 不录，会议软件里照样听得到。
+    @Published private(set) var microphoneMuted = false
+    @Published private(set) var systemMuted = false
     /// 🔖 标记（`t` = 距开始的秒数）。
     @Published private(set) var marks: [MeetingHighlight] = []
     /// 速记全文。
@@ -157,6 +160,8 @@ final class MeetingSessionController: ObservableObject {
         self.title = title
         startedAt = now
         subtitlesOn = false
+        microphoneMuted = false
+        systemMuted = false
         marks = []
         notes = ""
         notesExpanded = false
@@ -292,6 +297,20 @@ final class MeetingSessionController: ObservableObject {
         setSubtitles(!subtitlesOn)
     }
 
+    /// 点麦克风图标：不录 / 恢复录你的声音（对方的照录）。
+    func toggleMicrophoneMuted() {
+        guard isActive, phase != .finishing else { return }
+        microphoneMuted.toggle()
+        LiveTranslateController.shared.setLaneMuted(microphoneMuted, lane: LiveTranslateMixerCore.microphoneLane)
+    }
+
+    /// 点喇叭图标：不录 / 恢复录对方的声音（你的照录）。只有线上会议有这一路。
+    func toggleSystemMuted() {
+        guard isActive, phase != .finishing, type == .online else { return }
+        systemMuted.toggle()
+        LiveTranslateController.shared.setLaneMuted(systemMuted, lane: LiveTranslateMixerCore.systemLane)
+    }
+
     // MARK: - 结束
 
     /// 结束并生成纪要：等最后一句定稿（最多 1.5 秒）→ 写 meta.json → 后台整理纪要 → 宠物通知。
@@ -369,6 +388,8 @@ final class MeetingSessionController: ObservableObject {
         title = ""
         startedAt = nil
         subtitlesOn = false
+        microphoneMuted = false
+        systemMuted = false
         marks = []
         notes = ""
         notesExpanded = false

@@ -63,6 +63,11 @@ final class LiveTranslateMixedSource: LiveTranslateAudioSource {
         core.setPaused(paused)
     }
 
+    /// 单独不录某一路（`LiveTranslateMixerCore.microphoneLane` / `.systemLane`）。
+    func setMuted(_ muted: Bool, lane: Int) {
+        core.setMuted(muted, lane: lane)
+    }
+
     /// 上次取走以来两路的峰值 RMS（控制条的电平点）；没开的那一路为 nil。
     func takeLevels() -> LiveTranslateInputLevels {
         let peaks = core.takePeaks()
@@ -81,7 +86,7 @@ struct LiveTranslateInputLevels: Equatable {
 }
 
 /// 混音的线程部分：两路的采集回调线程往环形缓冲里写，混音队列每 20 ms 取。
-/// @unchecked Sendable 依据：`mixer` / `totals` / `peaks` / `paused` 只在 `lock` 内读写；`timer` / `clock` 只在 `queue` 上碰。
+/// @unchecked Sendable 依据：`mixer` / `totals` / `peaks` / `paused` / `mutedLanes` 只在 `lock` 内读写；`timer` / `clock` 只在 `queue` 上碰。
 final class LiveTranslateMixerCore: @unchecked Sendable {
     static let microphoneLane = 0
     static let systemLane = 1
@@ -94,6 +99,8 @@ final class LiveTranslateMixerCore: @unchecked Sendable {
     private var stats = LiveTranslateLaneStats()
     private var peaks: [Float] = [0, 0]
     private var paused = false
+    /// 单独不录的那几路（会议控制条上点掉的麦克风 / 系统声音）。
+    private var mutedLanes: Set<Int> = []
     private var timer: DispatchSourceTimer?
     private var clock: LiveTranslateMixClock?
 
@@ -113,9 +120,11 @@ final class LiveTranslateMixerCore: @unchecked Sendable {
         return { [weak self] buffer in
             guard let self, let converted = converter.convert(buffer),
                   let channel = converted.floatChannelData?[0], converted.frameLength > 0 else { return }
-            let samples = UnsafeBufferPointer(start: channel, count: Int(converted.frameLength))
+            let count = Int(converted.frameLength)
             self.lock.lock()
-            self.mixer.push(samples, lane: lane)
+            // 这一路静音：照样按时长送一段静音进去，两路仍对齐、不算断流；声音本身不进记录。
+            if self.mutedLanes.contains(lane) { channel.update(repeating: 0, count: count) }
+            self.mixer.push(UnsafeBufferPointer(start: channel, count: count), lane: lane)
             self.lock.unlock()
         }
     }
@@ -155,6 +164,14 @@ final class LiveTranslateMixerCore: @unchecked Sendable {
         lock.lock()
         self.paused = paused
         peaks = [0, 0]
+        lock.unlock()
+    }
+
+    /// 单独不录某一路（`microphoneLane` / `systemLane`），另一路照录。
+    func setMuted(_ muted: Bool, lane: Int) {
+        lock.lock()
+        if muted { mutedLanes.insert(lane) } else { mutedLanes.remove(lane) }
+        if peaks.indices.contains(lane) { peaks[lane] = 0 }
         lock.unlock()
     }
 
