@@ -3,7 +3,7 @@ import os
 
 private let detectorLog = Logger(subsystem: "com.baobox.app", category: "meeting.detect")
 
-/// 会议检测（docs/meeting/REQUIREMENTS.md §2、TECH_DESIGN §5）：每 5 秒采样一次，满足任一条件就问要不要记录。
+/// 会议检测（docs/meeting/REQUIREMENTS.md §2、TECH_DESIGN §5 / §10）：满足任一条件就问要不要记录。
 ///
 /// 1. 日历事件已开始（15 分钟内）、带会议链接、还没在记录 → 气泡 [加入并记录][开始记录][忽略]。会前提醒问过的那场不再问。
 /// 2. 会议 App 正在开会 → 气泡 [开始记录][忽略][不再检测此 App]。「正在开会」= 它开会时才起的进程开着（钉钉的 Tblive，
@@ -12,8 +12,10 @@ private let detectorLog = Logger(subsystem: "com.baobox.app", category: "meeting
 ///    正在进行的日历会议被「忽略」过就不问。
 ///
 /// 「命中日历会议时自动开始记录」（默认关）开着时，上面两种碰到日历会议都不问、直接开始（绑这场），并说一声。
-/// 麦克风按进程查要读 CoreAudio，放到后台，每次采样用上一次读到的结果（晚 5 秒无所谓）。询问都是 alert 级：
-/// 会议软件全屏时勿扰是开着的，攒起来补发就没有按钮了。
+///
+/// 采样节奏（借鉴 Notion）：默认输入设备一被占用 / 松开、或会议进程刚起，马上采样（`MeetingMicListener`）；
+/// 有人在用麦克风（及刚变过的 10 秒内）每秒采样，平时 5 秒。麦克风按进程查要读 CoreAudio，放到后台，读完马上判断。
+/// 询问都是 alert 级：会议软件全屏时勿扰是开着的，攒起来补发就没有按钮了。
 @MainActor
 final class MeetingDetector {
     static let shared = MeetingDetector()
@@ -21,24 +23,83 @@ final class MeetingDetector {
 
     private var machine = MeetingDetectionMachine()
     private var timer: Timer?
+    private var timerInterval: TimeInterval = 0
     private var started = false
-    /// 上一次在后台读到的「谁在用麦克风」。
+    /// 最近一次在后台读到的「谁在用麦克风」。
     private var microphoneUsage = MeetingMicrophoneUsage()
     private var microphoneRefreshing = false
+    /// 采样进行中又要查（麦克风刚被占用）：这次读完马上再读一次 —— 进行中那次可能是占用之前读的。
+    private var sampleAgain = false
+    /// 浏览器这一轮用麦克风期间认出过的会议网站。
+    private var webLatch = MeetingWebLatch()
+    private var lastWebMeetings: Set<String> = []
+    /// 上一次采样是否在避让（诊断日志只记变化）。
+    private var lastHoldOff = false
+    /// 麦克风刚变过 / 会议进程刚起：到这个时候之前每秒采样。
+    private var fastUntil = Date.distantPast
+    private var micListener: MeetingMicListener?
+    private var launchObserver: NSObjectProtocol?
+
+    private static let fastInterval: TimeInterval = 1
+    private static let slowInterval: TimeInterval = 5
+    /// 麦克风刚变过之后每秒采样多久（之后看还有没有人在用）。
+    private static let fastWindow: TimeInterval = 10
 
     func start() {
         guard !started else { return }
         started = true
-        let timer = Timer(timeInterval: 5, repeats: true) { _ in
+        schedule(Self.slowInterval)
+        let listener = MeetingMicListener {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { MeetingDetector.shared.microphoneChanged() }
+            }
+        }
+        listener.start()
+        micListener = listener
+        // 钉钉开会起的 Tblive 一出来就查（入会就静音时它可能根本不用麦克风）。
+        launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard let bundleID = app?.bundleIdentifier, MeetingDetectionApps.meetingProcesses[bundleID] != nil else { return }
+            MainActor.assumeIsolated { MeetingDetector.shared.microphoneChanged() }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        timerInterval = 0
+        micListener?.stop()
+        micListener = nil
+        if let launchObserver { NSWorkspace.shared.notificationCenter.removeObserver(launchObserver) }
+        launchObserver = nil
+        started = false
+    }
+
+    /// 麦克风刚被占用 / 松开，或会议进程刚起：马上查，接下来一段时间每秒查。
+    private func microphoneChanged() {
+        guard started else { return }
+        fastUntil = Date().addingTimeInterval(Self.fastWindow)
+        schedule(Self.fastInterval)
+        tick()
+    }
+
+    private func schedule(_ interval: TimeInterval) {
+        guard interval != timerInterval || timer == nil else { return }
+        timer?.invalidate()
+        timerInterval = interval
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in
             MainActor.assumeIsolated { MeetingDetector.shared.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
 
-    func stop() {
-        timer?.invalidate()
-        timer = nil
+    /// 有人在用麦克风、或麦克风刚变过，每秒采样；否则回到 5 秒。
+    private func updatePace(now: Date) {
+        let busy = !microphoneUsage.apps.isEmpty || microphoneUsage.unattributed || now < fastUntil
+        schedule(busy ? Self.fastInterval : Self.slowInterval)
     }
 
     private func tick() {
@@ -48,20 +109,46 @@ final class MeetingDetector {
         checkApps(at: now, paused: paused)
     }
 
-    /// 后台读一次谁在用麦克风，结果回主线程缓存（下一次采样用）。
-    private func refreshMicrophoneUsage(frontmost: String?) {
-        guard !microphoneRefreshing else { return }
+    /// 后台读一次谁在用麦克风，读完回主线程马上判断（`sampled`）。
+    private func requestSample(frontmost: String?) {
+        guard !microphoneRefreshing else {
+            sampleAgain = true
+            return
+        }
         microphoneRefreshing = true
         DispatchQueue.global(qos: .utility).async {
             let usage = MeetingMicrophoneProbe.sample(frontmost: frontmost)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    let detector = MeetingDetector.shared
-                    detector.microphoneUsage = usage
-                    detector.microphoneRefreshing = false
-                }
+                MainActor.assumeIsolated { MeetingDetector.shared.sampled(usage) }
             }
         }
+    }
+
+    private func sampled(_ usage: MeetingMicrophoneUsage) {
+        microphoneRefreshing = false
+        if usage != microphoneUsage { Self.logUsage(usage) }
+        microphoneUsage = usage
+        let now = Date()
+        updatePace(now: now)
+        evaluateApps(at: now, paused: MeetingReminder.shared.isPaused(at: now))
+        if sampleAgain {
+            sampleAgain = false
+            requestSample(frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        }
+    }
+
+    /// 谁在用麦克风变了就记一笔：只记 bundle id、每个在录音的浏览器读到几个窗口标题、认出的会议网站，不记标题内容。
+    /// 真机上「开了会却没问」时靠这条看卡在哪一步（没认出是谁在录 / 标题读不到 / 标题没认出来）。
+    private static func logUsage(_ usage: MeetingMicrophoneUsage) {
+        let apps = usage.apps.sorted().joined(separator: ",")
+        let titles = usage.browserTitleCounts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+            .joined(separator: ",")
+        let web = usage.sitesByBrowser.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value.sorted().joined(separator: "+"))" }.joined(separator: ",")
+        detectorLog.notice("""
+            mic in use: [\(apps, privacy: .public)] unattributed=\(usage.unattributed, privacy: .public) \
+            browser titles: [\(titles, privacy: .public)] web: [\(web, privacy: .public)]
+            """)
     }
 
     // MARK: - 规则 1：日历事件已开始
@@ -114,36 +201,60 @@ final class MeetingDetector {
 
     // MARK: - 规则 2：会议 App + 麦克风
 
+    /// 有会议 App 或浏览器在跑就去后台采样，读完再判断；都没在跑就不读 CoreAudio，直接判断（让问过的记录按时过期）。
     private func checkApps(at now: Date, paused: Bool) {
+        let workspace = NSWorkspace.shared
+        let runningIDs = workspace.runningApplications.compactMap(\.bundleIdentifier)
+        let enabled = MeetingSettings.detectionEnabled || MeetingSettings.autoStart
+        if enabled, runningIDs.contains(where: { MeetingDetectionApps.isMeetingApp($0) || MeetingWebSites.browsers.contains($0) }) {
+            requestSample(frontmost: workspace.frontmostApplication?.bundleIdentifier)
+            return
+        }
+        microphoneUsage = MeetingMicrophoneUsage()
+        updatePace(now: now)
+        evaluateApps(at: now, paused: paused)
+    }
+
+    private func evaluateApps(at now: Date, paused: Bool) {
         let session = MeetingSessionController.shared
         let workspace = NSWorkspace.shared
         let running = workspace.runningApplications
         let runningIDs = running.compactMap(\.bundleIdentifier)
         let frontmost = workspace.frontmostApplication?.bundleIdentifier
         let enabled = MeetingSettings.detectionEnabled || MeetingSettings.autoStart
+        // 浏览器这一轮录音里认出过的会议网站一直算（切了标签页、标题变了也算），松开麦克风才忘。
+        let webMeetings = webLatch.update(recordingBrowsers: microphoneUsage.apps.intersection(MeetingWebSites.browsers),
+                                          unattributed: microphoneUsage.unattributed,
+                                          matches: microphoneUsage.sitesByBrowser)
+        if webMeetings != lastWebMeetings {
+            lastWebMeetings = webMeetings
+            detectorLog.notice("web meetings: [\(webMeetings.sorted().joined(separator: ","), privacy: .public)]")
+        }
         var signals: [String: MeetingSignal] = [:]
         if enabled {
-            // 没有会议 App、也没有浏览器在跑就不去读 CoreAudio。
-            if runningIDs.contains(where: { MeetingDetectionApps.isMeetingApp($0) || MeetingWebSites.browsers.contains($0) }) {
-                refreshMicrophoneUsage(frontmost: frontmost)
-            } else {
-                microphoneUsage = MeetingMicrophoneUsage()
-            }
             signals = MeetingDetectionApps.signals(runningBundleIDs: runningIDs,
                                                    microphoneApps: microphoneUsage.apps,
                                                    unattributedMicrophone: microphoneUsage.unattributed,
-                                                   webMeetings: microphoneUsage.webMeetings,
+                                                   webMeetings: webMeetings,
                                                    frontmost: frontmost,
                                                    ignored: Set(MeetingSettings.ignoredApps.keys))
         }
         // Baobox 在记录会议：正在开的会算问过；在用麦克风做别的（听写、字幕、自检）或在录屏：先不问，结束后再问。
         let holdOff = AudioCaptureCoordinator.shared.current != nil || NotifyDND.shared.hasToken("recording")
+        if holdOff != lastHoldOff {
+            lastHoldOff = holdOff
+            detectorLog.notice("hold off: \(holdOff, privacy: .public)")
+        }
         guard let bundleID = machine.step(now: now, signals: signals, frontmost: frontmost,
                                           recordingMeeting: session.isActive, holdOff: holdOff) else { return }
         // 暂停期间不问（这一段占用也就算问过了）。
-        guard !paused else { return }
+        guard !paused else {
+            detectorLog.notice("meeting in \(bundleID, privacy: .public), not asked: reminders paused")
+            return
+        }
         let calendarEvent = MeetingCalendar.shared.bindingCandidate(at: now)
         if let calendarEvent, MeetingPromptBook.shared.isIgnored(calendarEvent.occurrenceKey, now: now) {
+            detectorLog.notice("meeting in \(bundleID, privacy: .public), not asked: its calendar event was ignored")
             return
         }
         if let calendarEvent, MeetingSettings.autoStart {

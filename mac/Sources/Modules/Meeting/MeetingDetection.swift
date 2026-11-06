@@ -4,10 +4,12 @@ import Foundation
 // 采样（运行中的进程、谁在用麦克风）在 MeetingMicrophoneUsage.swift / MeetingDetector.swift，发气泡在 MeetingDetector.swift。
 //
 // 每个会议 App 单独判断「是不是正在开会」，信号两种：
-// - 会议进程：会议 App 开会时才起的进程开着（如钉钉的 Tblive）—— 入会就静音也算，看到 3 秒就问；
-// - 麦克风：按进程查出来是这个 App（含它包里的辅助进程）在录音 —— 专门开会的 App 连续 5 秒、聊天 App 连续 10 秒才问
-//   （浏览器在录音、窗口标题又是会议网站 —— Google Meet、Teams 网页版等 —— 算这个网站在开会，同专门开会的 App）
+// - 会议进程：会议 App 开会时才起的进程开着（如钉钉的 Tblive）—— 入会就静音也算，看到 2 秒就问；
+// - 麦克风：按进程查出来是这个 App（含它包里的辅助进程）在录音 —— 专门开会的 App 连续 2 秒、聊天 App 连续 10 秒才问
+//   （浏览器在录音、窗口标题又是会议网站 —— Google Meet、Teams 网页版等 —— 算这个网站在开会，同专门开会的 App；
+//   这一轮录音里认出过一次就一直算，见 `MeetingWebLatch`）
 //   （微信语音消息、Slack 试麦这类短占用不算）。说不清是谁在录（WebKit 网页通话、系统不支持按进程查）时只算到前台的会议 App。
+// 麦克风一被占用就采样、在用期间每秒采样（MeetingDetector，借鉴 Notion），所以进会两三秒就能问到。
 // 同一场只问一次（同时有几个 App 在开会也只弹一个）：信号断开不超过一段时间还算同一场（会议进程 15 秒；麦克风 3 分钟 —— 有的软件静音时会松开麦克风）。
 // Baobox 自己在记录会议时，正在开的会都算问过（结束记录后同一场不再来问）；Baobox 在用麦克风做别的（听写、字幕、自检）
 // 或在录屏时先不问，结束后再问。
@@ -49,7 +51,7 @@ enum MeetingDetectionApps {
         all.contains(bundleID)
     }
 
-    /// 用麦克风 5 秒就问的（专门开会的 App、会议网站）；其余（聊天 App）要 10 秒。
+    /// 用麦克风 2 秒就问的（专门开会的 App、会议网站）；其余（聊天 App）要 10 秒。
     static func isDedicated(_ bundleID: String) -> Bool {
         dedicated.contains(bundleID) || MeetingWebSites.keys.contains(bundleID)
     }
@@ -155,6 +157,40 @@ enum MeetingWebSites {
     }
 }
 
+/// 浏览器里认出过的会议网站，在这个浏览器这一轮用麦克风期间一直算数；浏览器松开麦克风就忘掉，下一轮重新认。
+/// 2026-11-06 真机：Chrome 入会那一下标题认出了 Google Meet，5 秒后同一个窗口的标题就认不出了（切了标签页或标题变了），
+/// 连续计时被打断，一直没问。说不清是谁在录（Safari 由 WebKit 的 GPU 进程录音）时认在前台浏览器头上，说不清的录音停了才忘。
+struct MeetingWebLatch: Equatable {
+    private struct Entry: Equatable {
+        var sites: Set<String>
+        /// 是按「说不清是谁在录 + 前台是这个浏览器」认上的。
+        var unattributed: Bool
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    init() {}
+
+    /// 用这次采样更新，返回现在算在开会的会议网站（`MeetingWebSites` 的 key）。
+    /// - Parameters:
+    ///   - recordingBrowsers: 按进程查出来在录音的浏览器。
+    ///   - unattributed: 有说不清是谁的进程在录音。
+    ///   - matches: 这次各浏览器窗口标题认出来的会议网站（含说不清时的前台浏览器）。
+    mutating func update(recordingBrowsers: Set<String>, unattributed: Bool,
+                         matches: [String: Set<String>]) -> Set<String> {
+        entries = entries.filter { browser, entry in
+            recordingBrowsers.contains(browser) || (entry.unattributed && unattributed)
+        }
+        for (browser, found) in matches where !found.isEmpty {
+            var entry = entries[browser] ?? Entry(sites: [], unattributed: false)
+            entry.sites.formUnion(found)
+            entry.unattributed = !recordingBrowsers.contains(browser)
+            entries[browser] = entry
+        }
+        return entries.values.reduce(into: Set<String>()) { $0.formUnion($1.sites) }
+    }
+}
+
 /// 一个会议 App「正在开会」的依据。
 enum MeetingSignal: Equatable {
     /// 会议 App 开会时才起的进程开着。
@@ -163,12 +199,12 @@ enum MeetingSignal: Equatable {
     case microphone
 }
 
-/// 检测的状态机：每次采样（5 秒）推一步，该问时返回问哪个 App。每个 App 一条记录（一场会）。
+/// 检测的状态机：每次采样推一步（有人在用麦克风时每秒一次，平时 5 秒），该问时返回问哪个 App。每个 App 一条记录（一场会）。
 struct MeetingDetectionMachine: Equatable {
     /// 会议进程开着这么久就问。
-    static let processSustain: TimeInterval = 3
-    /// 专门开会的 App 连续用麦克风这么久才问。
-    static let dedicatedMicrophoneSustain: TimeInterval = 5
+    static let processSustain: TimeInterval = 2
+    /// 专门开会的 App（含会议网站）连续用麦克风这么久才问：短到进会就问，又能滤掉一闪而过的试麦。
+    static let dedicatedMicrophoneSustain: TimeInterval = 2
     /// 聊天 App 连续用麦克风这么久才问（语音消息、试麦不算）。
     static let chatMicrophoneSustain: TimeInterval = 10
     /// 会议进程退出这么久，这一场才算结束（下一场接着开也能问到）。

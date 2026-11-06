@@ -15,8 +15,10 @@ struct MeetingMicrophoneUsage: Equatable {
     var apps: Set<String> = []
     /// 有进程在录音但说不清是谁。
     var unattributed = false
-    /// 在录音的浏览器开着的会议网站（`MeetingWebSites` 的 key）。
-    var webMeetings: Set<String> = []
+    /// 在录音的浏览器这次从窗口标题认出来的会议网站（`MeetingWebSites` 的 key），按浏览器分；`MeetingWebLatch` 据此记住。
+    var sitesByBrowser: [String: Set<String>] = [:]
+    /// 在录音的浏览器各读到几个窗口标题（诊断用：0 = 标题读不到，屏幕录制 / 辅助功能权限有问题）。
+    var browserTitleCounts: [String: Int] = [:]
 }
 
 enum MeetingMicrophoneProbe {
@@ -44,7 +46,10 @@ enum MeetingMicrophoneProbe {
             browsers.insert(frontmost)
         }
         for browser in browsers {
-            usage.webMeetings.formUnion(MeetingWebSites.sites(inTitles: windowTitles(ofBundleID: browser)))
+            let titles = windowTitles(ofBundleID: browser)
+            usage.browserTitleCounts[browser] = titles.count
+            let sites = MeetingWebSites.sites(inTitles: titles)
+            if !sites.isEmpty { usage.sitesByBrowser[browser] = sites }
         }
         return usage
     }
@@ -133,5 +138,96 @@ enum MeetingMicrophoneProbe {
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }
         return String(cString: buffer)
+    }
+}
+
+/// 麦克风开始 / 停止被用就马上叫一声（docs/meeting/TECH_DESIGN.md §10）。借鉴 Notion：在默认输入设备上挂
+/// `kAudioDevicePropertyDeviceIsRunningSomewhere` 的监听（任何进程开始 / 停止用它都会变），一被占用就去查是谁，
+/// 不等下一次定时采样；默认输入设备换了跟着换。只盯默认设备 —— 用别的输入设备开会的，靠定时采样兜底。
+/// HAL 调用都在自己的串行队列上（coreaudiod 忙时属性读写会卡住，别卡主线程），回调也在这个队列上，由调用方转回主线程。
+final class MeetingMicListener: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.baobox.meeting.mic-listener")
+    private let onChange: @Sendable () -> Void
+    private var device = AudioObjectID(kAudioObjectUnknown)
+    private var deviceListener: AudioObjectPropertyListenerBlock?
+    private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
+
+    init(onChange: @escaping @Sendable () -> Void) {
+        self.onChange = onChange
+    }
+
+    func start() {
+        queue.async { self.install() }
+    }
+
+    func stop() {
+        queue.async { self.uninstall() }
+    }
+
+    private func install() {
+        guard defaultDeviceListener == nil else { return }
+        var address = Self.defaultInputAddress
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.rebind()
+            self?.onChange()
+        }
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, listener) == noErr {
+            defaultDeviceListener = listener
+        }
+        rebind()
+    }
+
+    /// 换到当前的默认输入设备上盯。
+    private func rebind() {
+        let current = Self.defaultInputDevice()
+        guard current != device else { return }
+        removeDeviceListener()
+        guard current != AudioObjectID(kAudioObjectUnknown) else { return }
+        var address = Self.runningAddress
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.onChange() }
+        if AudioObjectAddPropertyListenerBlock(current, &address, queue, listener) == noErr {
+            device = current
+            deviceListener = listener
+        }
+    }
+
+    private func removeDeviceListener() {
+        if device != AudioObjectID(kAudioObjectUnknown), let deviceListener {
+            var address = Self.runningAddress
+            AudioObjectRemovePropertyListenerBlock(device, &address, queue, deviceListener)
+        }
+        device = AudioObjectID(kAudioObjectUnknown)
+        deviceListener = nil
+    }
+
+    private func uninstall() {
+        removeDeviceListener()
+        if let defaultDeviceListener {
+            var address = Self.defaultInputAddress
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue,
+                                                   defaultDeviceListener)
+        }
+        defaultDeviceListener = nil
+    }
+
+    private static var runningAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                   mScope: kAudioObjectPropertyScopeGlobal,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private static var defaultInputAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                   mScope: kAudioObjectPropertyScopeGlobal,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private static func defaultInputDevice() -> AudioObjectID {
+        var address = defaultInputAddress
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr
+        else { return AudioObjectID(kAudioObjectUnknown) }
+        return device
     }
 }
