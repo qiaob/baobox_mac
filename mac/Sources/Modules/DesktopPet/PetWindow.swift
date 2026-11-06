@@ -13,6 +13,9 @@ final class PetPanel: NSPanel {
     private var windowStart: NSPoint?
     private var moved = false
 
+    /// 鼠标按着（可能正在拖）：这期间不切换点击穿透，免得拖到一半窗口不接鼠标了。
+    var isTracking: Bool { dragStart != nil }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
@@ -37,8 +40,9 @@ final class PetPanel: NSPanel {
 
     override func mouseUp(with event: NSEvent) {
         if moved {
-            onDragState?(false)
+            // 先报新位置再报「松手」：引擎松手时按新位置找落脚的台面（反过来会按拖之前的位置算）。
             onMove?(frame.origin)
+            onDragState?(false)
         } else if event.clickCount >= 2 {
             onDoubleClick?()
         } else {
