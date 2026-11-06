@@ -72,6 +72,33 @@ final class MeetingStore: ObservableObject {
         }
     }
 
+    /// 后台读几场会议的 Markdown（会议库全文搜索、周报）；读不到的不在结果里。
+    func loadMarkdowns(_ ids: [String], completion: @escaping @MainActor @Sendable ([String: String]) -> Void) {
+        let targets = ids.compactMap { id in record(id).map { (id, markdownURL(for: $0)) } }
+        guard !targets.isEmpty else {
+            completion([:])
+            return
+        }
+        io.async {
+            var texts: [String: String] = [:]
+            for (id, url) in targets {
+                if let data = FileManager.default.contents(atPath: url.path), let text = String(data: data, encoding: .utf8) {
+                    texts[id] = text
+                }
+            }
+            let result = texts
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { completion(result) }
+            }
+        }
+    }
+
+    /// 周报的位置：`weekly/<yyyy-Www>.md`。
+    func weeklyURL(_ key: String) -> URL {
+        rootURL.appendingPathComponent(MeetingLibraryLayout.weeklyFolderName, isDirectory: true)
+            .appendingPathComponent(key + ".md")
+    }
+
     // MARK: - 启动
 
     /// App 启动时调一次（MeetingTool.activate）：后台读 index.json（缺失 / 损坏就扫目录重建，否则与磁盘对账），
@@ -299,6 +326,34 @@ final class MeetingStore: ObservableObject {
         }
     }
 
+    /// 整份重写一场会议的 Markdown（重新生成纪要：纪要一节换掉，别的原样）；写完回主线程报结果。
+    func writeMarkdown(_ id: String, text: String, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard let record = record(id) else {
+            completion(false)
+            return
+        }
+        let url = markdownURL(for: record)
+        let data = Data(text.utf8)
+        io.async {
+            let succeeded = Self.write(data, to: url)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { completion(succeeded) }
+            }
+        }
+    }
+
+    /// 写周报（同一周再生成就覆盖）；写好回主线程给文件位置，失败为 nil。
+    func writeWeekly(_ key: String, text: String, completion: @escaping @MainActor @Sendable (URL?) -> Void) {
+        let url = weeklyURL(key)
+        let data = Data(text.utf8)
+        io.async {
+            let succeeded = Self.write(data, to: url)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { completion(succeeded ? url : nil) }
+            }
+        }
+    }
+
     /// 等排着的写盘做完（App 退出前）。
     func flush() {
         io.sync {}
@@ -391,12 +446,15 @@ final class MeetingStore: ObservableObject {
         }
     }
 
-    nonisolated private static func write(_ data: Data, to url: URL) {
+    @discardableResult
+    nonisolated private static func write(_ data: Data, to url: URL) -> Bool {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
             storeLog.error("write \(url.lastPathComponent, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

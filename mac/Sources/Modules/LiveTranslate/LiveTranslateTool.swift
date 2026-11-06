@@ -3,10 +3,13 @@ import SwiftUI
 
 /// 实时翻译模块壳：麦克风 / 系统声音 → 语音识别 → 英中互译 → 屏幕字幕条。
 /// 见 docs/live-translate/DESIGN.md。
+///
+/// 已并入「会议」（docs/meeting/TECH_DESIGN.md §7）：保留一个版本，菜单与设置 Tab 改名「字幕与同传」，
+/// 菜单第一行注明「已并入「会议」」，其余菜单项、快捷键 id、设置键都不变；下个版本删掉入口。
 @MainActor
 final class LiveTranslateTool: ToolModule {
     let id = "livetranslate"
-    let name = L("livetranslate.name")
+    let name = L("livetranslate.mergedName")
     let symbolName = "captions.bubble"
 
     private var controller: LiveTranslateController { LiveTranslateController.shared }
@@ -18,7 +21,11 @@ final class LiveTranslateTool: ToolModule {
     }
 
     func submenuItems() -> [NSMenuItem] {
-        var items: [NSMenuItem] = []
+        // 第一行（置灰）：已并入「会议」。
+        var items: [NSMenuItem] = [
+            NSMenuItem(title: L("livetranslate.menu.merged"), action: nil, keyEquivalent: ""),
+            .separator(),
+        ]
 
         let toggleTitle: String
         if controller.isHostedSession {

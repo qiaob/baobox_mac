@@ -1,10 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// 实时翻译设置：音源、语言、翻译开关、字幕样式。
+/// 实时翻译设置：音源、语言、翻译开关、字幕样式。Tab 已改名「字幕与同传」，第一行注明已并入「会议」
+/// （docs/meeting/TECH_DESIGN.md §7），其余不变。
 struct LiveTranslateSettingsView: View {
     var body: some View {
         Form {
+            Section {
+                HStack {
+                    Text("livetranslate.settings.merged")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("livetranslate.settings.openMeeting") {
+                        SettingsTabSelection.shared.selectedTab = "meeting"
+                    }
+                }
+            }
             LiveTranslateSettingsSections(embedded: false)
         }
         .formStyle(.grouped)

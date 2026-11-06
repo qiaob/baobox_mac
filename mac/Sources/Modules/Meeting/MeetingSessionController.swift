@@ -84,7 +84,8 @@ final class MeetingSessionController: ObservableObject {
 
     // MARK: - 开始
 
-    /// 开始记录。`event`：绑定的日历事件（第二段 EventKit 填，标题 / 参会人 / 结束时间都从它来）；nil = 手动开始。
+    /// 开始记录。`event`：绑定的日历事件（标题 / 参会人 / 结束时间都从它来）；nil = 手动开始 —— 线上会议这时
+    /// 自动绑正在进行（或 5 分钟内开始）的日历事件（需求 §1），线下会议不绑。
     /// `.free` = 自由听译（就是实时翻译）。正在记录时再开只提示一句。第一次用先弹合规说明，确认后才开。
     func start(type: MeetingType, event: MeetingEventInfo? = nil) {
         guard phase == .idle else {
@@ -95,6 +96,7 @@ final class MeetingSessionController: ObservableObject {
             startFreeListening()
             return
         }
+        let event = event ?? (type == .online ? MeetingCalendar.shared.bindingCandidate()?.info : nil)
         // 自由听译 / 听写正占着麦克风（设备端识别一次只能跑一个）：先说清楚，不弹合规说明。
         if let busy = AudioCaptureCoordinator.shared.busyMessage() {
             postToast(busy)
@@ -486,7 +488,7 @@ final class MeetingSessionController: ObservableObject {
             MainActor.assumeIsolated {
                 NotifyCenter.shared.post(notification) { action in
                     guard action == "open" else { return }
-                    MeetingStore.shared.open(id)
+                    MeetingWindowController.shared.showLibrary(select: id)
                 }
             }
         }
@@ -533,6 +535,12 @@ final class MeetingSessionController: ObservableObject {
         checkOvertime()
     }
 
+    /// 菜单栏的下一场倒计时（MeetingReminder 每 15 秒给一次；nil = 不显示）。记录中录音指示优先。
+    func setCountdown(_ text: String?) {
+        statusItem.menuItems = { MeetingMenu.items(includeSettings: true) }
+        statusItem.setCountdown(text)
+    }
+
     /// 菜单栏「● 32:15」。
     private func refreshIndicators() {
         switch phase {
@@ -557,7 +565,7 @@ final class MeetingSessionController: ObservableObject {
 
     // MARK: - 菜单状态行
 
-    /// 「● 记录中 32:15 · 线上会议」「正在开始记录…」；空闲时说明在干什么（第二段换成「下一场：…」）。
+    /// 「● 记录中 32:15 · 线上会议」「正在开始记录…」；空闲时「下一场：设计评审 · 25 分钟后」（读着日历、接下来有会时）。
     func statusLine() -> String {
         let kind = type.map(MeetingText.typeName) ?? ""
         switch phase {
@@ -569,6 +577,10 @@ final class MeetingSessionController: ObservableObject {
             let engine = LiveTranslateController.shared
             if engine.isRunning, !engine.isHostedSession {
                 return L("meeting.statusLine.freeListening")
+            }
+            let now = Date()
+            if let next = MeetingCalendar.shared.next(at: now) {
+                return L("meeting.statusLine.next \(next.info.title) \(MeetingText.relative(next.info.start, now: now))")
             }
             if let summarizing = MeetingStore.shared.records.first(where: { $0.meta.status == .summarizing }) {
                 return L("meeting.statusLine.summarizing \(summarizing.meta.title)")
