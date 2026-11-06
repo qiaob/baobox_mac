@@ -32,6 +32,8 @@ struct ClaudeLiveSession {
     let sessionID: String
     var state: ClaudeSessionState
     var cwd: String?
+    /// 会话开在哪个终端（hook 记下的，点通知时跳回去）。
+    var terminal: TerminalLocation?
     var lastEvent: Date
 
     var projectName: String {
@@ -115,15 +117,17 @@ final class ClaudeNotifier {
     private var currentSound: NSSound?
 
     /// 任务完成通知（受总开关控制）。
-    func notifyStop(project: String) {
+    /// `onOpen`：点通知卡片（或系统通知）时调用 —— 跳回会话所在的终端窗口（docs/claude-code-assistant/NOTIFY_JUMP.md）。
+    func notifyStop(project: String, onOpen: (() -> Void)? = nil) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.stop.title \(project)"), body: "", level: .bubble, speakProject: project)
+        post(title: L("claudecode.notify.stop.title \(project)"), body: "", level: .bubble, speakProject: project, onOpen: onOpen)
     }
 
     /// 等待确认通知（受总开关控制），正文带 Claude 的 message。
-    func notifyWaiting(project: String, message: String) {
+    func notifyWaiting(project: String, message: String, onOpen: (() -> Void)? = nil) {
         guard ClaudeNotifierSettings.enabled else { return }
-        post(title: L("claudecode.notify.waiting.title \(project)"), body: message, level: .alert, speakProject: project)
+        post(title: L("claudecode.notify.waiting.title \(project)"), body: message, level: .alert, speakProject: project,
+             onOpen: onOpen)
     }
 
     /// 额度 80% 提醒。
@@ -162,7 +166,8 @@ final class ClaudeNotifier {
     /// speakProject 非 nil 时,该通知参与语音朗读(完成 / 等待类)。
     /// 视觉呈现改走通知内核（DesktopPet）：宠物在场时经宠物，关时由内核回退系统通知；
     /// 声音仍按本模块 alertStyle 处理（自定义音自播，默认音交给内核在 playSound 时发）。
-    private func post(title: String, body: String, level: PetNotification.Level = .ambient, speakProject: String? = nil) {
+    private func post(title: String, body: String, level: PetNotification.Level = .ambient, speakProject: String? = nil,
+                      onOpen: (() -> Void)? = nil) {
         var useDefaultSound = false
         switch ClaudeNotifierSettings.alertStyle {
         case .sound:
@@ -180,7 +185,7 @@ final class ClaudeNotifier {
             title: title,
             body: body,
             playSound: useDefaultSound
-        ))
+        ), onAction: onOpen.map { open in { action in if action == "open" { open() } } })
 
         if let speakProject, ClaudeNotifierSettings.alertStyle == .speech {
             speak(title: title, project: speakProject)
@@ -390,23 +395,24 @@ final class ClaudeLiveStatus: ObservableObject {
               let event = object["hook_event_name"] as? String else { return }
 
         let cwd = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let terminal = TerminalLocation(json: object["baobox_terminal"])
         let now = Date()
 
         switch event {
         case "SessionStart", "UserPromptSubmit":
-            update(sessionID: sessionID, state: .running, cwd: cwd, at: now)
+            update(sessionID: sessionID, state: .running, cwd: cwd, terminal: terminal, at: now)
         case "Notification":
             let message = object["message"] as? String ?? ""
-            update(sessionID: sessionID, state: .waiting(message), cwd: cwd, at: now)
+            update(sessionID: sessionID, state: .waiting(message), cwd: cwd, terminal: terminal, at: now)
             if notify {
                 let project = cwd.map { ClaudeSessionIndex.projectName(fromPath: $0) } ?? sessionID
-                ClaudeNotifier.shared.notifyWaiting(project: project, message: message)
+                ClaudeNotifier.shared.notifyWaiting(project: project, message: message, onOpen: focusAction(sessionID))
             }
         case "Stop":
-            update(sessionID: sessionID, state: .idle, cwd: cwd, at: now)
+            update(sessionID: sessionID, state: .idle, cwd: cwd, terminal: terminal, at: now)
             if notify {
                 let project = cwd.map { ClaudeSessionIndex.projectName(fromPath: $0) } ?? sessionID
-                ClaudeNotifier.shared.notifyStop(project: project)
+                ClaudeNotifier.shared.notifyStop(project: project, onOpen: focusAction(sessionID))
             }
         case "SessionEnd":
             sessions.removeValue(forKey: sessionID)
@@ -415,19 +421,42 @@ final class ClaudeLiveStatus: ObservableObject {
             if var existing = sessions[sessionID] {
                 existing.lastEvent = now
                 if let cwd { existing.cwd = cwd }
+                if let terminal { existing.terminal = terminal }
                 sessions[sessionID] = existing
             }
         }
     }
 
-    private func update(sessionID: String, state: ClaudeSessionState, cwd: String?, at date: Date) {
+    private func update(sessionID: String, state: ClaudeSessionState, cwd: String?, terminal: TerminalLocation?, at date: Date) {
         if var existing = sessions[sessionID] {
             existing.state = state
             existing.lastEvent = date
             if let cwd { existing.cwd = cwd }
+            if let terminal { existing.terminal = terminal }
             sessions[sessionID] = existing
         } else {
-            sessions[sessionID] = ClaudeLiveSession(sessionID: sessionID, state: state, cwd: cwd, lastEvent: date)
+            sessions[sessionID] = ClaudeLiveSession(sessionID: sessionID, state: state, cwd: cwd, terminal: terminal,
+                                                    lastEvent: date)
+        }
+    }
+
+    /// 点通知时跳回这个会话所在的终端（docs/claude-code-assistant/NOTIFY_JUMP.md）。
+    /// 终端位置在发通知这一刻取好（会话之后可能结束、被清掉）：hook 记下了就精确到窗口 / 标签页 / 面板；
+    /// 没记下（旧版脚本、不认识的终端）退回按进程猜，与快速切换面板相同。
+    private func focusAction(_ sessionID: String) -> () -> Void {
+        let terminal = sessions[sessionID]?.terminal
+        let cwd = sessions[sessionID]?.cwd
+        return {
+            if let terminal, TerminalFocus.focus(terminal) { return }
+            guard let cwd else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let running = TerminalLauncher.findRunningSession(sessionID: sessionID, projectPath: cwd, isNewestInProject: true)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if let running { TerminalLauncher.focusTerminalWindow(of: running) }
+                    }
+                }
+            }
         }
     }
 
