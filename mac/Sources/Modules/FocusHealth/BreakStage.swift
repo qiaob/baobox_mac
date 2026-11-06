@@ -157,11 +157,15 @@ final class BreakStageController {
 
     private func buildBackdrops(fadeIn: Bool) {
         backdrops.forEach { $0.orderOut(nil) }
+        // 严格档有没有宠物都是模糊（宠物关着时也不退成渐变，否则和标准档一模一样）；
+        // 标准档有宠物是变暗，宠物关着才用设置里选的渐变 / 图片铺满。
         let style: BreakBackdropView.Style
-        if loan == nil {
+        if request?.style == .lockedBlur {
+            style = .blur
+        } else if loan == nil {
             style = .fallback
         } else {
-            style = request?.style == .lockedBlur ? .blur : .dim
+            style = .dim
         }
         backdrops = NSScreen.screens.map { screen in
             let primary = screen.frame == targetScreen?.frame

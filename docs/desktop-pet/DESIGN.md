@@ -15,7 +15,7 @@
 ```
 模块 / 外部进程 ──► NotifyCore ──► PetPresenter ──► PetEngine ──► Renderer(2D | 3D)
                       │  └─ 勿扰聚合队列 ─┘                └─ 气泡 UI
-                      └─ 回退：UNUserNotificationCenter（宠物关/未就绪时）
+                      └─ 回退：UNUserNotificationCenter（宠物关/未就绪时；按钮转成通知操作，点了照样回调来源）
 外部进程 ──Unix socket / CLI / URL──► NotifyGateway ──► NotifyCore
 ```
 
