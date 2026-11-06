@@ -215,7 +215,6 @@ struct NotifyToggleMenuRow: View {
         .environment(\.controlActiveState, .key)
         .onChange(of: enabled) { _, newValue in
             guard newValue else { return }
-            ClaudeNotifier.shared.requestAuthorizationIfNeeded()
             let hooks = ClaudeHooksManager.shared
             if !hooks.isReporterInstalled {
                 hooks.installReporter { _ in }

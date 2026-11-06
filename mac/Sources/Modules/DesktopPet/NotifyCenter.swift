@@ -81,6 +81,10 @@ final class NotifyCenter {
     private var suppressedQueue: [(PetNotification, ((String) -> Void)?)] = []
     private var flushTimer: Timer?
     private var didRequestAuth = false
+    /// 回退系统通知的按钮回调（通知 id → 投稿方回调）与已登记的按钮组。
+    private var systemCallbacks: [String: (String) -> Void] = [:]
+    private var systemCallbackOrder: [String] = []
+    private var systemCategories: [String: UNNotificationCategory] = [:]
 
     func post(_ n: PetNotification, onAction: ((String) -> Void)? = nil) {
         guard PetSettings.sourceEnabled(n.source) else { return }
@@ -114,7 +118,7 @@ final class NotifyCenter {
             }
             presenter.present(n) { actionID in onAction?(actionID) }
         } else {
-            postSystemNotification(n)
+            postSystemNotification(n, onAction: onAction)
         }
     }
 
@@ -124,18 +128,70 @@ final class NotifyCenter {
         n.playSound || (n.level == .alert && PetSettings.soundEnabled)
     }
 
-    /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（设计 §2）。
-    private func postSystemNotification(_ n: PetNotification) {
-        if !didRequestAuth {
-            didRequestAuth = true
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        }
+    /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（设计 §2）。气泡上的按钮照样带上
+    /// （UNNotificationAction），用户点了经 SystemNotificationRouter 回到投稿方 —— 否则推迟、
+    /// 「现在休息」「再来一轮」这些在宠物关着时全都点不了（2026-11-06 真机踩到）。
+    private func postSystemNotification(_ n: PetNotification, onAction: ((String) -> Void)?) {
+        let center = UNUserNotificationCenter.current()
+        prepareSystemFallback(requestPermission: true)
         let content = UNMutableNotificationContent()
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
         if wantsSound(n) { content.sound = .default }
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { _ in }
+        let id = UUID().uuidString
+        if let onAction {
+            systemCallbacks[id] = onAction
+            systemCallbackOrder.append(id)
+            // 只留最近这些：通知被系统收起 / 用户不理时不会回调，别让闭包越攒越多。
+            while systemCallbackOrder.count > 60 {
+                systemCallbacks[systemCallbackOrder.removeFirst()] = nil
+            }
+        }
+        guard !n.actions.isEmpty else {
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in }
+            return
+        }
+        let categoryID = "baobox." + n.actions.map { $0.id + "=" + $0.label }.joined(separator: "|")
+        content.categoryIdentifier = categoryID
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
+        if systemCategories[categoryID] != nil {
+            center.add(request) { _ in }
+            return
+        }
+        systemCategories[categoryID] = UNNotificationCategory(
+            identifier: categoryID,
+            actions: n.actions.map {
+                UNNotificationAction(identifier: $0.id, title: $0.label,
+                                     options: $0.role == .destructive ? [.destructive] : [])
+            },
+            intentIdentifiers: [], options: []
+        )
+        // setNotificationCategories 是整组替换；登记完（get 回来）再投递，否则第一条可能不带按钮。
+        center.setNotificationCategories(Set(systemCategories.values))
+        center.getNotificationCategories { _ in
+            center.add(request) { _ in }
+        }
+    }
+
+    /// 系统通知回退的准备（宠物模块自己判断什么时候会用上，功能模块不碰系统通知）：
+    /// 装上回调代理（不弹任何东西）；`requestPermission` 时顺带申请通知权限 —— 宠物关着启动、
+    /// 或用户刚把宠物关掉时就问，免得第一条回退通知因为弹授权框而丢掉。已授权 / 已拒绝时系统不会再弹。
+    func prepareSystemFallback(requestPermission: Bool) {
+        let center = UNUserNotificationCenter.current()
+        if center.delegate !== SystemNotificationRouter.shared {
+            center.delegate = SystemNotificationRouter.shared
+        }
+        guard requestPermission, !didRequestAuth else { return }
+        didRequestAuth = true
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// 系统通知上的按钮 / 点击（宠物关着时的回退路径）回到投稿方。点通知本体 = "open"（同气泡）。
+    func handleSystemResponse(requestID: String, actionID: String) {
+        guard actionID != UNNotificationDismissActionIdentifier,
+              let callback = systemCallbacks.removeValue(forKey: requestID) else { return }
+        systemCallbackOrder.removeAll { $0 == requestID }
+        callback(actionID == UNNotificationDefaultActionIdentifier ? "open" : actionID)
     }
 
     private func recordHistory(_ n: PetNotification) {
@@ -178,5 +234,29 @@ final class NotifyCenter {
             body: titles
         )
         deliver(digest, onAction: nil)
+    }
+}
+
+/// 系统通知的回调（UNUserNotificationCenterDelegate）：按钮 / 点击回到 NotifyCenter；
+/// Baobox 在前台（比如设置窗口开着）时也照常弹横幅 —— 不实现 willPresent 的话，
+/// 系统只把它悄悄塞进通知中心，看起来像点了没反应。
+final class SystemNotificationRouter: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = SystemNotificationRouter()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let requestID = response.notification.request.identifier
+        let actionID = response.actionIdentifier
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                NotifyCenter.shared.handleSystemResponse(requestID: requestID, actionID: actionID)
+            }
+        }
+        completionHandler()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
     }
 }

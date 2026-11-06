@@ -159,9 +159,6 @@ struct ClaudeNotificationsSection: View {
         Form {
             SwiftUI.Section("claudecode.settings.notify.section") {
                 Toggle("claudecode.settings.notify.enabled", isOn: $enabled)
-                    .onChange(of: enabled) { _, newValue in
-                        if newValue { ClaudeNotifier.shared.requestAuthorizationIfNeeded() }
-                    }
                 Text("claudecode.settings.notify.enabledHelp")
                     .font(.caption).foregroundStyle(.secondary)
                 // 提醒方式三选一:提示音与朗读同时响会互相干扰,故互斥。

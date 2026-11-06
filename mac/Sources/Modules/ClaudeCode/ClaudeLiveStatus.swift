@@ -1,13 +1,12 @@
 import AppKit
 import AVFoundation
 import Foundation
-import UserNotifications
 
 /// Claude Code 助手 —— events.jsonl 监听、会话状态机、系统通知。
 ///
 /// events.jsonl 由 reporter 脚本追加（见 ClaudeHooks.swift）。用 `DispatchSourceFileSystemObject`
 /// 监听增量，维护读取偏移。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲。
-/// 通知走 UNUserNotificationCenter，未签名 dev 包可能失败，全部判空不 crash。
+/// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key，建议中英文案）：
 ///   - claudecode.status.running %lld        zh:「%lld 运行中」            en:「%lld running」
@@ -114,13 +113,6 @@ final class ClaudeNotifier {
     private let speechSynthesizer = AVSpeechSynthesizer()
     /// 自定义提示音播放中也需持有引用。
     private var currentSound: NSSound?
-
-    /// 首次开启通知开关时调用。
-    func requestAuthorizationIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-            // 授权结果无需处理；失败时后续 add 会被系统丢弃，不 crash。
-        }
-    }
 
     /// 任务完成通知（受总开关控制）。
     func notifyStop(project: String) {

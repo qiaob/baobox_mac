@@ -582,9 +582,11 @@ final class FocusHealthController: ObservableObject {
         guard !stage.isBusy else { return }
         let strength = FocusHealthSettings.strength
         if strength == .relaxed {
+            // 宠物关着时轻松档的提醒是系统通知（带同样的按钮），文案别再说「宠物冒个气泡」。
             NotifyCenter.shared.post(PetNotification(
                 source: Self.source, level: .bubble, title: L("focus.preview.title"),
-                body: L("focus.preview.bubbleMessage"),
+                body: PetController.shared.isReady ? L("focus.preview.bubbleMessage")
+                                                   : L("focus.preview.notificationMessage"),
                 actions: [.init(id: "ok", label: L("focus.action.ok"), role: .primary),
                           .init(id: "snooze", label: L("focus.action.snooze5"))],
                 icon: "cup.and.saucer.fill"

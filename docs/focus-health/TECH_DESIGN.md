@@ -59,6 +59,7 @@ focusing / paused ──作废──► idle
 - 卡片发出即 `reset`；[推迟 10 分钟] → `snooze(600)`；气泡自己消失没有回调 = 错过。
 - 休息画面（标准 / 严格）：完成 → 重置全部「离开算完成」项；跳过 → 只重置本项；不能推迟。
 - 轻松档的休息气泡：发出即 `rearm`（重新计时、保留本轮推迟次数）；[好的] 按完成处理；[推迟 5 分钟] → `snooze(300)`、推迟次数 +1，达到上限不再给推迟按钮；没点 = 错过。
+- 宠物关着时通知内核回退系统通知，**按钮照样带上**：`PetNotification.Action` 转成 `UNNotificationAction`（按按钮组登记 `UNNotificationCategory`，登记完再投递），用户点了经 `SystemNotificationRouter`（`UNUserNotificationCenterDelegate`）回到投稿方的回调，点通知本体 = `"open"`；同时实现 `willPresent`，Baobox 在前台（开着设置窗口点预览）也弹横幅。通知权限同样归通知内核管：宠物关着启动、或用户刚把宠物关掉时申请（`prepareSystemFallback`），功能模块不再各自申请。第一版回退通知只有标题正文、按钮全丢，且前台时不弹（2026-11-06 真机踩到）。
 - 本工具自己判避让再发：勿扰期间通知内核会把通知排队、事后合成**不带按钮**的摘要（`NotifyCenter.flushIfPossible`），按钮回调就丢了。
 
 ## 5. 休息画面（BreakStage）
@@ -74,7 +75,7 @@ focusing / paused ──作废──► idle
 | 手动「现在休息」 | gentle | locked | lockedBlur |
 | 设置页「预览效果」 | 示例气泡 | locked 10 秒 | lockedBlur 10 秒 |
 
-模糊：暗幕里放 `NSVisualEffectView`（`.behindWindow` + `.fullScreenUI` + 深色外观 + `state = .active`，App 不在前台也保持模糊），上面再压一层 30% 黑；系统开了「减少透明度」时自动退成不透明底。暗幕 `hitTest` 一律返回自己，点在模糊层上也能「戳宠物」。
+模糊（严格档，有没有宠物都用）：暗幕里放 `NSVisualEffectView`（`.behindWindow` + `.fullScreenUI` + 深色外观 + `state = .active`，App 不在前台也保持模糊），上面再压一层 30% 黑；系统开了「减少透明度」时自动退成不透明底。暗幕 `hitTest` 一律返回自己，点在模糊层上也能「戳宠物」。
 
 ### 5.2 窗口
 

@@ -123,6 +123,8 @@ final class PetController: ObservableObject, NotifyPresenting {
             radial.close(animated: false)
             bubble.dismissAll()
             panel?.orderOut(nil)
+            // 宠物关了，之后的通知走系统通知：现在就把权限问好（已问过则不再弹）。
+            NotifyCenter.shared.prepareSystemFallback(requestPermission: true)
         }
         if shownModelID != nil { modelView.setActive(PetSettings.enabled) }
     }

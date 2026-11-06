@@ -15,7 +15,7 @@
 ```
 模块 / 外部进程 ──► NotifyCore ──► PetPresenter ──► PetEngine ──► Renderer(2D | 3D)
                       │  └─ 勿扰聚合队列 ─┘                └─ 气泡 UI
-                      └─ 回退：UNUserNotificationCenter（宠物关/未就绪时）
+                      └─ 回退：UNUserNotificationCenter（宠物关/未就绪时；按钮转成通知操作，点了照样回调来源）
 外部进程 ──Unix socket / CLI / URL──► NotifyGateway ──► NotifyCore
 ```
 
@@ -141,6 +141,7 @@ NotifyCenter.shared.post(_ n: PetNotification,
 
 - `AIToolsNotify`（Claude Code / Codex 的完成、失败、等待确认）与 LiveTranslate 纪要就绪通知改走 `NotifyCenter.post`，旧系统通知路径仅作宠物关闭时的回退，保留一个版本后删。
 - #42 / #43 / #45 实现时直接依赖本模块 API，不再自建通知。
+- 2026-11-06：Claude Code / Codex / 实时翻译残留的「自己申请通知权限」已删除。通知怎么展示、要不要系统通知权限，都由本模块决定（宠物关着启动或刚关掉宠物时申请），功能模块只投递内容与回调（用户确认的原则）。
 
 ## 12. 测试与验证
 
