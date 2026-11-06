@@ -70,6 +70,27 @@ enum TextInsertionPolicy {
         return fileExists(framework.path)
     }
 
+    /// 浏览器：网页内容区的输入框辅助功能写不进去（或写了页面收不到输入事件），一律粘贴；地址栏这类原生输入框照常直接写。
+    static let browserBundleIDs: Set<String> = [
+        "com.apple.Safari",
+        "com.apple.SafariTechnologyPreview",
+        "org.chromium.Chromium",
+        "company.thebrowser.Browser",
+        "company.thebrowser.dia",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+        "com.kagi.kagimacOS",
+        "com.duckduckgo.macos.browser",
+        "app.zen-browser.zen",
+    ]
+    /// 同一家的各个渠道版（Beta / Dev / Canary / Nightly…）按前缀认。
+    static let browserBundlePrefixes = ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "org.mozilla."]
+
+    static func isBrowser(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return browserBundleIDs.contains(bundleID) || browserBundlePrefixes.contains { bundleID.hasPrefix($0) }
+    }
+
     /// 「只粘贴」名单：终端、Electron。浏览器内容区按焦点判断（见 `route`）。
     static func isPasteOnly(bundleID: String?, appURL: URL?,
                             fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Bool {
@@ -77,17 +98,19 @@ enum TextInsertionPolicy {
     }
 
     /// 选档。`focus` 为 nil = App 不回答辅助功能查询（不支持 / 超时）：尽力粘贴。
-    static func route(pasteOnly: Bool, alwaysPaste: Bool, focus: Focus?) -> Route {
+    static func route(pasteOnly: Bool, browser: Bool = false, alwaysPaste: Bool, focus: Focus?) -> Route {
         if focus?.subrole == secureSubrole { return .copy(.secureInput) }
         if pasteOnly { return .paste }
         guard let focus else { return .paste }
         guard let role = focus.role else { return .copy(.noTextFocus) }
         if focus.inWebArea { return .paste }
+        // 值读不回来就无法确认写没写进去：宁可粘贴，也不冒「写进去了又粘一遍」变两份的险。
+        let nativeField = textRoles.contains(role) && focus.selectedTextSettable && focus.valueReadable
+        // 浏览器的网页辅助功能树是按需打开的，焦点常报成 AXGroup / AXWebArea：不能据此判「没有输入框」。
+        if browser, !nativeField { return .paste }
         let textLike = textRoles.contains(role) || focus.selectedTextSettable
         guard textLike else { return .copy(.noTextFocus) }
         if alwaysPaste { return .paste }
-        // 值读不回来就无法确认写没写进去：宁可直接粘贴，也不冒「写进去了又粘一遍」变两份的险。
-        if textRoles.contains(role), focus.selectedTextSettable, focus.valueReadable { return .accessibility }
-        return .paste
+        return nativeField ? .accessibility : .paste
     }
 }

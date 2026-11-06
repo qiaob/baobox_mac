@@ -3,8 +3,9 @@ import Foundation
 /// 听写文字的后处理（docs/dictation/REQUIREMENTS.md §4 第 1–3 步，按顺序）：语音指令 → 口头禅过滤 → 标点规整。
 /// 全是纯字符串处理，可单测；第 4 步 AI 润色的提示词与结果把关也在这里，调模型在 `DictationPolisher`。
 ///
-/// 做法：先把语音指令换成私用区的占位符（换行 / 新段落 / 删除上一句），口头禅与标点把占位符当边界处理，
-/// 最后 `render` 成真正的文字 ——「删除上一句」删的是已有文字里的最后一句，长听写里能删到收集面板里上一段的末句。
+/// 做法：先把语音指令换成私用区的占位符（换行 / 新段落 / 删除上一句，以及「句号」「逗号」这类指令打出的标点），
+/// 口头禅与标点把占位符当边界处理，最后 `render` 成真正的文字 ——「删除上一句」删的是已有文字里的最后一句，
+/// 长听写里能删到收集面板里上一段的末句；指令打出的标点在规整时受保护（不会被当成识别器的标点并掉、删掉）。
 /// 原则是保守：拿不准是不是口头禅 / 指令的，一律原样保留，不改意思。
 enum DictationTextProcessor {
     enum Language: Equatable {
@@ -22,6 +23,14 @@ enum DictationTextProcessor {
     static let newlineMark: Character = "\u{E000}"
     static let paragraphMark: Character = "\u{E001}"
     static let deleteMark: Character = "\u{E002}"
+
+    /// 语音指令打出来的标点（占位符 → 真正的标点）。用户明说的「逗号」放在结尾也是逗号，单说一个「问号」也要上屏。
+    private static let explicitPunctuation: [Character: Character] = [
+        "\u{E010}": "。", "\u{E011}": "，", "\u{E012}": "？", "\u{E013}": "！",
+        "\u{E014}": ".", "\u{E015}": ",", "\u{E016}": "?", "\u{E017}": "!",
+    ]
+    private static let explicitMarks: [Character: Character] = Dictionary(
+        uniqueKeysWithValues: explicitPunctuation.map { ($0.value, $0.key) })
 
     // MARK: - 入口
 
@@ -77,11 +86,12 @@ enum DictationTextProcessor {
             }
             if skipSpaces, isHorizontalSpace(ch) { continue }
             skipSpaces = false
+            let visible = display(ch)
             if joinPending {
                 joinPending = false
-                if let last = out.last, needsSpace(between: last, and: ch) { out.append(" ") }
+                if let last = out.last, needsSpace(between: last, and: visible) { out.append(" ") }
             }
-            out.append(ch)
+            out.append(visible)
         }
         return out
     }
@@ -115,7 +125,7 @@ enum DictationTextProcessor {
         case newline
         case paragraph
         case delete
-        case punctuation(full: String, ascii: String)
+        case punctuation(full: Character, ascii: Character)
     }
 
     private static let chineseCommands = regex("删除上一句话?|新的一行|换行|新段落|句号|逗号|问号|感叹号")
@@ -136,8 +146,9 @@ enum DictationTextProcessor {
     }
 
     /// 前面紧挨着这些字时指令词多半是普通文字：「打个问号」「一个句号」「这是新的一行」。
+    /// 不收「的」「了」这类常见句尾字：「好的句号」「好了问号」是指令。
     private static let literalBeforeChinese: Set<Character> = [
-        "个", "一", "打", "画", "加", "的", "用", "写", "是", "这", "那", "此", "该",
+        "个", "一", "打", "画", "加", "用", "写", "是", "这", "那", "此", "该",
     ]
     /// 前面是冠词 / 限定词时是普通文字：「a new line of products」「the new paragraph」。
     private static let literalBeforeEnglish: Set<String> = [
@@ -231,7 +242,9 @@ enum DictationTextProcessor {
         case .newline: return String(newlineMark)
         case .paragraph: return String(paragraphMark)
         case .delete: return String(deleteMark)
-        case .punctuation(let full, let ascii): return language == .chinese ? full : ascii + " "
+        case .punctuation(let full, let ascii):
+            let mark = explicitMarks[language == .chinese ? full : ascii].map { String($0) } ?? ""
+            return language == .chinese ? mark : mark + " "
         }
     }
 
@@ -240,9 +253,10 @@ enum DictationTextProcessor {
     /// 「嗯、呃、唔」不成词，在哪都去掉（连带后面的停顿标点）。
     private static let zhHesitation = regex("[嗯呃唔]+[，,、\\s]*")
     /// 「额」只在孤立出现时去：前面是开头 / 标点 / 空白，后面是标点 / 空白 / 结尾（「金额」「额外」不动）。
-    private static let zhEh = regex("(^|[\\p{P}\\s\\x{E000}-\\x{E002}])额+(?=[\\p{P}\\s]|$)[，,、\\s]*")
+    private static let zhEh = regex("(^|[\\p{P}\\s\\x{E000}-\\x{E017}])额+(?=[\\p{P}\\s\\x{E000}-\\x{E017}]|$)[，,、\\s]*")
     /// 句首孤立的「啊」「那个」（后面跟着停顿）。
-    private static let zhLeading = regex("(^|[。.！!？?\\x{E000}-\\x{E002}]\\s*)(?:啊|那个)[，,、\\s]+")
+    private static let zhLeading = regex(
+        "(^|[。.！!？?\\x{E000}-\\x{E002}\\x{E010}\\x{E012}-\\x{E014}\\x{E016}\\x{E017}]\\s*)(?:啊|那个)[，,、\\s]+")
     /// 连说三遍以上的单字（「我我我」）。只收不会叠用成词的字：「哈哈哈」「对对对」「好好好」不动。
     private static let zhRepeatedChar = regex("([我你他她它这那就在要也都把被给跟])\\1{2,}")
     /// 连说两遍以上的常见词（「那个那个」「然后然后」）。
@@ -298,7 +312,9 @@ enum DictationTextProcessor {
 
     private static func isSentenceStart(in ns: NSString, at location: Int) -> Bool {
         guard let previous = previousNonSpaceUnit(in: ns, before: location) else { return true }
+        // 指令打出的句末标点也算句末（逗号不算）。
         return isSentenceEndUnit(previous) || isMarkUnit(previous)
+            || [0xE010, 0xE012, 0xE013, 0xE014, 0xE016, 0xE017].contains(previous)
     }
 
     private static func capitalizeFirstLetter(in text: NSMutableString, from location: Int) {
@@ -349,8 +365,8 @@ enum DictationTextProcessor {
         for index in chars.indices {
             let ch = chars[index]
             guard let full = asciiToFull[ch] else { continue }
-            let previous = neighbor(of: index, in: chars, step: -1)
-            let next = neighbor(of: index, in: chars, step: 1)
+            let previous = neighbor(of: index, in: chars, step: -1).map(display)
+            let next = neighbor(of: index, in: chars, step: 1).map(display)
             let previousCJK = previous.map(isCJK) ?? false
             let nextCJK = next.map(isCJK) ?? false
             switch ch {
@@ -383,8 +399,8 @@ enum DictationTextProcessor {
             }
             var end = index
             while end < chars.count, isHorizontalSpace(chars[end]) { end += 1 }
-            let previous = out.last
-            let next = end < chars.count ? chars[end] : nil
+            let previous = out.last.map(display)
+            let next = end < chars.count ? display(chars[end]) : nil
             index = end
             guard let previous, let next else { continue }
             if isMark(previous) || isMark(next) { continue }
@@ -403,13 +419,21 @@ enum DictationTextProcessor {
     private static func cleanCollisions(_ chars: [Character]) -> [Character] {
         var out: [Character] = []
         for ch in chars {
-            if pauses.contains(ch) {
-                guard let last = out.last, !isMark(last), !sentenceEnds.contains(last), !pauses.contains(last) else {
+            if isExplicit(ch) {
+                // 指令打的标点优先：紧挨在前面的识别器标点换掉；开头、换行之后也照留。
+                if let last = out.last, !isExplicit(last), pauses.contains(last) || sentenceEnds.contains(last) {
+                    out[out.count - 1] = ch
+                } else {
+                    out.append(ch)
+                }
+            } else if pauses.contains(ch) {
+                guard let last = out.last, !isMark(last), !isExplicit(last), !sentenceEnds.contains(last),
+                      !pauses.contains(last) else {
                     continue
                 }
                 out.append(ch)
             } else if sentenceEnds.contains(ch) {
-                guard let last = out.last, !isMark(last) else { continue }
+                guard let last = out.last, !isMark(last), !isExplicit(last) else { continue }
                 if pauses.contains(last) {
                     out[out.count - 1] = ch
                 } else if last == ch, ch != ".", ch != "…" {
@@ -428,7 +452,7 @@ enum DictationTextProcessor {
     private static func appendTerminal(_ chars: inout [Character], chinese: Bool) {
         guard let lastIndex = chars.lastIndex(where: { !isHorizontalSpace($0) }) else { return }
         let last = chars[lastIndex]
-        if isMark(last) || sentenceEnds.contains(last) || last == "：" || last == ":" { return }
+        if isMark(last) || isExplicit(last) || sentenceEnds.contains(last) || last == "：" || last == ":" { return }
         if closers.contains(last), lastIndex > 0, sentenceEnds.contains(chars[lastIndex - 1]) { return }
         guard chars.contains(where: { $0.isLetter || $0.isNumber }) else { return }
         // 中文识别结果里只有英文（「OK」）时补英文句点。
@@ -535,6 +559,15 @@ enum DictationTextProcessor {
 
     private static func isMark(_ ch: Character) -> Bool {
         ch == newlineMark || ch == paragraphMark || ch == deleteMark
+    }
+
+    private static func isExplicit(_ ch: Character) -> Bool {
+        explicitPunctuation[ch] != nil
+    }
+
+    /// 占位符代表的真实字符（指令标点 → 标点；其他原样）。
+    private static func display(_ ch: Character) -> Character {
+        explicitPunctuation[ch] ?? ch
     }
 
     private static func trimTrailingSpaces(_ text: inout String) {

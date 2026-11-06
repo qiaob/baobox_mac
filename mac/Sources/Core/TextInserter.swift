@@ -55,8 +55,9 @@ enum TextInserter {
 
         let pasteOnly = TextInsertionPolicy.isPasteOnly(bundleID: app.bundleIdentifier, appURL: app.bundleURL)
         let probe = pasteOnly ? nil : focusProbe(of: app)
-        let route = TextInsertionPolicy.route(pasteOnly: pasteOnly, alwaysPaste: mode == .alwaysPaste,
-                                              focus: probe?.focus)
+        let route = TextInsertionPolicy.route(pasteOnly: pasteOnly,
+                                              browser: TextInsertionPolicy.isBrowser(bundleID: app.bundleIdentifier),
+                                              alwaysPaste: mode == .alwaysPaste, focus: probe?.focus)
         let bundle = app.bundleIdentifier ?? "?"
         log.notice("insert into \(bundle, privacy: .public): route \(String(describing: route), privacy: .public), role \(probe?.focus.role ?? "-", privacy: .public)")
 
