@@ -238,8 +238,20 @@ final class PetModelView: SCNView {
     @discardableResult
     func perform(_ kind: String) -> TimeInterval? {
         guard let model, let option = interactions[kind]?.randomElement() else { return nil }
-        let sequence = option.compactMap { model.clips[$0] }
-        guard let first = sequence.first else { return nil }
+        return play(sequence: option.compactMap { model.clips[$0] })
+    }
+
+    /// 按片段名播一串动作（健康提醒：喝水、伸懒腰）。模型里缺任何一段就不播、返回 nil。
+    @discardableResult
+    func performClips(_ names: [String]) -> TimeInterval? {
+        guard let model, !names.isEmpty else { return nil }
+        let sequence = names.compactMap { model.clips[$0] }
+        guard sequence.count == names.count else { return nil }
+        return play(sequence: sequence)
+    }
+
+    private func play(sequence: [GLTFClip]) -> TimeInterval? {
+        guard let model, let first = sequence.first else { return nil }
         if let current = currentClip?.clip { model.stop(current, fadeOut: 0.15) }
         model.play(first, loop: false, hold: false, fadeIn: 0.15)
         currentClip = ("interact", first)

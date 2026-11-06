@@ -41,13 +41,14 @@ NotifyCenter.shared.post(_ n: PetNotification,
                          onAction: ((String) -> Void)? = nil)
 ```
 
-- 内部来源在代码内注册（meeting / focus-health / dictation / ai-tools / livetranslate…)，免授权；外部来源走网关，须经授权名单（§5）。
+- 内部来源在代码内注册（meeting / focus / dictation / ai-tools / livetranslate…)，免授权；外部来源走网关，须经授权名单（§5）。专注与健康（#43）的来源 id 定为 `focus`。
 - 去重：同 `(source, dedupeKey)` 在 30 秒内重复投递只更新计数与最新文案，不重复弹。
 - 动作回调只在进程内分发给来源模块；对外部来源经 socket 写回（§5）。
 
 ## 4. 勿扰与聚合
 
 - 信号源（单一实现，#42/#43 共用）：前台 App 全屏、会议进行中（#42 会话状态）、屏幕录制 / 共享中、用户手动勿扰（宠物菜单「安静 1 小时 / 今天」）、专注中（#43）。
+- 落地（2026-11-06，#43）：其他模块经 `NotifyDND.setSuppressed(_:token:)` 挂令牌——Baobox 录屏挂 `recording`、专注中挂 `focus`、休息画面在场挂 `break`；`reasons(ignoringTokens:)` 列出全部原因（含麦克风占用），供调用方按需挑选。麦克风占用只给专注与健康的避让用，不进 `isSuppressed`（Baobox 自己的实时翻译也占麦克风，分不清是谁）。别的 App 的录屏 / 屏幕共享用公开 API 测不准，暂不检测。
 - 勿扰期间：`ambient` 直接进历史不弹；`bubble` 入队，勿扰解除后合并成一条摘要气泡（「3 条提醒：…」可展开）；`alert` 照常呈现但无声。
 - 宠物在勿扰期间进入睡觉状态，形象与行为一致，不出现「睡着了还弹气泡」的割裂。
 
@@ -119,7 +120,8 @@ NotifyCenter.shared.post(_ n: PetNotification,
 
 ## 8. 窗口与层级
 
-- 宠物窗：borderless `NSPanel`，`canJoinAllSpaces + fullScreenAuxiliary`，层级低于 #43 全屏休息覆盖层、高于普通窗口；`ignoresMouseEvents` 动态切换——仅命中区接收事件（2D 按 alpha、3D 按包围盒），其余穿透。
+- 宠物窗：borderless `NSPanel`，`canJoinAllSpaces + fullScreenAuxiliary`，`.floating` 级，高于普通窗口；`ignoresMouseEvents` 动态切换——仅命中区接收事件（2D 按 alpha、3D 按包围盒），其余穿透。
+- 休息画面（#43，2026-11-06 改）：**宠物本身就是休息画面的主角**——渲染视图借给休息画面的舞台窗（`.screenSaver + 1`，暗幕在 `.screenSaver`），走到屏幕中央变大，结束后飞回、还给宠物窗（`PetController.lendRenderView / returnRenderView`）。借出期间宠物窗留在原地但变空、不接鼠标，挂在它身上的气泡不受影响。见 `docs/focus-health/TECH_DESIGN.md` §5。
 - 气泡窗：独立小 `NSPanel`，不抢焦点；按钮可点但不激活 App（`nonactivatingPanel`)。
 
 ## 9. 设置（UserDefaults 键，前缀 `pet.` / `notify.`）

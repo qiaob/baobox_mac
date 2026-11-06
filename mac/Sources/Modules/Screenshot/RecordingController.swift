@@ -150,6 +150,8 @@ final class RecordingController: NSObject {
             self.writer = writer
             self.outputURL = url
             isRecording = true
+            // 录屏期间勿扰：宠物气泡不出来（免得被录进视频），健康提醒也顺延（docs/focus-health/TECH_DESIGN.md §6）。
+            NotifyDND.shared.setSuppressed(true, token: "recording")
             hud.startTimer()
         } catch {
             closeSessionUI()
@@ -179,6 +181,7 @@ final class RecordingController: NSObject {
     func stop(discard: Bool = false) async {
         guard isRecording, let stream, let sink, let writer, let outputURL else { return }
         isRecording = false
+        NotifyDND.shared.setSuppressed(false, token: "recording")
         isPaused = false
         closeSessionUI()
 

@@ -21,6 +21,9 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 气泡、环形菜单各自开着没有（任一开着宠物就站住面向用户）。
     private var bubbleShowing = false
     private var menuShowing = false
+    /// 渲染视图借给了休息画面（#43，见 lendRenderView）。
+    private(set) var isLent = false
+    private var characterChangePending = false
 
     var isReady: Bool { PetSettings.enabled && panel?.isVisible == true }
 
@@ -72,6 +75,8 @@ final class PetController: ObservableObject, NotifyPresenting {
             guard let self, let panel = self.panel else { return }
             // 拖拽时窗口由 PetPanel 跟手移动；引擎里的位置松手才更新，这时不能按它把窗口拽回去。
             if pose.state != .dragged, panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+            // 渲染视图借给休息画面期间（#43），姿态由休息画面驱动。
+            guard !self.isLent else { return }
             if self.shownModelID != nil {
                 self.modelView.pose = pose
             } else {
@@ -95,7 +100,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     }
 
     private func updateHeld() {
-        engine.setHeld(bubbleShowing || menuShowing)
+        engine.setHeld(bubbleShowing || menuShowing || isLent)
     }
 
     // MARK: - 启用 / 尺寸
@@ -189,6 +194,76 @@ final class PetController: ObservableObject, NotifyPresenting {
         return lines.randomElement() ?? ""
     }
 
+    // MARK: - 健康提醒的动作（#43）
+
+    /// 按片段名播一串动作，不冒话（喝水：坐下 → 捧着喝 → 站起；站立：伸懒腰）。
+    /// 宠物没开、正借给休息画面、2D 形象或形象里没有这些片段时返回 false（调用方就只让它跳一下）。
+    @discardableResult
+    func act(clips: [String]) -> Bool {
+        guard PetSettings.enabled, !isLent, shownModelID != nil,
+              let duration = modelView.performClips(clips) else { return false }
+        engine.occupy(for: duration)
+        return true
+    }
+
+    // MARK: - 借给休息画面（#43，docs/focus-health/TECH_DESIGN.md §5.3）
+
+    /// 借出的渲染视图与它此刻在屏幕上的位置。
+    struct Loan {
+        let view: NSView
+        /// 宠物窗在屏幕上的位置与大小（休息画面从这里飞出去、最后飞回这里）。
+        let frame: NSRect
+        let is3D: Bool
+    }
+
+    /// 把当前渲染视图借给休息画面放大。宠物窗留在原地但变空、不接鼠标，引擎站住不溜达；
+    /// 挂在宠物窗上的气泡不受影响。宠物没开 / 没就绪时返回 nil（休息画面走无宠物的回退画面）。
+    func lendRenderView() -> Loan? {
+        guard !isLent, PetSettings.enabled, let panel, panel.isVisible else { return nil }
+        let view: NSView = shownModelID != nil ? modelView : petView
+        guard view.superview === stage else { return nil }
+        radial.close(animated: false)
+        isLent = true
+        updateHeld()
+        panel.ignoresMouseEvents = true
+        view.removeFromSuperview()
+        return Loan(view: view, frame: panel.frame, is3D: shownModelID != nil)
+    }
+
+    /// 借出期间由休息画面驱动姿态（走过去、躺下、起身）。
+    func setLentPose(_ pose: PetPose) {
+        guard isLent else { return }
+        if shownModelID != nil {
+            modelView.pose = pose
+        } else {
+            petView.pose = pose
+        }
+    }
+
+    /// 借出期间做个互动动作（被戳一下）。2D 形象或不支持时返回 nil。
+    @discardableResult
+    func performLent(_ kind: String) -> TimeInterval? {
+        guard isLent, shownModelID != nil else { return nil }
+        return modelView.perform(kind)
+    }
+
+    /// 休息画面结束：视图放回宠物窗，恢复鼠标与溜达；借出期间积下的换形象请求这时执行。
+    func returnRenderView() {
+        guard isLent else { return }
+        isLent = false
+        panel?.ignoresMouseEvents = false
+        let view: NSView = shownModelID != nil ? modelView : petView
+        stage.show(view)
+        // 叫醒引擎（休息期间它按勿扰睡着了）；姿态由下一拍（≤ 1/30 秒）接上，不推旧姿态。
+        engine.occupy(for: 0.5)
+        updateHeld()
+        if characterChangePending {
+            characterChangePending = false
+            applyCharacter()
+        }
+        applyVisibility()
+    }
+
     // MARK: - 环形菜单（右键）
 
     private func openRadialMenu() {
@@ -205,7 +280,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
     /// 当前形象没有喂食 / 陪玩动作时，从外圈挪工具进内圈，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
-        let hotkeys = (NSApp.delegate as? AppDelegate)?.registry.allHotkeys().flatMap(\.defs) ?? []
+        let hotkeys = AppDelegate.shared?.registry.allHotkeys().flatMap(\.defs) ?? []
         func tool(_ id: String, _ symbol: String, _ title: String) -> RadialMenuItem? {
             guard let def = hotkeys.first(where: { $0.id == id }) else { return nil }
             let action = def.action
@@ -243,6 +318,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             tool("keyboardnav.click", "keyboard", L("pet.ring.keyboard")),
             tool("windowmanager.maximize", "macwindow", L("pet.ring.maximize")),
             tool("caffeinate.toggle", "cup.and.saucer.fill", L("pet.ring.caffeinate")),
+            tool("focushealth.focus", "timer", L("pet.ring.focus")),
         ].compactMap { $0 }
         outer.append(RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
             self?.nextCharacter()
@@ -253,7 +329,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.sendTestNotification(.sticky)
         })
         outer.append(RadialMenuItem(id: "pet.settings", symbol: "gearshape", title: L("pet.ring.settings")) {
-            guard let registry = (NSApp.delegate as? AppDelegate)?.registry else { return }
+            guard let registry = AppDelegate.shared?.registry else { return }
             SettingsWindowController.shared.show(registry: registry, tab: "desktop-pet")
         })
         outer.append(RadialMenuItem(id: "pet.hide", symbol: "eye.slash", title: L("pet.ring.hide")) { [weak self] in
@@ -299,6 +375,11 @@ final class PetController: ObservableObject, NotifyPresenting {
     }
 
     private func applyCharacter() {
+        // 渲染视图借出去了：等休息画面还回来再换，免得把视图从休息画面里抢回来。
+        if isLent {
+            characterChangePending = true
+            return
+        }
         let id = currentCharacterID
         let package = packages.first { $0.id == id }
         if let package, package.model != nil {

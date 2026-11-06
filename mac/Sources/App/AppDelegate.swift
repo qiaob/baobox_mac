@@ -2,8 +2,18 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// 当前实例。SwiftUI 的 @NSApplicationDelegateAdaptor 下，`NSApp.delegate` 是 SwiftUI 自己的转发对象，
+    /// `NSApp.delegate as? AppDelegate` 永远是 nil（2026-11-06 用同样入口写法的小程序实测）——
+    /// 宠物环形菜单的工具捷径与「设置」因此一直失灵。要拿注册表就用这个。
+    private(set) static weak var shared: AppDelegate?
+
     let registry = ToolRegistry()
     private var statusItemController: StatusItemController?
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -12,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ScreenDrawTool())
         registry.register(ClipboardTool())
         registry.register(CaffeinateTool())
+        registry.register(FocusHealthTool())
         registry.register(WindowManagerTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())

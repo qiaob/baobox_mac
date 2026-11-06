@@ -110,7 +110,7 @@ final class PetEngine {
     private func shouldSleep(_ now: Date) -> Bool {
         if now.timeIntervalSince(sleepCheckedAt) >= 1 {
             sleepCheckedAt = now
-            sleepCached = NotifyDND.shared.isSuppressed || Self.secondsSinceAnyInput() > 300
+            sleepCached = NotifyDND.shared.isSuppressed || UserActivity.secondsSinceInput() > 300
         }
         return sleepCached
     }
@@ -197,13 +197,5 @@ final class PetEngine {
             return screen.visibleFrame
         }
         return NSScreen.main?.visibleFrame ?? .zero
-    }
-
-    /// 距最近一次键鼠输入的秒数（取多类事件的最小值，即最近的活动）。
-    private static func secondsSinceAnyInput() -> TimeInterval {
-        let types: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel]
-        return types
-            .map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }
-            .min() ?? 0
     }
 }

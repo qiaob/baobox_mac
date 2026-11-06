@@ -51,6 +51,7 @@ BaoboxApp(@main, Settings scene)
 | ScreenDraw | `screendraw` | **屏幕标注画笔**：直接在屏幕上圈画（绘制 / 穿透两态），讲解演示用。模块壳 `ScreenDrawTool` 在 `Modules/Screenshot/`（共用标注引擎），快捷键 id 沿用 `screenshot.draw`。`docs/screen-draw/DESIGN.md` |
 | Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
+| FocusHealth | `focushealth` | **专注与健康**：专注计时（番茄钟，专注中勿扰）+ 健康提醒（喝水 / 站立 / 护眼 / 整段休息，可增删改）。提醒经桌面宠物呈现；强提醒 = 宠物走到屏幕中央变大陪你休息（轻松 / 标准 / 严格三档，标准起变暗并拦截键鼠），宠物关闭时回退全屏画面。避让开会（麦克风占用）/ 全屏 / 录屏，离开电脑算自然休息。`docs/focus-health/` |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
@@ -80,6 +81,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）+ `RECENT_FILES.md`（最近文件增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态）。2026-11 起是菜单栏一级入口（`ScreenDrawTool`），代码仍在 Screenshot 目录、与截图共用标注引擎。
+- `docs/focus-health/` —— 专注与健康 REQUIREMENTS + TECH_DESIGN：计时规则（用电脑的时间 / 实际时间 / 固定时刻、自然休息）、专注—休息状态机、避让与撞车、休息画面（借宠物渲染视图放大、拦截边界、看门狗）。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/live-translate/DESIGN.md` —— 实时翻译：分段识别（停顿 / 45s 切段）、翻译节流（finals 全翻 + 最新 partial）、字幕条窗口。
 - `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
