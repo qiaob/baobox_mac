@@ -1,4 +1,21 @@
+import LocalAuthentication
+import LocalAuthenticationEmbeddedUI
 import SwiftUI
+
+/// 嵌在确认卡片里的 Touch ID（TECH_DESIGN.md §5.6）：绑着这个 context，验证时提示在这里显示、不弹系统对话框。
+struct TouchIDView: NSViewRepresentable {
+    let authContext: LAContext
+
+    /// 控件尺寸决定画多大（mini 16 / small 32 / regular 64 / large 128 点，实测），不跟外面给的 frame 走。
+    /// large 塞进小框会溢出盖住文字（2026-11-08 用户截图）；用 small，和原来的指纹图标差不多大。
+    static let side: CGFloat = 32
+
+    func makeNSView(context: Context) -> LAAuthenticationView {
+        LAAuthenticationView(context: authContext, controlSize: .small)
+    }
+
+    func updateNSView(_ nsView: LAAuthenticationView, context: Context) {}
+}
 
 /// 休息画面中央的卡片：标题、大字倒计时、一句话、按钮（技术设计 §5）。
 struct BreakInfoView: View {
@@ -10,7 +27,26 @@ struct BreakInfoView: View {
                 .font(.system(size: 21, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-            if !model.finished {
+            if model.confirming {
+                // 结束前确认是本人（TECH_DESIGN.md §5.6）：指纹验证就嵌在这张卡片里。
+                if let auth = model.authContext {
+                    TouchIDView(authContext: auth)
+                        .frame(width: TouchIDView.side, height: TouchIDView.side)
+                        .id(ObjectIdentifier(auth))
+                        .padding(.vertical, 6)
+                } else {
+                    Image(systemName: "touchid")
+                        .font(.system(size: 40, weight: .light))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.vertical, 2)
+                }
+                Text(verbatim: L("focus.break.confirmHint \(model.confirmLeft)"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !model.finished {
                 Text(verbatim: FocusText.countdown(model.remaining))
                     .font(.system(size: 52, weight: .light, design: .rounded).monospacedDigit())
                 if !model.message.isEmpty {
@@ -35,6 +71,9 @@ struct BreakInfoView: View {
     }
 
     private var headline: String {
+        if model.confirming {
+            return model.confirmSkipping ? L("focus.break.confirmSkipTitle") : L("focus.break.confirmTitle")
+        }
         if model.finished { return L("focus.break.done") }
         return model.nudge ?? model.title
     }
@@ -83,9 +122,10 @@ struct BreakMiniView: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            Text(verbatim: model.finished ? L("focus.break.done") : L("focus.break.mini"))
+            Text(verbatim: model.confirming ? L("focus.break.confirmMini")
+                 : (model.finished ? L("focus.break.done") : L("focus.break.mini")))
                 .font(.system(size: 16, weight: .medium))
-            if !model.finished {
+            if !model.finished, !model.confirming {
                 Text(verbatim: FocusText.countdown(model.remaining))
                     .font(.system(size: 34, weight: .light, design: .rounded).monospacedDigit())
             }
