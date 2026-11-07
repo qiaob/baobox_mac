@@ -19,6 +19,7 @@ struct FocusHealthSettingsView: View {
     @AppStorage(FocusHealthSettings.workEndKey) private var workEnd = 18 * 60
     @AppStorage(FocusHealthSettings.workdaysOnlyKey) private var workdaysOnly = true
     @AppStorage(FocusHealthSettings.minSpacingKey) private var minSpacing = 15
+    @AppStorage(FocusHealthSettings.confirmIdentityKey) private var confirmIdentity = true
     @State private var expandedID: String?
 
     private static let focusOptions = [15, 25, 30, 45, 50, 60, 90]
@@ -90,6 +91,12 @@ struct FocusHealthSettingsView: View {
                     Stepper(value: $maxSnoozes, in: 0...5) {
                         Text(verbatim: L("focus.settings.maxSnoozes \(maxSnoozes)"))
                     }
+                } else {
+                    // 标准 / 严格档会盖屏：结束前确认是本人，人不在就锁屏（TECH_DESIGN.md §5.6）。
+                    Toggle("focus.settings.confirmIdentity", isOn: $confirmIdentity)
+                    Text("focus.settings.confirmIdentityHint")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Picker("focus.settings.backdrop", selection: $backdrop) {
                     Text("focus.backdrop.teal").tag("teal")

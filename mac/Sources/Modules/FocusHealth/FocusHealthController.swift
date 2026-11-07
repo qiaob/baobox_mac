@@ -183,7 +183,7 @@ final class FocusHealthController: ObservableObject {
         let now = Date()
         let length = max(1, minutes ?? FocusHealthSettings.defaultFocusMinutes)
         if session.inBreak { session.endBreak() }
-        if stage.isBusy { stage.finish(.skipped) }
+        if stage.isBusy { stage.end(.skipped) }
         // 先说一声再挂勿扰（挂上之后这条轻提示会被攒起来）。
         NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient,
                                                  title: L("focus.toast.started \(length)"), icon: "timer"))
@@ -273,9 +273,10 @@ final class FocusHealthController: ObservableObject {
             } else {
                 var message = L("focus.focusDone.longMessage \(round)")
                 if !extras.isEmpty { message += "\n" + L("focus.alsoLine \(extras)") }
-                let request = BreakRequest(title: L("focus.rest.longTitle \(minutes)"), message: message,
+                var request = BreakRequest(title: L("focus.rest.longTitle \(minutes)"), message: message,
                                            seconds: Double(minutes * 60), style: Self.stageStyle(strength),
                                            lookAway: false)
+                request.confirmIdentity = Self.confirmsIdentity(request.style)
                 stage.present(request) { outcome in
                     FocusHealthController.shared.finishBreak(completed: outcome == .completed)
                 }
@@ -350,7 +351,7 @@ final class FocusHealthController: ObservableObject {
     func endCycle() {
         guard session.inBreak else { return }
         session.endBreak()
-        if stage.isBusy { stage.finish(.skipped) }
+        if stage.isBusy { stage.end(.skipped) }
         changed()
     }
 
@@ -558,9 +559,10 @@ final class FocusHealthController: ObservableObject {
             let line = L("focus.alsoLine \(extras.joined(separator: L("focus.listSeparator")))")
             message = message.isEmpty ? line : message + "\n" + line
         }
-        let request = BreakRequest(title: item.restTitle, message: message, seconds: TimeInterval(item.restSeconds),
+        var request = BreakRequest(title: item.restTitle, message: message, seconds: TimeInterval(item.restSeconds),
                                    style: Self.stageStyle(FocusHealthSettings.strength),
                                    lookAway: item.preset == ReminderPreset.eye)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         let id = item.id
         stage.present(request) { outcome in
             FocusHealthController.shared.restEnded(itemID: id, outcome: outcome)
@@ -601,9 +603,10 @@ final class FocusHealthController: ObservableObject {
     func breakNow() {
         guard !stage.isBusy, !session.inFocus, !session.inBreak else { return }
         let base = items.first { $0.preset == ReminderPreset.rest }
-        let request = BreakRequest(title: L("focus.rest.title"), message: L("focus.rest.breakMessage"),
+        var request = BreakRequest(title: L("focus.rest.title"), message: L("focus.rest.breakMessage"),
                                    seconds: TimeInterval(base?.restSeconds ?? 300),
                                    style: Self.stageStyle(FocusHealthSettings.strength), lookAway: false)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         stage.present(request) { outcome in
             guard outcome == .completed else { return }
             FocusHealthController.shared.manualBreakDone()
@@ -635,9 +638,16 @@ final class FocusHealthController: ObservableObject {
             }
             return
         }
-        let request = BreakRequest(title: L("focus.preview.title"), message: L("focus.preview.message"),
+        // 预览也走「结束前确认本人」，在设置里就能把整套流程试一遍。
+        var request = BreakRequest(title: L("focus.preview.title"), message: L("focus.preview.message"),
                                    seconds: 10, style: Self.stageStyle(strength), lookAway: false)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         stage.present(request) { _ in }
+    }
+
+    /// 休息画面结束前要不要确认本人：设置开着，且是拦截键鼠的画面（标准 / 严格档）。
+    private static func confirmsIdentity(_ style: BreakStageStyle) -> Bool {
+        FocusHealthSettings.confirmIdentity && style != .gentle
     }
 
     // MARK: - 暂停提醒
