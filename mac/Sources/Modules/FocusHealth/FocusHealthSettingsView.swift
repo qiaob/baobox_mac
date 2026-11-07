@@ -18,6 +18,7 @@ struct FocusHealthSettingsView: View {
     @AppStorage(FocusHealthSettings.workStartKey) private var workStart = 9 * 60
     @AppStorage(FocusHealthSettings.workEndKey) private var workEnd = 18 * 60
     @AppStorage(FocusHealthSettings.workdaysOnlyKey) private var workdaysOnly = true
+    @AppStorage(FocusHealthSettings.minSpacingKey) private var minSpacing = 15
     @State private var expandedID: String?
 
     private static let focusOptions = [15, 25, 30, 45, 50, 60, 90]
@@ -67,6 +68,12 @@ struct FocusHealthSettingsView: View {
                     }
                     Spacer()
                 }
+                Stepper(value: $minSpacing, in: 10...30, step: 5) {
+                    Text(verbatim: L("focus.settings.minSpacing \(minSpacing)"))
+                }
+                Text("focus.settings.rhythmHint")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("focus.settings.breakSection") {
@@ -229,6 +236,7 @@ struct ReminderItemRow: View {
             DatePicker("focus.settings.item.time", selection: timeBinding, displayedComponents: .hourAndMinute)
         }
         Picker("focus.settings.item.style", selection: $item.style) {
+            Text("focus.style.nudge").tag(ReminderItem.Style.nudge)
             Text("focus.style.bubble").tag(ReminderItem.Style.bubble)
             Text("focus.style.rest").tag(ReminderItem.Style.rest)
         }

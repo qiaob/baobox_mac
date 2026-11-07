@@ -15,6 +15,7 @@ enum FocusHealthSettings {
     static let workStartKey = "focus.workStart"
     static let workEndKey = "focus.workEnd"
     static let workdaysOnlyKey = "focus.workdaysOnly"
+    static let minSpacingKey = "focus.minSpacing"
 
     private static var defaults: UserDefaults { .standard }
 
@@ -37,6 +38,8 @@ enum FocusHealthSettings {
     }
     /// 每次休息最多推迟几次。
     static var maxSnoozes: Int { int(maxSnoozesKey, 2, 0...5) }
+    /// 两次提醒至少隔多少分钟（统一节拍，REQUIREMENTS.md §7）。
+    static var minSpacingMinutes: Int { int(minSpacingKey, 15, 10...30) }
     /// 宠物关闭时休息画面的背景：teal / dusk / forest / image。
     static var backdrop: String { defaults.string(forKey: backdropKey) ?? "teal" }
     static var backdropImagePath: String? {
