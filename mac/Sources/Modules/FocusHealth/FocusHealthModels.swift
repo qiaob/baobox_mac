@@ -25,6 +25,8 @@ struct ReminderItem: Codable, Identifiable, Equatable {
     enum Style: String, Codable, CaseIterable {
         case bubble     // 宠物提醒：气泡 + 按钮
         case rest       // 休息画面（强提醒）
+        /// 轻提醒：宠物做个动作 + 一个几秒后自己消失的小气泡，没有按钮、不盖屏（护眼 20-20-20 这类一下就做完的事）。
+        case nudge
     }
 
     var id: String
@@ -100,9 +102,19 @@ struct ReminderItem: Codable, Identifiable, Equatable {
 
     var intervalSeconds: TimeInterval { TimeInterval(intervalMinutes * 60) }
 
-    /// 离开多久算这一项做过了（需求 §3）：休息画面项 = max(休息时长, 2 分钟)，宠物提醒项 = 5 分钟。
+    /// 统一节拍里的级别（docs/focus-health/REQUIREMENTS.md §7）：3 = 大休息（休息画面 ≥ 2 分钟），
+    /// 2 = 起身（宠物提醒：站立、喝水、自定义），1 = 小歇（轻提醒、很短的休息画面）。大的包含小的。
+    var tier: Int {
+        switch style {
+        case .rest: return restSeconds >= 120 ? 3 : 1
+        case .bubble: return 2
+        case .nudge: return 1
+        }
+    }
+
+    /// 离开多久算这一项做过了（需求 §3）：休息画面项、轻提醒项 = max(休息时长, 2 分钟)，宠物提醒项 = 5 分钟。
     var awayThreshold: TimeInterval {
-        style == .rest ? TimeInterval(max(restSeconds, 120)) : 300
+        style == .bubble ? 300 : TimeInterval(max(restSeconds, 120))
     }
 }
 
@@ -113,17 +125,36 @@ enum ReminderPreset {
     static let eye = "eye"
     static let rest = "break"
 
+    /// 2026-11-07 统一节拍（REQUIREMENTS.md §7）：喝水跟站立同一个节奏（按用电脑的时间每 60 分钟、离开也算做过），
+    /// 两项总是一起到点、合成一条「起来走走，喝口水」；护眼改成轻提醒，不盖屏。
     static func defaults() -> [ReminderItem] {
         [
-            ReminderItem(id: "preset.water", preset: water, intervalMinutes: 45, clock: .wall,
-                         style: .bubble, awayCounts: false),
+            ReminderItem(id: "preset.water", preset: water, intervalMinutes: 60, clock: .active,
+                         style: .bubble, awayCounts: true),
             ReminderItem(id: "preset.stand", preset: stand, intervalMinutes: 60, clock: .active,
                          style: .bubble, awayCounts: true),
             ReminderItem(id: "preset.eye", preset: eye, intervalMinutes: 20, clock: .active,
-                         style: .rest, restSeconds: 20, awayCounts: true),
+                         style: .nudge, restSeconds: 20, awayCounts: true),
             ReminderItem(id: "preset.break", preset: rest, intervalMinutes: 50, clock: .active,
                          style: .rest, restSeconds: 300, awayCounts: true),
         ]
+    }
+
+    /// 旧版本存下的预置项：用户没改过（还是旧默认值）的换成新默认值；改过的原样保留。
+    static func migrated(_ items: [ReminderItem]) -> [ReminderItem] {
+        let fresh = Dictionary(uniqueKeysWithValues: defaults().map { ($0.id, $0) })
+        return items.map { item in
+            guard let replacement = fresh[item.id], item.name.isEmpty, !item.workHoursOnly,
+                  item.schedule == .interval else { return item }
+            let oldWater = item.preset == water && item.intervalMinutes == 45 && item.clock == .wall
+                && item.style == .bubble && !item.awayCounts
+            let oldEye = item.preset == eye && item.intervalMinutes == 20 && item.clock == .active
+                && item.style == .rest && item.restSeconds == 20 && item.awayCounts
+            guard oldWater || oldEye else { return item }
+            var updated = replacement
+            updated.enabled = item.enabled
+            return updated
+        }
     }
 }
 

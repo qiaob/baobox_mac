@@ -125,6 +125,13 @@ final class GLTFModel {
             track.node.removeAnimation(forKey: clip.key, blendOutDuration: fadeOut)
         }
     }
+
+    /// 改正在播的片段的速度（赶路时走路片段跟着加快，脚不打滑）。
+    func setSpeed(_ clip: GLTFClip, _ speed: CGFloat) {
+        for track in clip.tracks {
+            track.node.animationPlayer(forKey: clip.key)?.speed = speed
+        }
+    }
 }
 
 /// 一段动画：每个被驱动的节点一组关键帧（位置 / 朝向 / 缩放），整段共用一个时长，循环时各节点同步。

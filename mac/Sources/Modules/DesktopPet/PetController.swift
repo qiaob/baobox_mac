@@ -100,8 +100,20 @@ final class PetController: ObservableObject, NotifyPresenting {
         let origin = restoredOrigin()
         panel.setFrameOrigin(origin)
         engine.ledges = { [weak self] in self?.windowWatcher.ledges ?? [] }
+        engine.activity = PetSettings.activity
+        engine.onArrive = { [weak self] in self?.settler?.noteArrived() }
+        engine.onDropped = { [weak self] in self?.settler?.noteDropped() }
+        engine.strollFilter = { [weak self] origin in self?.settler?.strollAcceptable(origin) ?? true }
+        // 踩台阶：脚下冒一级、爬完收起（SETTLE.md §4.4）。
+        engine.onClimbStep = { [weak self] feet, _ in
+            guard let self, let panel = self.panel else { return }
+            self.stairs.addStep(at: feet, width: self.holeWidth * 1.15, below: panel)
+        }
+        engine.onClimbEnd = { [weak self] in self?.stairs.finish() }
         configureRange()
         engine.start(at: origin)
+        startSettler()
+        observeSystem()
         // 3D 形象在后台读（VRM 要好几秒）：读好再出场，不先拿占位图跳一遍。期间的通知排队。
         if PetSettings.enabled, loadingModelID != nil {
             switchingCharacter = true
@@ -116,10 +128,14 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 窗口上的顶边从这里来（只在「窗口上」模式时运行）。
     private let windowWatcher = PetWindowWatcher()
 
+    /// 窗口观察器：窗口模式要它的顶边；找空地（不挡我 / 安静、适中换地方）要它的窗口位置。都不用时不跑。
     private func configureRange() {
         engine.range = PetSettings.range
         engine.customRect = PetSettings.rangeRect
-        if engine.range == .windows {
+        let activity = PetSettings.activity
+        let needsWindows = engine.range == .windows || PetSettings.avoidsActiveWindow
+            || activity == .calm || activity == .normal
+        if needsWindows {
             if !windowWatcher.isRunning { windowWatcher.start() }
         } else {
             windowWatcher.stop()
@@ -130,6 +146,144 @@ final class PetController: ObservableObject, NotifyPresenting {
     func applyRange() {
         configureRange()
         engine.rangeChanged()
+    }
+
+    /// 设置页改了走动方式 / 不挡我 / 识别屏幕内容（docs/desktop-pet/SETTLE.md §6）。
+    func applyActivity() {
+        engine.activity = PetSettings.activity
+        configureRange()
+        settler?.settingsChanged()
+    }
+
+    // MARK: - 找个不碍事的地方待着（docs/desktop-pet/SETTLE.md）
+
+    private var settler: PetSettler?
+    /// 爬高爬低时脚下的台阶。
+    private let stairs = PetStairs()
+
+    /// 身子大约占宠物窗的多宽 / 多高：VRM 人又高又瘦（窗口放大过）；毛绒 / 动物模型与 2D 帧图差不多占满。
+    private var bodyFractions: (width: CGFloat, height: CGFloat) {
+        guard shownModelID != nil else { return (0.8, 0.8) }
+        return modelView.isHumanoid ? (0.36, 0.84) : (0.7, 0.75)
+    }
+
+    private func startSettler() {
+        let settler = PetSettler(engine: engine, environment: PetSettler.Environment(
+            isAvailable: { [weak self] in
+                guard let self, let panel = self.panel else { return false }
+                return PetSettings.enabled && panel.isVisible && !self.isLent && !self.isChoreographing
+                    && !self.switchingCharacter
+            },
+            metrics: { [weak self] in
+                guard let self else { return (104, 0, 0.8, 0.8) }
+                let body = self.bodyFractions
+                return (self.panelSide, self.engine.footInset, body.width, body.height)
+            },
+            petFrame: { [weak self] in self?.panel?.frame ?? .zero },
+            windows: { [weak self] in self?.windowWatcher.windows ?? [] },
+            ledges: { [weak self] in self?.windowWatcher.ledges ?? [] },
+            transit: { [weak self] destination in self?.transit(to: destination) }
+        ))
+        self.settler = settler
+        settler.start()
+    }
+
+    /// 远处的空地：脚下张开黑洞钻进去，从目的地的黑洞里冒出来（复用出场 / 退场的编排，不道别、不招手）。
+    /// 关了出场动画就直接过去；减弱动态效果时淡出淡入。
+    private func transit(to destination: NSPoint) {
+        guard let panel, panel.isVisible, !isChoreographing else { return }
+        guard animatesEntrance else {
+            engine.place(at: destination)
+            panel.setFrameOrigin(engine.origin)
+            settler?.noteArrived()
+            return
+        }
+        beginChoreography()
+        let from = engine.origin
+        let leave = reduceMotion
+            ? PetEntrancePlan.fade(home: from, appearing: false)
+            : PetEntrancePlan.leave(home: from, side: panelSide, footInset: engine.footInset, holeWidth: holeWidth,
+                                    farewellClip: false, quick: true)
+        run(leave, as: .leaving) { [weak self] in
+            guard let self, let panel = self.panel else { return }
+            // 冒出来以后就站在这儿（收尾时按 choreographyHome 放好）。
+            self.choreographyHome = destination
+            let enter = self.reduceMotion
+                ? PetEntrancePlan.fade(home: destination, appearing: true)
+                : PetEntrancePlan.enter(home: destination, side: self.panelSide, footInset: self.engine.footInset,
+                                        holeWidth: self.holeWidth, greetClip: false)
+            let first = enter.sample(0)
+            self.engine.setOrigin(first.origin)
+            panel.setFrameOrigin(first.origin)
+            self.applyFrame(first)
+            self.run(enter, as: .entering) { [weak self] in
+                guard let self else { return }
+                self.endChoreography(restoreHome: true)
+                self.engine.place(at: destination)
+                self.panel?.setFrameOrigin(self.engine.origin)
+                self.saveOrigin(self.engine.origin)
+                self.bubble.setSuspended(false)
+                self.updateAccessory()
+                self.settler?.noteArrived()
+            }
+        }
+    }
+
+    // MARK: - 系统睡眠 / 唤醒（docs/desktop-pet/WAKE.md）
+
+    private var systemObservers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var wakeWork: DispatchWorkItem?
+
+    /// 睡前 / 熄屏 / 切走用户：停引擎和渲染。醒来 / 亮屏 / 切回 / 解锁：等 1 秒（屏幕起来）再把动画从头接上。
+    /// 2026-11-07 合盖睡了 23 小时醒来，骨骼不动、窗口照走（「在飘」）几分钟后才恢复：原因在系统睡眠这一段里，
+    /// 醒着时复现不了；这里不管是哪种都从头重建一遍，再由看门狗兜底并写日志。
+    private func observeSystem() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
+            systemObservers.append((workspace, workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated { self?.systemWillRest(note.name.rawValue) }
+            }))
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification] {
+            systemObservers.append((workspace, workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated { self?.systemDidWake(note.name.rawValue) }
+            }))
+        }
+        let distributed = DistributedNotificationCenter.default()
+        systemObservers.append((distributed, distributed.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
+                                                                     object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemDidWake("screenIsUnlocked") }
+        }))
+    }
+
+    private func systemWillRest(_ why: String) {
+        wakeWork?.cancel()
+        wakeWork = nil
+        PetLog.log.info("system rest (\(why, privacy: .public)): pausing engine and rendering")
+        engine.suspend()
+        if shownModelID != nil { modelView.suspended = true }
+    }
+
+    private func systemDidWake(_ why: String) {
+        wakeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.finishWake(why) }
+        }
+        wakeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func finishWake(_ why: String) {
+        wakeWork = nil
+        PetLog.log.info("system wake (\(why, privacy: .public)): restarting engine and animations")
+        engine.resume()
+        if shownModelID != nil {
+            modelView.suspended = false
+            modelView.restartAnimations(reason: "wake: \(why)")
+        }
+        settler?.recheck(reason: "wake", after: 2)
     }
 
     /// 框选自定义区域；选好后自动切到「自定义区域」。
@@ -391,6 +545,12 @@ final class PetController: ObservableObject, NotifyPresenting {
         let model = shownModelID != nil ? modelView : nil
         engine.footInset = (model?.footInsetFraction ?? 0) * side
         engine.walkSpeed = model?.walkSpeed(viewHeight: side) ?? 34 * side / 104
+        // 跑步、踏台阶、蹲坐：按形象的片段配（没有的形象：快走、原地走着上下、不歇脚）。
+        engine.hurryFactor = model?.runSpeedRatio ?? PetEngine.walkHurryFactor
+        engine.climbStepRise = model?.climbStepRise(viewHeight: side) ?? side * 0.12
+        engine.climbCycle = model?.climbCycle ?? 1.0
+        engine.canLounge = model?.supportsLounge ?? false
+        engine.loungeExitDuration = model?.loungeExitDuration ?? 1.2
         var frame = panel.frame
         guard frame.width != side || frame.height != side else { return }
         frame.origin.x = (frame.midX - side / 2).rounded()

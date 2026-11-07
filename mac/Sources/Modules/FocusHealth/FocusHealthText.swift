@@ -26,10 +26,32 @@ extension ReminderItem {
         case .interval: when = L("focus.summary.every \(intervalMinutes)")
         case .daily: when = L("focus.summary.daily \(FocusText.clock(timeOfDay))")
         }
-        let how = style == .rest
-            ? L("focus.summary.rest \(FocusText.duration(restSeconds))")
-            : L("focus.summary.bubble")
+        let how: String
+        switch style {
+        case .rest: how = L("focus.summary.rest \(FocusText.duration(restSeconds))")
+        case .bubble: how = L("focus.summary.bubble")
+        case .nudge: how = L("focus.summary.nudge")
+        }
         return when + " · " + how
+    }
+
+    /// 轻提醒的一句话（标题）。
+    var nudgeTitle: String {
+        preset == ReminderPreset.eye ? L("focus.nudge.eyeTitle") : displayName
+    }
+
+    /// 轻提醒的小字（自建项没有）。
+    var nudgeBody: String {
+        preset == ReminderPreset.eye ? L("focus.nudge.eyeBody") : ""
+    }
+
+    /// 并进别的提醒里顺带说时的说法：「顺便：喝口水、起来走走」。
+    var foldPhrase: String {
+        switch preset {
+        case ReminderPreset.water: return L("focus.fold.water")
+        case ReminderPreset.stand: return L("focus.fold.stand")
+        default: return displayName
+        }
     }
 
     /// 宠物提醒的标题。
@@ -84,11 +106,12 @@ extension ReminderItem {
         preset == ReminderPreset.eye ? nil : ["yawn"]
     }
 
-    /// 宠物配合的动作（内置毛绒形象的片段名）；形象里没有这几段时宠物只跳一下。
+    /// 宠物配合的动作（内置毛绒形象的片段名）；形象里没有这几段时宠物只跳一下。护眼：搭手远眺（VRM 的 look_up）。
     var petClips: [String]? {
         switch preset {
         case ReminderPreset.water: return ["sit_down", "sit_hold_drink", "stand_up"]
         case ReminderPreset.stand: return ["stretch"]
+        case ReminderPreset.eye: return ["look_up"]
         default: return nil
         }
     }

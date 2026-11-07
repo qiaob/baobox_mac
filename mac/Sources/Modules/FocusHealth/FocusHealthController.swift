@@ -18,8 +18,6 @@ final class FocusHealthController: ObservableObject {
     private static let presenceIdle: TimeInterval = 120
     /// 休息画面项顺延超过这么久，解除后降级为宠物提醒。
     private static let downgradeAfter: TimeInterval = 45 * 60
-    /// 撞车窗口：更长的休息画面项这么久之内到点，就吞掉当前项。
-    private static let collisionWindow: TimeInterval = 10 * 60
     private static let bubbleSnooze: TimeInterval = 10 * 60
     private static let restSnooze: TimeInterval = 5 * 60
     /// App 关着期间专注过点超过这么久：只记一轮，不补休息。
@@ -47,6 +45,8 @@ final class FocusHealthController: ObservableObject {
     private var sleepStartedAt: Date?
     /// 专注期间到点、被顺延的项：专注结束时并进休息。
     private var deferredDuringFocus: Set<String> = []
+    /// 上一次真的提醒（气泡 / 轻提醒 / 休息画面）的时刻：统一节拍的最小间隔从这儿算（REQUIREMENTS.md §7）。
+    private var lastPromptAt: Date?
     private var avoidanceCheckedAt = Date.distantPast
     private var avoidanceCached = false
     private var dirty = false
@@ -183,7 +183,7 @@ final class FocusHealthController: ObservableObject {
         let now = Date()
         let length = max(1, minutes ?? FocusHealthSettings.defaultFocusMinutes)
         if session.inBreak { session.endBreak() }
-        if stage.isBusy { stage.finish(.skipped) }
+        if stage.isBusy { stage.end(.skipped) }
         // 先说一声再挂勿扰（挂上之后这条轻提示会被攒起来）。
         NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient,
                                                  title: L("focus.toast.started \(length)"), icon: "timer"))
@@ -273,9 +273,10 @@ final class FocusHealthController: ObservableObject {
             } else {
                 var message = L("focus.focusDone.longMessage \(round)")
                 if !extras.isEmpty { message += "\n" + L("focus.alsoLine \(extras)") }
-                let request = BreakRequest(title: L("focus.rest.longTitle \(minutes)"), message: message,
+                var request = BreakRequest(title: L("focus.rest.longTitle \(minutes)"), message: message,
                                            seconds: Double(minutes * 60), style: Self.stageStyle(strength),
                                            lookAway: false)
+                request.confirmIdentity = Self.confirmsIdentity(request.style)
                 stage.present(request) { outcome in
                     FocusHealthController.shared.finishBreak(completed: outcome == .completed)
                 }
@@ -350,26 +351,23 @@ final class FocusHealthController: ObservableObject {
     func endCycle() {
         guard session.inBreak else { return }
         session.endBreak()
-        if stage.isBusy { stage.finish(.skipped) }
+        if stage.isBusy { stage.end(.skipped) }
         changed()
     }
 
     // MARK: - 提醒分发（技术设计 §4）
 
     private func handle(_ events: [ReminderEvent], now: Date) {
-        var dueBubbles: [ReminderItem] = []
-        var dueRests: [ReminderItem] = []
+        var due: [ReminderItem] = []
         var warns: [ReminderItem] = []
         for event in events {
             switch event {
             case .warn(let id):
                 if let item = item(id) { warns.append(item) }
             case .due(let id):
-                guard let item = item(id) else { continue }
-                if item.style == .rest { dueRests.append(item) } else { dueBubbles.append(item) }
+                if let item = item(id) { due.append(item) }
             }
         }
-        let due = dueRests + dueBubbles
 
         // 专注中、休息中、休息画面在场：顺延（专注期间的记下来，结束时并进休息）。
         if session.phase == .focusing || session.inBreak || stage.isBusy {
@@ -386,23 +384,43 @@ final class FocusHealthController: ObservableObject {
             return
         }
 
-        if let rest = dueRests.max(by: { $0.restSeconds < $1.restSeconds }) {
-            // 同时到点的更短的休息画面项被这一次覆盖。
-            for other in dueRests where other.id != rest.id {
-                ReminderScheduler.reset(other.id, runtime: &runtime, now: now)
-            }
-            if ReminderScheduler.longerRestDueSoon(than: rest, items: items, runtime: runtime, now: now,
-                                                   within: Self.collisionWindow) {
-                // 撞车：更长的休息马上就到，这次算做过了。
-                ReminderScheduler.reset(rest.id, runtime: &runtime, now: now)
-            } else {
-                fireRest(rest, alsoDue: dueBubbles, now: now)
+        // 统一节拍：什么时候真的打扰、一次说几件事（REQUIREMENTS.md §7）。
+        if !due.isEmpty, let plan = ReminderCoordinator.plan(
+            due: due, items: items, runtime: runtime, now: now, lastPromptAt: lastPromptAt,
+            minSpacing: TimeInterval(FocusHealthSettings.minSpacingMinutes * 60)
+        ) {
+            let members = plan.items.compactMap { item($0) }
+            // 大的包含小的：级别更低的项这次算做过了。
+            for id in plan.covered { ReminderScheduler.reset(id, runtime: &runtime, now: now) }
+            if let primary = members.first {
+                lastPromptAt = now
+                let others = Array(members.dropFirst())
+                switch primary.style {
+                case .rest: fireRest(primary, alsoDue: others, now: now)
+                case .bubble: fireBubbles(members, now: now)
+                case .nudge: fireNudge(members, now: now)
+                }
                 return
             }
         }
-        if !dueBubbles.isEmpty { fireBubbles(dueBubbles, now: now) }
         // 轻松档的休息提醒本身就是一个气泡，不再提前预告。
         if let warn = warns.first, FocusHealthSettings.strength != .relaxed { fireWarn(warn) }
+    }
+
+    /// 轻提醒（护眼这类）：宠物做个动作（护眼是搭手远眺），冒一个几秒后自己消失的小气泡，没有按钮；发出即算做过。
+    private func fireNudge(_ due: [ReminderItem], now: Date) {
+        guard let first = due.first else { return }
+        for item in due { ReminderScheduler.reset(item.id, runtime: &runtime, now: now) }
+        let title = due.count == 1 ? first.nudgeTitle : due.map(\.displayName).joined(separator: " · ")
+        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: title,
+                                                 body: due.count == 1 ? first.nudgeBody : "", ttl: 6,
+                                                 icon: first.icon))
+        if let clips = due.compactMap(\.petClips).first {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                MainActor.assumeIsolated { _ = PetController.shared.act(clips: clips) }
+            }
+        }
+        changed(now)
     }
 
     /// 避让（技术设计 §4 第 3 步）：自己挂的 focus / break 令牌不算。查全屏要遍历窗口列表，被挡住期间
@@ -419,8 +437,21 @@ final class FocusHealthController: ObservableObject {
         guard let first = due.first else { return }
         for item in due { ReminderScheduler.reset(item.id, runtime: &runtime, now: now) }
         let ids = due.map(\.id)
-        let title = due.count == 1 ? first.bubbleTitle : due.map(\.displayName).joined(separator: " · ")
-        let body = due.count == 1 ? first.bubbleBody : ""
+        // 站立和喝水一起到点（统一节拍的默认）：合成一句「起来走走，喝口水」。
+        let presets = Set(due.compactMap(\.preset))
+        let standAndWater = due.count == 2 && presets == [ReminderPreset.stand, ReminderPreset.water]
+        let title: String
+        let body: String
+        if standAndWater {
+            title = L("focus.bubble.standWaterTitle")
+            body = L("focus.bubble.standWaterBody")
+        } else if due.count == 1 {
+            title = first.bubbleTitle
+            body = first.bubbleBody
+        } else {
+            title = due.map(\.displayName).joined(separator: " · ")
+            body = ""
+        }
         let sticky = due.contains { $0.schedule == .daily }
         NotifyCenter.shared.post(PetNotification(
             source: Self.source, level: .bubble, title: title, body: body,
@@ -431,8 +462,9 @@ final class FocusHealthController: ObservableObject {
             guard action == "snooze" else { return }
             FocusHealthController.shared.snooze(ids, seconds: Self.bubbleSnooze)
         }
-        // 气泡出来时宠物先跳一下（约 0.9 秒），之后再做喝水 / 伸懒腰，免得被跳的动作打断。
-        if let clips = due.compactMap(\.petClips).first {
+        // 气泡出来时宠物先跳一下（约 0.9 秒），之后再做喝水 / 伸懒腰，免得被跳的动作打断。几项一起就一个接一个做。
+        let clips = due.compactMap(\.petClips).flatMap { $0 }
+        if !clips.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 MainActor.assumeIsolated { _ = PetController.shared.act(clips: clips) }
             }
@@ -453,30 +485,38 @@ final class FocusHealthController: ObservableObject {
         }
     }
 
+    /// 休息里顺带说的事（「顺便：喝口水、起来走走」）：小歇（护眼）不列，休息本来就包含它。
+    private static func foldLines(_ items: [ReminderItem]) -> [String] {
+        items.filter { $0.tier > 1 }.map(\.foldPhrase)
+    }
+
     private func fireRest(_ item: ReminderItem, alsoDue: [ReminderItem], now: Date) {
         let relaxed = FocusHealthSettings.strength == .relaxed
         let deferredFor = runtime[item.id]?.deferredSince.map { now.timeIntervalSince($0) } ?? 0
         if !relaxed, deferredFor > Self.downgradeAfter {
-            // 顺延太久（一直在开会 / 全屏）：不再突然盖屏，降级成宠物提醒。
+            // 顺延太久（一直在开会 / 全屏）：不再突然盖屏，降级成宠物提醒。一起到点的事并进同一张卡片，不再另弹一张。
             ReminderScheduler.reset(item.id, runtime: &runtime, now: now)
+            for other in alsoDue { ReminderScheduler.reset(other.id, runtime: &runtime, now: now) }
+            var body = item.restTitle
+            let extras = Self.foldLines(alsoDue)
+            if !extras.isEmpty { body += "\n" + L("focus.alsoLine \(extras.joined(separator: L("focus.listSeparator")))") }
             let id = item.id
             NotifyCenter.shared.post(PetNotification(
-                source: Self.source, level: .bubble, title: L("focus.downgrade.title"), body: item.restTitle,
+                source: Self.source, level: .bubble, title: L("focus.downgrade.title"), body: body,
                 actions: [.init(id: "ok", label: L("focus.action.ok"), role: .primary),
                           .init(id: "now", label: L("focus.action.restNow"))],
                 icon: item.icon
             )) { action in
                 if action == "now" { FocusHealthController.shared.startRest(itemID: id) }
             }
-            if !alsoDue.isEmpty { fireBubbles(alsoDue, now: now) }
             changed(now)
             return
         }
         for other in alsoDue { ReminderScheduler.reset(other.id, runtime: &runtime, now: now) }
         if relaxed {
-            postRestBubble(item, extras: alsoDue.map(\.displayName), now: now)
+            postRestBubble(item, extras: Self.foldLines(alsoDue), now: now)
         } else {
-            presentRest(item, extras: alsoDue.map(\.displayName))
+            presentRest(item, extras: Self.foldLines(alsoDue))
         }
         changed(now)
     }
@@ -519,9 +559,10 @@ final class FocusHealthController: ObservableObject {
             let line = L("focus.alsoLine \(extras.joined(separator: L("focus.listSeparator")))")
             message = message.isEmpty ? line : message + "\n" + line
         }
-        let request = BreakRequest(title: item.restTitle, message: message, seconds: TimeInterval(item.restSeconds),
+        var request = BreakRequest(title: item.restTitle, message: message, seconds: TimeInterval(item.restSeconds),
                                    style: Self.stageStyle(FocusHealthSettings.strength),
                                    lookAway: item.preset == ReminderPreset.eye)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         let id = item.id
         stage.present(request) { outcome in
             FocusHealthController.shared.restEnded(itemID: id, outcome: outcome)
@@ -562,9 +603,10 @@ final class FocusHealthController: ObservableObject {
     func breakNow() {
         guard !stage.isBusy, !session.inFocus, !session.inBreak else { return }
         let base = items.first { $0.preset == ReminderPreset.rest }
-        let request = BreakRequest(title: L("focus.rest.title"), message: L("focus.rest.breakMessage"),
+        var request = BreakRequest(title: L("focus.rest.title"), message: L("focus.rest.breakMessage"),
                                    seconds: TimeInterval(base?.restSeconds ?? 300),
                                    style: Self.stageStyle(FocusHealthSettings.strength), lookAway: false)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         stage.present(request) { outcome in
             guard outcome == .completed else { return }
             FocusHealthController.shared.manualBreakDone()
@@ -596,9 +638,16 @@ final class FocusHealthController: ObservableObject {
             }
             return
         }
-        let request = BreakRequest(title: L("focus.preview.title"), message: L("focus.preview.message"),
+        // 预览也走「结束前确认本人」，在设置里就能把整套流程试一遍。
+        var request = BreakRequest(title: L("focus.preview.title"), message: L("focus.preview.message"),
                                    seconds: 10, style: Self.stageStyle(strength), lookAway: false)
+        request.confirmIdentity = Self.confirmsIdentity(request.style)
         stage.present(request) { _ in }
+    }
+
+    /// 休息画面结束前要不要确认本人：设置开着，且是拦截键鼠的画面（标准 / 严格档）。
+    private static func confirmsIdentity(_ style: BreakStageStyle) -> Bool {
+        FocusHealthSettings.confirmIdentity && style != .gentle
     }
 
     // MARK: - 暂停提醒

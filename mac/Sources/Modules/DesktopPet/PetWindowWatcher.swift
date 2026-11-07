@@ -14,12 +14,22 @@ struct PetLedge {
     }
 }
 
-/// 看屏幕上的 App 窗口，算出宠物能站的顶边（docs/desktop-pet/ROAM.md §2.1）。
+/// 屏幕上的一个普通 App 窗口（找空地时判断宠物挡住了谁，docs/desktop-pet/SETTLE.md §3）。
+struct PetWindowInfo {
+    let id: CGWindowID
+    /// 屏幕坐标，左下角原点。
+    let frame: NSRect
+    let pid: pid_t
+}
+
+/// 看屏幕上的 App 窗口，算出宠物能站的顶边（docs/desktop-pet/ROAM.md §2.1），顺带交出所有窗口的位置与所属 App。
 /// 只读窗口的位置与前后层级（`CGWindowListCopyWindowInfo`），不读标题和内容，不需要额外权限。
 /// 平时每秒刷一次；宠物站在窗口上 / 正在跳时每秒 10 次，窗口被拖动时跟得上。
 @MainActor
 final class PetWindowWatcher {
     private(set) var ledges: [PetLedge] = []
+    /// 普通 App 窗口，从前往后（不含 Baobox 自己的）。
+    private(set) var windows: [PetWindowInfo] = []
     private var timer: Timer?
     private var interval: TimeInterval = 0
 
@@ -39,6 +49,7 @@ final class PetWindowWatcher {
         timer?.invalidate()
         timer = nil
         ledges = []
+        windows = []
     }
 
     private func schedule() {
@@ -54,19 +65,20 @@ final class PetWindowWatcher {
     }
 
     func refresh() {
-        ledges = Self.readLedges()
+        (ledges, windows) = Self.read()
     }
 
     /// 窗口列表从前往后：每个窗口的顶边减去它前面那些窗口挡住的部分（顶边本身和上方一小段都要空着）。
-    private static func readLedges() -> [PetLedge] {
+    private static func read() -> ([PetLedge], [PetWindowInfo]) {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]],
-              let primary = NSScreen.screens.first else { return [] }
+              let primary = NSScreen.screens.first else { return ([], []) }
         let primaryHeight = primary.frame.height
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let screenFrames = NSScreen.screens.map(\.frame)
         var occluders: [NSRect] = []
         var result: [PetLedge] = []
+        var windows: [PetWindowInfo] = []
         for info in list {
             guard (info[kCGWindowLayer as String] as? Int) == 0,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
@@ -76,6 +88,7 @@ final class PetWindowWatcher {
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { continue }
             // CG 的窗口坐标原点在主屏左上角、y 朝下。
             let frame = NSRect(x: cg.minX, y: primaryHeight - cg.maxY, width: cg.width, height: cg.height)
+            if frame.width >= 40, frame.height >= 30 { windows.append(PetWindowInfo(id: number, frame: frame, pid: pid)) }
             defer { occluders.append(frame) }
             // 太小的（工具条、弹窗）、全屏的不站。
             guard frame.width >= 160, frame.height >= 100,
@@ -88,7 +101,7 @@ final class PetWindowWatcher {
             segments = segments.filter { $0.upperBound - $0.lowerBound >= 50 }
             if !segments.isEmpty { result.append(PetLedge(id: number, frame: frame, segments: segments)) }
         }
-        return result
+        return (result, windows)
     }
 
     private static func subtract(_ cut: ClosedRange<CGFloat>, from segments: [ClosedRange<CGFloat>]) -> [ClosedRange<CGFloat>] {

@@ -121,6 +121,21 @@ enum VRMMotion {
             Definition(name: "land", duration: 0.5, plant: both, pose: landing),
             Definition(name: "lie_prone", duration: 3.0) { t in lieProne(t, body: body) },
             Definition(name: "pout", duration: 2.4, plant: [.left], pose: pout),
+            // 第三批（试用反馈「走来走去碍事，站着不动又单调」：找个空地待着，以原地动作为主）。
+            // 待机站姿：长时间站着时轮换，循环播，首尾无缝（周期 = 时长）；不带表情，自动眨眼照常。
+            Definition(name: "idle_hands_behind", duration: 4.0, plant: both, pose: idleHandsBehind),
+            Definition(name: "idle_arms_crossed", duration: 4.4, plant: both, pose: idleArmsCrossed),
+            Definition(name: "idle_hands_front", duration: 4.0, plant: both, pose: idleHandsFront),
+            Definition(name: "idle_hip", duration: 4.6, plant: both, pose: idleHip),
+            // 原地小动作：从 idle 出发、回到 idle。脚尖离地的那只脚自己钉（plantFoot），所以不在 plant 里。
+            Definition(name: "rock_heels", duration: 2.6) { t in rockHeels(t, body: body) },
+            Definition(name: "kick_ground", duration: 2.4, plant: [.left]) { t in kickGround(t, body: body) },
+            Definition(name: "fix_hair", duration: 2.4, plant: both, pose: fixHair),
+            Definition(name: "look_up", duration: 2.8, plant: both, pose: lookUp),
+            Definition(name: "hum_bounce", duration: 3.2, plant: both, pose: humBounce),
+            Definition(name: "arms_cross_tap", duration: 3.0, plant: [.left]) { t in armsCrossTap(t, body: body) },
+            Definition(name: "neck_stretch", duration: 2.8, plant: both, pose: neckStretch),
+            Definition(name: "peek", duration: 2.4, plant: both, pose: peek),
         ]
     }
 
@@ -928,6 +943,263 @@ enum VRMMotion {
         }
         p.expressions["happy"] = Float(e)
         return p
+    }
+
+    // MARK: - 第三批：待机站姿（循环，周期 = 时长）
+
+    /// 双手背在身后，胸口微微挺起、头稍歪；呼吸、重心轻移与 idle 相同。
+    static func idleHandsBehind(_ t: Double) -> VRMPose {
+        let breath = sin(2 * Double.pi * t / 4)
+        var p = idle(t)
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: -74 + 0.8 * breath, forward: -32, elbow: 55, twist: 85)
+        }
+        p.rotations["chest"] = qx(-2.5) * p.rotation("chest")
+        p.rotations["head"] = qz(4) * p.rotation("head")
+        return p
+    }
+
+    /// 双臂抱在胸前（左小臂压在右小臂上），重心左右慢慢移（比 idle 明显一点）。
+    static func idleArmsCrossed(_ t: Double) -> VRMPose {
+        let period = 4.4
+        let phase = 2 * Double.pi * t / period
+        let shift = sin(phase + 0.8)
+        var p = idle(t * 4 / period)
+        crossArms(&p, weight: 1, breath: sin(phase))
+        p.hips.x += Float(0.012 * shift)
+        p.rotations["hips"] = qz(2 * shift) * p.rotation("hips")
+        p.rotations["spine"] = qz(-2 * shift) * p.rotation("spine")
+        p.rotations["head"] = qz(-1.5 * shift) * p.rotation("head")
+        return p
+    }
+
+    /// 双手在腹前交握，头微微低、稍歪（乖巧地站着）。
+    static func idleHandsFront(_ t: Double) -> VRMPose {
+        let breath = sin(2 * Double.pi * t / 4)
+        var p = idle(t)
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: -68 + 0.8 * breath, forward: 25, elbow: 74, twist: 50)
+        }
+        p.rotations["head"] = qz(2.5) * qx(2) * p.rotation("head")
+        return p
+    }
+
+    /// 重心落在右腿：胯往右顶、右胯高，肩膀反过来右低左高，右手叉腰；左膝由钉脚自然松弯。
+    static func idleHip(_ t: Double) -> VRMPose {
+        let period = 4.6
+        let breath = sin(2 * Double.pi * t / period)
+        var p = idle(t * 4 / period)
+        p.hips += SIMD3(-0.045, -0.018, 0)
+        p.rotations["hips"] = qz(-7) * p.rotation("hips")
+        p.rotations["spine"] = qz(4) * p.rotation("spine")
+        p.rotations["chest"] = qz(4) * p.rotation("chest")
+        p.rotations["head"] = qz(-2) * qy(-4) * p.rotation("head")
+        p.arm(.right, elevation: -50 + 0.6 * breath, forward: -16, elbow: 96, twist: 70)
+        p.arm(.left, elevation: -74 + breath, forward: 8, elbow: 14)
+        return p
+    }
+
+    /// 抱臂：weight 0 = 垂手，1 = 抱好（左小臂在上、靠前，右小臂在下、贴身）。
+    static func crossArms(_ p: inout VRMPose, weight w: Double, breath: Double = 0) {
+        p.arm(.left, elevation: lerp(-72, -59 + 0.6 * breath, w), forward: lerp(6, 62, w), elbow: lerp(12, 100, w), twist: 45 * w)
+        p.arm(.right, elevation: lerp(-72, -62 + 0.6 * breath, w), forward: lerp(6, 52, w), elbow: lerp(12, 105, w), twist: 50 * w)
+    }
+
+    // MARK: - 第三批：原地小动作（从 idle 出发、回到 idle）
+
+    /// 背着手踮脚尖、落脚跟，前后摇两个来回：踮起时人往前送、升高，落到脚跟时脚尖翘起、身子往后靠。
+    static func rockHeels(_ t: Double, body: VRMBody) -> VRMPose {
+        let e = envelope(t, 2.6, rise: 0.4, fall: 0.5)
+        // +1 = 踮在前脚掌上，−1 = 落在脚跟上。
+        let rock = sin(2 * Double.pi * (t - 0.45) / 0.85) * ramp(t, 0.35, 0.6) * (1 - ramp(t, 1.95, 2.25))
+        let toe = rock > 0 ? 28 * rock : 16 * rock
+        let lean = rock > 0 ? 5 * rock : 3 * rock
+        let ankle = ankleLift(toe: toe, body: body)
+        var p = idle(t)
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: lerp(-72, -74, e), forward: lerp(6, -32, e), elbow: lerp(12, 55, e), twist: 85 * e)
+        }
+        p.rotations["hips"] = qx(lean) * p.rotation("hips")
+        p.rotations["chest"] = qx(-3 * e) * p.rotation("chest")
+        // 整个人绕踝前后倾：hips 跟着踝挪，再加上倾斜带出的位移；比够得着的高度低一点，膝盖不会绷死。
+        let lever = body.hipsHeight - body.ankle
+        p.hips += SIMD3(0, ankle.y - Float(0.004 * abs(rock)), ankle.z + lever * sinf(Float(lean * .pi / 180)))
+        for side in [VRMSide.left, .right] {
+            plantFoot(&p, body: body, side: side, ankle: ankle, toe: toe)
+        }
+        p.shrug(4 * max(0, rock))
+        p.rotations["head"] = qz(9 * sin(2 * Double.pi * (t - 0.45) / 1.7) * e) * qx(-6 * max(0, rock)) * p.rotation("head")
+        p.expressions["happy"] = Float(0.5 * e)
+        return p
+    }
+
+    /// 低着头、两手在身前握着，右脚前掌贴地来回蹭两下（脚跟抬起，踝基本不挪；腿的动作小，大腿不往前抬）。
+    static func kickGround(_ t: Double, body: VRMBody) -> VRMPose {
+        let e = envelope(t, 2.4, rise: 0.4, fall: 0.5)
+        var p = idle(t)
+        // 重心移到左腿：胯往左挪。右胯不往下沉 —— 沉了右腿更短、膝盖更弯，大腿就往前抬了。
+        p.hips += SIMD3(Float(0.025 * e), Float(-0.002 * e), 0)
+        p.rotations["spine"] = qz(-4 * e) * qx(4 * e) * p.rotation("spine")
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: lerp(-72, -78, e), forward: lerp(6, 18, e), elbow: lerp(12, 45, e), twist: 55 * e)
+        }
+        p.shrug(4 * e)
+        p.bend("neck", pitch: 6 * e)
+        p.rotations["head"] = qx(14 * e) * qy(-6 * e) * p.rotation("head")
+        // 每下 0.7 s：脚跟抬起，前掌贴着地往后蹭、再蹭回来（前掌高度由 ankleLift 保证贴地；踝始终不超过静止位置往前）。
+        var toe = 0.0
+        var back = 0.0
+        var rub = 0.0
+        for start in [0.5, 1.2] {
+            let s = min(max((t - start) / 0.7, 0), 1)
+            toe += 18 * sin(Double.pi * s)
+            back += 0.06 * sin(Double.pi * s) + 0.035 * sin(2 * Double.pi * s)
+            rub += sin(2 * Double.pi * s)
+        }
+        var ankle = ankleLift(toe: toe, body: body)
+        ankle.z = Float(-back) * (body.thigh + body.shin)
+        plantFoot(&p, body: body, side: .right, ankle: ankle, toe: toe)
+        p.rotations["spine"] = qz(-2.5 * rub * e) * p.rotation("spine")
+        return p
+    }
+
+    /// 右手抬到鬓角，把头发往后别到耳后，再顺着头发往外一撩放开；头跟着往右歪，微笑。
+    static func fixHair(_ t: Double) -> VRMPose {
+        let w = ramp(t, 0, 0.5) * (1 - ramp(t, 1.85, 2.4))
+        let tuck = ramp(t, 0.65, 1.2)
+        let flick = ramp(t, 1.3, 1.65)
+        var p = idle(t)
+        let elevation = lerp(lerp(-18, -10, tuck), -30, flick)
+        let forward = lerp(lerp(39, 25, tuck), 28, flick)
+        let elbow = lerp(lerp(143, 150, tuck), 130, flick)
+        let twist = lerp(-80, -70, flick)
+        p.arm(.right, elevation: lerp(-72, elevation, w), forward: lerp(6, forward, w), elbow: lerp(12, elbow, w), twist: twist * w)
+        let tilt = w * (0.6 + 0.4 * tuck - 0.5 * flick)
+        p.rotations["head"] = qz(12 * tilt) * qy(-6 * w) * p.rotation("head")
+        p.rotations["spine"] = qz(-3 * w) * p.rotation("spine")
+        p.expressions["relaxed"] = Float(0.6 * w)
+        return p
+    }
+
+    /// 抬头远眺：右手手掌平搭在眉上遮光，头和上身慢慢从左转到右，胸口往上挺。
+    static func lookUp(_ t: Double) -> VRMPose {
+        let e = envelope(t, 2.8, rise: 0.5, fall: 0.6)
+        let scan = 20 * (1 - 2 * ramp(t, 0.8, 2.1)) * e
+        var p = idle(t)
+        p.arm(.right, elevation: lerp(-72, 42, e), forward: lerp(6, 45, e), elbow: lerp(12, 94, e), twist: -63 * e)
+        p.hand(.right, .open, weight: e)
+        p.rotations["rightHand"] = qz(50 * e) * p.rotation("rightHand")
+        p.rotations["chest"] = qy(0.55 * scan) * qx(-5 * e) * p.rotation("chest")
+        p.rotations["neck"] = qy(0.15 * scan) * qx(-6 * e) * p.rotation("neck")
+        p.rotations["head"] = qy(0.3 * scan) * qx(-13 * e) * p.rotation("head")
+        return p
+    }
+
+    /// 哼着歌一颠一颠：膝盖跟着拍子小幅颠、点头，两臂弯着前后摆，身子左右晃，眯眼笑。
+    static func humBounce(_ t: Double) -> VRMPose {
+        let e = envelope(t, 3.2, rise: 0.4, fall: 0.5)
+        let phase = 2 * Double.pi * t / 0.64
+        let bounce = (0.5 - 0.5 * cos(phase)) * e
+        let swing = sin(phase / 2) * e
+        var p = idle(t)
+        p.hips.y += Float(-0.02 * bounce)
+        p.hips.x += Float(0.026 * swing)
+        p.rotations["hips"] = qz(-4 * swing) * p.rotation("hips")
+        p.rotations["spine"] = qz(6 * swing) * p.rotation("spine")
+        p.rotations["head"] = qx(9 * bounce) * qz(8 * swing) * p.rotation("head")
+        p.arm(.left, elevation: lerp(-72, -58, e), forward: 6 + 28 * swing, elbow: lerp(12, 50, e))
+        p.arm(.right, elevation: lerp(-72, -58, e), forward: 6 - 28 * swing, elbow: lerp(12, 50, e))
+        p.expressions["relaxed"] = Float(0.8 * e)
+        return p
+    }
+
+    /// 抱着胳膊不耐烦：右脚尖一下一下点地（脚跟着地、前掌抬起落下），头歪着往旁边看、跟着点，最后放下手。
+    static func armsCrossTap(_ t: Double, body: VRMBody) -> VRMPose {
+        let e = envelope(t, 3.0, rise: 0.5, fall: 0.6)
+        let tap = [0.95, 1.3, 1.65, 2.0].map { bump(t, at: $0, width: 0.3) }.reduce(0, +)
+        var p = idle(t)
+        crossArms(&p, weight: e)
+        p.hips += SIMD3(Float(0.015 * e), Float(-0.006 * e - 0.004 * tap), 0)
+        p.rotations["hips"] = qz(3 * e) * p.rotation("hips")
+        p.rotations["head"] = qx(4 * tap) * qz(-10 * e) * qy(14 * e) * p.rotation("head")
+        let toe = -26 * tap
+        plantFoot(&p, body: body, side: .right, ankle: ankleLift(toe: toe, body: body), toe: toe)
+        p.expressions["angry"] = Float(0.35 * e)
+        return p
+    }
+
+    /// 活动脖子和肩膀：右手举过头顶搭到头的左侧，把头往右拉（侧颈拉伸）；
+    /// 放开后双手握拳搭在肩上，手肘往前、上、后画两圈（广播体操的转肩）。
+    static func neckStretch(_ t: Double) -> VRMPose {
+        let up = ramp(t, 0.15, 0.5) * (1 - ramp(t, 1.15, 1.45))
+        // 先举高再弯肘搭过去、先松开再放下：手从头顶上方绕，不穿过头。
+        let fold = ramp(t, 0.3, 0.65) * (1 - ramp(t, 1.0, 1.25))
+        let tilt = ramp(t, 0.45, 0.85) * (1 - ramp(t, 1.05, 1.4))
+        let fists = ramp(t, 1.3, 1.55) * (1 - ramp(t, 2.4, 2.8))
+        let circle = ramp(t, 1.45, 1.6) * (1 - ramp(t, 2.3, 2.45))
+        let theta = 2 * Double.pi * (t - 1.5) / 0.45
+        var p = idle(t)
+        let e0 = lerp(-72, -22 - 20 * cos(theta) * circle, fists)
+        let f0 = lerp(6, 20 + 30 * sin(theta) * circle, fists)
+        let el0 = lerp(12, 150, fists)
+        let tw0 = -90 * fists
+        p.arm(.left, elevation: e0, forward: f0, elbow: el0, twist: tw0)
+        // 小臂从头顶偏后绕过去（头上有帽子、发饰时不穿过去），手搭在头的左后侧。
+        p.arm(.right, elevation: lerp(e0, 58, up), forward: lerp(f0, -20, up), elbow: lerp(lerp(el0, 15, up), 105, fold),
+              twist: lerp(tw0, -95, up))
+        for side in [VRMSide.left, .right] {
+            p.hand(side, .fist, weight: fists)
+            p.rotations[side.name + "Hand"] = qz(-side.sign * 70 * fists) * p.rotation(side.name + "Hand")
+        }
+        p.shrug(8 * fists + 6 * (0.5 - 0.5 * cos(theta)) * circle)
+        // 头歪 20° 左右封顶：长头发没有物理，再歪就整片硬邦邦地甩出去（与 tilt_head 同一量级）。
+        p.rotations["neck"] = qz(4 * tilt) * p.rotation("neck")
+        p.rotations["head"] = qz(16 * tilt) * p.rotation("head")
+        p.expressions["relaxed"] = Float(0.6 * max(tilt, fists))
+        return p
+    }
+
+    /// 探头偷看：上身往右侧大幅探出去（胯往左让保持平衡），头往那边转、带点好奇，右手抬到脸旁像扶着墙角，探两下再回来。
+    static func peek(_ t: Double) -> VRMPose {
+        let e = envelope(t, 2.4, rise: 0.5, fall: 0.6)
+        let bob = bump(t, at: 1.05, width: 0.35) + bump(t, at: 1.45, width: 0.35)
+        let lean = (30 + 6 * bob) * e
+        var p = idle(t)
+        // 从胯开始整个上身往右歪（胯也跟着歪一点），胯往左让、压低一点，两只脚才都钉得住。
+        p.hips += SIMD3(Float(0.042 * e), Float(-0.014 * e), 0)
+        p.rotations["hips"] = qz(0.15 * lean) * p.rotation("hips")
+        p.rotations["spine"] = qz(0.4 * lean) * qy(-8 * e) * p.rotation("spine")
+        p.rotations["chest"] = qz(0.35 * lean) * p.rotation("chest")
+        p.rotations["neck"] = qz(0.1 * lean) * p.rotation("neck")
+        // 头往回摆正一半：探出去的是身子，头只歪 15° 上下（长头发不甩成一整片）。
+        p.rotations["head"] = qz(-0.45 * lean) * qy(-18 * e) * qx(-4 * e) * p.rotation("head")
+        p.arm(.right, elevation: lerp(-72, -12, e), forward: lerp(6, 62, e), elbow: lerp(12, 108, e), twist: 10 * e)
+        p.arm(.left, elevation: lerp(-72, -60, e), forward: lerp(6, -12, e), elbow: lerp(12, 24, e))
+        p.hand(.left, .open, weight: 0.5 * e)
+        p.expressions["surprised"] = Float(0.3 * e)
+        return p
+    }
+
+    // MARK: - 第三批：脚尖 / 脚跟离地时的钉脚
+
+    /// 钉脚的变体：踝的目标从静止位置挪开 ankle（规范化空间，模型单位），脚掌再转 toe 度（正 = 脚尖朝下、脚跟抬起）。
+    /// 踮脚、前掌蹭地、脚尖点地用；ankle 由 `ankleLift` 算，前脚掌（或脚跟）就留在地上。
+    static func plantFoot(_ p: inout VRMPose, body: VRMBody, side: VRMSide, ankle: SIMD3<Float>, toe: Double) {
+        var shifted = p
+        shifted.hips -= ankle
+        plantFeet(&shifted, body: body, sides: [side])
+        p.rotations[side.name + "UpperLeg"] = shifted.rotation(side.name + "UpperLeg")
+        p.rotations[side.name + "LowerLeg"] = shifted.rotation(side.name + "LowerLeg")
+        p.rotations[side.name + "Foot"] = shifted.rotation(side.name + "Foot") * qx(toe)
+    }
+
+    /// 脚掌绕前脚掌（toe > 0，脚跟抬起）或脚跟（toe < 0，脚尖翘起）转 toe 度时，踝从静止位置挪了多少。
+    /// 踝高从模型量；前脚掌、脚跟到踝的水平距离按腿长估（VRoid 实测前脚掌约 0.16 腿长、脚跟约 0.06）。
+    static func ankleLift(toe: Double, body: VRMBody) -> SIMD3<Float> {
+        let leg = body.thigh + body.shin
+        let a = Float(toe * .pi / 180)
+        let pivot = toe >= 0 ? 0.16 * leg : -0.06 * leg
+        return SIMD3(0, body.ankle * (cosf(a) - 1) + pivot * sinf(a), body.ankle * sinf(a) + pivot * (1 - cosf(a)))
     }
 }
 

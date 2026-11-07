@@ -83,6 +83,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）+ `RECENT_FILES.md`（最近文件增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态）。2026-11 起是菜单栏一级入口（`ScreenDrawTool`），代码仍在 Screenshot 目录、与截图共用标注引擎。
+- `docs/desktop-pet/` —— 桌面宠物：DESIGN（总设计）、INTERACTION、PACKS（素材包）、ROAM（活动范围 / 跳窗口）、VRM（二次元人形 + 程序化动作）、ENTRANCE（黑洞出场 / 退场）、SETTLE（找个不碍事的地方待着 + 原地动作）、WAKE（系统睡眠唤醒、动画重建与看门狗，日志 category `pet`）。
 - `docs/focus-health/` —— 专注与健康 REQUIREMENTS + TECH_DESIGN：计时规则（用电脑的时间 / 实际时间 / 固定时刻、自然休息）、专注—休息状态机、避让与撞车、休息画面（借宠物渲染视图放大、拦截边界、看门狗）。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/meeting/` —— 会议 REQUIREMENTS + TECH_DESIGN（§9 第一段落地记录：引擎配置、混音与说话人、结束冲刷、会议库；§10 第二段：日历、提醒、检测状态机、会议库窗口、周报、自检、菜单迁移）。
