@@ -355,27 +355,30 @@ pub fn run(show_settings: bool) -> Result<String, String> {
     Ok("已退出。".to_string())
 }
 
+thread_local! {
+    static IN_HANDLER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    thread_local! {
-        static IN_HANDLER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
     struct HandlerGuard;
     impl Drop for HandlerGuard {
         fn drop(&mut self) {
             IN_HANDLER.set(false);
         }
     }
+    // TrackPopupMenu requests measurement and drawing before the tray callback returns.
+    if let Some(result) = tray::paint_menu(message, lparam) {
+        return result;
+    }
     // 原生菜单和模态窗口会嵌套消息循环，期间不能再次借用 App。
     if IN_HANDLER.replace(true) {
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
     let _guard = HandlerGuard;
-    if let Some(result) = tray::paint_menu(message, lparam) { return result; }
     let pointer = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
         hwnd,
         windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
@@ -507,6 +510,17 @@ fn write_field<const N: usize>(buffer: &mut [u16; N], text: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_menu_can_measure_rows_inside_the_tray_callback() {
+        use windows::Win32::UI::WindowsAndMessaging::WM_MEASUREITEM;
+        IN_HANDLER.set(true);
+        let height = crate::tray::measure_test_row(|item| unsafe {
+            wndproc(HWND::default(), WM_MEASUREITEM, WPARAM(0), item)
+        });
+        IN_HANDLER.set(false);
+        assert!(height > 0);
+    }
+
     use super::*;
 
     #[test]

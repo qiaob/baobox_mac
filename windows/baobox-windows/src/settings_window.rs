@@ -63,6 +63,7 @@ use windows::Win32::UI::Controls::{
     ODS_FOCUS, ODS_SELECTED, TBM_GETTHUMBRECT, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN,
     TBS_NOTICKS, UDM_SETPOS32, UDM_SETRANGE32, UDS_SETBUDDYINT,
 };
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// 设置窗口类名。
@@ -184,23 +185,8 @@ pub fn open(
         )
         .map_err(|e| format!("创建设置窗口失败：{e}"))?;
 
-        let font = CreateFontW(
-            -14,
-            0,
-            0,
-            0,
-            400,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            4,
-            0,
-            w!("Microsoft YaHei UI"),
-        );
-        let title_font = title_font();
+        let font = settings_font(-15, FW_NORMAL.0 as i32);
+        let title_font = settings_font(-16, FW_SEMIBOLD.0 as i32);
         config.set_bool("general", "autostart", starts_at_login());
         let mut state = Box::new(SettingsState {
             controls: Vec::new(),
@@ -547,7 +533,8 @@ unsafe fn build(
                     instance,
                     w!("COMBOBOX"),
                     "",
-                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | CBS_DROPDOWNLIST as u32,
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0
+                        | (CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS) as u32,
                     control_x,
                     y,
                     CONTROL_WIDTH,
@@ -555,7 +542,7 @@ unsafe fn build(
                     id,
                     state.font,
                 );
-                let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+                style_combo(hwnd);
                 for (index, (stored, title)) in options.iter().enumerate() {
                     let text = wide(title);
                     SendMessageW(
@@ -862,29 +849,6 @@ pub unsafe fn message_font() -> HFONT {
     } else {
         HFONT::default()
     }
-}
-
-/// 页标题的字体：消息字体放大到 1.4 倍并加粗。
-pub unsafe fn title_font() -> HFONT {
-    let mut metrics = NONCLIENTMETRICSW {
-        cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-        ..Default::default()
-    };
-    let ok = SystemParametersInfoW(
-        SPI_GETNONCLIENTMETRICS,
-        metrics.cbSize,
-        Some(&mut metrics as *mut _ as *mut _),
-        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-    )
-    .is_ok();
-    if !ok {
-        return HFONT::default();
-    }
-    let mut logfont = metrics.lfMessageFont;
-    // lfHeight 是负数（按字符高度匹配），同比例放大就是乘过去
-    logfont.lfHeight = logfont.lfHeight * 14 / 10;
-    logfont.lfWeight = FW_BOLD.0 as i32;
-    CreateFontIndirectW(&logfont)
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -1198,6 +1162,145 @@ unsafe fn draw_nav(item: &DRAWITEMSTRUCT, state: &SettingsState) {
     SelectObject(dc, old);
 }
 
+unsafe fn settings_font(height: i32, weight: i32) -> HFONT {
+    CreateFontW(
+        height,
+        0,
+        0,
+        0,
+        weight,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET.0.into(),
+        0,
+        0,
+        CLEARTYPE_NATURAL_QUALITY,
+        0,
+        w!("Microsoft YaHei UI"),
+    )
+}
+
+unsafe fn style_combo(hwnd: HWND) {
+    let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+    SendMessageW(hwnd, CB_SETITEMHEIGHT, WPARAM(usize::MAX), LPARAM(22));
+    SendMessageW(hwnd, CB_SETITEMHEIGHT, WPARAM(0), LPARAM(28));
+    let _ = SetWindowSubclass(hwnd, Some(combo_proc), 1, 0);
+}
+
+unsafe fn combo_text(hwnd: HWND, index: usize) -> Vec<u16> {
+    let len = SendMessageW(hwnd, CB_GETLBTEXTLEN, WPARAM(index), LPARAM(0)).0;
+    if len < 0 {
+        return Vec::new();
+    }
+    let mut text = vec![0; len as usize + 1];
+    SendMessageW(
+        hwnd,
+        CB_GETLBTEXT,
+        WPARAM(index),
+        LPARAM(text.as_mut_ptr() as isize),
+    );
+    text.truncate(len as usize);
+    text
+}
+
+unsafe fn draw_combo_text(dc: HDC, font: HFONT, mut text: Vec<u16>, mut bounds: RECT) {
+    bounds.left += 10;
+    bounds.right -= 8;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, TEXT);
+    let old = SelectObject(dc, font);
+    DrawTextW(
+        dc,
+        &mut text,
+        &mut bounds,
+        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+    );
+    SelectObject(dc, old);
+}
+
+unsafe fn draw_combo_item(item: &DRAWITEMSTRUCT, font: HFONT) {
+    let bounds = item.rcItem;
+    let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+    fill(item.hDC, bounds, PANEL);
+    if selected {
+        rounded(
+            item.hDC,
+            rect(
+                bounds.left + 3,
+                bounds.top + 1,
+                bounds.right - 3,
+                bounds.bottom - 1,
+            ),
+            8,
+            BLUE,
+            BLUE,
+        );
+    }
+    draw_combo_text(
+        item.hDC,
+        font,
+        combo_text(item.hwndItem, item.itemID as usize),
+        bounds,
+    );
+}
+
+unsafe extern "system" fn combo_proc(
+    hwnd: HWND,
+    message: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    id: usize,
+    _: usize,
+) -> LRESULT {
+    if message == WM_NCDESTROY {
+        let _ = RemoveWindowSubclass(hwnd, Some(combo_proc), id);
+    }
+    if message != WM_PAINT {
+        let result = DefSubclassProc(hwnd, message, wp, lp);
+        if matches!(
+            message,
+            CB_SETCURSEL | CB_SHOWDROPDOWN | WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN | WM_LBUTTONUP
+        ) {
+            let _ = InvalidateRect(hwnd, None, false);
+        }
+        return result;
+    }
+    let mut paint = PAINTSTRUCT::default();
+    let dc = BeginPaint(hwnd, &mut paint);
+    let mut bounds = RECT::default();
+    let _ = GetClientRect(hwnd, &mut bounds);
+    let focused = windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() == hwnd;
+    fill(dc, bounds, PANEL);
+    rounded(
+        dc,
+        bounds,
+        9,
+        COLORREF(0x383837),
+        if focused { BLUE } else { COLORREF(0x4a4a49) },
+    );
+    let font = HFONT(SendMessageW(hwnd, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as _);
+    let index = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
+    draw_combo_text(
+        dc,
+        font,
+        combo_text(hwnd, index),
+        rect(0, 0, bounds.right - 22, bounds.bottom),
+    );
+
+    let x = bounds.right - 14;
+    let y = bounds.bottom / 2;
+    let pen = CreatePen(PS_SOLID, 2, MUTED);
+    let old = SelectObject(dc, pen);
+    let _ = MoveToEx(dc, x - 4, y - 2, None);
+    let _ = LineTo(dc, x, y + 2);
+    let _ = LineTo(dc, x + 5, y - 3);
+    SelectObject(dc, old);
+    let _ = DeleteObject(pen);
+    let _ = EndPaint(hwnd, &paint);
+    LRESULT(0)
+}
+
 unsafe fn draw_action(item: &DRAWITEMSTRUCT, font: HFONT) {
     let dc = item.hDC;
     let mut bounds = item.rcItem;
@@ -1293,6 +1396,8 @@ unsafe extern "system" fn wndproc(
             let item = &*(lparam.0 as *const DRAWITEMSTRUCT);
             if (NAV_ID..FIRST_CONTROL).contains(&(wparam.0 as i32)) {
                 draw_nav(item, state);
+            } else if item.CtlType == windows::Win32::UI::Controls::ODT_COMBOBOX {
+                draw_combo_item(item, state.font);
             } else if item.CtlID >= OPEN_PETS_ID as u32 {
                 draw_action(item, state.font);
             } else if let Some(bound) = state

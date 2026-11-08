@@ -318,6 +318,24 @@ pub unsafe fn paint_menu(message: u32, lp: LPARAM) -> Option<LRESULT> {
     }
     Some(LRESULT(1))
 }
+#[cfg(test)]
+pub(crate) fn measure_test_row(dispatch: impl FnOnce(LPARAM) -> LRESULT) -> u32 {
+    unsafe {
+        let mut paint = MenuPaint::new();
+        let row = paint.row("设置", None, None);
+        let mut item = MEASUREITEMSTRUCT {
+            CtlType: ODT_MENU,
+            itemData: row.0 as usize,
+            ..Default::default()
+        };
+        assert_eq!(
+            dispatch(LPARAM(&mut item as *mut MEASUREITEMSTRUCT as isize)),
+            LRESULT(1)
+        );
+        item.itemHeight
+    }
+}
+
 impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
