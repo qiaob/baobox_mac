@@ -1048,6 +1048,7 @@ unsafe fn scroll_to(hwnd: HWND, state: &mut SettingsState, target: i32) {
         );
     }
     configure_scrollbar(hwnd, state);
+    let _ = RedrawWindow(hwnd, None, None, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 pub(crate) fn page_icon(section: &str) -> u16 {
