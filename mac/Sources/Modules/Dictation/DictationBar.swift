@@ -20,6 +20,8 @@ final class DictationBarModel: ObservableObject {
     @Published var hint = ""
     /// 正在识别的文字（显示尾部一行）。
     @Published var preview = ""
+    /// 正在听、还没有文字时第二行的提示；空 = 「请开始说话…」（连续听写换成「说完一句停一下就上屏」）。
+    @Published var placeholder = ""
     @Published var level: Float = 0
     @Published var elapsed: TimeInterval = 0
 
@@ -221,7 +223,8 @@ struct DictationBarView: View {
     private var secondLine: String {
         switch model.phase {
         case .listening:
-            return model.preview.isEmpty ? L("dictation.bar.placeholder") : model.preview
+            guard model.preview.isEmpty else { return model.preview }
+            return model.placeholder.isEmpty ? L("dictation.bar.placeholder") : model.placeholder
         case .working:
             return model.preview
         case .result(_, let detail):

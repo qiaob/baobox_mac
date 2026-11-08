@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 
 /// 语音听写设置（需求 §7）：唤起方式、识别、文本处理、AI 润色、插入、录音条、历史、术语表、权限。
 struct DictationSettingsView: View {
-    @AppStorage(DictationSettings.languageKey) private var language = DictationLanguageSetting.follow.rawValue
-    @AppStorage(DictationSettings.pauseKey) private var pauseSeconds = 3
+    @AppStorage(DictationSettings.languageKey) private var language = DictationLanguageSetting.auto.rawValue
+    @AppStorage(DictationSettings.pauseKey) private var pauseSeconds = DictationSettings.defaultPauseSeconds
     @AppStorage(DictationSettings.onDeviceKey) private var onDevice = true
     @AppStorage(DictationSettings.voiceCommandsKey) private var voiceCommands = true
     @AppStorage(DictationSettings.fillerFilterKey) private var fillerFilter = true
@@ -43,10 +43,10 @@ struct DictationSettingsView: View {
 
             Section("dictation.settings.recognitionSection") {
                 Picker("dictation.settings.language", selection: $language) {
+                    Text("dictation.language.auto").tag(DictationLanguageSetting.auto.rawValue)
                     Text(verbatim: followTitle).tag(DictationLanguageSetting.follow.rawValue)
                     Text("dictation.language.chinese").tag(DictationLanguageSetting.chinese.rawValue)
                     Text("dictation.language.english").tag(DictationLanguageSetting.english.rawValue)
-                    Text("dictation.language.auto").tag(DictationLanguageSetting.auto.rawValue)
                 }
                 Text("dictation.settings.languageHelp")
                     .font(.caption)

@@ -6,6 +6,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let registry: ToolRegistry
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
+    /// 状态栏菜单开着（只在主线程读写）。连续听写据此推迟上屏：菜单 tracking 时合成的 ⌘V / 退格会被菜单吃掉。
+    private(set) static var isMenuOpen = false
 
     init(registry: ToolRegistry) {
         self.registry = registry
@@ -47,12 +49,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// 此时收不到（「菜单开着按快捷键无反应」）。tap 在 HID 层捕获，命中即收起菜单并触发。
     nonisolated func menuWillOpen(_ menu: NSMenu) {
         guard Thread.isMainThread else { return }
-        MainActor.assumeIsolated { HotkeyCenter.shared.beginMenuTrackingCapture() }
+        MainActor.assumeIsolated {
+            StatusItemController.isMenuOpen = true
+            HotkeyCenter.shared.beginMenuTrackingCapture()
+        }
     }
 
     nonisolated func menuDidClose(_ menu: NSMenu) {
         guard Thread.isMainThread else { return }
-        MainActor.assumeIsolated { HotkeyCenter.shared.endMenuTrackingCapture() }
+        MainActor.assumeIsolated {
+            StatusItemController.isMenuOpen = false
+            HotkeyCenter.shared.endMenuTrackingCapture()
+        }
     }
 
     /// 收起可能正打开的状态栏菜单。供全局热键触发前调用（见 `HotkeyCenter.onWillFireAction`），

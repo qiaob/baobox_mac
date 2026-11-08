@@ -273,21 +273,22 @@ final class DictationMicrophone {
 ///
 /// - 低延迟：识别器对象在模块启用时就建好（`prewarm`）；开始时先建请求再开麦克风，音频一到就喂。
 /// - 结束：停麦克风 → endAudio → 等 final（最多 2 秒，超时用最后一次 partial）。
-/// - 分段：整句模式只在满 50 秒时换段（防触到单次请求的时长上限）；长听写每次停顿 ≥ 1.2 秒或满 50 秒收一段。
+/// - 分段：整句模式（按住说话）只在满 50 秒时换段（防触到单次请求的时长上限）；分段模式（长听写、连续听写）
+///   每次停顿 ≥ 1.2 秒或满 50 秒收一段，一段段交出。
 /// - 自动判别（两种语言）：每段录音留着；定稿后平均置信度 < 0.45（或有人声却没认出字）就拿录音给另一种语言重认，
 ///   按实时翻译的打分（置信度 × 文字系统吻合度 × 字数密度）取高的那份，并换成它接着听。
 @MainActor
 final class DictationRecognizer {
     enum Mode {
-        /// 按住说话 / 点按切换：结束时一次交出整段。
+        /// 按住说话：结束时一次交出整段。
         case utterance
-        /// 长听写：一段段交出（`onSegment`）。
-        case long
+        /// 长听写（进收集面板）/ 连续听写（逐句上屏）：按停顿切段，一段段交出（`onSegment`）。
+        case segmented
     }
 
-    /// 预览变了：整句模式 = 已定稿的各段 + 正在说的这段；长听写 = 正在说的这段。
+    /// 预览变了：整句模式 = 已定稿的各段 + 正在说的这段；分段模式 = 正在说的这段。
     var onPreview: ((String) -> Void)?
-    /// 长听写：一段定稿了（已做过语种重认）。
+    /// 分段模式：一段定稿了（已做过语种重认）。
     var onSegment: ((String, TranslationLanguage) -> Void)?
     /// 不可恢复的失败（已自行停下）。整句模式下已经定稿的那几段一并交出（不丢字），没有为 nil。
     var onFailure: ((String, DictationTranscript?) -> Void)?
@@ -334,7 +335,7 @@ final class DictationRecognizer {
 
     /// 等 final 最多多久（秒）。
     static let finalWait: TimeInterval = 2
-    /// 长听写：停顿这么久收一段（秒）。
+    /// 分段模式：停顿这么久收一段（秒）。
     static let pauseCut: TimeInterval = 1.2
     /// 一段最长多久（秒）。
     static let maxSegment: TimeInterval = 50
@@ -378,7 +379,7 @@ final class DictationRecognizer {
         running = true
         startedAt = Date()
         DictationLog.recognition.notice(
-            "start \(self.mode == .long ? "long" : "utterance", privacy: .public): \(self.languages.map(\.code).joined(separator: "+"), privacy: .public), on-device \(self.preferOnDevice && self.recognizers[self.active].supportsOnDeviceRecognition)")
+            "start \(self.mode == .segmented ? "segmented" : "utterance", privacy: .public): \(self.languages.map(\.code).joined(separator: "+"), privacy: .public), on-device \(self.preferOnDevice && self.recognizers[self.active].supportsOnDeviceRecognition)")
         beginSegment()
         let microphone = DictationMicrophone(pipe: pipe)
         do {
@@ -583,7 +584,7 @@ final class DictationRecognizer {
         let language = languages[languageIndex]
         if !text.isEmpty {
             finals.append((text, language))
-            if mode == .long { onSegment?(text, language) }
+            if mode == .segmented { onSegment?(text, language) }
         }
         partial = ""
         onPreview?(previewText())
@@ -638,7 +639,7 @@ final class DictationRecognizer {
 
     private func fail(_ message: String) {
         DictationLog.recognition.error("recognition failed: \(message, privacy: .public)")
-        // 长听写的各段已经交出去了；整句模式把已经认出来的交给调用方，不丢字。
+        // 分段模式的各段已经交出去了；整句模式把已经认出来的交给调用方，不丢字。
         let kept = mode == .utterance && !finals.isEmpty ? collected() : nil
         finishCompletion = nil
         teardown()
@@ -677,14 +678,14 @@ final class DictationRecognizer {
         guard !finishing, segmentOpen else { return }
         let age = now.timeIntervalSince(segmentStart)
         let quiet = now.timeIntervalSince(max(lastTextChange, pipe.lastVoice))
-        if age >= Self.maxSegment || (mode == .long && !partial.isEmpty && quiet >= Self.pauseCut) {
+        if age >= Self.maxSegment || (mode == .segmented && !partial.isEmpty && quiet >= Self.pauseCut) {
             cut()
         }
     }
 
     private func previewText() -> String {
         switch mode {
-        case .long:
+        case .segmented:
             return partial
         case .utterance:
             let done = finals.map(\.text).reduce("") { DictationTextProcessor.join($0, $1) }
