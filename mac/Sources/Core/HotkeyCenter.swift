@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
+import os
 
 /// 全局快捷键中心（Carbon RegisterEventHotKey）。
 ///
@@ -82,6 +83,7 @@ final class HotkeyCenter: ObservableObject {
             return
         }
         handlerInstalled = true
+        observeMenuTrackingIfNeeded()
     }
 
     @MainActor
@@ -99,12 +101,41 @@ final class HotkeyCenter: ObservableObject {
 
     // MARK: - 菜单跟踪期热键补捉（CGEventTap）
     //
-    // 状态栏 NSMenu 打开时进入独立的事件跟踪循环、独占事件，Carbon 全局热键此时**收不到**
-    // （表现为「菜单开着按快捷键无反应」）。这里在菜单打开期间临时启用一个 CGEventTap，在 HID
-    // 层补捉键盘事件；命中已注册组合就收起菜单并触发对应动作。需辅助功能权限，无权限则静默不启用。
+    // 本 App 的任何 NSMenu（状态栏菜单、设置里的下拉框、右键菜单…）打开时都进入独立的事件跟踪循环、
+    // 独占事件，Carbon 全局热键此时**收不到**（表现为「菜单开着按快捷键无反应」）。这里在菜单打开期间
+    // 临时启用一个 CGEventTap，在 HID 层补捉键盘事件；命中已注册组合就收起菜单并触发对应动作。
+    // 需辅助功能权限，无权限则静默不启用。
+
+    private static let log = Logger(subsystem: "com.baobox.app", category: "hotkey")
 
     private var menuEventTap: CFMachPort?
     private var menuTapSource: CFRunLoopSource?
+    /// 正在跟踪的菜单（通知里的根菜单）：热键命中时收起它。状态栏菜单另由 `onWillFireAction` 收。
+    private weak var trackingMenu: NSMenu?
+    private var menuObservers: [NSObjectProtocol] = []
+
+    /// 监听本 App 所有菜单的开始 / 结束跟踪，期间开着补捉 tap。原先只有状态栏菜单开 tap（StatusItemController），
+    /// 设置里的下拉框开着时截图快捷键没反应（2026-11-08 用户反馈）。状态栏菜单两边都会开 / 关，tap 的开关是幂等的。
+    private func observeMenuTrackingIfNeeded() {
+        guard menuObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        // queue: nil = 在发通知的线程上同步回调：菜单一开始跟踪，主线程就进了跟踪循环，main 队列要等菜单关掉才服务，
+        // 不能用 queue: .main。AX 巡检（键盘点击类工具、读屏软件）会在后台线程「模拟打开」菜单，那种直接跳过。
+        menuObservers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil,
+                                                queue: nil) { note in
+            guard Thread.isMainThread else { return }
+            let center = HotkeyCenter.shared
+            center.trackingMenu = note.object as? NSMenu
+            center.beginMenuTrackingCapture()
+            Self.log.notice("menu tracking began; key tap \(center.menuEventTap != nil ? "on" : "off (no accessibility permission?)", privacy: .public)")
+        })
+        menuObservers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil,
+                                                queue: nil) { _ in
+            guard Thread.isMainThread else { return }
+            HotkeyCenter.shared.trackingMenu = nil
+            HotkeyCenter.shared.endMenuTrackingCapture()
+        })
+    }
 
     /// 状态栏菜单即将打开：启用补捉 tap（幂等）。
     func beginMenuTrackingCapture() {
@@ -142,6 +173,8 @@ final class HotkeyCenter: ObservableObject {
     /// tap 回调：把 keyDown 转 keyCode + 修饰键，匹配已注册热键。命中则收起菜单 + 触发，返回是否命中。
     /// tap source 挂在主 run loop，回调在主线程执行。
     fileprivate func handleTapKeyDown(_ event: CGEvent) -> Bool {
+        // 正在录新键位（设置里的快捷键页，热键全部挂起）：按键原样放行给录制框。
+        guard !suspended else { return false }
         let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
         // 按住不放时系统会补发自动重复的 keyDown：吞掉、不再触发（与 Carbon 路径一致，每按一次只触发一次）。
@@ -156,8 +189,10 @@ final class HotkeyCenter: ObservableObject {
                 guard let combo = reg.combo,
                       combo.keyCode == keyCode, combo.carbonModifiers == carbon else { continue }
                 if isRepeat { return true }
+                Self.log.notice("hotkey \(reg.def.id, privacy: .public) fired while a menu was open")
                 onBeforeFire?()      // 收菜单前：截图先抓含菜单整屏快照
-                onWillFireAction?()  // 收起菜单
+                trackingMenu?.cancelTrackingWithoutAnimation()  // 收起正开着的菜单（下拉框、右键菜单…）
+                onWillFireAction?()  // 收起状态栏菜单
                 reg.def.action()
                 return true
             }

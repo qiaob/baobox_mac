@@ -31,8 +31,8 @@ It releases itself when the timer expires, and the remaining time in the menu up
 - The desktop pet's right-click ring menu has "Keep Awake" too. While it's on, that button reads
   "**Allow Sleep**"; click it again to turn it off.
 - Both start with the default duration. After turning it on or off the pet says so ("Keep Awake
-  is on until you turn it off" / "Keep Awake is off"), even during Focus, Quiet and other
-  do-not-disturb states — except while screen recording, so it doesn't end up in the video.
+  is on until you turn it off" / "Keep Awake is off"), even during Focus, Quiet, screen
+  recording and other do-not-disturb states.
 
 ## Settings
 

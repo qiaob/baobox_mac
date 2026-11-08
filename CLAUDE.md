@@ -47,7 +47,7 @@ BaoboxApp(@main, Settings scene)
 
 | 模块 | id | 说明 |
 |---|---|---|
-| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、录屏、历史。ScreenCaptureKit；菜单场景走「含菜单整屏」冻结底图，见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
+| Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、录屏、历史。ScreenCaptureKit；截图与取字每次先冻结整屏（按快捷键那一刻定格，菜单开着也截得到），见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
 | ScreenDraw | `screendraw` | **屏幕标注画笔**：直接在屏幕上圈画（绘制 / 穿透两态），讲解演示用。模块壳 `ScreenDrawTool` 在 `Modules/Screenshot/`（共用标注引擎），快捷键 id 沿用 `screenshot.draw`。`docs/screen-draw/DESIGN.md` |
 | Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |

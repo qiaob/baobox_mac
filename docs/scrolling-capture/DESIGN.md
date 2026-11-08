@@ -55,6 +55,18 @@ if mode == .capture, frozenScreens.isEmpty, ScreenMenuSnapshot.hasForeignMenuOnS
 - 误判（例如某些 App 的 tooltip 也放在 101 层）的后果只是「这一次截图冻结在按下快捷键的那一刻」，
   不影响正确性。
 
+### 2026-11-08 更新：每次截图都冻结，所有菜单都能截
+
+- **截图与取字每次都冻结整屏**。用户反馈截图时宠物照样走动、气泡照样到点消失，说「应该所有的都冻结」。
+  `CaptureController.begin` 在创建窗口、激活本 App 之前一律 `captureAllScreens()`（菜单场景已经抓好的就直接用），
+  `hasForeignMenuOnScreen()` 随之删掉 —— 别的 App 的菜单自然包含在内。录屏不冻结，长截屏只在选区阶段冻结。
+  代价同上面的取舍：点选窗口从整屏裁剪，会带上压在它上面的东西（用户知情后选的）。抓图耗时写日志
+  （category `capture`，`frozen snapshot: … in N ms`）。
+- **本 App 的所有菜单开着时，快捷键都能用**。用户反馈设置里的下拉框开着时截图快捷键没反应：tap 原先只在
+  `StatusItemController` 打开状态栏菜单时启用。现在 `HotkeyCenter` 监听 `NSMenu.didBeginTrackingNotification` /
+  `didEndTrackingNotification`（任何菜单：状态栏菜单、下拉框、右键菜单），期间开着 tap；命中时先抓整屏、
+  再收起那个菜单（通知里的根菜单），所以下拉框也截得进去。日志 category `hotkey`。
+
 ---
 
 ## 2. 长截屏（滚动拼接）

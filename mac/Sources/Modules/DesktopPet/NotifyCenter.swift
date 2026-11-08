@@ -42,8 +42,8 @@ struct PetNotification {
     var style: Style? = nil
     /// SF Symbol；不指定 = 按来源给默认图标。
     var icon: String? = nil
-    /// 用户刚做的操作的回执（环形菜单开关防休眠、暂停专注…）：人就在电脑前等着看结果，勿扰时也照常呈现，
-    /// 不攒进摘要 —— 否则专注中开防休眠，那句「已开启」要等专注结束才冒出来。录屏中除外（见 post）。自动发出的提醒不要设。
+    /// 用户刚做的操作的回执（环形菜单开关防休眠、暂停专注…）：人就在电脑前等着看结果，任何勿扰下（含录屏）都照常呈现，
+    /// 从不攒进摘要 —— 回执只在当下有意义，事后跟着摘要冒出来既没用、按钮也早过期了。自动发出的提醒不要设。
     var isUserFeedback: Bool = false
 
     var resolvedStyle: Style {
@@ -105,9 +105,10 @@ final class NotifyCenter {
         }
         recordHistory(n)
 
-        // 勿扰：alert 照常呈现（宠物路径本身不额外发声，见 deliver）；操作回执也照常呈现，但录屏中除外 ——
-        // 录屏挂勿扰就是为了不让气泡录进视频（按快捷键开关防休眠时，那句提示不该出现在录像里）。其余入队待解除后合并摘要。
-        let showsAnyway = n.level == .alert || (n.isUserFeedback && !NotifyDND.shared.hasToken("recording"))
+        // 勿扰：alert 照常呈现（宠物路径本身不额外发声，见 deliver）；操作回执也照常呈现，录屏中同样 ——
+        // 起初录屏时把回执也攒了起来（免得录进视频），结果录屏中暂停专注什么都看不到，录完才跟着摘要一起冒出来
+        // （2026-11-08 用户反馈）。环形菜单本身就会被录进去，跟着出一句回执不算多。其余入队待解除后合并摘要。
+        let showsAnyway = n.level == .alert || n.isUserFeedback
         if NotifyDND.shared.isSuppressed, !showsAnyway {
             suppressedQueue.append((n, onAction))
             startFlushTimerIfNeeded()

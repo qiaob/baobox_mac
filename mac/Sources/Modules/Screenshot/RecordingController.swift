@@ -151,6 +151,7 @@ final class RecordingController: NSObject {
             self.outputURL = url
             isRecording = true
             // 录屏期间勿扰：宠物气泡不出来（免得被录进视频），健康提醒也顺延（docs/focus-health/TECH_DESIGN.md §6）。
+            // 用户刚点的操作的回执（暂停专注、开关防休眠…）照常出来，见 NotifyCenter.post。
             NotifyDND.shared.setSuppressed(true, token: "recording")
             hud.startTimer()
         } catch {
