@@ -7,6 +7,14 @@ enum PhoneTransferSettings {
     static let receiveDirKey = "phonetransfer.receiveDir"
     static let autoCopyTextKey = "phonetransfer.autoCopyText"
     static let pageURLKey = "phonetransfer.pageURL"
+    static let lanInterfaceKey = "phonetransfer.lanInterface"
+
+    /// 局域网模式在哪块网卡上监听：`""` = 自动（默认路由那块），`"*"` = 所有网卡，其他 = BSD 名（如 `en0`）。
+    /// 存网卡名而不是 IP：换网络后 IP 会变，网卡名不变。
+    static var lanInterface: String {
+        get { UserDefaults.standard.string(forKey: lanInterfaceKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: lanInterfaceKey) }
+    }
 
     /// 公网模式的手机页面（本仓库 GitHub Pages 发布的 `mac/Sources/Resources/PhoneTransfer/`）。
     static let defaultPageURL = "https://qiaob.github.io/baobox_mac/transfer/"

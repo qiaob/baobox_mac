@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 
 /// 手机互传会话：一个窗口一个会话。负责模式切换、设备请求、传输列表与文字，
 /// 协调局域网服务（`LANTransferServer`）与公网宿主（`RTCTransferHost`）。
@@ -41,12 +42,22 @@ final class PhoneTransferSession: ObservableObject {
         var done: Int64
         var state: TransferState
         var url: URL?
+        /// 加进列表 / 开始传 / 传完的时刻：显示「17:30:12 · 用时 1.2 秒」（REQUIREMENTS §3.4）。
+        /// 局域网共享给手机的文件：start / finish 是最近一次被下载的起止。
+        var createdAt = Date()
+        var startedAt: Date?
+        var finishedAt: Date?
+        /// 图片的缩略图，后台生成。
+        var thumbnail: NSImage?
+
+        var isImage: Bool { PhoneTransferImage.isImage(URL(fileURLWithPath: name)) }
     }
 
     struct TextItem: Identifiable {
         let id = UUID()
         let incoming: Bool
         let text: String
+        var date = Date()
     }
 
     @Published private(set) var mode: Mode = .lan
@@ -61,10 +72,20 @@ final class PhoneTransferSession: ObservableObject {
     @Published private(set) var texts: [TextItem] = []
     /// 公网模式的宿主 WebView 由窗口挂进视图层级。
     @Published private(set) var rtcHost: RTCTransferHost?
+    /// 局域网模式可选的网卡，窗口开着时随网络变化刷新。
+    @Published private(set) var interfaces: [PhoneTransferInterface] = []
+    /// 默认路由那块网卡的地址（「自动」用它）。
+    @Published private(set) var primaryIP = "127.0.0.1"
+    /// 网卡选择：`""` 自动、`"*"` 所有网卡、其他是 BSD 名（存在设置里，下次打开沿用）。
+    @Published private(set) var lanInterfaceChoice = PhoneTransferSettings.lanInterface
 
     var isRunning: Bool { phase != .idle }
 
     private var lan: LANTransferServer?
+    /// 当前二维码里的地址。
+    private var lanIP: String?
+    private var pathMonitor: NWPathMonitor?
+    private var interfaceKinds: [String: PhoneTransferInterface.Kind] = [:]
     private var expiryTimer: Timer?
     private var signalTimer: Timer?
     private var generation = 0
@@ -93,7 +114,9 @@ final class PhoneTransferSession: ObservableObject {
         signalReady = 0
         failureDetail = []
         qrText = nil
+        lanIP = nil
         phase = .starting
+        startInterfaceMonitor()
         switch mode {
         case .lan: startLAN()
         case .internet: startInternet()
@@ -113,8 +136,11 @@ final class PhoneTransferSession: ObservableObject {
     /// 关窗时调用：停掉后端、清掉令牌，传输记录保留到下次打开窗口前。
     func stop() {
         stopBackends()
+        pathMonitor?.cancel()
+        pathMonitor = nil
         phase = .idle
         qrText = nil
+        lanIP = nil
         requests = []
         devices = []
         route = nil
@@ -132,8 +158,45 @@ final class PhoneTransferSession: ObservableObject {
         outQueue.removeAll()
         for i in transfers.indices where transfers[i].state == .queued || transfers[i].state == .active {
             transfers[i].state = .failed
+            transfers[i].finishedAt = Date()
         }
         abortReceive()
+    }
+
+    // MARK: - 网卡
+
+    /// 窗口开着期间监视网络变化，刷新可选网卡（插网线、连 VPN、开互联网共享都会多出一块）。
+    private func startInterfaceMonitor() {
+        guard pathMonitor == nil else { return }
+        refreshInterfaces()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let kinds = PhoneTransferNetwork.kinds(of: path)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.pathMonitor != nil else { return }
+                    self.interfaceKinds = kinds
+                    self.refreshInterfaces()
+                }
+            }
+        }
+        pathMonitor = monitor
+        monitor.start(queue: DispatchQueue(label: "com.baobox.phonetransfer.path"))
+    }
+
+    private func refreshInterfaces() {
+        let list = PhoneTransferNetwork.interfaces(kinds: interfaceKinds)
+        if list != interfaces { interfaces = list }
+        let ip = NetworkInterfaces.primaryIP()
+        if ip != primaryIP { primaryIP = ip }
+    }
+
+    /// 窗口里换网卡：记住选择；局域网模式正在跑就用新网卡重开（换新令牌、新二维码）。
+    func setLANInterface(_ choice: String) {
+        guard choice != lanInterfaceChoice else { return }
+        lanInterfaceChoice = choice
+        PhoneTransferSettings.lanInterface = choice
+        if mode == .lan, phase != .idle { start() }
     }
 
     private func armExpiry() {
@@ -155,8 +218,33 @@ final class PhoneTransferSession: ObservableObject {
 
     private func startLAN() {
         let gen = generation
+        refreshInterfaces()
+        // 先定地址再起服务：选了网卡就只在它的地址上监听（TECH_DESIGN §3.1）。
+        let qrIP: String
+        let bindIP: String?
+        switch lanInterfaceChoice {
+        case "":
+            qrIP = primaryIP
+            bindIP = qrIP
+        case "*":
+            qrIP = primaryIP
+            bindIP = nil
+        default:
+            guard let iface = interfaces.first(where: { $0.name == lanInterfaceChoice }) else {
+                phase = .failed(L("phonetransfer.error.noInterface \(lanInterfaceChoice)"))
+                return
+            }
+            qrIP = iface.ip
+            bindIP = iface.ip
+        }
+        guard qrIP != "127.0.0.1" else {
+            phase = .failed(L("phonetransfer.error.noLAN"))
+            return
+        }
+        lanIP = qrIP
         let server = LANTransferServer(
             token: PhoneTransferSettings.randomToken(bytes: 16),
+            bindIP: bindIP,
             receiveDir: PhoneTransferSettings.receiveDir,
             webRoot: Bundle.main.url(forResource: "PhoneTransfer", withExtension: nil),
             macName: PhoneTransferSettings.macName
@@ -171,12 +259,7 @@ final class PhoneTransferSession: ObservableObject {
     private func handleLAN(_ event: LANServerEvent) {
         switch event {
         case .ready(let port):
-            guard let server = lan else { return }
-            let ip = NetworkInterfaces.primaryIP()
-            if ip == "127.0.0.1" {
-                phase = .failed(L("phonetransfer.error.noLAN"))
-                return
-            }
+            guard let server = lan, let ip = lanIP else { return }
             qrText = "http://\(ip):\(port)/?t=\(server.token)"
             if phase == .starting { phase = .waiting }
         case .failed(let message):
@@ -185,7 +268,8 @@ final class PhoneTransferSession: ObservableObject {
             requests.append(Request(id: clientID, name: name))
             PhoneTransferWindowController.shared.show()
         case .uploadBegan(let id, let name, let size):
-            transfers.insert(Transfer(id: id, incoming: true, name: name, size: size, done: 0, state: .active), at: 0)
+            transfers.insert(Transfer(id: id, incoming: true, name: name, size: size, done: 0, state: .active,
+                                      startedAt: Date()), at: 0)
         case .uploadProgress(let id, let received):
             update(id) { $0.done = received }
         case .uploadFinished(let id, let url):
@@ -193,14 +277,21 @@ final class PhoneTransferSession: ObservableObject {
                 $0.done = $0.size
                 $0.state = .finished
                 $0.url = url
+                $0.finishedAt = Date()
             }
+            loadThumbnail(id: id, url: url)
         case .uploadFailed(let id):
-            update(id) { $0.state = .failed }
+            update(id) {
+                $0.state = .failed
+                $0.finishedAt = Date()
+            }
         case .text(let text):
             receivedText(text)
-        case .downloadFinished(let fileID):
+        case .downloadFinished(let fileID, let started, let finished):
             update(fileID) {
                 if case .shared(let n) = $0.state { $0.state = .shared(downloads: n + 1) }
+                $0.startedAt = started
+                $0.finishedAt = finished
             }
         }
     }
@@ -331,7 +422,8 @@ final class PhoneTransferSession: ObservableObject {
         rxName = PhoneTransferSettings.sanitize(name)
         rxTemp = temp
         rxHandle = handle
-        transfers.insert(Transfer(id: id, incoming: true, name: rxName, size: size, done: 0, state: .active), at: 0)
+        transfers.insert(Transfer(id: id, incoming: true, name: rxName, size: size, done: 0, state: .active,
+                                  startedAt: Date()), at: 0)
     }
 
     private func finishReceive() {
@@ -344,10 +436,15 @@ final class PhoneTransferSession: ObservableObject {
                 $0.state = .finished
                 $0.done = max($0.done, $0.size)
                 $0.url = target
+                $0.finishedAt = Date()
             }
+            loadThumbnail(id: id, url: target)
         } catch {
             try? FileManager.default.removeItem(at: temp)
-            update(id) { $0.state = .failed }
+            update(id) {
+                $0.state = .failed
+                $0.finishedAt = Date()
+            }
         }
         rxID = nil
         rxTemp = nil
@@ -357,7 +454,12 @@ final class PhoneTransferSession: ObservableObject {
     private func abortReceive() {
         try? rxHandle?.close()
         if let temp = rxTemp { try? FileManager.default.removeItem(at: temp) }
-        if let id = rxID { update(id) { $0.state = .failed } }
+        if let id = rxID {
+            update(id) {
+                $0.state = .failed
+                $0.finishedAt = Date()
+            }
+        }
         rxID = nil
         rxTemp = nil
         rxHandle = nil
@@ -371,7 +473,10 @@ final class PhoneTransferSession: ObservableObject {
             defer { self.pumping = false }
             while self.generation == gen, self.phase == .connected, !self.outQueue.isEmpty {
                 let job = self.outQueue.removeFirst()
-                self.update(job.id) { $0.state = .active }
+                self.update(job.id) {
+                    $0.state = .active
+                    $0.startedAt = Date()
+                }
                 do {
                     try await host.sendFile(id: job.id, url: job.url, name: job.name, size: job.size) { sent in
                         self.update(job.id) { $0.done = sent }
@@ -379,9 +484,13 @@ final class PhoneTransferSession: ObservableObject {
                     self.update(job.id) {
                         $0.state = .finished
                         $0.done = $0.size
+                        $0.finishedAt = Date()
                     }
                 } catch {
-                    self.update(job.id) { $0.state = .failed }
+                    self.update(job.id) {
+                        $0.state = .failed
+                        $0.finishedAt = Date()
+                    }
                 }
             }
         }
@@ -435,6 +544,7 @@ final class PhoneTransferSession: ObservableObject {
                 transfers.insert(Transfer(id: id, incoming: false, name: name, size: size, done: 0,
                                           state: .queued, url: url), at: 0)
             }
+            loadThumbnail(id: id, url: url)
         }
         if mode == .internet { pumpRTC() }
     }
@@ -480,5 +590,14 @@ final class PhoneTransferSession: ObservableObject {
     private func update(_ id: String, _ change: (inout Transfer) -> Void) {
         guard let index = transfers.firstIndex(where: { $0.id == id }) else { return }
         change(&transfers[index])
+    }
+
+    /// 图片在后台生成缩略图（最长边 128 像素，按 EXIF 方向转正），好了再填回列表。
+    private func loadThumbnail(id: String, url: URL) {
+        guard PhoneTransferImage.isImage(url) else { return }
+        PhoneTransferImage.load(url, maxPixel: 128) { [weak self] image in
+            guard let image else { return }
+            self?.update(id) { $0.thumbnail = image }
+        }
     }
 }

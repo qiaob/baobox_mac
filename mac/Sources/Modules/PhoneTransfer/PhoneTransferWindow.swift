@@ -108,6 +108,10 @@ struct PhoneTransferQRPanel: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if session.mode == .lan {
+                interfacePicker
+            }
+
             qrBox
                 .frame(maxWidth: .infinity)
 
@@ -152,6 +156,52 @@ struct PhoneTransferQRPanel: View {
     private var isFailed: Bool {
         if case .failed = session.phase { return true }
         return false
+    }
+
+    // MARK: 网卡
+
+    private var interfaceBinding: Binding<String> {
+        Binding(get: { session.lanInterfaceChoice }, set: { session.setLANInterface($0) })
+    }
+
+    /// 选过的网卡现在不在了（拔了网线 / 断了 VPN）：菜单里留一项占位，不让选择变成空白。
+    private var choiceMissing: Bool {
+        let choice = session.lanInterfaceChoice
+        return !choice.isEmpty && choice != "*" && !session.interfaces.contains { $0.name == choice }
+    }
+
+    private var autoLabel: String {
+        let current = session.interfaces.first { $0.ip == session.primaryIP }?.label ?? session.primaryIP
+        return L("phonetransfer.lan.interface.auto \(current)")
+    }
+
+    private var interfacePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(selection: interfaceBinding) {
+                Text(autoLabel).tag("")
+                Divider()
+                ForEach(session.interfaces) { iface in
+                    Text(iface.label).tag(iface.name)
+                }
+                if choiceMissing {
+                    Text(L("phonetransfer.lan.interface.missing \(session.lanInterfaceChoice)"))
+                        .tag(session.lanInterfaceChoice)
+                }
+                Divider()
+                Text("phonetransfer.lan.interface.all").tag("*")
+            } label: {
+                Text("phonetransfer.lan.interface")
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            if session.lanInterfaceChoice == "*" {
+                Text("phonetransfer.lan.interface.allNote")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     @ViewBuilder
@@ -237,6 +287,7 @@ struct PhoneTransferMainPanel: View {
     @ObservedObject var session: PhoneTransferSession
     @State private var draft = ""
     @State private var dropTargeted = false
+    @State private var preview: PhoneTransferPreviewItem?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -285,6 +336,9 @@ struct PhoneTransferMainPanel: View {
                 .buttonStyle(.borderless)
                 .controlSize(.small)
             }
+        }
+        .sheet(item: $preview) { item in
+            PhoneTransferImagePreview(url: item.url, name: item.name)
         }
     }
 
@@ -392,9 +446,14 @@ struct PhoneTransferMainPanel: View {
         HStack(alignment: .top) {
             Image(systemName: item.incoming ? "arrow.down.circle" : "arrow.up.circle")
                 .foregroundStyle(item.incoming ? Color.accentColor : Color.secondary)
-            Text(item.text)
-                .lineLimit(4)
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.text)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+                Text(PhoneTransferFormat.time(item.date))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             Button("phonetransfer.text.copy") {
                 NSPasteboard.general.clearContents()
@@ -407,8 +466,7 @@ struct PhoneTransferMainPanel: View {
 
     private func transferRow(_ item: PhoneTransferSession.Transfer) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: item.incoming ? "arrow.down.circle" : "arrow.up.circle")
-                .foregroundStyle(item.incoming ? Color.accentColor : Color.secondary)
+            leadingIcon(item)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.name).lineLimit(1).truncationMode(.middle)
                 Text(detail(item)).font(.caption).foregroundStyle(.secondary)
@@ -418,6 +476,9 @@ struct PhoneTransferMainPanel: View {
                 }
             }
             Spacer()
+            if let url = imageURL(item) {
+                PhoneTransferCopyImageButton(url: url)
+            }
             if let url = item.url, item.incoming, item.state == .finished {
                 Button("phonetransfer.history.reveal") {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -428,23 +489,159 @@ struct PhoneTransferMainPanel: View {
         }
     }
 
+    /// 能预览 / 复制的图片：收到的要传完，发出的随时可以（文件就在本机）。
+    private func imageURL(_ item: PhoneTransferSession.Transfer) -> URL? {
+        guard let url = item.url, item.isImage else { return nil }
+        if item.incoming && item.state != .finished { return nil }
+        return url
+    }
+
+    /// 行首：图片是缩略图（点开预览），其他是方向箭头。
+    @ViewBuilder
+    private func leadingIcon(_ item: PhoneTransferSession.Transfer) -> some View {
+        if let url = imageURL(item), let thumbnail = item.thumbnail {
+            Button {
+                preview = PhoneTransferPreviewItem(url: url, name: item.name)
+            } label: {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+            }
+            .buttonStyle(.plain)
+            .help("phonetransfer.image.previewHelp")
+        } else {
+            Image(systemName: item.incoming ? "arrow.down.circle" : "arrow.up.circle")
+                .font(.title2)
+                .foregroundStyle(item.incoming ? Color.accentColor : Color.secondary)
+                .frame(width: 40, height: 40)
+        }
+    }
+
+    /// 「2.4 MB · 已接收 · 17:30:12 · 用时 1.2 秒」（REQUIREMENTS §3.4）。
     private func detail(_ item: PhoneTransferSession.Transfer) -> String {
-        let size = ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)
-        let state: String
+        var parts = [ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)]
         switch item.state {
         case .queued:
-            state = L("phonetransfer.state.queued")
+            parts.append(L("phonetransfer.state.queued"))
         case .active:
             let percent = item.size > 0 ? Int(Double(item.done) / Double(item.size) * 100) : 0
-            state = "\(percent)%"
+            parts.append("\(percent)%")
         case .finished:
-            state = item.incoming ? L("phonetransfer.state.received") : L("phonetransfer.state.sent")
+            parts.append(item.incoming ? L("phonetransfer.state.received") : L("phonetransfer.state.sent"))
+            parts.append(contentsOf: timing(item))
         case .failed:
-            state = L("phonetransfer.state.failed")
+            parts.append(L("phonetransfer.state.failed"))
+            parts.append(PhoneTransferFormat.time(item.finishedAt ?? item.createdAt))
         case .shared(let downloads):
-            state = downloads == 0 ? L("phonetransfer.state.sharedWaiting")
-                                   : L("phonetransfer.state.downloaded \(downloads)")
+            if downloads == 0 {
+                parts.append(L("phonetransfer.state.sharedWaiting"))
+                parts.append(PhoneTransferFormat.time(item.createdAt))
+            } else {
+                parts.append(L("phonetransfer.state.downloaded \(downloads)"))
+                parts.append(contentsOf: timing(item))
+            }
         }
-        return "\(size) · \(state)"
+        return parts.joined(separator: " · ")
+    }
+
+    /// 传完的时刻 + 用时。
+    private func timing(_ item: PhoneTransferSession.Transfer) -> [String] {
+        var parts = [PhoneTransferFormat.time(item.finishedAt ?? item.startedAt ?? item.createdAt)]
+        if let start = item.startedAt, let finish = item.finishedAt {
+            parts.append(L("phonetransfer.time.took \(PhoneTransferFormat.duration(finish.timeIntervalSince(start)))"))
+        }
+        return parts
+    }
+}
+
+// MARK: - 图片
+
+struct PhoneTransferPreviewItem: Identifiable {
+    let id = UUID()
+    let url: URL
+    let name: String
+}
+
+/// 「复制」：原图写进剪贴板（PNG + TIFF），粘到聊天软件里是图片。复制完闪一下「已复制」。
+struct PhoneTransferCopyImageButton: View {
+    let url: URL
+    var prominent = false
+    @State private var copied = false
+    @State private var busy = false
+
+    var body: some View {
+        if prominent {
+            button.buttonStyle(.bordered)
+        } else {
+            button.buttonStyle(.borderless).controlSize(.small)
+        }
+    }
+
+    private var button: some View {
+        Button(copied ? "phonetransfer.image.copied" : "phonetransfer.image.copy") {
+            busy = true
+            PhoneTransferImage.copy(url) { ok in
+                busy = false
+                guard ok else {
+                    NSSound.beep()
+                    return
+                }
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    MainActor.assumeIsolated { copied = false }
+                }
+            }
+        }
+        .disabled(busy)
+    }
+}
+
+/// 窗口里的大图预览（不引 QuickLook）：复制、用「预览」打开、在 Finder 中显示、关闭（Esc）。
+struct PhoneTransferImagePreview: View {
+    let url: URL
+    let name: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else if failed {
+                    Text("phonetransfer.image.loadFailed")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(spacing: 8) {
+                Text(name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                PhoneTransferCopyImageButton(url: url, prominent: true)
+                Button("phonetransfer.image.openPreview") { PhoneTransferImage.openInPreview(url) }
+                Button("phonetransfer.history.reveal") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                Button("phonetransfer.image.close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 520, idealWidth: 620, minHeight: 380, idealHeight: 460)
+        .onAppear {
+            PhoneTransferImage.load(url, maxPixel: 2400) { loaded in
+                if let loaded { image = loaded } else { failed = true }
+            }
+        }
     }
 }

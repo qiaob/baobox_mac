@@ -15,6 +15,8 @@ GitHub Pages 工作流把它发布到 `/transfer/`）。
 | `RTCTransferHost.swift` | 公网模式：`WKWebView` 里跑 `rtc.js`，Swift ↔ JS 桥 |
 | `PhoneTransferWindow.swift` | 窗口与 SwiftUI 视图 |
 | `PhoneTransferSettingsView.swift` | 设置页 |
+| `PhoneTransferNetwork.swift` | 局域网模式可选的网卡（§3.1） |
+| `PhoneTransferImage.swift` | 图片判断、按方向转正的解码、复制到剪贴板；时刻 / 用时格式（§5.1） |
 | `Resources/PhoneTransfer/index.html` + `phone.js` | 手机网页（两种模式共用，按 URL 判断模式） |
 | `Resources/PhoneTransfer/rtc.js` | 公网模式共享层：加密、信令、WebRTC、分块协议（手机和 Mac 宿主页共用） |
 | `Resources/PhoneTransfer/host.html` | Mac 宿主页（不发布到 Pages） |
@@ -33,8 +35,16 @@ GitHub Pages 工作流把它发布到 `/transfer/`）。
 
 ### 3.1 服务
 
-- `NWListener(using: .tcp)` 不指定端口（系统分配），`.ready` 后读 `listener.port`。
-- 地址用 `NetworkInterfaces.primaryIP()`（抓包模块已有，默认路由出口的私有地址）；拿不到私有地址时提示「未连接局域网」。
+- 网卡选择存在设置 `phonetransfer.lanInterface`：`""` 自动、`"*"` 所有网卡、其他是 BSD 名（存名字不存 IP，换网络 IP 会变）。
+  窗口左栏（局域网模式）一个菜单：自动（显示当前是哪块）/ 各网卡 / 所有网卡；换了就用新令牌重开服务。
+- 可选网卡：`getifaddrs` 枚举 up 的 IPv4 网卡（排除回环和 169.254，**保留** VPN、网桥 —— 用户自己选）；
+  类型（Wi-Fi / 有线）来自 `NWPathMonitor` 的 `availableInterfaces`（Network 框架，不引 SystemConfiguration），认不出的显示 BSD 名。
+  窗口开着期间监视网络变化，刷新列表；选过的网卡不在了，菜单里留一项「（现在不可用）」占位，起服务时提示换网卡。
+- 先定地址再起服务：自动 = `NetworkInterfaces.primaryIP()`（抓包模块已有，默认路由出口的私有地址），拿不到私有地址时提示
+  「未连接局域网」；选了网卡 = 它的地址；所有网卡 = 二维码用自动的地址、不限制监听。
+- 选了网卡（含自动）时 `NWListener` 只绑这个地址：`parameters.requiredLocalEndpoint = .hostPort(host: <ip>, port: .any)`，
+  端口由系统分配，`.ready` 后读 `listener.port`。别的网卡、IPv6、127.0.0.1 上都连不进来（2026-11-08 探针实测：`lsof` 显示
+  `192.168.x.x:<port>`，经 127.0.0.1 访问被拒）。地址变了（换 Wi-Fi）监听会失败，提示后刷新二维码即可。
 - 二维码：`http://<ip>:<port>/?t=<token>`，token 为 16 字节随机数的 base64url。
 - 每个连接只处理一个请求，响应都带 `Connection: close`。请求头上限 64KB；只认 `Content-Length`，拒绝 chunked。
 
@@ -46,8 +56,8 @@ GitHub Pages 工作流把它发布到 `/transfer/`）。
 | 方法 路径 | 说明 |
 |---|---|
 | `GET /api/hello?name=` | 首次调用登记设备并触发 Mac 端「允许 / 拒绝」；返回 `{state: pending/approved/denied, mac}`。手机每秒轮询直到有结果 |
-| `GET /api/poll?since=<seq>` | 已允许才可用。返回 `{state, files:[{id,name,size}], texts:[{seq,text}], seq}`：Mac 共享的文件全量 + `seq` 之后 Mac 发的文字。手机每 1.5 秒轮询 |
-| `GET /api/file?id=` | 下载 Mac 共享的文件，流式发送（256KB 一块，前一块发完再读下一块），`Content-Disposition: attachment; filename*=UTF-8''…` |
+| `GET /api/poll?since=<seq>` | 已允许才可用。返回 `{state, files:[{id,name,size,ts}], texts:[{seq,text,ts}], seq}`：Mac 共享的文件全量 + `seq` 之后 Mac 发的文字；`ts` 是共享 / 发送的时刻（毫秒时间戳）。手机每 1.5 秒轮询 |
+| `GET /api/file?id=` | 下载 Mac 共享的文件，流式发送（256KB 一块，前一块发完再读下一块），`Content-Disposition: attachment; filename*=UTF-8''…`。`Content-Type` 按扩展名取（`UTType.preferredMIMEType`，取不到用 `application/octet-stream`）：响应带 `nosniff`，图片要有正确的类型手机网页才能用 `<img>` 显示。发完报 `downloadFinished(fileID, started, finished)`，Mac 据此显示最近一次下载的用时 |
 | `POST /api/upload?name=` | 手机上传，body 是文件原始字节。边收边写 `<接收文件夹>/.<uuid>.part`，收完改名为去重后的文件名 |
 | `POST /api/text` | 手机发文字，body UTF-8，≤ 1MB |
 
@@ -106,7 +116,7 @@ STUN：`stun.cloudflare.com:3478`、`stun.miwifi.com:3478`、`stun.chat.bilibili
 - 二进制帧是「当前正在收的那个文件」的数据块，每块 16KB（Safari 兼容的安全值）。
 - 每个方向同一时间只发一个文件（排队），两个方向可以同时进行；DataChannel 有序可靠，所以不需要块号。
 - 背压：`bufferedAmount` 超过 4MB 暂停，`bufferedamountlow`（阈值 1MB）时继续。
-- 手机收到的文件拼成 `Blob`，给出「保存」链接（`<a download>`）。
+- 手机收到的文件拼成 `Blob`，给出「保存」链接（`<a download>`）；图片给「查看」，用 Blob URL 显示（见 §5.2）。
 
 ### 4.7 Mac 宿主（WKWebView）
 
@@ -118,7 +128,28 @@ STUN：`stun.cloudflare.com:3478`、`stun.miwifi.com:3478`、`stun.chat.bilibili
 - Swift → JS：`callAsyncJavaScript` 调 `ptHost.start(cfg)`、`approve(bool)`、`beginFile(...)`、`sendChunk(b64)`（Promise 在缓冲回落后才 resolve，
   形成背压）、`endFile(id)`、`sendText(text)`、`stop()`。Swift 每次读 256KB 交给 JS，JS 再切成 16KB 发。
 
-## 5. 风险与待验证
+## 5. 图片与传输时间
+
+### 5.1 Mac 端
+
+- `PhoneTransferImage.swift`：按扩展名判断图片（`UTType.conforms(to: .image)`）；ImageIO 读图，
+  `kCGImageSourceCreateThumbnailWithTransform` 按 EXIF 方向转正（手机照片多数带方向）。缩略图最长边 128 像素；
+  复制时按原尺寸解码，在后台编码 PNG + TIFF，回主线程写剪贴板（写法同截图模块）。
+- `Transfer` 增加 `createdAt / startedAt / finishedAt / thumbnail`；图片传完（收到的）或加入列表时（发出的）在后台生成缩略图。
+  时刻显示 `finishedAt ?? startedAt ?? createdAt`（`Date.formatted(date: .omitted, time: .standard)`），
+  用时 = `finishedAt - startedAt`，只在传完时显示；不到 60 秒保留一位小数，否则用 `DateComponentsFormatter`。
+- 预览是窗口里的 sheet（不引 QuickLook 框架）：大图在后台按最长边 2400 像素解码；按钮：复制、用「预览」打开、在 Finder 中显示、关闭（Esc）。
+
+### 5.2 手机网页
+
+- 两个隐藏的 `<input type=file multiple>`：一个 `accept="image/*"`（「选择图片」），一个不限类型（「选择文件」），进同一个发送队列。
+- 发出的每行：开始发送记时刻，成功后显示 `已发送 · 时刻 · 用时`。
+- 收到的图片（按扩展名判断）：按钮「查看」，打开全屏浮层 `<img>`：局域网直接用 `/api/file?...` 地址
+  （`<img>` 不理会 `Content-Disposition`），公网用 Blob URL。浮层里有「长按图片可存到相册」提示、下载 / 保存、关闭；
+  图片加载失败（浏览器不支持该格式）时改成提示用下载。浮层不能禁用 `-webkit-touch-callout`，否则长按菜单出不来。
+- 局域网收到的文件和文字用服务端给的 `ts` 显示时刻；公网收到的文件从 `file` 控制消息到 `end` 记用时。
+
+## 6. 风险与待验证
 
 1. WKWebView 中 `RTCPeerConnection` 是否默认可用：宿主页启动时检测，不可用就把公网模式标记为「此系统不支持」。
 2. JS ↔ Swift 用 base64 过桥的吞吐：公网链路一般是瓶颈，预计足够；实测不够再改 `WKURLSchemeHandler`。

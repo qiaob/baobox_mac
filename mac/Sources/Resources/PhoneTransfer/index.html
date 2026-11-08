@@ -56,6 +56,13 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   #error h2 { color: var(--danger); }
   #error ul { margin: 8px 0 0; padding-left: 20px; }
+  .picks { margin: 0 0 10px; }
+  /* 看大图：长按图片存相册，所以不能禁用 -webkit-touch-callout / pointer-events。 */
+  .viewer { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, .92); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .viewer img { max-width: 100%; max-height: 72vh; object-fit: contain; border-radius: 6px; }
+  .viewer-text { color: #E6E6E6; font-size: 14px; text-align: center; }
+  .viewer-actions { display: flex; gap: 10px; }
 </style>
 </head>
 <body>
@@ -81,8 +88,12 @@
   <div id="main" class="hidden">
     <section class="card">
       <h2 data-i18n="sendTitle"></h2>
+      <input id="image-input" type="file" accept="image/*" multiple class="hidden">
       <input id="file-input" type="file" multiple class="hidden">
-      <button id="pick" class="wide" data-i18n="pickFiles"></button>
+      <div class="row picks">
+        <button id="pick-images" data-i18n="pickImages"></button>
+        <button id="pick" data-i18n="pickFiles"></button>
+      </div>
       <textarea id="text-input" data-i18n-placeholder="textPlaceholder"></textarea>
       <div class="row"><button id="send-text" class="secondary" data-i18n="sendText"></button></div>
       <ul id="out-list" class="list" style="margin-top:10px"></ul>
@@ -95,6 +106,15 @@
     </section>
   </div>
 </main>
+<div id="viewer" class="viewer hidden" role="dialog" aria-modal="true">
+  <img id="viewer-img" alt="">
+  <div id="viewer-hint" class="viewer-text hidden" data-i18n="saveHint"></div>
+  <div id="viewer-msg" class="viewer-text hidden" data-i18n="noPreview"></div>
+  <div class="viewer-actions">
+    <a id="viewer-save" class="btn secondary"></a>
+    <button id="viewer-close" data-i18n="close"></button>
+  </div>
+</div>
 <script src="rtc.js"></script>
 <script src="phone.js"></script>
 </body>

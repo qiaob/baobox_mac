@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UniformTypeIdentifiers
 
 /// 局域网服务发给会话的事件（已切回主线程）。
 enum LANServerEvent {
@@ -11,7 +12,8 @@ enum LANServerEvent {
     case uploadFinished(uploadID: String, url: URL)
     case uploadFailed(uploadID: String)
     case text(String)
-    case downloadFinished(fileID: String)
+    /// 手机下载完一次 Mac 共享的文件（同一个文件可以被下载多次）。
+    case downloadFinished(fileID: String, started: Date, finished: Date)
 }
 
 /// 局域网模式：`NWListener` 上的极简 HTTP/1.1 服务，给手机提供网页与上传 / 下载接口。
@@ -24,6 +26,8 @@ final class LANTransferServer: @unchecked Sendable {
         let url: URL
         let name: String
         let size: Int64
+        /// 共享的时刻：手机网页显示「什么时候发来的」。
+        var added = Date()
     }
 
     enum DeviceState: String {
@@ -31,6 +35,8 @@ final class LANTransferServer: @unchecked Sendable {
     }
 
     let token: String
+    /// 只在这个地址上监听（用户在窗口里选的网卡），别的网卡 / IPv6 上连不进来；nil = 所有网卡。
+    let bindIP: String?
     private let receiveDir: URL
     private let webRoot: URL?
     private let macName: String
@@ -42,7 +48,7 @@ final class LANTransferServer: @unchecked Sendable {
     private let lock = NSLock()
     private var devices: [String: DeviceState] = [:]
     private var shared: [SharedFile] = []
-    private var texts: [(seq: Int, text: String)] = []
+    private var texts: [(seq: Int, text: String, date: Date)] = []
     private var textSeq = 0
     private var connections: [ObjectIdentifier: LANConnection] = [:]
     private var stopped = false
@@ -53,9 +59,10 @@ final class LANTransferServer: @unchecked Sendable {
         "rtc.js": "text/javascript; charset=utf-8"
     ]
 
-    init(token: String, receiveDir: URL, webRoot: URL?, macName: String,
+    init(token: String, bindIP: String?, receiveDir: URL, webRoot: URL?, macName: String,
          onEvent: @escaping @MainActor (LANServerEvent) -> Void) {
         self.token = token
+        self.bindIP = bindIP
         self.receiveDir = receiveDir
         self.webRoot = webRoot
         self.macName = macName
@@ -67,6 +74,10 @@ final class LANTransferServer: @unchecked Sendable {
     func start() {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
+        // 选了网卡就只绑它的地址，端口由系统分配（docs/phone-transfer/TECH_DESIGN.md §3.1）。
+        if let bindIP {
+            params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(bindIP), port: .any)
+        }
         guard let listener = try? NWListener(using: params) else {
             emit(.failed(L("phonetransfer.error.listen")))
             return
@@ -124,7 +135,7 @@ final class LANTransferServer: @unchecked Sendable {
     func addMacText(_ text: String) {
         lock.lock()
         textSeq += 1
-        texts.append((textSeq, text))
+        texts.append((textSeq, text, Date()))
         lock.unlock()
     }
 
@@ -215,8 +226,12 @@ final class LANTransferServer: @unchecked Sendable {
     private func handlePoll(clientID: String, since: Int, _ conn: LANConnection) {
         lock.lock()
         let state = devices[clientID]
-        let files = shared.map { ["id": $0.id, "name": $0.name, "size": NSNumber(value: $0.size)] as [String: Any] }
-        let newTexts = texts.filter { $0.seq > since }.map { ["seq": $0.seq, "text": $0.text] as [String: Any] }
+        let files = shared.map {
+            ["id": $0.id, "name": $0.name, "size": NSNumber(value: $0.size), "ts": Self.millis($0.added)] as [String: Any]
+        }
+        let newTexts = texts.filter { $0.seq > since }.map {
+            ["seq": $0.seq, "text": $0.text, "ts": Self.millis($0.date)] as [String: Any]
+        }
         let seq = textSeq
         lock.unlock()
         guard state == .approved else {
@@ -234,9 +249,15 @@ final class LANTransferServer: @unchecked Sendable {
             conn.respond(status: 404, json: ["error": "file"])
             return
         }
+        let started = Date()
         conn.streamFile(file.url, name: file.name) { [weak self] ok in
-            if ok { self?.emit(.downloadFinished(fileID: id)) }
+            if ok { self?.emit(.downloadFinished(fileID: id, started: started, finished: Date())) }
         }
+    }
+
+    /// 给手机网页的时间戳（毫秒）。
+    private static func millis(_ date: Date) -> NSNumber {
+        NSNumber(value: Int64(date.timeIntervalSince1970 * 1000))
     }
 
     private func handleUpload(_ req: LANRequest, _ conn: LANConnection) {
@@ -509,7 +530,9 @@ final class LANConnection: @unchecked Sendable {
         let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         let encoded = name.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "file"
         let ascii = String(name.unicodeScalars.map { $0.isASCII && $0 != "\"" && $0 != "\\" && $0.value >= 0x20 ? Character($0) : "_" })
-        let head = header(status: 200, contentType: "application/octet-stream", length: size,
+        // 按扩展名给类型：响应带 nosniff，图片要有正确的类型，手机网页才能用 <img> 显示（长按存相册）。
+        let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let head = header(status: 200, contentType: type, length: size,
                           extra: ["Content-Disposition": "attachment; filename=\"\(ascii)\"; filename*=UTF-8''\(encoded)"])
         var sent: Int64 = 0
 

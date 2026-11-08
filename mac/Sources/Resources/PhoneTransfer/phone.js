@@ -13,7 +13,15 @@
     zh: {
       title: 'Baobox 互传',
       sendTitle: '发送到电脑',
+      pickImages: '选择图片',
       pickFiles: '选择文件',
+      view: '查看',
+      close: '关闭',
+      saveHint: '长按图片可存到相册',
+      noPreview: '这个格式浏览器显示不了，请用下载。',
+      took: '用时 ',
+      unitSec: ' 秒',
+      unitMin: ' 分 ',
       textPlaceholder: '输入要发送的文字…',
       sendText: '发送文字',
       fromMac: '电脑发来的',
@@ -50,7 +58,7 @@
       errNoAnswerTitle: '电脑没有回应',
       errNoAnswer: '请确认电脑上的「手机互传」窗口还开着、处于公网模式，并且能上网。',
       errP2PTitle: '无法建立公网直连',
-      errP2P: '两边的网络都不允许直接连接（本功能不使用中继服务器）。',
+      errP2P: '手机和电脑之间没能打通直连（本功能不使用中继服务器）。',
       errClosedTitle: '连接已断开',
       errClosed: '电脑关闭了窗口或网络中断。需要的话请重新扫码。',
       natPhone: '手机网络：',
@@ -70,7 +78,15 @@
     en: {
       title: 'Baobox Transfer',
       sendTitle: 'Send to computer',
+      pickImages: 'Choose photos',
       pickFiles: 'Choose files',
+      view: 'View',
+      close: 'Close',
+      saveHint: 'Long-press the image to save it to Photos',
+      noPreview: 'This browser can’t display this format. Use Download instead.',
+      took: 'took ',
+      unitSec: ' s',
+      unitMin: 'm ',
       textPlaceholder: 'Type text to send…',
       sendText: 'Send text',
       fromMac: 'From your computer',
@@ -107,7 +123,7 @@
       errNoAnswerTitle: 'No response from the computer',
       errNoAnswer: 'Make sure the Phone Transfer window is still open in Internet mode and the computer is online.',
       errP2PTitle: 'Couldn’t connect directly',
-      errP2P: 'Neither network allows a direct connection (this feature doesn’t use relay servers).',
+      errP2P: 'No direct path could be opened between the phone and the computer (this feature doesn’t use relay servers).',
       errClosedTitle: 'Disconnected',
       errClosed: 'The computer closed the window or the network dropped. Scan again if you need to.',
       natPhone: 'Phone network: ',
@@ -145,6 +161,31 @@
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
     if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
     return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  /** 时刻：跟随手机的语言和 12/24 小时制。 */
+  function fmtTime(ts) {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  /** 用时：不到一分钟保留一位小数。 */
+  function fmtDuration(ms) {
+    const s = Math.max(0, ms) / 1000;
+    if (s < 60) return s.toFixed(1) + T('unitSec');
+    return Math.floor(s / 60) + T('unitMin') + Math.round(s % 60) + T('unitSec');
+  }
+
+  /** 按扩展名判断图片（显示不了的格式，看大图时会提示改用下载）。 */
+  function isImageName(name) {
+    return /\.(jpe?g|png|gif|webp|heic|heif|bmp|avif|tiff?)$/i.test(name || '');
+  }
+
+  /** 相册给的图片偶尔没有扩展名：按类型补上，电脑端才认得出是图片。 */
+  function uploadName(file) {
+    const name = file.name || 'file';
+    if (/\.[a-z0-9]{2,5}$/i.test(name)) return name;
+    const m = /^image\/(jpeg|png|gif|webp|heic|heif|avif|bmp)$/i.exec(file.type || '');
+    return m ? name + '.' + (m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase()) : name;
   }
 
   function setStatus(text, kind) {
@@ -201,7 +242,7 @@
     return e;
   }
 
-  /** 发出列表的一行，返回 { setProgress(0..1), setState(text) }。 */
+  /** 发出列表的一行，返回 { begin(), setProgress(0..1), done(), fail() }。传完显示「已发送 · 时刻 · 用时」。 */
   function outRow(name, size) {
     const li = el('li');
     const box = el('div', 'grow');
@@ -214,16 +255,67 @@
     box.appendChild(bar);
     li.appendChild(box);
     $('out-list').prepend(li);
+    let started = 0;
     return {
+      begin: function () { started = Date.now(); },
       setProgress: function (p) {
         fill.style.width = Math.round(Math.max(0, Math.min(1, p)) * 100) + '%';
         meta.textContent = fmtSize(size) + ' · ' + Math.round(p * 100) + '%';
       },
-      setState: function (text) {
-        meta.textContent = fmtSize(size) + ' · ' + text;
-        if (text === T('sent')) fill.style.width = '100%';
+      done: function () {
+        const now = Date.now();
+        fill.style.width = '100%';
+        meta.textContent = [fmtSize(size), T('sent'), fmtTime(now), T('took') + fmtDuration(now - (started || now))].join(' · ');
+      },
+      fail: function () {
+        meta.textContent = [fmtSize(size), T('failed'), fmtTime(Date.now())].join(' · ');
       }
     };
+  }
+
+  // MARK: - 看大图（长按存相册）
+
+  function openViewer(src, name, saveLabel) {
+    const img = $('viewer-img');
+    $('viewer-hint').classList.add('hidden');
+    $('viewer-msg').classList.add('hidden');
+    img.classList.remove('hidden');
+    img.onload = function () { $('viewer-hint').classList.remove('hidden'); };
+    img.onerror = function () {
+      img.classList.add('hidden');
+      $('viewer-msg').classList.remove('hidden');
+    };
+    img.alt = name;
+    img.src = src;
+    const save = $('viewer-save');
+    save.href = src;
+    save.setAttribute('download', name);
+    save.textContent = saveLabel;
+    $('viewer').classList.remove('hidden');
+  }
+
+  function closeViewer() {
+    const img = $('viewer-img');
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+    $('viewer').classList.add('hidden');
+  }
+
+  $('viewer-close').addEventListener('click', closeViewer);
+  $('viewer').addEventListener('click', function (ev) { if (ev.target === $('viewer')) closeViewer(); });
+
+  /** 收到的文件那一行右边的按钮：图片「查看」，其他文件下载 / 保存。 */
+  function fileAction(name, href, saveLabel) {
+    if (isImageName(name)) {
+      const btn = el('button', 'small', T('view'));
+      btn.addEventListener('click', function () { openViewer(href, name, saveLabel); });
+      return btn;
+    }
+    const a = el('a', 'btn small', saveLabel);
+    a.href = href;
+    a.setAttribute('download', name);
+    return a;
   }
 
   function refreshEmpty() {
@@ -249,10 +341,11 @@
     ta.remove();
   }
 
-  function addInText(text) {
+  function addInText(text, ts) {
     const li = el('li');
     const box = el('div', 'grow');
     box.appendChild(el('div', 'textbody', text));
+    box.appendChild(el('div', 'meta', fmtTime(ts || Date.now())));
     li.appendChild(box);
     const btn = el('button', 'secondary small', T('copy'));
     btn.addEventListener('click', function () { copyText(text, btn); });
@@ -291,23 +384,28 @@
     sending = true;
     while (queue.length) {
       const job = queue.shift();
+      job.row.begin();
       try {
         await transport.sendFile(job.file, job.row);
-        job.row.setState(T('sent'));
+        job.row.done();
       } catch (e) {
-        job.row.setState(T('failed'));
+        job.row.fail();
       }
     }
     sending = false;
   }
 
-  $('pick').addEventListener('click', function () { $('file-input').click(); });
-  $('file-input').addEventListener('change', function () {
-    const files = Array.prototype.slice.call($('file-input').files || []);
-    $('file-input').value = '';
-    files.forEach(function (f) { queue.push({ file: f, row: outRow(f.name, f.size) }); });
+  // 「选择图片」（相册）和「选择文件」进同一个发送队列。
+  function enqueue(input) {
+    const files = Array.prototype.slice.call(input.files || []);
+    input.value = '';
+    files.forEach(function (f) { queue.push({ file: f, row: outRow(uploadName(f), f.size) }); });
     pump();
-  });
+  }
+  $('pick-images').addEventListener('click', function () { $('image-input').click(); });
+  $('pick').addEventListener('click', function () { $('file-input').click(); });
+  $('image-input').addEventListener('change', function () { enqueue($('image-input')); });
+  $('file-input').addEventListener('change', function () { enqueue($('file-input')); });
   $('send-text').addEventListener('click', async function () {
     const ta = $('text-input');
     const text = ta.value;
@@ -351,12 +449,10 @@
         const li = el('li');
         const box = el('div', 'grow');
         box.appendChild(el('div', 'name', f.name));
-        box.appendChild(el('div', 'meta', fmtSize(f.size)));
+        box.appendChild(el('div', 'meta', fmtSize(f.size) + (f.ts ? ' · ' + fmtTime(f.ts) : '')));
         li.appendChild(box);
-        const a = el('a', 'btn small', T('download'));
-        a.href = api('file', 'id=' + encodeURIComponent(f.id));
-        a.setAttribute('download', f.name);
-        li.appendChild(a);
+        // 图片直接用下载地址显示：<img> 不理会 Content-Disposition，服务端按扩展名给了图片类型。
+        li.appendChild(fileAction(f.name, api('file', 'id=' + encodeURIComponent(f.id)), T('download')));
         $('in-list').prepend(li);
       });
       refreshEmpty();
@@ -371,7 +467,7 @@
           if (j.state === 'denied') { showError(T('errDeniedTitle'), T('errDenied')); return; }
           if (lostSince) { lostSince = 0; setStatus(T('stLan'), 'ok'); }
           renderFiles(j.files || []);
-          (j.texts || []).forEach(function (t) { addInText(t.text); });
+          (j.texts || []).forEach(function (t) { addInText(t.text, t.ts); });
           if (typeof j.seq === 'number') since = j.seq;
         } catch (e) {
           if (!lostSince) lostSince = Date.now();
@@ -406,7 +502,7 @@
       sendFile: function (file, row) {
         return new Promise(function (resolve, reject) {
           const xhr = new XMLHttpRequest();
-          xhr.open('POST', api('upload', 'name=' + encodeURIComponent(file.name)));
+          xhr.open('POST', api('upload', 'name=' + encodeURIComponent(uploadName(file))));
           xhr.upload.onprogress = function (e) { if (e.lengthComputable && e.total > 0) row.setProgress(e.loaded / e.total); };
           xhr.onload = function () { (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error('http ' + xhr.status)); };
           xhr.onerror = function () { reject(new Error('network')); };
@@ -506,18 +602,16 @@
       if (pc.iceConnectionState === 'failed' && !connected) failP2P();
     };
 
-    const received = function (name, parts, size) {
-      const blob = new Blob(parts);
+    const received = function (name, parts, size, mime, started) {
+      const blob = new Blob(parts, { type: mime || '' });
       const url = URL.createObjectURL(blob);
+      const now = Date.now();
       const li = el('li');
       const box = el('div', 'grow');
       box.appendChild(el('div', 'name', name));
-      box.appendChild(el('div', 'meta', fmtSize(size)));
+      box.appendChild(el('div', 'meta', [fmtSize(size), fmtTime(now), T('took') + fmtDuration(now - started)].join(' · ')));
       li.appendChild(box);
-      const a = el('a', 'btn small', T('save'));
-      a.href = url;
-      a.setAttribute('download', name);
-      li.appendChild(a);
+      li.appendChild(fileAction(name, url, T('save')));
       $('in-list').prepend(li);
       refreshEmpty();
     };
@@ -542,7 +636,8 @@
       },
       control: function (m) {
         if (m.t === 'file' && typeof m.id === 'string') {
-          rx = { id: m.id, name: String(m.name || 'file'), size: Number(m.size) || 0, parts: [], got: 0, row: null };
+          rx = { id: m.id, name: String(m.name || 'file'), size: Number(m.size) || 0, mime: String(m.mime || ''),
+                 started: Date.now(), parts: [], got: 0, row: null };
           if (rx.size > 1024 * 1024 * 1024) showNote(T('tooBig'));
           rx.row = (function () {
             const li = el('li');
@@ -561,7 +656,7 @@
           })();
         } else if (m.t === 'end' && rx && m.id === rx.id) {
           rx.row.li.remove();
-          received(rx.name, rx.parts, rx.got);
+          received(rx.name, rx.parts, rx.got, rx.mime, rx.started);
           rx = null;
         } else if (m.t === 'cancel' && rx && m.id === rx.id) {
           rx.row.meta.textContent = fmtSize(rx.size) + ' · ' + T('failed');
@@ -586,7 +681,7 @@
     transport = {
       sendFile: async function (file, row) {
         const id = 'p' + (nextID++);
-        link.sendJSON({ t: 'file', id: id, name: file.name, size: file.size, mime: file.type || '' });
+        link.sendJSON({ t: 'file', id: id, name: uploadName(file), size: file.size, mime: file.type || '' });
         const step = 1024 * 1024;
         try {
           for (let off = 0; off < file.size; off += step) {
