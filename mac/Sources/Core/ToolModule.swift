@@ -41,8 +41,12 @@ protocol ToolModule: AnyObject {
     func activate()
     /// App 退出前调用：刷新未落盘数据、释放系统资源等
     func willTerminate()
+    /// 放在 Baobox 主菜单最上面的行（工具列表之前，框架另接一条分隔线），默认没有。
+    /// 菜单栏管理用它放「被隐藏 / 被挤掉的图标」那一行（docs/menubar-manager/）。和 submenuItems 一样只读内存缓存。
+    func statusMenuHeaderItems() -> [NSMenuItem]
 }
 
 extension ToolModule {
     func willTerminate() {}
+    func statusMenuHeaderItems() -> [NSMenuItem] { [] }
 }

@@ -11,6 +11,7 @@ For version **0.0.6**. This manual covers every tool and every feature currently
 | [Screenshot & recording](screenshot.md) | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, live drawing, history |
 | [Clipboard](clipboard.md) | History, search, paste-back, favorites, text tools, snippets, privacy and encryption |
 | [Window manager](window-manager.md) | Halves, quarters, maximize, center, across displays, layout snapshots |
+| [Menu bar](menubar.md) | Show or hide each menu bar icon; hidden and squeezed-out icons one click away at the top of the Baobox menu; move the Baobox icon to the right |
 | [Keyboard clicking](keyboard-nav.md) | Letter-label clicking, continuous mode, keyboard scrolling |
 | [Live Translate](live-translate.md) | Live captions from the mic or system audio, English ⇄ Chinese, on-screen caption bar |
 | [Keep awake](caffeinate.md) | Timed sleep prevention, optional display-on |
