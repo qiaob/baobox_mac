@@ -568,9 +568,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
     let mut label = [0u16; 48];
     let count = GetWindowTextW(item.hwndItem, &mut label).max(0) as usize;
     let label_half = (count as i32 * 7 + 10).clamp(22, 42);
-    if active {
-        let _ = RoundRect(dc, center - label_half, 46, center + label_half, 65, 14, 14);
-    }
+    let _ = RoundRect(dc, center - label_half, 46, center + label_half, 65, 14, 14);
     SelectObject(dc, old_pen);
     SelectObject(dc, old_brush);
     let _ = DeleteObject(outline);
@@ -633,7 +631,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
     };
     DrawTextW(
         dc,
-        &mut label[..if active { count } else { 0 }],
+        &mut label[..count],
         &mut label_rect,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
