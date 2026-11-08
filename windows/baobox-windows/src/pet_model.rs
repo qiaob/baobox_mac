@@ -575,6 +575,7 @@ pub struct Model {
     support_feet: Option<[(usize, f32); 2]>,
     mocap: Option<MocapRig>,
     gait: Cell<usize>,
+    body_bounds: Cell<Option<(i32, i32, i32, i32)>>,
 }
 
 impl Model {
@@ -934,6 +935,7 @@ impl Model {
             support_feet: None,
             mocap: None,
             gait: Cell::new(0),
+            body_bounds: Cell::new(None),
         };
         let rest = model.world("idle", 0.0);
         if let Some(humanoid) = &mut model.humanoid {
@@ -1272,7 +1274,29 @@ impl Model {
             size.min(160)
         } as usize;
         let pixels = self.render(edge, state, seconds as f32, left);
+        if self.is_humanoid() {
+            let (mut left, mut top, mut right, mut bottom) = (edge, edge, 0, 0);
+            for (y, row) in pixels.chunks_exact(edge).enumerate() {
+                if let Some(x) = row.iter().position(|&pixel| pixel != KEY) {
+                    left = left.min(x);
+                    right = right.max(row.iter().rposition(|&pixel| pixel != KEY).unwrap_or(x) + 1);
+                    top = top.min(y);
+                    bottom = y + 1;
+                }
+            }
+            self.body_bounds
+                .set((right > left && bottom > top).then_some((
+                    left as i32,
+                    top as i32,
+                    right as i32,
+                    bottom as i32,
+                )));
+        }
         super::pet_pack::draw_bitmap(dc, (0, 0, size, size), (edge, edge), &pixels);
+    }
+
+    pub fn body_bounds(&self) -> Option<(i32, i32, i32, i32)> {
+        self.body_bounds.get()
     }
 
     pub fn render(&self, edge: usize, state: &str, seconds: f32, left: bool) -> Vec<u32> {

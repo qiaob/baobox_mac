@@ -16,7 +16,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_RING_ACTION: u32 = WM_APP + 5;
 pub const MORE: &str = "desktop-pet.more";
 pub const ADVANCED: &str = "desktop-pet.advanced";
-pub const BACK: &str = "desktop-pet.ring-back";
 pub const ITEMS: [(&str, &str); 8] = [
     (crate::screenshot_module::QUICK_CAPTURE, "截图"),
     (crate::screenshot_module::OCR, "屏幕取字"),
@@ -43,15 +42,201 @@ struct RingState {
     owner: HWND,
     start: Instant,
     hovered: Cell<HWND>,
-    settled: Cell<bool>,
     icons: Vec<u16>,
+    points: Vec<(i32, i32)>,
+    center: (i32, i32),
+    inner: usize,
+    more: Option<usize>,
+    outer_started: Cell<Option<Instant>>,
+    faded_in: Cell<bool>,
+}
+
+fn ring_positions(
+    body: RECT,
+    screen: RECT,
+    inner: usize,
+    outer: usize,
+) -> ((i32, i32), Vec<(i32, i32)>) {
+    let body_center = (
+        (body.left + body.right) as f32 / 2.0,
+        (body.top + body.bottom) as f32 / 2.0,
+    );
+    let half = (
+        (body.right - body.left) as f32 / 2.0,
+        (body.bottom - body.top) as f32 / 2.0,
+    );
+    let radii = ((half.0 + 46.0).max(80.0), (half.1 + 40.0).max(80.0));
+    let limits = (
+        screen.left as f32 + 44.0,
+        screen.top as f32 + 32.0,
+        screen.right as f32 - 44.0,
+        screen.bottom as f32 - 44.0,
+    );
+    let fit = |position: f32, min: f32, max: f32, radius: f32| {
+        if min + radius <= max - radius {
+            position.clamp(min + radius, max - radius)
+        } else {
+            (min + max) / 2.0
+        }
+    };
+    let center = (
+        fit(body_center.0, limits.0, limits.2, radii.0),
+        fit(body_center.1, limits.1, limits.3, radii.1),
+    );
+    let mut placed = Vec::new();
+    for (count, gap) in [(inner, 0.0), (outer, 74.0)] {
+        if count == 0 {
+            continue;
+        }
+        let samples: Vec<_> = (0..360)
+            .map(|i| {
+                let angle = (i as f32).to_radians();
+                (
+                    center.0 + angle.sin() * (radii.0 + gap),
+                    center.1 - angle.cos() * (radii.1 + gap),
+                )
+            })
+            .collect();
+        let allowed: Vec<_> = samples
+            .iter()
+            .map(|&(x, y)| {
+                let dx = (x - body_center.0) / (half.0 + 18.0);
+                let dy = (y - body_center.1) / (half.1 + 18.0);
+                x >= limits.0
+                    && x <= limits.2
+                    && y >= limits.1
+                    && y <= limits.3
+                    && dx * dx + dy * dy >= 1.0
+            })
+            .collect();
+        let full = allowed.iter().all(|&ok| ok);
+        let (start, length) = if full {
+            (0, 361)
+        } else {
+            (0..360)
+                .filter(|&i| allowed[i] && !allowed[(i + 359) % 360])
+                .map(|start| {
+                    (
+                        start,
+                        (0..360).take_while(|i| allowed[(start + i) % 360]).count(),
+                    )
+                })
+                .max_by_key(|&(_, length)| length)
+                .unwrap_or((0, 361))
+        };
+        let points: Vec<_> = (0..length).map(|i| samples[(start + i) % 360]).collect();
+        let mut arc = vec![0.0];
+        for pair in points.windows(2) {
+            arc.push(arc.last().unwrap() + (pair[0].0 - pair[1].0).hypot(pair[0].1 - pair[1].1));
+        }
+        let span = *arc.last().unwrap();
+        for index in 0..count {
+            let fraction = if count == 1 {
+                0.5
+            } else {
+                index as f32 / (if full { count } else { count - 1 }) as f32
+            };
+            let distance = span * fraction;
+            let end = arc.partition_point(|&v| v < distance).min(points.len() - 1);
+            let begin = end.saturating_sub(1);
+            let f = (distance - arc[begin]) / (arc[end] - arc[begin]).max(0.001);
+            let (a, b) = (points[begin], points[end]);
+            let clamp =
+                |value: f32, low: f32, high: f32| value.clamp(low, high.max(low)).round() as i32;
+            placed.push((
+                clamp(a.0 + (b.0 - a.0) * f, limits.0, limits.2),
+                clamp(a.1 + (b.1 - a.1) * f, limits.1, limits.3),
+            ));
+        }
+    }
+    ((center.0.round() as i32, center.1.round() as i32), placed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_rings_fit_at_center_and_four_corners_on_a_secondary_monitor() {
+        let screen = RECT {
+            left: -1920,
+            top: -90,
+            right: 0,
+            bottom: 990,
+        };
+        for (left, top) in [
+            (-1050, 230),
+            (-1920, -90),
+            (-180, -90),
+            (-1920, 510),
+            (-180, 510),
+        ] {
+            let body = RECT {
+                left,
+                top,
+                right: left + 180,
+                bottom: top + 480,
+            };
+            let (_, points) = ring_positions(body, screen, 8, 8);
+            assert_eq!(points.len(), 16);
+            for (i, &(x, y)) in points.iter().enumerate() {
+                assert!(x - 43 >= screen.left && x + 43 <= screen.right);
+                assert!(y - 22 >= screen.top && y + 44 <= screen.bottom);
+                for &(other_x, other_y) in &points[..i] {
+                    assert!(
+                        (x - other_x).abs() >= 30 || (y - other_y).abs() >= 30,
+                        "icons overlap at {left},{top}: {x},{y} and {other_x},{other_y}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn more_and_escape_toggle_outer_without_dismissing_inner() {
+        unsafe {
+            let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+            let pet = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("test pet"),
+                WS_POPUP,
+                100,
+                120,
+                160,
+                230,
+                None,
+                None,
+                instance,
+                None,
+            )
+            .unwrap();
+            let inner = [(MORE, "更多")];
+            let outer = [(ADVANCED, "宠物动作")];
+            let ring = Ring::open(pet, pet, &inner, &outer).unwrap();
+            let outer_button = GetDlgItem(ring.window, 2).unwrap();
+            assert!(!IsWindowVisible(outer_button).as_bool());
+            SendMessageW(ring.window, WM_COMMAND, WPARAM(1), LPARAM(0));
+            ring.state
+                .outer_started
+                .set(Some(Instant::now() - std::time::Duration::from_secs(1)));
+            animate_ring(ring.window, &ring.state);
+            assert!(IsWindowVisible(outer_button).as_bool());
+            SendMessageW(ring.window, WM_KEYDOWN, WPARAM(0x1b), LPARAM(0));
+            assert!(ring.visible());
+            assert!(!IsWindowVisible(outer_button).as_bool());
+            drop(ring);
+            DestroyWindow(pet).unwrap();
+        }
+    }
 }
 
 impl Ring {
     pub fn open(
         owner: HWND,
         pet: HWND,
-        items: &[(&'static str, &'static str)],
+        inner: &[(&'static str, &'static str)],
+        outer: &[(&'static str, &'static str)],
     ) -> Result<Self, windows::core::Error> {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None)?.into();
@@ -70,20 +255,49 @@ impl Ring {
             let have_monitor =
                 GetMonitorInfoW(MonitorFromWindow(pet, MONITOR_DEFAULTTONEAREST), &mut info)
                     .as_bool();
-            let width = 344;
-            let height = 260;
-            let mut x = (pet_bounds.left + pet_bounds.right - width) / 2;
-            let mut y = (pet_bounds.top + pet_bounds.bottom - height) / 2;
-            if have_monitor {
-                x = x.clamp(
-                    info.rcWork.left,
-                    (info.rcWork.right - width).max(info.rcWork.left),
-                );
-                y = y.clamp(
-                    info.rcWork.top,
-                    (info.rcWork.bottom - height).max(info.rcWork.top),
-                );
-            }
+            let body = crate::pet::body_bounds(pet, pet_bounds);
+            let screen = if have_monitor {
+                info.rcMonitor
+            } else {
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: GetSystemMetrics(SM_CXSCREEN),
+                    bottom: GetSystemMetrics(SM_CYSCREEN),
+                }
+            };
+            let (center, points) = ring_positions(body, screen, inner.len(), outer.len());
+            let x = points
+                .iter()
+                .map(|p| p.0)
+                .min()
+                .unwrap_or(center.0)
+                .min(center.0)
+                - 43;
+            let y = points
+                .iter()
+                .map(|p| p.1)
+                .min()
+                .unwrap_or(center.1)
+                .min(center.1)
+                - 22;
+            let width = points
+                .iter()
+                .map(|p| p.0)
+                .max()
+                .unwrap_or(center.0)
+                .max(center.0)
+                + 43
+                - x;
+            let height = points
+                .iter()
+                .map(|p| p.1)
+                .max()
+                .unwrap_or(center.1)
+                .max(center.1)
+                + 44
+                - y;
+            let items: Vec<_> = inner.iter().chain(outer).copied().collect();
             let window = CreateWindowExW(
                 WS_EX_LAYERED
                     | WS_EX_TOPMOST
@@ -111,7 +325,15 @@ impl Ring {
                     owner,
                     start: Instant::now(),
                     hovered: Cell::new(HWND::default()),
-                    settled: Cell::new(false),
+                    points: points
+                        .into_iter()
+                        .map(|(px, py)| (px - x - 43, py - y - 22))
+                        .collect(),
+                    center: (center.0 - x - 43, center.1 - y - 22),
+                    inner: inner.len(),
+                    more: inner.iter().position(|(id, _)| *id == MORE).map(|i| i + 1),
+                    outer_started: Cell::new(None),
+                    faded_in: Cell::new(false),
                     icons: items
                         .iter()
                         .map(|(action, _)| match *action {
@@ -122,7 +344,6 @@ impl Ring {
                             crate::keyboardnav_module::CLICK => 0xe765,
                             "desktop-pet.next-character" => 0xe8ab,
                             "app.settings" => 0xe713,
-                            BACK => 0xe72b,
                             _ => ITEMS
                                 .iter()
                                 .position(|(id, _)| id == action)
@@ -138,16 +359,14 @@ impl Ring {
             );
             SetLayeredWindowAttributes(window, KEY, 100, LWA_COLORKEY | LWA_ALPHA)?;
             for (index, (_, title)) in items.iter().enumerate() {
-                let angle = index as f32 * std::f32::consts::TAU / items.len() as f32
-                    - std::f32::consts::FRAC_PI_2;
                 let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
                 CreateWindowExW(
                     Default::default(),
                     w!("BUTTON"),
                     PCWSTR(title.as_ptr()),
                     WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32),
-                    width / 2 + (angle.cos() * 124.0) as i32 - 43,
-                    height / 2 + (angle.sin() * 92.0) as i32 - 33,
+                    ring.state.points[index].0,
+                    ring.state.points[index].1,
                     86,
                     66,
                     window,
@@ -218,6 +437,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPAR
         }
         WM_COMMAND => {
             if let Some(state) = state {
+                if state.more == Some(wp.0 & 0xffff) && state.inner < state.points.len() {
+                    toggle_outer(hwnd, state);
+                    return LRESULT(0);
+                }
                 let _ = PostMessageW(
                     state.owner,
                     WM_RING_ACTION,
@@ -228,6 +451,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPAR
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
         WM_KEYDOWN if wp.0 == 0x1b => {
+            if let Some(state) = state.filter(|state| state.outer_started.get().is_some()) {
+                toggle_outer(hwnd, state);
+                return LRESULT(0);
+            }
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
         _ => return DefWindowProcW(hwnd, message, wp, lp),
@@ -235,34 +462,61 @@ unsafe extern "system" fn wndproc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPAR
     LRESULT(0)
 }
 
+unsafe fn toggle_outer(hwnd: HWND, state: &RingState) {
+    let open = state.outer_started.get().is_none();
+    state.outer_started.set(open.then(Instant::now));
+    if !open {
+        for index in state.inner..state.points.len() {
+            if let Ok(button) = GetDlgItem(hwnd, (index + 1) as i32) {
+                let _ = ShowWindow(button, SW_HIDE);
+            }
+        }
+    }
+    if let Some(index) = state.more {
+        if let Ok(button) = GetDlgItem(hwnd, index as i32) {
+            let _ = SetWindowTextW(button, if open { w!("收起") } else { w!("更多") });
+            let _ = InvalidateRect(button, None, false);
+        }
+    }
+}
+
 unsafe fn animate_ring(hwnd: HWND, state: &RingState) {
     let elapsed = state.start.elapsed().as_secs_f32();
-    if !state.settled.get() {
+    if !state.faded_in.get() {
         let alpha = 100 + (130.0 * (elapsed / 0.22).min(1.0)) as u8;
         let _ = SetLayeredWindowAttributes(hwnd, KEY, alpha, LWA_COLORKEY | LWA_ALPHA);
-        for index in 0..state.icons.len() {
-            let age = elapsed - index as f32 * 0.018;
-            if age < 0.0 {
-                continue;
-            }
-            let Ok(button) = GetDlgItem(hwnd, (index + 1) as i32) else {
+        state.faded_in.set(elapsed >= 0.22);
+    }
+    for (index, &(x, y)) in state.points.iter().enumerate() {
+        let (elapsed, offset) = if index < state.inner {
+            (elapsed, index)
+        } else {
+            let Some(start) = state.outer_started.get() else {
                 continue;
             };
-            let angle = index as f32 * std::f32::consts::TAU / state.icons.len() as f32
-                - std::f32::consts::FRAC_PI_2;
-            let progress = (age / 0.18).clamp(0.0, 1.0);
-            let radius = 1.0 - 0.23 * (1.0 - progress).powi(3);
-            let _ = SetWindowPos(
-                button,
-                None,
-                129 + (angle.cos() * 124.0 * radius) as i32,
-                97 + (angle.sin() * 92.0 * radius) as i32,
-                0,
-                0,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_SHOWWINDOW,
-            );
+            (start.elapsed().as_secs_f32(), index - state.inner)
+        };
+        let age = elapsed - offset as f32 * 0.018;
+        if age < 0.0 {
+            continue;
         }
-        state.settled.set(elapsed >= 0.36);
+        let Ok(button) = GetDlgItem(hwnd, (index + 1) as i32) else {
+            continue;
+        };
+        if age > 0.22 && IsWindowVisible(button).as_bool() {
+            continue;
+        }
+        let progress = (age / 0.18).clamp(0.0, 1.0);
+        let radius = 1.0 - 0.35 * (1.0 - progress).powi(3);
+        let _ = SetWindowPos(
+            button,
+            None,
+            state.center.0 + ((x - state.center.0) as f32 * radius).round() as i32,
+            state.center.1 + ((y - state.center.1) as f32 * radius).round() as i32,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
     }
     let mut cursor = windows::Win32::Foundation::POINT::default();
     let hovered = if GetCursorPos(&mut cursor).is_ok() {

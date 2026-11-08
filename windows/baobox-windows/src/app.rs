@@ -66,18 +66,18 @@ struct App {
 }
 
 impl App {
-    fn open_pet_ring(&mut self, outer: bool) {
+    fn open_pet_ring(&mut self) {
         use crate::{caffeinate_module as awake, pet_ring as ring};
         let has_action = |tool_id: &str, action: &str| {
             self.registry.tools().iter().find(|tool| tool.id() == tool_id)
                 .is_some_and(|tool| tool.menu_items().iter().any(|item| item.action_ids().contains(&action)))
         };
-        let mut items = if outer {
+        let mut outer = {
             let mut items = vec![
                 ("desktop-pet.feed", "喂食"), ("desktop-pet.play", "陪玩"),
                 (crate::keyboardnav_module::CLICK, "键盘点击"),
                 (screenshot_module::HISTORY, "截图历史"), (ACTION_SETTINGS, "设置"),
-                (ring::ADVANCED, "宠物动作"), (ring::BACK, "返回"),
+                (ring::ADVANCED, "宠物动作"),
             ];
             if let Some(baobox_app::MenuItem::Action { label, .. }) = self.registry.tools().iter()
                 .find(|tool| tool.id() == screenshot_module::ID)
@@ -86,15 +86,16 @@ impl App {
                 items.insert(0, (screenshot_module::RECORD, title));
             }
             items
-        } else {
+        };
+        let inner = {
             let mut items = ring::ITEMS.to_vec();
             items[4] = if has_action(awake::ID, awake::STOP) { (awake::STOP, "关闭防休眠") } else { (awake::TOGGLE, "防休眠") };
             items[5] = (crate::pet::NEXT_CHARACTER, "换形象");
             if self.notices.manually_quiet() { items[6] = (pet_notify::RESUME, "结束勿扰"); }
             items
         };
-        items.retain(|(id, _)| !matches!(*id, "desktop-pet.feed" | "desktop-pet.play") || has_action(crate::pet::ID, id));
-        self.pet_ring = crate::pet::anchor().and_then(|pet| ring::Ring::open(self.hwnd, pet, &items).ok());
+        outer.retain(|(id, _)| !matches!(*id, "desktop-pet.feed" | "desktop-pet.play") || has_action(crate::pet::ID, id));
+        self.pet_ring = crate::pet::anchor().and_then(|pet| ring::Ring::open(self.hwnd, pet, &inner, &outer).ok());
         crate::pet::set_menu_open(self.pet_ring.is_some());
         if self.pet_ring.is_none() { self.pet_menu(); }
     }
@@ -126,8 +127,6 @@ impl App {
             ACTION_QUIT => unsafe { PostQuitMessage(0) },
             ACTION_SETTINGS => self.open_settings(),
             ACTION_ABOUT => about(self.hwnd),
-            crate::pet_ring::MORE => self.open_pet_ring(true),
-            crate::pet_ring::BACK => self.open_pet_ring(false),
             crate::pet_ring::ADVANCED => self.pet_menu(),
             "app.open-screenshot-folder" => {
                 let history = store::load(1);
@@ -393,7 +392,7 @@ unsafe extern "system" fn wndproc(
             let was_open = app.pet_ring.take().is_some_and(|ring| ring.visible());
             if !was_open {
                 app.screenshot_target = crate::paste::PasteTarget::current();
-                app.open_pet_ring(false);
+                app.open_pet_ring();
             }
             crate::pet::set_menu_open(app.pet_ring.as_ref().is_some_and(|ring| ring.visible()));
             LRESULT(0)

@@ -135,8 +135,18 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
         let _ring = if mode == Some("--ring") {
             set_menu_open(true);
             Some(
-                crate::pet_ring::Ring::open(hwnd, hwnd, &crate::pet_ring::ITEMS)
-                    .map_err(|e| e.to_string())?,
+                crate::pet_ring::Ring::open(
+                    hwnd,
+                    hwnd,
+                    &crate::pet_ring::ITEMS,
+                    &[
+                        ("desktop-pet.nod", "点头"),
+                        ("desktop-pet.shake", "摇头"),
+                        ("desktop-pet.laugh", "笑"),
+                        ("desktop-pet.cry", "哭"),
+                    ],
+                )
+                .map_err(|e| e.to_string())?,
             )
         } else {
             None
@@ -158,6 +168,28 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
 
 pub fn anchor() -> Option<HWND> {
     ANCHOR.get()
+}
+
+pub fn body_bounds(hwnd: HWND, window: RECT) -> RECT {
+    unsafe {
+        let state = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State).as_ref();
+        if let Some((left, top, right, bottom)) = state.and_then(|state| {
+            state
+                .pack
+                .borrow()
+                .as_ref()
+                .and_then(|pack| pack.body_bounds())
+        }) {
+            RECT {
+                left: window.left + left,
+                top: window.top + top,
+                right: window.left + right,
+                bottom: window.top + bottom,
+            }
+        } else {
+            window
+        }
+    }
 }
 
 pub fn set_quiet(value: bool) {

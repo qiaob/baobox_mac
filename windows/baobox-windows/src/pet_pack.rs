@@ -322,6 +322,12 @@ impl Frame {
 }
 
 impl Pack {
+    pub fn body_bounds(&self) -> Option<(i32, i32, i32, i32)> {
+        match self {
+            Self::Model(model) => model.body_bounds(),
+            Self::Sprites(_) => None,
+        }
+    }
     pub fn set_gait(&self, gait: usize) {
         if let Self::Model(model) = self {
             model.set_gait(gait);
