@@ -15,6 +15,9 @@ struct HotkeyDefinition {
     /// 松开时调用；nil = 不关心松开（绝大多数快捷键）。「按住说话」= `action` 开始 + `onRelease` 结束，
     /// 见 docs/dictation/TECH_DESIGN.md §1。
     var onRelease: (@MainActor () -> Void)? = nil
+    /// 开关类动作此刻按下去会做什么（「关闭防休眠」「暂停专注」）。桌面宠物的环形菜单拿它当按钮标题 ——
+    /// 那里看不到二级菜单里随状态变的那一行。要短（按钮下的小标签）；nil / 返回 nil = 用环形菜单自己的标题。
+    var stateTitle: (@MainActor () -> String?)? = nil
 }
 
 /// 工具模块协议：新增工具只需实现本协议并在 AppDelegate 中注册，

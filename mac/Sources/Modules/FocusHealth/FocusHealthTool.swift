@@ -19,10 +19,17 @@ final class FocusHealthTool: ToolModule {
                 id: "focushealth.focus",
                 title: L("focus.hotkey.focus"),
                 subtitle: L("focus.hotkey.focusHelp"),
-                defaultCombo: nil
-            ) {
-                FocusHealthController.shared.toggleFocus()
-            },
+                defaultCombo: nil,
+                action: { FocusHealthController.shared.toggleFocus() },
+                // 环形菜单的标题跟着 toggleFocus 走：专注中 = 暂停、暂停中 = 继续；空闲 / 休息中 = 开始，用环形菜单自己的「专注」。
+                stateTitle: {
+                    switch FocusHealthController.shared.session.phase {
+                    case .focusing: return L("focus.menu.pause")
+                    case .paused: return L("focus.menu.resume")
+                    case .idle, .shortBreak, .longBreak: return nil
+                    }
+                }
+            ),
             HotkeyDefinition(
                 id: "focushealth.breakNow",
                 title: L("focus.hotkey.breakNow"),

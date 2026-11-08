@@ -72,7 +72,7 @@
 - `clips`：引擎状态 → 模型里的动画片段名。状态有五个：`idle` 待机、`walk` 走路、`happy` 来通知时（播一次）、`sleep` 睡觉（默认播完停在最后一帧）、`drag` 被拖着。值可以直接写片段名，也可以写 `{ "clip", "loop", "hold" }`。
 - 没写的状态按片段名猜（idle / survey → 待机，walk → 走路，jump / wave / yes → 通知，sleep / lie / sit → 睡觉），再没有就用待机。
 - `fidgets`：待机时每 8–16 秒随机播一个的小动作，播完回到待机；来通知 / 开始走路会立刻打断。
-- `interactions`：互动 → 若干候选（随机挑一个），每个候选是一串依次播放的片段（只有一段时也可以直接写字符串）。互动有六种：`poke` 单击、`highFive` 双击、`pet` 抚摸、`feed` 喂食、`play` 陪玩、`wake` 睡醒。没写的按片段名猜（giggle / jump → 单击，highfive / wave → 双击，nod → 抚摸，eat / drink → 喂食，pounce / dance → 陪玩，get_up / yawn → 睡醒），猜不到就不支持（环形菜单里不显示「喂食」「陪玩」）。
+- `interactions`：互动 → 若干候选（随机挑一个），每个候选是一串依次播放的片段（只有一段时也可以直接写字符串）。互动有六种：`poke` 单击、`highFive` 双击、`pet` 抚摸、`feed` 喂食、`play` 陪玩、`wake` 睡醒。没写的按片段名猜（giggle / jump → 单击，highfive / wave → 双击，nod → 抚摸，eat / drink → 喂食，pounce / dance → 陪玩，get_up / yawn → 睡醒），猜不到就不支持。`feed` / `play` 原先由环形菜单的「喂食」「陪玩」触发，2026-11-08 这两个入口删了，写了也暂时用不上。
 - `enter` / `leave`：出场落地后 / 退场前播的片段（一个名字或一串，#54，见 [ENTRANCE.md](ENTRANCE.md) §4）。不写的 VRM 用 `wave` / `bye`，其他形象不播片段。
 - 片段名要写全名：Quaternius 的模型带 `AnimalArmature|` 之类的前缀（有的重复三遍）。
 - `yaw`：模型正面不朝 +Z 时的修正（度）；`scale`：在自动取景的基础上再放大 / 缩小。

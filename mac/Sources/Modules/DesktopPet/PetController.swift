@@ -784,7 +784,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         bubble.show(n, onAction: onAction)
     }
 
-    // MARK: - 互动（单击 / 双击 / 抚摸 / 喂食 / 陪玩）
+    // MARK: - 互动（单击 / 双击 / 抚摸）
 
     /// 做个互动动作并冒一句话。3D 形象按 pet.json 的 interactions（或按片段名猜）播；2D 形象跳一下。
     func interact(_ kind: String, fallback: String? = nil) {
@@ -805,14 +805,9 @@ final class PetController: ObservableObject, NotifyPresenting {
             engine.occupy(for: 1)
             engine.notify(level: .bubble)
         }
-        // 被摸、被戳、被喂、陪着玩：高兴一阵，接下来走路蹦蹦跳跳的（MOCAP.md §3）。
+        // 被摸、被戳：高兴一阵，接下来走路蹦蹦跳跳的（MOCAP.md §3）。
         engine.cheer()
         say(Self.line(for: used))
-    }
-
-    /// 当前形象支不支持某种互动（环形菜单据此显示「喂食」「陪玩」）。
-    func supports(_ kind: String) -> Bool {
-        shownModelID != nil && modelView.supports(kind)
     }
 
     /// 宠物说一句话：一条 2 秒的轻提示，不进通知历史。
@@ -827,8 +822,6 @@ final class PetController: ObservableObject, NotifyPresenting {
         case "poke": lines = [L("pet.line.poke1"), L("pet.line.poke2"), L("pet.line.poke3"), L("pet.line.poke4")]
         case "highFive": lines = [L("pet.line.highFive1"), L("pet.line.highFive2")]
         case "pet": lines = [L("pet.line.pet1"), L("pet.line.pet2")]
-        case "feed": lines = [L("pet.line.feed1"), L("pet.line.feed2")]
-        case "play": lines = [L("pet.line.play1"), L("pet.line.play2")]
         default: lines = []
         }
         return lines.randomElement() ?? ""
@@ -930,18 +923,21 @@ final class PetController: ObservableObject, NotifyPresenting {
         radial.open(around: body, inner: inner, outer: outer)
     }
 
-    /// 内圈 7 格（最后一格由菜单补「更多」）：专注、防休眠、换形象、手机互传、实时翻译 + 喂食、陪玩、安静；外圈：其余工具 + 测试通知、设置、隐藏。
+    /// 内圈 7 格（最后一格由菜单补「更多」）：专注、防休眠、换形象、手机互传、实时翻译、安静，空着的一格由外圈第一个工具补上；
+    /// 外圈：其余工具 + 测试通知、设置、隐藏。
     /// 2026-11-08 用户先说「优先放没有快捷键的常用按钮，截图、剪贴板之类的都有快捷键」，又点名内圈放「专注、防休眠、换宠物、实时翻译」，
     /// Claude Code 不要。外圈的工具按常用程度排，没绑快捷键的在前、绑了的整体排后（键盘就按得到）；绑没绑按当前键位实时判断。
-    /// 手机互传（没有出厂快捷键）2026-11-08 用户要求加进内圈；形象有喂食 + 陪玩时内圈会多出一格，排在最后的工具（实时翻译，已并入会议）挪去外圈最前。
+    /// 手机互传（没有出厂快捷键）2026-11-08 用户要求加进内圈。喂食、陪玩同日用户说不要了（原先形象支持时排在安静前面）。
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
-    /// 内圈缺了谁（形象没有喂食 / 陪玩动作、某个工具没注册）就从外圈挪工具进来，保证内圈是满的。
+    /// 开关类工具的标题跟着状态走（`HotkeyDefinition.stateTitle`，模块自己给）：开着时写「关闭防休眠」「暂停专注」「停止录屏」……
+    /// 2026-11-08 用户反馈点了防休眠没提示、标题也还是「防休眠」，专注同样。菜单每次打开都重建，标题总是当下的状态。
+    /// 内圈缺了谁（某个工具没注册）就从外圈挪工具进来，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
         let hotkeys = AppDelegate.shared?.registry.allHotkeys().flatMap(\.defs) ?? []
         func tool(_ id: String, _ symbol: String, _ title: String) -> RadialMenuItem? {
             guard let def = hotkeys.first(where: { $0.id == id }) else { return nil }
             let action = def.action
-            return RadialMenuItem(id: id, symbol: symbol, title: title) { action() }
+            return RadialMenuItem(id: id, symbol: symbol, title: def.stateTitle?() ?? title) { action() }
         }
         let quiet = PetSettings.quietUntil.map { $0 > Date() } ?? false
 
@@ -954,16 +950,6 @@ final class PetController: ObservableObject, NotifyPresenting {
             tool("phonetransfer.open", "iphone.and.arrow.forward", L("pet.ring.phoneTransfer")),
             tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate")),
         ].compactMap { $0 }
-        if supports("feed") {
-            inner.append(RadialMenuItem(id: "pet.feed", symbol: "fork.knife", title: L("pet.ring.feed")) { [weak self] in
-                self?.interact("feed")
-            })
-        }
-        if supports("play") {
-            inner.append(RadialMenuItem(id: "pet.play", symbol: "gamecontroller.fill", title: L("pet.ring.play")) { [weak self] in
-                self?.interact("play")
-            })
-        }
         inner.append(RadialMenuItem(id: "pet.quiet", symbol: quiet ? "bell.fill" : "moon.zzz.fill",
                                     title: quiet ? L("pet.ring.unquiet") : L("pet.ring.quiet")) { [weak self] in
             if quiet { self?.clearQuiet() } else { self?.quietForOneHour() }
@@ -998,7 +984,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.setEnabled(false)
         })
 
-        // 内圈最多 7 格（第 8 格是「更多」）：形象有喂食 + 陪玩时会多出来，把排在最后的工具（实时翻译，已并入会议）挪到外圈最前。
+        // 内圈最多 7 格（第 8 格是「更多」）：多出来时把排在最后的工具挪到外圈最前（现在的内圈凑不满 7 格，只是兜底）。
         while inner.count > 7, let last = inner.lastIndex(where: { !$0.id.hasPrefix("pet.") }) {
             outer.insert(inner.remove(at: last), at: 0)
         }

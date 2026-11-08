@@ -68,10 +68,11 @@ final class ScreenshotTool: ToolModule {
                 id: "screenshot.record",
                 title: L("screenshot.menu.record"),
                 subtitle: L("screenshot.record.hotkey.subtitle"),
-                defaultCombo: KeyCombo(keyCode: 0x0F, carbonModifiers: KeyCombo.control | KeyCombo.shift) // ⌃⇧R
-            ) { [weak self] in
-                self?.toggleRecording()
-            }
+                defaultCombo: KeyCombo(keyCode: 0x0F, carbonModifiers: KeyCombo.control | KeyCombo.shift), // ⌃⇧R
+                action: { [weak self] in self?.toggleRecording() },
+                // 同一个动作录制中 = 停止：环形菜单这时写「停止录屏」。
+                stateTitle: { RecordingController.shared.isRecording ? L("screenshot.menu.stopRecord") : nil }
+            )
         ]
     }
 

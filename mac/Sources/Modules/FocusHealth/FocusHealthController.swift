@@ -193,11 +193,28 @@ final class FocusHealthController: ObservableObject {
         changed(now)
     }
 
+    /// 暂停 / 继续都给回执：菜单栏倒计时换个图标不显眼，从环形菜单点的时候更是什么都看不到（2026-11-08 用户反馈）。
+    /// 暂停的回执是张卡片「专注已暂停 · 还剩 12:34」[继续][结束这一轮]：环形菜单和快捷键只能开始 / 暂停 / 继续，
+    /// 想提前结束就在这里点。结束算完成（同菜单「提前结束 ▸ 记为完成」），用户 2026-11-08 从三个方案里选的。
     func pauseFocus() {
         guard session.phase == .focusing else { return }
         session.pause(at: Date())
         NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
         changed()
+        NotifyCenter.shared.post(PetNotification(
+            source: Self.source, level: .bubble, title: statusLine(),
+            actions: [.init(id: "resume", label: L("focus.action.resume"), role: .primary),
+                      .init(id: "end", label: L("focus.action.endRound"))],
+            icon: "pause.circle", isUserFeedback: true
+        )) { action in
+            // 卡片还在时用户可能已经从别处继续了：resumeFocus / endFocusEarly 自己会按当前阶段判断。
+            let controller = FocusHealthController.shared
+            switch action {
+            case "resume": controller.resumeFocus()
+            case "end": controller.endFocusEarly(countAsDone: true)
+            default: break
+            }
+        }
     }
 
     func resumeFocus() {
@@ -205,13 +222,20 @@ final class FocusHealthController: ObservableObject {
         session.resume(at: Date())
         NotifyDND.shared.setSuppressed(true, token: Self.focusToken)
         changed()
+        feedback(statusLine(), icon: "timer")
+    }
+
+    /// 用户刚点的操作的回执：勿扰（含专注自己挂的）时也照常显示。
+    private func feedback(_ text: String, icon: String) {
+        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: text, icon: icon,
+                                                 isUserFeedback: true))
     }
 
     /// 提前结束：记为完成（接休息）或作废（不计轮次、不接休息，顺延的提醒照常补上）。
     func endFocusEarly(countAsDone: Bool) {
         guard session.inFocus else { return }
         if countAsDone {
-            finishFocus(at: Date())
+            finishFocus(at: Date(), byUser: true)
         } else {
             session.discard()
             NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
@@ -244,7 +268,8 @@ final class FocusHealthController: ObservableObject {
         }
     }
 
-    private func finishFocus(at now: Date) {
+    /// `byUser`：用户点的「提前结束 · 算完成」—— 完成卡片算操作回执，全屏 / 安静这些勿扰时也立刻出来。
+    private func finishFocus(at now: Date, byUser: Bool = false) {
         let overdue = session.plannedEnd.map { now.timeIntervalSince($0) } ?? 0
         NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
         let kind = session.complete(day: FocusDay.key(now), longEvery: FocusHealthSettings.longEvery)
@@ -262,14 +287,14 @@ final class FocusHealthController: ObservableObject {
         case .short:
             let minutes = FocusHealthSettings.shortBreakMinutes
             session.startBreak(.short, seconds: Double(minutes * 60), at: now)
-            postFocusDone(round: round, breakMinutes: minutes, extras: extras)
+            postFocusDone(round: round, breakMinutes: minutes, extras: extras, byUser: byUser)
         case .long:
             let minutes = FocusHealthSettings.longBreakMinutes
             session.startBreak(.long, seconds: Double(minutes * 60), at: now)
             let strength = FocusHealthSettings.strength
             if strength == .relaxed {
                 // 轻松档不出休息画面：同短休息，宠物提醒 + 菜单栏倒计时。
-                postFocusDone(round: round, breakMinutes: minutes, extras: extras)
+                postFocusDone(round: round, breakMinutes: minutes, extras: extras, byUser: byUser)
             } else {
                 var message = L("focus.focusDone.longMessage \(round)")
                 if !extras.isEmpty { message += "\n" + L("focus.alsoLine \(extras)") }
@@ -286,14 +311,14 @@ final class FocusHealthController: ObservableObject {
     }
 
     /// 专注完成的卡片：休息多久、顺延进来的事；[再来一轮][结束]。休息在菜单栏倒计时。
-    private func postFocusDone(round: Int, breakMinutes: Int, extras: String) {
+    private func postFocusDone(round: Int, breakMinutes: Int, extras: String, byUser: Bool = false) {
         var body = L("focus.focusDone.shortBody \(breakMinutes)")
         if !extras.isEmpty { body += "\n" + L("focus.alsoLine \(extras)") }
         NotifyCenter.shared.post(PetNotification(
             source: Self.source, level: .bubble, title: L("focus.focusDone.title \(round)"), body: body,
             actions: [.init(id: "next", label: L("focus.action.nextRound"), role: .primary),
                       .init(id: "end", label: L("focus.action.endCycle"), role: .destructive)],
-            icon: "checkmark.circle"
+            icon: "checkmark.circle", isUserFeedback: byUser
         )) { action in
             let controller = FocusHealthController.shared
             switch action {
@@ -599,9 +624,18 @@ final class FocusHealthController: ObservableObject {
         presentRest(item, extras: [])
     }
 
-    /// 菜单 / 快捷键「现在休息」：按「整段休息」项的时长（没有就 5 分钟）出画面，做完算一次完整休息。
+    /// 菜单 / 快捷键 / 环形菜单「现在休息」：按「整段休息」项的时长（没有就 5 分钟）出画面，做完算一次完整休息。
     func breakNow() {
-        guard !stage.isBusy, !session.inFocus, !session.inBreak else { return }
+        guard !stage.isBusy else { return }
+        // 专注中、休息中不再插一次休息。菜单这时不显示这一项，环形菜单和快捷键却点得到：说一声为什么没动静。
+        if session.inFocus {
+            feedback(L("focus.toast.breakInFocus"), icon: "timer")
+            return
+        }
+        if session.inBreak {
+            feedback(L("focus.toast.alreadyOnBreak"), icon: "cup.and.saucer.fill")
+            return
+        }
         let base = items.first { $0.preset == ReminderPreset.rest }
         var request = BreakRequest(title: L("focus.rest.title"), message: L("focus.rest.breakMessage"),
                                    seconds: TimeInterval(base?.restSeconds ?? 300),

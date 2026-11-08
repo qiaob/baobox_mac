@@ -22,9 +22,16 @@ final class MeetingTool: ToolModule {
                 MeetingActions.joinNext()
             },
             HotkeyDefinition(id: "meeting.startOnline", title: L("meeting.hotkey.startOnline"),
-                             subtitle: L("meeting.hotkey.startOnlineHelp"), defaultCombo: nil) {
-                MeetingMenu.toggleOnline()
-            },
+                             subtitle: L("meeting.hotkey.startOnlineHelp"), defaultCombo: nil,
+                             action: { MeetingMenu.toggleOnline() },
+                             // 环形菜单的标题跟着开关走：记录中 = 结束；正在收尾时再点也没用，写明在结束。
+                             stateTitle: {
+                                 switch MeetingSessionController.shared.phase {
+                                 case .idle: return nil
+                                 case .starting, .recording, .paused: return L("meeting.action.finish")
+                                 case .finishing: return L("meeting.statusLine.finishing")
+                                 }
+                             }),
             HotkeyDefinition(id: "meeting.startOffline", title: L("meeting.hotkey.startOffline"),
                              subtitle: nil, defaultCombo: nil) {
                 MeetingSessionController.shared.start(type: .offline)

@@ -40,11 +40,7 @@ combination:
 | Recent files panel | Claude Code |
 | Codex session center | Codex assistant |
 | Codex quick resume panel | Codex assistant |
-
-## Tools with no shortcut
-
-**Keep awake** is menu-only and declares no shortcut — a low-frequency action shouldn't
-occupy a key combination.
+| Toggle Keep Awake (default duration) | Keep awake |
 
 ## In-interface keys (not global)
 
