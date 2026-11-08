@@ -930,9 +930,10 @@ final class PetController: ObservableObject, NotifyPresenting {
         radial.open(around: body, inner: inner, outer: outer)
     }
 
-    /// 内圈 7 格（最后一格由菜单补「更多」）：专注、防休眠、换形象、实时翻译 + 喂食、陪玩、安静；外圈：其余工具 + 测试通知、设置、隐藏。
+    /// 内圈 7 格（最后一格由菜单补「更多」）：专注、防休眠、换形象、手机互传、实时翻译 + 喂食、陪玩、安静；外圈：其余工具 + 测试通知、设置、隐藏。
     /// 2026-11-08 用户先说「优先放没有快捷键的常用按钮，截图、剪贴板之类的都有快捷键」，又点名内圈放「专注、防休眠、换宠物、实时翻译」，
     /// Claude Code 不要。外圈的工具按常用程度排，没绑快捷键的在前、绑了的整体排后（键盘就按得到）；绑没绑按当前键位实时判断。
+    /// 手机互传（没有出厂快捷键）2026-11-08 用户要求加进内圈；形象有喂食 + 陪玩时内圈会多出一格，排在最后的工具（实时翻译，已并入会议）挪去外圈最前。
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
     /// 内圈缺了谁（形象没有喂食 / 陪玩动作、某个工具没注册）就从外圈挪工具进来，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
@@ -950,6 +951,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
                 self?.nextCharacter()
             },
+            tool("phonetransfer.open", "iphone.and.arrow.forward", L("pet.ring.phoneTransfer")),
             tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate")),
         ].compactMap { $0 }
         if supports("feed") {
@@ -996,7 +998,11 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.setEnabled(false)
         })
 
-        // 内圈凑满 7 格（第 8 格是「更多」）。
+        // 内圈最多 7 格（第 8 格是「更多」）：形象有喂食 + 陪玩时会多出来，把排在最后的工具（实时翻译，已并入会议）挪到外圈最前。
+        while inner.count > 7, let last = inner.lastIndex(where: { !$0.id.hasPrefix("pet.") }) {
+            outer.insert(inner.remove(at: last), at: 0)
+        }
+        // 内圈凑满 7 格。
         while inner.count < 7, !outer.isEmpty {
             inner.insert(outer.removeFirst(), at: max(inner.count - 1, 0))
         }

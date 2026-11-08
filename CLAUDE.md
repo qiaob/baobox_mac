@@ -60,6 +60,7 @@ BaoboxApp(@main, Settings scene)
 | LiveTranslate | `livetranslate` | **实时翻译**（菜单与设置 Tab 已改名「字幕与同传」，注明已并入「会议」，下个版本删入口）：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
 | SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层翻译 + 朗读（AX 取词 / 借剪贴板兜底（App 自己的「拷贝」菜单项，终端等 AX 读不到的 App 自动弹出也能用）/ 框选 OCR；原文语种自动识别，译成可选语言；系统翻译 / 离线模型，macOS 14 也能翻）。`docs/selection-translate/` |
 | Dictation | `dictation` | **语音听写**（#45）：按住说话 / 连续听写（开始·结束听写，出厂快捷键 ⌥Space：一句定稿就上屏，可以一直说，安静 30 秒自动结束）/ 长听写（收集面板，可编辑再插入）；录音条不抢焦点，Esc 取消；识别走自己的 `SFSpeechRecognizer`（taskHint 听写、优先设备端、术语表共用），默认中英自动判别（低置信度时换语言重认；连续听写与长听写按停顿切段、逐句判）；后处理：语音指令、口头禅过滤、标点规整、可选本地 AI 润色（按 App）；插入按可靠性降级：AX 写入焦点（读回校验）→ 借剪贴板 ⌘V（不进剪贴板历史）→ 复制 + 提示（密码框 / 无权限）。听写历史只存文本。`docs/dictation/` |
+| PhoneTransfer | `phonetransfer` | **手机互传**：扫码连接，Mac ↔ 手机互传文件和文字，手机只用浏览器。局域网模式 = `NWListener` 极简 HTTP 服务（令牌 + Mac 端允许）；公网模式 = 隐藏 `WKWebView` 跑 WebRTC DataChannel（UDP 打洞，**不做中继**），信令 AES-GCM 加密后经公共 ntfy.sh / MQTT 中转。网页在 `Resources/PhoneTransfer/`（folder 资源，同一份由 `pages.yml` 发布到 GitHub Pages `/transfer/`）。`docs/phone-transfer/` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
@@ -90,6 +91,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/dictation/` —— 语音听写 REQUIREMENTS + TECH_DESIGN：三种唤起、快捷键松开事件、识别与换段、文本后处理顺序、插入降级与「只粘贴」名单、Esc 拦截。
 - `docs/live-translate/DESIGN.md` —— 实时翻译：分段识别（停顿 / 45s 切段）、翻译节流（finals 全翻 + 最新 partial）、字幕条窗口。
 - `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
+- `docs/phone-transfer/` —— 手机互传 REQUIREMENTS + TECH_DESIGN：局域网 HTTP 接口、加密信令格式、三个公共信令后端、WebRTC 建连与 NAT 诊断、DataChannel 分块协议、WKWebView 宿主桥。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。

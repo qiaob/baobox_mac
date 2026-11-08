@@ -56,6 +56,7 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 | [专注与健康](docs/focus-health/REQUIREMENTS.md) | 出厂不绑定 | 专注计时、喝水 / 站立 / 护眼 20-20-20 提醒、宠物陪伴式休息画面 |
 | [桌面宠物](docs/desktop-pet/DESIGN.md) | 出厂不绑定 | 桌面上的宠物，同时是 Baobox 统一的通知中心 |
 | [防休眠](docs/manual/caffeinate.md) | 纯菜单 | 定时阻止睡眠，可选屏幕常亮 |
+| [手机互传](docs/manual/phone-transfer.md) | 出厂不绑定 | 扫码连接，Mac 与手机互传文件和文字；局域网或公网点对点直连，手机不用装 App |
 | [Claude Code 助手](docs/manual/claude-code.md) | ⌃⇧空格 | 会话续接、额度用量、审计、通知、配置可视化、statusline、MCP |
 | [Codex 助手](docs/manual/codex.md) | 出厂不绑定 | 会话续接、额度用量、配置可视化、完成通知、维护 |
 

@@ -47,11 +47,35 @@ jobs:
       - name: Generate project
         run: xcodegen generate
 
+      # 下载好的 llama.cpp + 编好的虚拟麦克风驱动按 Makefile 内容缓存：版本不变就不再访问 GitHub 的下载服务
+      # （它偶尔连续 504，曾让整条构建卡在这一步、代码根本没编）。只在两样都齐了时才存缓存。
+      - name: Restore vendored helpers
+        id: vendor-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: mac/Vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mac/Makefile') }}
+
       # 离线翻译的推理进程（llama.cpp 官方预编译包）+「Baobox 同传」虚拟麦克风驱动（BlackHole 源码改名编译），
       # 版本与 SHA-256 固定在 mac/Makefile。构建时由 project.yml 的脚本阶段拷进 App
       # （没有它们 App 也能编，只是离线模型 / 送会议不可用）。
       - name: Vendor llama.cpp and audio driver
-        run: make vendor
+        id: vendor
+        # 这条流水线是用来验证代码能编过的：下载失败只告警、继续编（App 缺了它们照样能编，
+        # 只是离线模型 / 送会议不可用）。发版流水线（release.yml）仍然严格，缺了就失败。
+        run: |
+          if make -k vendor; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::make vendor failed (download error?) — building without the offline-translation helper / virtual mic; this artifact lacks them"
+          fi
+
+      - name: Save vendored helpers
+        if: steps.vendor.outputs.complete == 'true' && steps.vendor-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: mac/Vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mac/Makefile') }}
 
       # ad-hoc 签名（CODE_SIGN_IDENTITY="-"）：CI runner 上没有开发团队的凭据，
       # 但产物要能真的跑起来，所以不能用 CODE_SIGNING_ALLOWED=NO ——

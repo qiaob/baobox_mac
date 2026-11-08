@@ -36,6 +36,9 @@ LLAMA_LIBS   := libllama-server-impl.dylib libllama-common.0.dylib libmtmd.0.dyl
 # 产物 Vendor/audio-driver/BaoboxInterpreter.driver（gitignore），构建时由 project.yml 的脚本阶段拷进
 # Baobox.app/Contents/Library/Audio/ 并签名；用户在设置里点「安装」才装进 /Library/Audio/Plug-Ins/HAL/。
 # 见 docs/live-translate-voice/DESIGN.md §3。
+# 下载：GitHub 的 release 下载偶尔连续 504，多重试几次、每次隔 10 秒，所有错误都重试（含 5xx）。
+CURL := curl -fL --retry 6 --retry-delay 10 --retry-all-errors --connect-timeout 30
+
 BLACKHOLE_VERSION := 0.7.1
 BLACKHOLE_SHA256  := e9de179da54ed55ff27876990f3a2dcfefa66e6bd6cfcba448a8564eabdf3e89
 BLACKHOLE_URL     := https://github.com/ExistentialAudio/BlackHole/archive/refs/tags/v$(BLACKHOLE_VERSION).tar.gz
@@ -60,7 +63,7 @@ vendor: $(LLAMA_STAMP) $(DRIVER_STAMP)
 $(DRIVER_STAMP):
 	@rm -rf "$(DRIVER_DIR)" "$(DRIVER_DIR).tmp"
 	@mkdir -p "$(DRIVER_DIR).tmp/src"
-	curl -fL --retry 3 -o "$(DRIVER_DIR).tmp/blackhole.tar.gz" "$(BLACKHOLE_URL)"
+	$(CURL) -o "$(DRIVER_DIR).tmp/blackhole.tar.gz" "$(BLACKHOLE_URL)"
 	echo "$(BLACKHOLE_SHA256)  $(DRIVER_DIR).tmp/blackhole.tar.gz" | shasum -a 256 -c -
 	tar -xzf "$(DRIVER_DIR).tmp/blackhole.tar.gz" -C "$(DRIVER_DIR).tmp/src" --strip-components 1
 	# 改名：BlackHole.c 里这些常量都由 #ifndef 包着，预先定义就盖过默认值（设备名不带「2ch」后缀）。
@@ -84,7 +87,7 @@ $(DRIVER_STAMP):
 $(LLAMA_STAMP):
 	@rm -rf "$(LLAMA_DIR)" "$(LLAMA_DIR).tmp"
 	@mkdir -p "$(LLAMA_DIR).tmp"
-	curl -fL --retry 3 -o "$(LLAMA_DIR).tmp/llama.tar.gz" "$(LLAMA_URL)"
+	$(CURL) -o "$(LLAMA_DIR).tmp/llama.tar.gz" "$(LLAMA_URL)"
 	echo "$(LLAMA_SHA256)  $(LLAMA_DIR).tmp/llama.tar.gz" | shasum -a 256 -c -
 	tar -xzf "$(LLAMA_DIR).tmp/llama.tar.gz" -C "$(LLAMA_DIR).tmp"
 	@mkdir -p "$(LLAMA_DIR)"

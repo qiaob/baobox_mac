@@ -1,0 +1,197 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Baobox PT Host</title>
+<!-- Mac 宿主页：由 RTCTransferHost.swift 读出、把 rtc.js 内联进下面的占位符后加载。不发布到 Pages。 -->
+<script>/*__RTC_JS__*/</script>
+<script>
+(function () {
+  'use strict';
+  const PT = window.BaoboxPT;
+  const FLUSH = 256 * 1024;
+
+  function post(m) {
+    try { window.webkit.messageHandlers.pt.postMessage(m); } catch (e) { /* 不在 WKWebView 里 */ }
+  }
+  function log(msg) { post({ type: 'log', msg: String(msg) }); }
+
+  let cfg = null;
+  let sig = null;
+  let pc = null;
+  let link = null;
+  let offer = null;        // 当前接受处理的 offer
+  let decision = null;     // null | 'approved' | 'denied'
+  let answerMsg = null;
+  let connected = false;
+  let connectTimer = null;
+  let macNat = 'unknown';
+  let rx = null;           // 正在接收的文件 { id, parts: [Uint8Array], len }
+
+  function concat(parts, len) {
+    const out = new Uint8Array(len);
+    let o = 0;
+    parts.forEach(function (p) { out.set(p, o); o += p.length; });
+    return out;
+  }
+
+  function flushRx() {
+    if (!rx || rx.len === 0) return;
+    post({ type: 'rx-chunk', id: rx.id, b64: PT.b64(concat(rx.parts, rx.len)) });
+    rx.parts = [];
+    rx.len = 0;
+  }
+
+  function fail(reason) {
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+    if (connected) return;
+    post({ type: 'state', state: 'failed', reason: reason,
+           phoneNat: (offer && offer.nat) || 'unknown', macNat: macNat });
+  }
+
+  function setupLink(dc) {
+    link = new PT.Link(dc, {
+      open: async function () {
+        connected = true;
+        if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+        const route = await PT.routeOf(pc);
+        post({ type: 'state', state: 'connected', route: route });
+        try { link.sendJSON({ t: 'hello', name: cfg.macName }); } catch (e) { /* noop */ }
+        // 连上后信令就没用了，关掉省流量。
+        if (sig) { sig.close(); sig = null; }
+      },
+      close: function () {
+        if (connected) post({ type: 'state', state: 'closed' });
+        connected = false;
+      },
+      control: function (m) {
+        if (m.t === 'file' && typeof m.id === 'string') {
+          rx = { id: m.id, parts: [], len: 0 };
+          post({ type: 'rx-begin', id: m.id, name: String(m.name || 'file'), size: Number(m.size) || 0 });
+        } else if (m.t === 'end' && rx && m.id === rx.id) {
+          flushRx();
+          post({ type: 'rx-end', id: rx.id });
+          rx = null;
+        } else if (m.t === 'cancel' && rx && m.id === rx.id) {
+          post({ type: 'rx-cancel', id: rx.id });
+          rx = null;
+        } else if (m.t === 'text' && typeof m.text === 'string') {
+          post({ type: 'text', text: m.text });
+        } else if (m.t === 'hello') {
+          post({ type: 'peer', name: String(m.name || '') });
+        }
+      },
+      binary: function (buf) {
+        if (!rx) return;
+        rx.parts.push(new Uint8Array(buf));
+        rx.len += buf.byteLength;
+        if (rx.len >= FLUSH) flushRx();
+      }
+    });
+  }
+
+  async function sendAnswerCopy() {
+    if (sig && answerMsg) await sig.send(Object.assign({}, answerMsg), !!(offer && offer.z));
+  }
+
+  async function onSignal(m) {
+    if (m.t !== 'offer' || typeof m.oid !== 'string' || typeof m.sdp !== 'string') return;
+    if (offer) {
+      if (m.oid !== offer.oid) {
+        // 一次会话只接一部手机：别的设备直接拒绝。
+        await sig.send({ t: 'deny', re: m.oid, why: 'busy' });
+        return;
+      }
+      // 手机重发的同一个 offer：已经答复过就再发一遍答复。
+      if (decision === 'approved') await sendAnswerCopy();
+      else if (decision === 'denied') await sig.send({ t: 'deny', re: offer.oid });
+      return;
+    }
+    offer = m;
+    post({ type: 'offer', name: String(m.name || ''), nat: String(m.nat || 'unknown') });
+  }
+
+  window.ptHost = {
+    start: async function (c) {
+      cfg = c;
+      if (!PT.hasRTC()) { post({ type: 'signal', state: 'unsupported', reason: 'rtc' }); return; }
+      if (!PT.hasCrypto()) { post({ type: 'signal', state: 'unsupported', reason: 'crypto' }); return; }
+      sig = new PT.Signaling({
+        sid: c.sid, key: PT.unb64u(c.key), self: 'm', since: c.since,
+        onMessage: function (m) { onSignal(m).catch(function (e) { log(e); }); },
+        onStatus: function (n) { post({ type: 'signal', state: 'status', ready: n }); }
+      });
+      await sig.start();
+      post({ type: 'signal', state: 'started' });
+    },
+
+    approve: async function (ok) {
+      if (!offer || decision) return;
+      if (!ok) {
+        decision = 'denied';
+        if (sig) await sig.send({ t: 'deny', re: offer.oid });
+        return;
+      }
+      decision = 'approved';
+      post({ type: 'state', state: 'connecting' });
+      try {
+        pc = PT.createPeer();
+        pc.ondatachannel = function (ev) { setupLink(ev.channel); };
+        pc.oniceconnectionstatechange = function () {
+          if (pc.iceConnectionState === 'failed') fail('ice');
+        };
+        await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        await PT.gather(pc, 4000);
+        macNat = PT.natHint(pc.localDescription.sdp);
+        answerMsg = { t: 'answer', re: offer.oid, sdp: pc.localDescription.sdp, name: cfg.macName, nat: macNat };
+        await sendAnswerCopy();
+        connectTimer = setTimeout(function () { fail('timeout'); }, 25000);
+      } catch (e) {
+        log(e);
+        fail('error');
+      }
+    },
+
+    beginFile: function (id, name, size, mime) {
+      link.sendJSON({ t: 'file', id: id, name: name, size: size, mime: mime });
+      return true;
+    },
+
+    sendChunk: async function (b64) {
+      await link.sendBytes(PT.unb64(b64));
+      return true;
+    },
+
+    endFile: function (id) {
+      link.sendJSON({ t: 'end', id: id });
+      return true;
+    },
+
+    cancelFile: function (id) {
+      try { link.sendJSON({ t: 'cancel', id: id }); } catch (e) { /* noop */ }
+      return true;
+    },
+
+    sendText: function (text) {
+      link.sendJSON({ t: 'text', text: text });
+      return true;
+    },
+
+    stop: function () {
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      if (sig) { sig.close(); sig = null; }
+      if (link) { link.close(); link = null; }
+      if (pc) { try { pc.close(); } catch (e) { /* noop */ } pc = null; }
+      connected = false;
+      return true;
+    }
+  };
+
+  post({ type: 'loaded', rtc: PT.hasRTC(), crypto: PT.hasCrypto() });
+})();
+</script>
+</head>
+<body></body>
+</html>
