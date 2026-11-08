@@ -19,7 +19,8 @@ final class PhoneTransferWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             let hosting = NSHostingController(rootView: PhoneTransferRootView())
-            let created = NSWindow(contentViewController: hosting)
+            // 要拿焦点的普通窗口：在桌面空间建，不叠进别的 App 的全屏空间（见 mac/CLAUDE.md「普通窗口与全屏空间」）。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("phonetransfer.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
             created.setContentSize(NSSize(width: 760, height: 540))
