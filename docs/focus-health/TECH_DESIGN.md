@@ -194,7 +194,7 @@ focusing / paused ──作废──► idle
 - `NotifyDND` 新增 `reasons(ignoringTokens:)`：安静 / 令牌 / 前台全屏 / 麦克风占用。`isSuppressed` 语义不变（令牌、安静、全屏）。
   - 麦克风占用只进 `reasons` 给本工具避让用，不改变宠物与其他通知的现有行为（Baobox 自己的实时翻译也会占用麦克风，分不清是谁在用）。
   - 麦克风状态在后台队列读 CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`，每 5 秒刷新一次缓存，不在主线程直接调 HAL。
-- 录屏：`RecordingController` 开始 / 停止录制时挂 / 摘 `recording` 令牌——录屏期间宠物气泡不出来（免得被录进视频），本工具的提醒也顺延。
+- 录屏：`RecordingController` 开始 / 停止录制时挂 / 摘 `recording` 令牌——录屏期间宠物气泡不出来（免得被录进视频），本工具的提醒也顺延。用户刚点的操作的回执（`isUserFeedback`，如暂停专注的卡片）除外，照常出来。
 - `PetController.act(clips:)`：按片段名播一串动作，不冒话（喝水 `sit_down → sit_hold_drink → stand_up`，站立 `stretch`）；形象没有这些片段返回 false。`PetModelView.performClips(_:)` 为其底层。
 - 环形菜单外圈加「专注」（快捷键 id `focushealth.focus`）；宠物设置的逐来源开关加「专注与健康」（来源 id `focus`）。
   - 2026-11-08：`focushealth.focus` 带 `stateTitle`（专注中「暂停专注」、暂停中「继续专注」）。`pauseFocus` 发 bubble 级卡片 [继续][结束这一轮]，「结束」= `endFocusEarly(countAsDone: true)`；`resumeFocus`、`breakNow` 被拒（专注中 / 休息中）发 ambient 回执。这些都标 `isUserFeedback`，勿扰（含专注自己的令牌）时照常出来；提前结束算完成后的「第 N 轮专注完成」卡片同样标上（`finishFocus(byUser:)`）。

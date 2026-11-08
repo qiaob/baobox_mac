@@ -51,15 +51,19 @@ final class CaptureController {
 
         isActive = true
         sessionMode = mode
-        // 菜单场景：取「含菜单整屏」快照（截图快捷键在菜单打开时按下，已在收菜单前抓好）。
-        // 截图与取字都要（菜单里的文字同样该能取），录屏不要。
-        frozenScreens = (mode != .record) ? ScreenMenuSnapshot.take() : [:]
-        // 别的 App 的右键菜单/下拉菜单：Carbon 热键照常触发，但下面的 NSApp.activate 与 overlay
-        // 上屏会让对方菜单立刻收起 —— 等 overlay 摆好再抓，菜单早没了（issue #6）。
-        // 所以在**创建任何窗口、激活本 App 之前**同步抓一张整屏，之后框选/窗口/全屏都从它裁剪。
-        if mode != .record, frozenScreens.isEmpty, ScreenMenuSnapshot.hasForeignMenuOnScreen() {
-            ScreenMenuSnapshot.captureAllScreens()
+        // 截图与取字一律冻结整屏：在**创建任何窗口、激活本 App 之前**同步抓一张整屏，之后框选 / 窗口 / 全屏 /
+        // 标注底图都从它裁剪，看到的、截到的都是按快捷键那一刻（宠物不再走开、气泡不再到点消失、视频停在那一帧）。
+        // 2026-11-08 用户：截图时宠物照样走、气泡照样消失，「应该所有的都冻结」。原先只在菜单场景冻结（issue #6：
+        // 别的 App 的菜单会被 NSApp.activate 与 overlay 上屏收掉），现在那种场景自然也包含在内。录屏不冻结。
+        // 本 App 菜单开着时按的快捷键：收菜单之前已经抓好了（HotkeyCenter.onBeforeFire），直接用那张。
+        // 代价：点选窗口时从整屏裁剪，压在那个窗口上面的东西会一起截进去（用户知情后选的）。
+        frozenScreens = [:]
+        if mode != .record {
             frozenScreens = ScreenMenuSnapshot.take()
+            if frozenScreens.isEmpty {
+                ScreenMenuSnapshot.captureAllScreens()
+                frozenScreens = ScreenMenuSnapshot.take()
+            }
         }
         let mouseAK = NSEvent.mouseLocation
 

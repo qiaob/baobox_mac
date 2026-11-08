@@ -31,9 +31,14 @@ Once a region exists you can keep adjusting it:
 - A loupe follows the cursor, magnifying pixels and showing the coordinates and the color
   under the pointer
 
-**Menus can be captured too.** If a context menu or menu-bar dropdown is open when you press
-the shortcut, Baobox freezes the whole screen *before* it activates and the menu closes — so
-the menu is still in the shot.
+**The screen freezes the moment you press the shortcut.** Whatever you then select, click or
+capture full-screen is what was on screen at that moment: the desktop pet doesn't walk off,
+bubbles don't time out, and videos stay on that frame. Clicking a window crops its bounds out of
+the frozen screen, so anything lying on top of that window is included.
+
+**Menus can be captured too.** If a context menu, a menu-bar dropdown, or one of Baobox's own
+menus (including the pop-up menus in Settings) is open when you press the shortcut, the menu
+stays in the shot.
 
 When the capture completes, what happens next depends on your settings: copy to the
 clipboard, also save to disk by template, or save only.
