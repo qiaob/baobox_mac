@@ -535,11 +535,6 @@ final class PetModelView: SCNView {
         head.node.constraints = [constraint]
     }
 
-    /// 当前形象支不支持某种互动（环形菜单据此显示 / 隐藏「喂食」「陪玩」）。
-    func supports(_ kind: String) -> Bool {
-        interactions[kind] != nil
-    }
-
     /// 做一个互动动作，返回总时长（引擎据此站住不动）；不支持返回 nil。
     /// 不挑正在播的那一个（连戳两下抽到同一个，同名片段一替换会从绑定姿势淡入，闪一下 T 字）。
     @discardableResult

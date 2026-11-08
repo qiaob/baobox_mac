@@ -1,13 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// 防休眠工具模块壳。纯菜单操作，无全局快捷键。
+/// 防休眠工具模块壳。主要是菜单操作；「开关防休眠」快捷键出厂不绑，桌面宠物的环形菜单也经它开关。
 @MainActor
 final class CaffeinateTool: ToolModule {
     let id = "caffeinate"
     let name = L("caffeinate.name")
     let symbolName = "cup.and.saucer"
-    /// 无快捷键。
 
     private var controller: CaffeinateController { CaffeinateController.shared }
 
@@ -33,7 +32,7 @@ final class CaffeinateTool: ToolModule {
 
         // 「默认时长」的唯一可达入口。此前它只挂在 performDefaultAction 上，而 AppKit
         // 对带 submenu 的菜单主行从不发送 action —— 该方法全项目零调用点，导致设置页
-        // 那个显眼的「默认时长」Picker 改了 100% 没有任何效果。本模块又没有快捷键，
+        // 那个显眼的「默认时长」Picker 改了 100% 没有任何效果。本模块的快捷键出厂又不绑，
         // 所以必须在菜单里给出入口。
         if !controller.isActive {
             items.append(ClosureMenuItem(title: L("caffeinate.menu.startDefault")) { [weak self] in
@@ -65,21 +64,17 @@ final class CaffeinateTool: ToolModule {
     }
 
     func hotkeys() -> [HotkeyDefinition] {
-        // 出厂不绑键（不占组合键）；桌面宠物的环形菜单也经它开关防休眠。
+        // 出厂不绑键（不占组合键）；桌面宠物的环形菜单也经它开关防休眠。这两处都看不到二级菜单的状态行：
+        // 开关后让宠物说一声，环形菜单开着时写「关闭防休眠」（2026-11-08 用户反馈点了没反应、标题也不变）。
         [
             HotkeyDefinition(
                 id: "caffeinate.toggle",
                 title: L("caffeinate.hotkey.toggle"),
                 subtitle: nil,
-                defaultCombo: nil
-            ) {
-                let controller = CaffeinateController.shared
-                if controller.isActive {
-                    controller.stop()
-                } else {
-                    controller.start(duration: nil)
-                }
-            }
+                defaultCombo: nil,
+                action: { [weak self] in self?.toggle(announce: true) },
+                stateTitle: { CaffeinateController.shared.isActive ? L("caffeinate.action.stop") : nil }
+            )
         ]
     }
 
@@ -93,12 +88,29 @@ final class CaffeinateTool: ToolModule {
 
     // MARK: - 动作
 
-    private func toggle() {
+    /// 按默认时长开 / 关：菜单「按默认时长开启」、快捷键、桌面宠物的环形菜单（设置页写的就是「菜单点击或快捷开启时的时长」；
+    /// 快捷键以前一律无限期开）。`announce`：快捷键与环形菜单看不到状态行，开关后让宠物说一声。
+    private func toggle(announce: Bool = false) {
         if controller.isActive {
             controller.stop()
-        } else {
-            controller.start(duration: CaffeinateSettings.defaultDuration)
+            if announce { Self.toast(L("caffeinate.toast.off")) }
+            return
         }
+        let duration = CaffeinateSettings.defaultDuration
+        controller.start(duration: duration)
+        // 断言没建成：start 已经弹了错误框，不再说「已开启」。
+        guard announce, controller.isActive else { return }
+        if let duration {
+            Self.toast(L("caffeinate.toast.onFor \(max(1, Int((duration / 60).rounded())))"))
+        } else {
+            Self.toast(L("caffeinate.toast.on"))
+        }
+    }
+
+    /// 宠物说一句。是用户刚点的操作的回执：专注 / 安静这些勿扰时也照常显示。
+    private static func toast(_ text: String) {
+        NotifyCenter.shared.post(PetNotification(source: "caffeinate", level: .ambient, title: text,
+                                                 icon: "cup.and.saucer.fill", isUserFeedback: true))
     }
 
     // MARK: - 展示

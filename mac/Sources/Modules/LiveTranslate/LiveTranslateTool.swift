@@ -124,10 +124,17 @@ final class LiveTranslateTool: ToolModule {
                 title: L("livetranslate.hotkey.toggle"),
                 subtitle: L("livetranslate.hotkey.toggle.subtitle"),
                 // 易冲突组合出厂不绑定（仓库惯例），在快捷键页自设。
-                defaultCombo: nil
-            ) {
-                LiveTranslateController.shared.toggle()
-            },
+                defaultCombo: nil,
+                action: { LiveTranslateController.shared.toggle() },
+                // 环形菜单的标题跟着开关走（与二级菜单同一套判断）；没开着时用环形菜单自己的「翻译」。
+                stateTitle: {
+                    let controller = LiveTranslateController.shared
+                    if controller.isHostedSession {
+                        return controller.barVisible ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
+                    }
+                    return controller.isRunning ? L("livetranslate.action.stop") : nil
+                }
+            ),
         ]
     }
 

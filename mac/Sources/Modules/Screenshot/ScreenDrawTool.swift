@@ -21,8 +21,11 @@ final class ScreenDrawTool: ToolModule {
                 title: L("screendraw.hotkey.title"),
                 subtitle: L("screendraw.hotkey.subtitle"),
                 // 出厂不绑定（易冲突组合的一贯做法），用户在快捷键页或本模块设置页自行设置。
-                defaultCombo: nil
-            ) { ScreenDrawController.shared.toggle() }
+                defaultCombo: nil,
+                action: { ScreenDrawController.shared.toggle() },
+                // 穿透态下宠物点得到：环形菜单开着时写「关闭画笔」。
+                stateTitle: { ScreenDrawController.shared.isRunning ? L("screendraw.action.stop") : nil }
+            )
         ]
     }
 
