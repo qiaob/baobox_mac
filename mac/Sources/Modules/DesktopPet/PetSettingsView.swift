@@ -3,7 +3,10 @@ import SwiftUI
 /// 桌面宠物设置：宠物本体（启用 / 漫游 / 大小）、形象（选择 + 下载更多）、通知（提示音 / 逐来源开关）。
 struct PetSettingsView: View {
     @AppStorage(PetSettings.enabledKey) private var enabled = true
-    @AppStorage(PetSettings.roamKey) private var roam = true
+    @AppStorage(PetSettings.activityKey) private var activity = PetSettings.activity.rawValue
+    @AppStorage(PetSettings.avoidKey) private var avoid = true
+    @AppStorage(PetSettings.contentAwareKey) private var contentAware = true
+    @AppStorage(PetSettings.entranceKey) private var entrance = true
     @AppStorage(PetSettings.sizeKey) private var size = 1.0
     @AppStorage(PetSettings.rangeKey) private var range = PetRange.bottom.rawValue
     @AppStorage(PetSettings.soundKey) private var sound = false
@@ -27,7 +30,29 @@ struct PetSettingsView: View {
                     .onChange(of: enabled) { _, _ in
                         PetController.shared.applyVisibility()
                     }
-                Toggle("pet.settings.roam", isOn: $roam)
+                Picker("pet.settings.activity", selection: $activity) {
+                    Text("pet.activity.still").tag(PetActivity.still.rawValue)
+                    Text("pet.activity.calm").tag(PetActivity.calm.rawValue)
+                    Text("pet.activity.normal").tag(PetActivity.normal.rawValue)
+                    Text("pet.activity.lively").tag(PetActivity.lively.rawValue)
+                }
+                .onChange(of: activity) { _, _ in
+                    PetController.shared.applyActivity()
+                }
+                Toggle("pet.settings.avoid", isOn: $avoid)
+                    .onChange(of: avoid) { _, _ in
+                        PetController.shared.applyActivity()
+                    }
+                if avoid {
+                    Toggle("pet.settings.contentAware", isOn: $contentAware)
+                        .onChange(of: contentAware) { _, _ in
+                            PetController.shared.applyActivity()
+                        }
+                }
+                Text("pet.settings.activityHint")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("pet.settings.entrance", isOn: $entrance)
                 Picker("pet.settings.range", selection: $range) {
                     Text("pet.range.bottom").tag(PetRange.bottom.rawValue)
                     Text("pet.range.windows").tag(PetRange.windows.rawValue)

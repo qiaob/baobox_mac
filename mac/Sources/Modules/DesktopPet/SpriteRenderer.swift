@@ -35,6 +35,9 @@ struct PetManifest: Decodable {
     var fidgets: [String]?
     /// 3D：互动（poke / highFive / pet / feed / play / wake）→ 候选列表，候选可以是一串片段。
     var interactions: [String: [PetClipSequence]]?
+    /// 3D：出场落地后、退场前播的片段（一个名字或一串，#54）；不写的用默认（VRM 招手 / 道别，其他形象跳一下）。
+    var enter: PetClipSequence?
+    var leave: PetClipSequence?
 }
 
 /// 所有帧里不透明像素的并集（像素），以帧的「底边中点」为原点。
@@ -139,9 +142,11 @@ enum PetPackageLoader {
         if let modelFile = manifest.model {
             let url = dir.appendingPathComponent(modelFile)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            let spec = PetModelSpec(url: url, clips: manifest.clips ?? [:], fidgets: manifest.fidgets ?? [],
+            var spec = PetModelSpec(url: url, clips: manifest.clips ?? [:], fidgets: manifest.fidgets ?? [],
                                     interactions: (manifest.interactions ?? [:]).mapValues { $0.map(\.clips) },
                                     yawDegrees: manifest.yaw ?? 0, scale: manifest.scale ?? 1)
+            spec.enterClips = manifest.enter?.clips ?? []
+            spec.leaveClips = manifest.leave?.clips ?? []
             return PetPackage(id: id, name: name, pixelArt: false, facesLeft: false, framesByState: [:],
                               fpsByState: [:], content: PetContentBox(left: 0, right: 0, bottom: 0, top: 0),
                               model: spec)
@@ -261,6 +266,13 @@ final class SpritePetView: NSView {
     private(set) var package: PetPackage?
     private var lastRenderKey: RenderKey?
 
+    /// 出场 / 退场时的形变（#54）：以脚底中点为原点横竖各缩放多少（落地压扁、退场缩小）。1 = 原样。
+    var presentationScale = CGSize(width: 1, height: 1) {
+        didSet {
+            if presentationScale != oldValue { needsDisplay = true }
+        }
+    }
+
     /// 决定画面的全部输入：相同就不用重画。
     private struct RenderKey: Equatable {
         var state: String
@@ -327,6 +339,12 @@ final class SpritePetView: NSView {
         let rect = NSRect(x: snap(b.midX - width / 2),
                           y: snap(b.minY - box.bottom * scale + CGFloat(verticalOffset)),
                           width: width, height: height)
+        if presentationScale != CGSize(width: 1, height: 1) {
+            let anchor = CGPoint(x: rect.midX, y: rect.minY + box.bottom * scale)
+            context.cgContext.translateBy(x: anchor.x, y: anchor.y)
+            context.cgContext.scaleBy(x: max(presentationScale.width, 0.01), y: max(presentationScale.height, 0.01))
+            context.cgContext.translateBy(x: -anchor.x, y: -anchor.y)
+        }
         if pose.facingLeft != package.facesLeft {
             context.cgContext.translateBy(x: rect.midX, y: 0)
             context.cgContext.scaleBy(x: -1, y: 1)
@@ -340,7 +358,7 @@ final class SpritePetView: NSView {
         case .sleep, .rest: return "sleep"
         case .wander: return "walk"
         case .notify, .jump: return "happy"
-        case .idle, .dragged, .fall: return "idle"
+        case .idle, .dragged, .fall, .entering, .leaving, .lounge: return "idle"
         }
     }
 
