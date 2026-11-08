@@ -59,6 +59,41 @@ enum VRMMotion {
         return 4 * leg * sinf(Float(walkSwing * .pi / 180)) / Float(walkCycle)
     }
 
+    /// 跳（近的地方）：引擎按阶段切片段、按抛物线挪窗口。长度以身高为单位（身高 = VRMBody.height，取景时缩放到 1.26 的那个高度）。
+    /// 重力 jumpGravity（身高 / 秒²，比真的略小一点，空中多停一会儿）；横向全程匀速，竖向抛物线。
+    /// 单跳：最高点比起点、终点里高的那个再高 jumpApex。落差超过约一个身高用二段跳：第一段最高点比起点高 doubleJumpFirstApex，
+    /// 到第一段最高点（竖直速度为 0）时播 jump_spin、从那儿再起一段，第二段最高点比终点高 doubleJumpSecondApex。
+    /// 往下跳（hop）：最高点比起点高 hopApex，再落到终点。二段跳最多到约 1.5 个身高，再高就用助推器飞。
+    static let jumpGravity = 5.8
+    static let jumpApex = 0.22
+    static let doubleJumpFirstApex = 0.62
+    static let doubleJumpSecondApex = 0.24
+    static let hopApex = 0.13
+    /// 蓄力片段播到最后一帧正好离地（jump_crouch / hop_crouch 的时长）；boost_crouch 在 boostLiftoff 秒离地。
+    static let jumpCrouchDuration = 0.39
+    static let hopCrouchDuration = 0.27
+    static let boostCrouchDuration = 0.55
+    static let boostLiftoff = 0.42
+    /// jump_spin：开头 0.07 s 在空中往下蹬一下，0.06–0.56 s 转一圈，到 0.7 s 打开成下落的姿势。
+    static let jumpSpinDuration = 0.7
+    /// 离落地还有多少秒开始播 jump_reach / boost_brake（腿先往下伸，播完停在最后一帧，落地接 jump_land）。
+    static let jumpReachLead = 0.26
+    static let boostBrakeLead = 0.37
+    /// fly / fly_down 一个浮动周期。
+    static let flyCycle = 2.4
+
+    /// 跑步（`run`）：一个周期左右各一步；runSwing = 着地、离地时腿与竖直线的夹角（度），
+    /// runStance = 一只脚着地占周期的比例（小于 0.5，两步之间有腾空）。
+    static let runCycle = 0.7
+    static let runSwing = 20.0
+    static let runStance = 0.36
+
+    /// 跑步时身体每秒前进多少（模型单位）：着地那段时间里，脚从 hips 前方 腿长·sin(runSwing) 匀速滑到后方同样远。
+    static func runGroundSpeed(body: VRMBody) -> Float {
+        let leg = body.thigh + body.shin
+        return 2 * leg * sinf(Float(runSwing * .pi / 180)) / Float(runStance * runCycle)
+    }
+
     /// 不坐到地上：VRoid 的裙子没有布料模拟，大腿一往前抬（坐、跪、蹲）裙子不会搭在腿上，
     /// 略俯视的相机会看到裙底（实测正座 + 双手放腿上也挡不住）。所以睡觉是站着打盹，喝水 / 吃东西站着捧杯。
     /// 片段名沿用健康提醒与互动认的 sit_down / sit_hold_drink / stand_up（捧起 → 喝两口 → 放下）。
@@ -136,12 +171,35 @@ enum VRMMotion {
             Definition(name: "arms_cross_tap", duration: 3.0, plant: [.left]) { t in armsCrossTap(t, body: body) },
             Definition(name: "neck_stretch", duration: 2.8, plant: both, pose: neckStretch),
             Definition(name: "peek", duration: 2.4, plant: both, pose: peek),
+            // 移动：跑步；上下挪位置 —— 近的跳，远的、高的背助推器飞（时长、离地时刻、轨迹参数见 jump* / boost* 常量）。
+            // 引擎按阶段一段段切换、按轨迹挪窗口，每段单独播：脚由片段自己钉（plantFeet / plantFoot），不在 plant 里。
+            Definition(name: "run", duration: runCycle) { t in run(t, body: body) },
+            Definition(name: "jump_crouch", duration: jumpCrouchDuration) { t in jumpCrouchClip(t, body: body, hop: false) },
+            Definition(name: "jump_rise", duration: 0.9, pose: jumpAir),
+            Definition(name: "jump_fall", duration: 0.8, pose: jumpFallPose),
+            Definition(name: "jump_spin", duration: jumpSpinDuration, pose: jumpSpinClip),
+            Definition(name: "jump_reach", duration: jumpReachLead, pose: jumpReachClip),
+            Definition(name: "jump_land", duration: 0.7) { t in jumpLand(t, t: t, body: body, strength: 1.1) },
+            Definition(name: "hop_crouch", duration: hopCrouchDuration) { t in jumpCrouchClip(t, body: body, hop: true) },
+            Definition(name: "hop_fall", duration: 0.8, pose: hopFall),
+            Definition(name: "boost_crouch", duration: boostCrouchDuration) { t in boostCrouchClip(t, body: body) },
+            Definition(name: "fly", duration: flyCycle) { t in flying(t, lean: 14, tuck: 1) },
+            Definition(name: "fly_down", duration: flyCycle) { t in flying(t, lean: 3, tuck: 0.45) },
+            Definition(name: "boost_brake", duration: boostBrakeLead, pose: boostBrakeClip),
+            // 蹲、坐地（引擎的「歇脚」：坐下 → 坐着循环 → 起身）。坐下停在最后一帧，接循环的第一帧；起身从循环的姿势出发。
+            Definition(name: "squat_down", duration: 0.9) { t in squatting(0, body: body, depth: smooth(t / 0.9)) },
+            Definition(name: "squat", duration: 3.2) { t in squatting(t, body: body, depth: 1) },
+            Definition(name: "squat_up", duration: 0.8) { t in squatting(0, body: body, depth: 1 - smooth(t / 0.8)) },
+            Definition(name: "sit_ground_down", duration: 1.6) { t in sitGroundDown(t, body: body) },
+            Definition(name: "sit_ground", duration: 4.0) { t in sittingGround(t, body: body) },
+            Definition(name: "sit_ground_up", duration: 1.4) { t in sitGroundDown(1.6 * (1 - t / 1.4), body: body) },
         ]
     }
 
     static func clips(for rig: VRMRig) -> [String: GLTFClip] {
         var out: [String: GLTFClip] = [:]
-        for definition in definitions(body: rig.body) {
+        // 动捕走路（VRMMocap）和程序化动作一样采样成动画。
+        for definition in definitions(body: rig.body) + VRMMocap.definitions(body: rig.body) {
             out[definition.name] = makeClip(definition, rig: rig)
         }
         return out
@@ -183,6 +241,20 @@ enum VRMMotion {
             }
             add(hips.node, "position", values)
         }
+        // 裙片（假布料）：每个片段都带，不抬腿时就是静止朝向，片段之间淡入淡出裙子不会跳。
+        if !rig.skirt.isEmpty {
+            let skirtPoses = poses.map { skirtRotations($0, rig: rig) }
+            for (index, panel) in rig.skirt.enumerated() {
+                var previous: simd_quatf?
+                let values: [NSValue] = skirtPoses.map { rotations in
+                    var q = rig.localRotation(panel.bone, rotations[index])
+                    if let previous, simd_dot(previous.vector, q.vector) < 0 { q = simd_quatf(vector: -q.vector) }
+                    previous = q
+                    return NSValue(scnVector4: SCNVector4(CGFloat(q.imag.x), CGFloat(q.imag.y), CGFloat(q.imag.z), CGFloat(q.real)))
+                }
+                add(panel.bone.node, "orientation", values)
+            }
+        }
 
         // 表情：用到任何表情的片段同时接管眨眼 —— 带表情时不眨（不然眯眼笑再叠一次闭眼），睡觉时闭眼（设计 §4.3）。
         var names = Set(poses.flatMap { $0.expressions.keys })
@@ -210,6 +282,87 @@ enum VRMMotion {
 
         let tracks = byNode.values.map { GLTFClip.Track(node: $0.node, animations: $0.animations) }
         return GLTFClip(name: definition.name, duration: definition.duration, tracks: tracks)
+    }
+
+    // MARK: - 假布料：裙片跟着大腿翻
+
+    /// 每条裙片根骨骼此刻的旋转（规范化空间，相对它的人形父骨骼；顺序同 `rig.skirt`）。
+    /// 裙片默认竖直往下垂（人直立时按重力，不跟着胯前倾后仰；趴着、躺着时跟着胯）；
+    /// 哪条大腿往裙片那个方向抬（往前抬 → 前片，往外张 → 侧片，往后踢 → 后片），裙片就被推着往那边翻，
+    /// 比大腿多翻一点（腿有厚度），所以抬腿、蹲、坐时前片盖在大腿上，后片、侧片垂下来挡住屁股和胯两侧。
+    /// 坐到地上时，裙片末端碰到地面就顺着地面往外摊开，不扎进地里。不抬腿时就是静止朝向。
+    static func skirtRotations(_ p: VRMPose, rig: VRMRig) -> [simd_quatf] {
+        let body = rig.body
+        let hipsRotation = p.rotation("hips")
+        let hipsJoint = SIMD3<Float>(0, body.hipsHeight, 0) + p.hips
+        let down = SIMD3<Float>(0, -1, 0)
+        // 垂的参照系：直立时只保留胯的朝向（绕竖直轴转了多少），躺倒时整个跟着胯。
+        let facing = hipsRotation.act(SIMD3<Float>(0, 0, 1))
+        let level = simd_quatf(angle: atan2f(facing.x, facing.z), axis: SIMD3<Float>(0, 1, 0))
+        let upright = hipsRotation.act(SIMD3<Float>(0, 1, 0)).y
+        let frame = simd_slerp(hipsRotation, level, Float(smooth((Double(upright) - 0.5) / 0.35)))
+        let toFrame = frame.inverse * hipsRotation
+        var thighs: [(sign: Double, rest: SIMD3<Float>, now: SIMD3<Float>)] = []
+        for side in [VRMSide.left, .right] {
+            let mirror = SIMD3<Float>(side == .left ? 1 : -1, 1, 1)
+            let rest = simd_normalize((body.kneeRest - body.legOffset) * mirror)
+            thighs.append((side.sign, rest, toFrame.act(p.rotation(side.name + "UpperLeg").act(rest))))
+        }
+        let floor = 0.012 * body.height
+        return rig.skirt.map { panel in
+            var parentRotation = hipsRotation
+            var anchor = SIMD3<Float>(0, 0, 0)
+            if panel.parent != "hips" {
+                anchor = body.legOffset * SIMD3<Float>(panel.parent == "leftUpperLeg" ? 1 : -1, 1, 1)
+                parentRotation = hipsRotation * p.rotation(panel.parent)
+            }
+            let placed = toFrame.act(anchor + panel.offset)
+            let flat = SIMD3<Float>(placed.x, 0, placed.z)
+            guard simd_length(flat) > 1e-4 else { return parentRotation.inverse * frame }
+            let outward = simd_normalize(flat)
+            var push = 0.0
+            for thigh in thighs {
+                // 裙片在这条腿这一侧（含正前、正后）全额，偏到另一侧就不管。
+                let weight = smooth((Double(outward.x) * thigh.sign + 0.7) / 0.7)
+                push = max(push, weight * max(0, lean(thigh.now, toward: outward) - lean(thigh.rest, toward: outward)))
+            }
+            // 连着前片的布料被抬起的大腿往前带：侧片跟着大腿抬的方向翻一半，越靠正侧面带得越多，后片不带。
+            var drag = 0.0
+            var dragAxis = SIMD3<Float>(1, 0, 0)
+            for thigh in thighs {
+                let level = SIMD3<Float>(thigh.now.x, 0, thigh.now.z)
+                guard simd_length(level) > 0.05 else { continue }
+                let heading = simd_normalize(level)
+                let facing = Double(simd_dot(heading, outward))
+                guard facing > -0.3 else { continue }
+                let weight = smooth((Double(outward.x) * thigh.sign + 0.7) / 0.7) * 0.5 * (1 - facing * facing)
+                let lift = (Double(acosf(min(max(-thigh.now.y, -1), 1))) - Double(acosf(min(max(-thigh.rest.y, -1), 1)))) * 180 / .pi
+                if weight * lift > drag {
+                    drag = weight * lift
+                    dragAxis = simd_normalize(simd_cross(down, heading))
+                }
+            }
+            let dragged = simd_quatf(angle: radians(drag), axis: dragAxis)
+            var tilt = push + 6 * smooth(push / 30)
+            let axis = simd_normalize(simd_cross(down, outward))
+            let root = hipsJoint + hipsRotation.act(anchor) + parentRotation.act(panel.offset)
+            func tipHeight(_ angle: Double) -> Float {
+                (root + (frame * dragged * simd_quatf(angle: radians(angle), axis: axis)).act(panel.direction * panel.length)).y
+            }
+            if upright > 0.7 {
+                while tilt < 110, tipHeight(tilt) < floor, tipHeight(tilt + 4) > tipHeight(tilt) { tilt += 4 }
+            }
+            return parentRotation.inverse * frame * dragged * simd_quatf(angle: radians(tilt), axis: axis)
+        }
+    }
+
+    /// 方向 d 往水平方向 a 偏了多少度：在 a 与竖直线所在的平面里量，再按 d 的水平分量里朝 a 的比例打折 ——
+    /// 往前平伸的大腿对前片算 90°（抬过水平再往上就超过 90°），对侧片只算它往外张的那一点。
+    private static func lean(_ d: SIMD3<Float>, toward a: SIMD3<Float>) -> Double {
+        let along = Double(simd_dot(d, a))
+        let horizontal = Double(simd_length(SIMD3<Float>(d.x, 0, d.z)))
+        let share = horizontal < 1e-3 ? 1 : min(max(along / horizontal, 0), 1)
+        return atan2(along, Double(-d.y)) * 180 / .pi * share
     }
 
     // MARK: - 站姿与过渡
@@ -1180,17 +1333,439 @@ enum VRMMotion {
         return p
     }
 
+    // MARK: - 第三批：移动（跑步）
+
+    /// 跑步（循环）：身子前倾，手臂弯 90° 前后大幅摆，步子大，两步之间腾空，身子一颠一颠。
+    /// 着地的那只脚在窗口里从 hips 前方匀速滑到后方（runGroundSpeed），宠物窗按这个速度挪，脚踩在地上不打滑。
+    static func run(_ t: Double, body: VRMBody) -> VRMPose {
+        let leg = body.thigh + body.shin
+        let reach = leg * sinf(Float(runSwing * .pi / 180))
+        let cycle = t / runCycle
+        var p = stand()
+        // 着地中段最低，腾空最高。
+        let bounce = -cos(4 * Double.pi * (cycle - runStance / 2))
+        let swing = cos(2 * Double.pi * cycle)   // 正 = 左脚在前（右臂往前）
+        p.hips.y = -0.1 * leg + Float(0.045 * bounce) * leg
+        p.bend("hips", pitch: 5, yaw: -5 * swing)
+        p.bend("spine", pitch: 9, yaw: 4 * swing)
+        p.bend("chest", pitch: 4, yaw: 4 * swing)
+        p.bend("head", pitch: -6, yaw: -4 * swing)
+        for side in [VRMSide.left, .right] {
+            let forward = -side.sign * swing   // 与同侧腿反向
+            p.arm(side, elevation: -66, forward: 12 + 40 * forward, elbow: 88 + 10 * forward, twist: 15)
+            p.hand(side, .fist, weight: 0.6)
+        }
+        for (side, offset) in [(VRMSide.left, 0.0), (.right, 0.5)] {
+            let u = (cycle + offset) - floor(cycle + offset)
+            var ankle = SIMD3<Float>(0, 0, 0)
+            let toe: Double
+            if u < runStance {
+                // 着地：脚从前往后匀速滑（= 地面相对身体往后走），后半段脚跟抬起、前脚掌蹬地。
+                let k = u / runStance
+                ankle.z = reach * Float(1 - 2 * k)
+                toe = lerp(-6, 26, smooth((k - 0.35) / 0.65))
+            } else {
+                // 腾空 + 摆腿：脚跟往上收、膝盖往前带，再伸出去着地。
+                let s = (u - runStance) / (1 - runStance)
+                ankle.z = -reach * Float(cos(Double.pi * s))
+                ankle.y = 0.24 * leg * Float(pow(sin(Double.pi * s), 1.2))
+                toe = lerp(26, -6, smooth(s))
+            }
+            plantFoot(&p, body: body, side: side, ankle: ankle + ankleLift(toe: toe, body: body), toe: toe)
+        }
+        return p
+    }
+
+    // MARK: - 第三批：上下挪位置 —— 跳（近的）、背助推器飞（远的、高的）
+
+    /// 起跳前蹲下蓄力：膝盖弯、屁股往后坐、上身往前压，两臂往后甩，抬头看要去的地方。k = 0 站着，1 蹲到底；deep 往下跳时只蹲一半。
+    static func jumpCrouch(_ t: Double, body: VRMBody, k: Double, deep: Double = 1) -> VRMPose {
+        let leg = body.thigh + body.shin
+        var p = idle(t)
+        p.hips += SIMD3(0, Float(-0.15 * deep * k) * leg, Float(-0.05 * deep * k) * leg)
+        p.rotations["hips"] = qx(15 * deep * k) * p.rotation("hips")
+        p.rotations["spine"] = qx(7 * k) * p.rotation("spine")
+        p.rotations["head"] = qx(-18 * k) * p.rotation("head")
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: lerp(-72, -48, k), forward: lerp(6, -48, k), elbow: lerp(12, 18, k))
+            p.hand(side, .open, weight: 0.4 * k)
+        }
+        plantFeet(&p, body: body)
+        p.expressions["happy"] = Float(0.5 * k)
+        return p
+    }
+
+    /// 蹬地那一下：腿蹬直、脚尖绷着，两臂往前上方甩过头。
+    static func jumpLaunch() -> VRMPose {
+        var p = stand()
+        p.bend("hips", pitch: 6)
+        p.bend("spine", pitch: 2)
+        p.bend("head", pitch: -12)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: 2, knee: 4, foot: 34, spread: -1)
+            p.arm(side, elevation: 52, forward: 32, elbow: 14)
+            p.hand(side, .open, weight: 0.8)
+        }
+        p.expressions["happy"] = 0.9
+        return p
+    }
+
+    /// jump_crouch / hop_crouch（一次性，播到最后一帧正好离地）：慢慢蹲下（最后停一下），再很快蹬直 ——
+    /// 脚跟先抬、前脚掌最后离地，窗口这时还没动。往下跳（hop）蹲得浅、蹬得快。
+    static func jumpCrouchClip(_ t: Double, body: VRMBody, hop: Bool) -> VRMPose {
+        let crouch = hop ? 0.2 : 0.3
+        let launch = hop ? hopCrouchDuration - 0.2 : jumpCrouchDuration - 0.3
+        let deep = hop ? 0.5 : 1.0
+        if t < crouch {
+            return jumpCrouch(t, body: body, k: smooth(t / (crouch * 0.85)), deep: deep)
+        }
+        let k = smooth((t - crouch) / launch)
+        var p = blend(jumpCrouch(t, body: body, k: 1, deep: deep), jumpLaunch(), k)
+        let toe = 30 * k
+        let lift = ankleLift(toe: toe, body: body)
+        p.hips.y = Float(1 - k) * p.hips.y + lift.y * Float(k)
+        for side in [VRMSide.left, .right] {
+            plantFoot(&p, body: body, side: side, ankle: lift, toe: toe)
+        }
+        return p
+    }
+
+    /// jump_rise（循环 0.9 s）：往上飞，腿收起来（膝盖往前上提、小腿往后折，一条腿收得多一点），两臂往上张开。
+    static func jumpAir(_ t: Double) -> VRMPose {
+        let s = sin(2 * Double.pi * t / 0.9)
+        var p = stand()
+        p.bend("hips", pitch: 4)
+        p.bend("spine", pitch: -2)
+        p.bend("head", pitch: -8)
+        p.leg(.left, swing: 38 + 3 * s, knee: 82, foot: 18)
+        p.leg(.right, swing: 26 - 3 * s, knee: 92, foot: 22)
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: 34 + 4 * s * side.sign, forward: 18, elbow: 22)
+            p.hand(side, .open, weight: 0.8)
+        }
+        p.expressions["happy"] = 1
+        return p
+    }
+
+    /// jump_fall（循环 0.8 s）：往下落，腿还收着一点、两臂往两边张开稳住，低头看落脚的地方。
+    static func jumpFallPose(_ t: Double) -> VRMPose {
+        let s = sin(2 * Double.pi * t / 0.8)
+        var p = stand()
+        p.bend("hips", pitch: 3)
+        p.bend("head", pitch: 8)
+        p.leg(.left, swing: 22 + 3 * s, knee: 50, foot: 18)
+        p.leg(.right, swing: 16 - 3 * s, knee: 58, foot: 20)
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: 8 + 4 * s * side.sign, forward: 12, elbow: 20)
+            p.hand(side, .open, weight: 0.7)
+        }
+        p.expressions["happy"] = 0.8
+        return p
+    }
+
+    /// 二段跳在空中再蹬一下：腿往下猛地一伸，两臂往下甩。
+    static func jumpKick() -> VRMPose {
+        var p = stand()
+        p.bend("hips", pitch: 2)
+        p.bend("head", pitch: -10)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: -6 + 8 * side.sign, knee: 10, foot: 36)
+            p.arm(side, elevation: -40, forward: -24, elbow: 16)
+            p.hand(side, .open, weight: 0.6)
+        }
+        p.expressions["happy"] = 1
+        return p
+    }
+
+    /// 二段跳在空中转一圈（绕竖直轴，spin 0 → 1 = 0° → 360°）：两臂收在胸前、两腿并拢微屈，像花样滑冰的旋转。
+    /// 不抱膝团身：大腿抬到胸前时两个模型都会从胯两侧露出裙底；也不往前翻（倒过来时略俯视的镜头会看进裙子里）。
+    static func jumpSpin(_ spin: Double) -> VRMPose {
+        var p = stand()
+        p.bend("hips", yaw: 360 * spin)
+        p.bend("spine", pitch: 2)
+        p.bend("head", pitch: -6)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: 18 - 6 * side.sign, knee: 36 + 10 * side.sign, foot: 30, spread: -3)
+            p.arm(side, elevation: -48, forward: 72, elbow: 112, twist: 58)
+            p.hand(side, .fist, weight: 0.5)
+        }
+        p.expressions["happy"] = 1
+        return p
+    }
+
+    /// jump_spin（一次性 jumpSpinDuration）：第一段最高点开始播。0–0.07 s 腿往下一蹬（脚下该冒一圈气浪），
+    /// 0.06–0.56 s 收手并腿转一圈（先慢后快再慢），之后打开成下落的姿势。
+    static func jumpSpinClip(_ t: Double) -> VRMPose {
+        let spin = smooth((t - 0.06) / 0.5)
+        let kick = blend(jumpAir(t), jumpKick(), smooth(t / 0.07))
+        let turning = blend(kick, jumpSpin(spin), smooth((t - 0.06) / 0.1))
+        return blend(turning, jumpFallPose(t), smooth((t - 0.52) / 0.18))
+    }
+
+    /// 快落地：腿先往下伸（膝盖还留一点弯）、脚尖略朝下，两臂往两边张开稳住，低头看落脚点。
+    static func jumpReach() -> VRMPose {
+        var p = stand()
+        p.bend("hips", pitch: -2)
+        p.bend("spine", pitch: 2)
+        p.bend("head", pitch: 10)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: 8, knee: 14, foot: 14, spread: 2)
+            p.arm(side, elevation: -6, forward: 10, elbow: 14)
+            p.hand(side, .open, weight: 0.7)
+        }
+        p.expressions["happy"] = 0.6
+        return p
+    }
+
+    /// jump_reach（jumpReachLead 秒，停在最后一帧）：离落地还有 jumpReachLead 秒开始播，腿从收着伸到快站直。
+    static func jumpReachClip(_ t: Double) -> VRMPose {
+        blend(jumpFallPose(t), jumpReach(), smooth(t / 0.16))
+    }
+
+    /// hop_fall（循环 0.8 s）：往下跳的空中，身子直、腿并拢微屈，手臂往两边轻轻张开，像轻轻落下去。
+    static func hopFall(_ t: Double) -> VRMPose {
+        let s = sin(2 * Double.pi * t / 0.8)
+        var p = stand()
+        p.bend("hips", pitch: 2)
+        p.bend("head", pitch: 6)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: 10 + 2 * s * side.sign, knee: 20, foot: 20, spread: -1)
+            p.arm(side, elevation: 4 + 4 * s, forward: 6, elbow: 18)
+            p.hand(side, .open, weight: 0.6)
+        }
+        p.expressions["happy"] = 0.7
+        return p
+    }
+
+    /// jump_land（0.7 s，一次性，最后一帧就是 idle）：u = 落地以后过了多少秒。脚钉在地上，屈膝一沉很快、站起来慢；
+    /// 手臂跟着往下甩再回来，头点一下。strength = 摔得多重。跳和飞落地都用它。
+    static func jumpLand(_ u: Double, t: Double, body: VRMBody, strength: Double) -> VRMPose {
+        let leg = body.thigh + body.shin
+        let down = smooth(u / 0.08) * (1 - smooth((u - 0.1) / 0.4))
+        let arms = smooth(u / 0.12) * (1 - smooth((u - 0.2) / 0.45))
+        let breath = sin(2 * Double.pi * t / 4)   // 和 idle 一样带呼吸，最后一帧才正好接上 idle
+        var p = idle(t)
+        p.hips += SIMD3(0, Float(-0.13 * strength * down) * leg, Float(-0.03 * strength * down) * leg)
+        p.rotations["hips"] = qx(16 * strength * down) * p.rotation("hips")
+        p.rotations["spine"] = qx(8 * strength * down) * p.rotation("spine")
+        p.rotations["head"] = qx(8 * down - 3 * arms) * p.rotation("head")
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: lerp(-72 + breath, -40, arms), forward: lerp(6, 22, arms), elbow: lerp(12, 24, arms))
+            p.hand(side, .open, weight: 0.5 * arms)
+        }
+        plantFeet(&p, body: body)
+        p.expressions["happy"] = Float(0.6 * (1 - smooth((u - 0.3) / 0.4)))
+        return p
+    }
+
+    /// fly / fly_down（循环 flyCycle）：身子朝飞行方向前倾（lean 度），两腿并拢微屈悬着（tuck 1 = 膝盖弯 22° 左右，
+    /// 0.45 = 慢慢降时腿伸得直一些），手臂略张开保持平衡，整个人上下轻轻浮。浮动是一个主频叠一个两倍频，升得慢、落得快一点；
+    /// 腿和手比身子慢半拍（跟随），头最后。左右轻轻摇和上下浮同一个周期、错开相位，循环才接得上。
+    static func flying(_ t: Double, lean: Double, tuck: Double) -> VRMPose {
+        let phase = 2 * Double.pi * t / flyCycle
+        func wave(_ delay: Double) -> Double { 0.65 * sin(phase - delay) + 0.3 * sin(2 * (phase - delay) + 0.8) }
+        let body = wave(0)
+        let legs = wave(0.9)
+        let arms = wave(0.5)
+        let head = wave(1.3)
+        var p = stand()
+        p.hips.y = Float(0.012 * body)
+        p.bend("hips", pitch: lean * 0.45 + 1.5 * body, roll: 1.2 * sin(phase + 1.9))
+        p.bend("spine", pitch: lean * 0.35 - 0.8 * body, roll: -1.5 * sin(phase + 2.3))
+        p.bend("chest", pitch: lean * 0.2)
+        p.bend("neck", pitch: -lean * 0.25)
+        p.bend("head", pitch: -lean * 0.35 + 2.5 * head, roll: 2 * sin(phase + 3.1))
+        for side in [VRMSide.left, .right] {
+            let s = side.sign
+            // 并拢（稍微往里收），一条腿略靠前一点，晃的时候脚尖朝下。
+            p.leg(side, swing: (6 + 5 * legs) * tuck + s * 2.5, knee: (22 + 9 * legs) * tuck - s * 4 * tuck + 3,
+                  foot: 24 + 8 * legs, spread: -2)
+            p.arm(side, elevation: -46 + 5 * arms, forward: 10 - 3 * arms, elbow: 20 + 6 * arms, twist: -10)
+            p.hand(side, .open, weight: 0.35)
+        }
+        p.expressions["happy"] = 0.35
+        return p
+    }
+
+    /// 点火蓄力：脚踩着地，膝盖弯、身子往下沉、两臂往后甩，抬头看要去的方向。k = 0 站着，1 蹲到底。
+    static func boostCrouch(_ t: Double, body: VRMBody, k: Double) -> VRMPose {
+        let leg = body.thigh + body.shin
+        var p = idle(t)
+        p.hips += SIMD3(0, Float(-0.11 * k) * leg, Float(-0.03 * k) * leg)
+        p.rotations["hips"] = qx(12 * k) * p.rotation("hips")
+        p.rotations["spine"] = qx(6 * k) * p.rotation("spine")
+        p.rotations["head"] = qx(-12 * k) * p.rotation("head")
+        for side in [VRMSide.left, .right] {
+            p.arm(side, elevation: lerp(-72, -58, k), forward: lerp(6, -28, k), elbow: lerp(12, 18, k))
+        }
+        plantFeet(&p, body: body)
+        p.expressions["happy"] = Float(0.3 * k)
+        return p
+    }
+
+    /// 助推器起飞那一下：腿蹬直、脚尖绷着，两臂往两边稍微抬起来。
+    static func boostLaunch() -> VRMPose {
+        var p = stand()
+        p.bend("hips", pitch: 6)
+        p.bend("spine", pitch: 4)
+        p.bend("head", pitch: -10)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: -4, knee: 4, foot: 30, spread: -1)
+            p.arm(side, elevation: -32, forward: 12, elbow: 16)
+            p.hand(side, .open, weight: 0.5)
+        }
+        p.expressions["happy"] = 0.6
+        return p
+    }
+
+    /// boost_crouch（一次性 boostCrouchDuration）：0.3 s 蹲到底、停一下，boostLiftoff 秒脚离地（窗口开始挪），蹬直后接 fly。
+    static func boostCrouchClip(_ t: Double, body: VRMBody) -> VRMPose {
+        if t < 0.4 { return boostCrouch(t, body: body, k: smooth(t / 0.3)) }
+        return blend(boostCrouch(t, body: body, k: 1), boostLaunch(), smooth((t - 0.4) / 0.15))
+    }
+
+    /// 落地前：身子直起来（略往后靠），腿往下伸去够地面（extend 0 = 还收着，1 = 伸直），手臂往两边张开稳住。
+    static func boostBrake(_ t: Double, extend k: Double) -> VRMPose {
+        var p = idle(t)
+        p.bend("hips", pitch: -3)
+        p.bend("spine", pitch: -2)
+        p.bend("head", pitch: 4)
+        for side in [VRMSide.left, .right] {
+            p.leg(side, swing: lerp(8, 3, k), knee: lerp(24, 6, k), foot: lerp(24, 12, k), spread: 1)
+            p.arm(side, elevation: -32, forward: 14, elbow: 16)
+            p.hand(side, .open, weight: 0.5)
+        }
+        p.expressions["happy"] = 0.3
+        return p
+    }
+
+    /// boost_brake（boostBrakeLead 秒，停在最后一帧）：离落地还有 boostBrakeLead 秒开始播，腿先伸、身子直起来。
+    static func boostBrakeClip(_ t: Double) -> VRMPose {
+        boostBrake(t, extend: smooth(t / 0.3))
+    }
+
+    // MARK: - 第三批：蹲、坐地
+
+    /// 蹲（depth 0 = 站着，1 = 蹲到底；循环时 t 带出轻晃）：脚掌踩平钉住，屁股往下往后坐到脚跟上方，
+    /// 膝盖并拢、抬得比胯还高，上身往前趴在膝盖上，两臂环抱小腿。
+    /// 膝盖高过胯，略俯视的相机看过去胯下被膝盖挡住；蹲到一半时（膝盖还没胯高）两手先按住裙子前面，
+    /// 蹲稳了再换成抱膝 —— 起身倒过来，也是先按住裙子再站起来。
+    static func squatting(_ t: Double, body: VRMBody, depth k: Double) -> VRMPose {
+        let leg = body.thigh + body.shin
+        let phase = 2 * Double.pi * t / 3.2
+        let sway = sin(phase) * k
+        // 先往后坐胯（胯前倾、屁股往后），再往下蹲：蹲下去一半时胯已经倾到位。
+        let hinge = smooth(k / 0.55)
+        var p = idle(t * 4 / 3.2)
+        // 胯往前倾得多（38°）、腰往回收一点：上身前倾的总角度不变，但大腿和胯之间的夹角小一些 ——
+        // 裙子上半截是蒙在胯和大腿上的，夹角一大，侧面腰下就被大腿扯开一道缝（3/4 侧面看得到）。
+        p.hips += SIMD3(Float(0.012 * sway) * leg, Float(-0.74 * k) * leg, Float(-0.26 * hinge) * leg)
+        p.rotations["hips"] = qz(-3 * sway) * qx(38 * hinge) * p.rotation("hips")
+        p.rotations["spine"] = qz(3 * sway) * qx(-4 * hinge) * p.rotation("spine")
+        p.rotations["chest"] = qx(10 * k) * p.rotation("chest")
+        p.rotations["neck"] = qx(-8 * k) * p.rotation("neck")
+        p.rotations["head"] = qz(7 * sin(phase + 0.6) * k) * qx(-24 * k) * p.rotation("head")
+        let reach = smooth(k / 0.3)
+        let hold = 1 - smooth((k - 0.9) / 0.1)
+        for side in [VRMSide.left, .right] {
+            // 按裙子：两手往前往中间伸，并在一起按住两腿中间的裙摆；抱膝：手肘垂在大腿外侧，小臂圈住小腿 ——
+            // 手肘挡住胯两侧（3/4 侧面看得到的地方），小臂挡住两膝之间。这几个角度是对着两个模型逐帧扫出来的，改了要重扫。
+            let elevation = lerp(-53, -72, hold), forward = lerp(58, 115, hold)
+            let elbow = lerp(74, 30, hold), twist = lerp(68, 30, hold)
+            p.arm(side, elevation: lerp(-72, elevation, reach), forward: lerp(6, forward, reach), elbow: lerp(12, elbow, reach),
+                  twist: twist * reach)
+        }
+        plantFeet(&p, body: body)
+        for side in [VRMSide.left, .right] { turnKnee(&p, body: body, side: side, angle: 9 * k + 6 * hold * reach) }
+        return p
+    }
+
+    /// 坐地（ぺたん座り，循环 4 s）：屁股坐在地上，两条大腿往前平放、膝盖并拢，小腿往后往外折；
+    /// 两臂伸直、双手搭在两腿中间的裙子上（相机略俯视，裙摆前面就是手，看不进裙底）；身子和头慢慢晃。
+    static func sittingGround(_ t: Double, body: VRMBody) -> VRMPose {
+        let phase = 2 * Double.pi * t / 4
+        var p = seated(body: body)
+        // 每一项在 t = 0 都是 0：循环的第一帧 = 坐下（sit_ground_down）的最后一帧。
+        p.rotations["spine"] = qz(4 * sin(phase)) * p.rotation("spine")
+        p.rotations["chest"] = qz(3 * sin(phase)) * qx(-1.2 * sin(2 * phase)) * p.rotation("chest")
+        p.rotations["head"] = qz(-10 * sin(phase)) * qy(8 * sin(phase / 2) * sin(phase / 2)) * p.rotation("head")
+        p.shrug(0.8 * sin(2 * phase))
+        return p
+    }
+
+    /// 坐地的静止姿势（坐下、起身、循环共用）。splay = 大腿往里转、小腿往两边分开的程度（1 = 鸭子坐）。
+    static func seated(body: VRMBody, splay: Double = 1) -> VRMPose {
+        var p = stand()
+        p.hips.y = 0.09 * body.height - body.hipsHeight
+        p.rotations["hips"] = qx(-6)
+        for side in [VRMSide.left, .right] {
+            p.rotations[side.name + "UpperLeg"] = qy(-side.sign * 4 * splay) * qx(-86) * qy(-side.sign * 35 * splay)
+            p.rotations[side.name + "LowerLeg"] = qx(158)
+            p.rotations[side.name + "Foot"] = qx(45)
+            p.arm(side, elevation: -72, forward: 122, elbow: 10, twist: 20)
+        }
+        p.bend("spine", pitch: 9)
+        p.bend("chest", pitch: 3)
+        p.bend("head", pitch: -2, roll: 3)
+        return p
+    }
+
+    /// 坐到地上（1.6 s，播完停住）：先蹲下去，再双膝往前落地、屁股坐到两脚中间。起身（sit_ground_up）是它倒着播。
+    static func sitGroundDown(_ t: Double, body: VRMBody) -> VRMPose {
+        let crouch = squatting(0, body: body, depth: 0.8 * smooth(t / 0.75))
+        let w = smooth((t - 0.6) / 1.0)
+        // 大腿往里转（小腿分开）留到屁股快着地才做：转早了，挂在大腿上的裙片被带着往前转，胯侧面就露出来。
+        return blend(crouch, seated(body: body, splay: smooth((w - 0.5) / 0.5)), w)
+    }
+
+    /// 钉好脚以后把膝盖往里（angle > 0）转：整条腿绕「腿根 → 踝」这条线转，踝不动，脚掌朝向不变。
+    static func turnKnee(_ p: inout VRMPose, body: VRMBody, side: VRMSide, angle: Double) {
+        let mirror = SIMD3<Float>(side == .left ? 1 : -1, 1, 1)
+        let hipsRotation = p.rotation("hips")
+        let hip = p.hips + hipsRotation.act(body.legOffset * mirror)
+        let axis = simd_normalize(body.ankleRest * mirror - hip)
+        let turn = simd_quatf(angle: radians(side.sign * angle), axis: axis)
+        let thighWorld = hipsRotation * p.rotation(side.name + "UpperLeg")
+        let footWorld = thighWorld * p.rotation(side.name + "LowerLeg") * p.rotation(side.name + "Foot")
+        let turned = turn * thighWorld
+        p.rotations[side.name + "UpperLeg"] = hipsRotation.inverse * turned
+        p.rotations[side.name + "Foot"] = (turned * p.rotation(side.name + "LowerLeg")).inverse * footWorld
+    }
+
     // MARK: - 第三批：脚尖 / 脚跟离地时的钉脚
 
     /// 钉脚的变体：踝的目标从静止位置挪开 ankle（规范化空间，模型单位），脚掌再转 toe 度（正 = 脚尖朝下、脚跟抬起）。
-    /// 踮脚、前掌蹭地、脚尖点地用；ankle 由 `ankleLift` 算，前脚掌（或脚跟）就留在地上。
+    /// 踮脚、前掌蹭地、脚尖点地、迈步、跑步用；ankle 由 `ankleLift` 补上时，前脚掌（或脚跟）就留在地上。
+    /// plantFeet 把腿当成笔直的两节，而 VRoid 的小腿静止时往后斜（踝在膝盖后两三厘米）：膝盖弯得越多这点误差转得越多，
+    /// 踝就偏离目标、脚在地上滑。这里按真实骨骼方向正着算一遍踝落在哪，把差值补回目标再解，两轮就到毫米级；
+    /// 站直时 plantFeet 留下的那点固定偏差照样保留，和钉脚的 idle 一致，片段之间淡入淡出脚不挪。
     static func plantFoot(_ p: inout VRMPose, body: VRMBody, side: VRMSide, ankle: SIMD3<Float>, toe: Double) {
-        var shifted = p
-        shifted.hips -= ankle
-        plantFeet(&shifted, body: body, sides: [side])
-        p.rotations[side.name + "UpperLeg"] = shifted.rotation(side.name + "UpperLeg")
-        p.rotations[side.name + "LowerLeg"] = shifted.rotation(side.name + "LowerLeg")
-        p.rotations[side.name + "Foot"] = shifted.rotation(side.name + "Foot") * qx(toe)
+        let mirror = SIMD3<Float>(side == .left ? 1 : -1, 1, 1)
+        func solve(_ target: SIMD3<Float>) -> VRMPose {
+            var shifted = p
+            shifted.hips -= target
+            plantFeet(&shifted, body: body, sides: [side])
+            return shifted
+        }
+        func reach(_ q: VRMPose, hips: SIMD3<Float>, hipsRotation: simd_quatf) -> SIMD3<Float> {
+            let thigh = hipsRotation * q.rotation(side.name + "UpperLeg")
+            let shin = thigh * q.rotation(side.name + "LowerLeg")
+            return hips + hipsRotation.act(body.legOffset * mirror) + thigh.act((body.kneeRest - body.legOffset) * mirror)
+                + shin.act((body.ankleRest - body.kneeRest) * mirror)
+        }
+        var rest = VRMPose()
+        plantFeet(&rest, body: body, sides: [side])
+        let goal = reach(rest, hips: .zero, hipsRotation: identity) + ankle
+        let hipsRotation = p.rotation("hips")
+        var target = ankle
+        var solved = solve(target)
+        for _ in 0..<2 {
+            target += goal - reach(solved, hips: p.hips, hipsRotation: hipsRotation)
+            solved = solve(target)
+        }
+        p.rotations[side.name + "UpperLeg"] = solved.rotation(side.name + "UpperLeg")
+        p.rotations[side.name + "LowerLeg"] = solved.rotation(side.name + "LowerLeg")
+        p.rotations[side.name + "Foot"] = solved.rotation(side.name + "Foot") * qx(toe)
     }
 
     /// 脚掌绕前脚掌（toe > 0，脚跟抬起）或脚跟（toe < 0，脚尖翘起）转 toe 度时，踝从静止位置挪了多少。
@@ -1205,6 +1780,8 @@ enum VRMMotion {
 
 /// 量出来的身体尺寸（模型单位，VRM 原点在脚底）：跪坐 / 下蹲时算 hips 该降多少，膝盖和脚才刚好着地。
 struct VRMBody {
+    /// 身高（静止时整个模型外包框的高度，与取景用的高度一致）。
+    var height: Float = 1.3
     var hipsHeight: Float = 0.65
     /// hips 关节比大腿根（upperLeg）高多少。
     var hipToLeg: Float = 0.03
@@ -1214,6 +1791,8 @@ struct VRMBody {
     var ankle: Float = 0.08
     /// 左腿根、左踝相对 hips 的静止位置（规范化空间；右边按 x 取反）。
     var legOffset = SIMD3<Float>(0.06, -0.03, 0)
+    /// 左膝相对 hips 的静止位置（VRoid 的小腿静止时往后斜一点，`plantFoot` 按真实骨骼方向校正钉脚用）。
+    var kneeRest = SIMD3<Float>(0.06, -0.28, 0)
     var ankleRest = SIMD3<Float>(0.06, -0.57, 0)
 
     /// 大腿前抬 swing 度、屈膝 knee 度时，hips 离地多高：脚（小腿竖着时踩地、躺平时脚背贴地）与膝盖都不低于地面。

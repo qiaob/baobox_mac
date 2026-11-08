@@ -356,7 +356,7 @@ final class SpritePetView: NSView {
     private var stateKey: String {
         switch pose.state {
         case .sleep, .rest: return "sleep"
-        case .wander, .climb: return "walk"
+        case .wander: return "walk"
         case .notify, .jump: return "happy"
         case .idle, .dragged, .fall, .entering, .leaving, .lounge: return "idle"
         }

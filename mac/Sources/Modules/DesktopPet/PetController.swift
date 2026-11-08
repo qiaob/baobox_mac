@@ -104,12 +104,21 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.onArrive = { [weak self] in self?.settler?.noteArrived() }
         engine.onDropped = { [weak self] in self?.settler?.noteDropped() }
         engine.strollFilter = { [weak self] origin in self?.settler?.strollAcceptable(origin) ?? true }
-        // 踩台阶：脚下冒一级、爬完收起（SETTLE.md §4.4）。
-        engine.onClimbStep = { [weak self] feet, _ in
-            guard let self, let panel = self.panel else { return }
-            self.stairs.addStep(at: feet, width: self.holeWidth * 1.15, below: panel)
+        engine.roamFilter = { [weak self] origin in self?.settler?.roamAcceptable(origin) ?? true }
+        // 跳 / 飞（SETTLE.md §4.4）：起跳、落地脚下扬一小团土（火箭是一团烟），二段跳空中一圈气浪，都留在原地。
+        // 宠物看不见的时候（关着、借给休息画面）不画，免得屏幕上凭空冒土。
+        engine.onTakeoff = { [weak self] feet, style in
+            guard let self, let panel = self.effectsPanel else { return }
+            self.effects.puff(at: feet, width: self.holeWidth * 1.4, smoke: style == .rocket, below: panel)
         }
-        engine.onClimbEnd = { [weak self] in self?.stairs.finish() }
+        engine.onTouchdown = { [weak self] feet, style in
+            guard let self, let panel = self.effectsPanel else { return }
+            self.effects.puff(at: feet, width: self.holeWidth * 1.4, smoke: style == .rocket, below: panel)
+        }
+        engine.onKick = { [weak self] feet in
+            guard let self, let panel = self.effectsPanel else { return }
+            self.effects.ring(at: feet, width: self.holeWidth * 1.4, below: panel)
+        }
         configureRange()
         engine.start(at: origin)
         startSettler()
@@ -120,7 +129,31 @@ final class PetController: ObservableObject, NotifyPresenting {
             bubble.setSuspended(true)
         }
         applyVisibility()
-        startClickThroughTracking()
+        if PetSettings.enabled { startClickThroughTracking() }
+    }
+
+    /// 特效画在哪个宠物窗下面：宠物正显示着才画（关着、借给休息画面时返回 nil）。
+    private var effectsPanel: NSPanel? {
+        guard let panel, panel.isVisible, PetSettings.enabled, !isLent else { return nil }
+        return panel
+    }
+
+    /// 宠物还在不在某块屏上：拔了外接屏、合盖换屏、睡醒时屏已经换了，宠物会留在已经不存在的屏幕坐标上，
+    /// 屏外的地方碍事分是 0、settler 不会挪它，就再也回不来了。不在任何屏上就放到最近那块屏的可见区里。
+    private func rescueIfOffscreen() {
+        guard let panel, !engine.isOnScreen, !isChoreographing, !isLent else { return }
+        let side = panelSide
+        let center = NSPoint(x: engine.origin.x + side / 2, y: engine.origin.y + side / 2)
+        guard let screen = PetEngine.nearestScreen(to: center) else { return }
+        let visible = screen.visibleFrame
+        let point = NSPoint(x: min(max(engine.origin.x, visible.minX), visible.maxX - side),
+                            y: min(max(engine.origin.y, visible.minY), visible.maxY - side))
+        PetLog.log.info("pet was off every screen; moving it back onto \(screen.localizedName, privacy: .public)")
+        engine.place(at: point)
+        panel.setFrameOrigin(engine.origin)
+        saveOrigin(engine.origin)
+        bubble.relayout()
+        layoutAccessory()
     }
 
     // MARK: - 活动范围（docs/desktop-pet/ROAM.md）
@@ -133,8 +166,9 @@ final class PetController: ObservableObject, NotifyPresenting {
         engine.range = PetSettings.range
         engine.customRect = PetSettings.rangeRect
         let activity = PetSettings.activity
-        let needsWindows = engine.range == .windows || PetSettings.avoidsActiveWindow
-            || activity == .calm || activity == .normal
+        // 宠物关着就不看窗口（每次都是一次跨进程的窗口列表）。
+        let needsWindows = PetSettings.enabled && (engine.range == .windows || PetSettings.avoidsActiveWindow
+            || activity == .calm || activity == .normal)
         if needsWindows {
             if !windowWatcher.isRunning { windowWatcher.start() }
         } else {
@@ -158,8 +192,8 @@ final class PetController: ObservableObject, NotifyPresenting {
     // MARK: - 找个不碍事的地方待着（docs/desktop-pet/SETTLE.md）
 
     private var settler: PetSettler?
-    /// 爬高爬低时脚下的台阶。
-    private let stairs = PetStairs()
+    /// 跳 / 飞时脚下的小特效（土、烟、气浪）。
+    private let effects = PetEffects()
 
     /// 身子大约占宠物窗的多宽 / 多高：VRM 人又高又瘦（窗口放大过）；毛绒 / 动物模型与 2D 帧图差不多占满。
     private var bodyFractions: (width: CGFloat, height: CGFloat) {
@@ -206,6 +240,14 @@ final class PetController: ObservableObject, NotifyPresenting {
                                     farewellClip: false, quick: true)
         run(leave, as: .leaving) { [weak self] in
             guard let self, let panel = self.panel else { return }
+            // 钻进去的那一会儿宠物被关掉了：不再冒出来，就在目的地收起（下次从那儿出场）。
+            guard PetSettings.enabled else {
+                self.endChoreography(restoreHome: false)
+                self.engine.place(at: destination)
+                self.saveOrigin(self.engine.origin)
+                self.hidePet()
+                return
+            }
             // 冒出来以后就站在这儿（收尾时按 choreographyHome 放好）。
             self.choreographyHome = destination
             let enter = self.reduceMotion
@@ -256,11 +298,22 @@ final class PetController: ObservableObject, NotifyPresenting {
                                                                      object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.systemDidWake("screenIsUnlocked") }
         }))
+        // 接上 / 拔掉显示器、改分辨率：宠物所在的屏可能没了。
+        let center = NotificationCenter.default
+        systemObservers.append((center, center.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                           object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rescueIfOffscreen() }
+        }))
     }
+
+    /// 真的歇过（系统睡 / 熄屏 / 切走用户）：醒来才把动画整个重建。单纯锁屏又解锁（屏没熄）不重建 ——
+    /// 重建会把蹲着的人从 T 字淡回去、把睡着的人重播一遍、把正在做的动作硬切掉（看门狗照样兜底卡住的情况）。
+    private var restedSinceWake = false
 
     private func systemWillRest(_ why: String) {
         wakeWork?.cancel()
         wakeWork = nil
+        restedSinceWake = true
         PetLog.log.info("system rest (\(why, privacy: .public)): pausing engine and rendering")
         engine.suspend()
         if shownModelID != nil { modelView.suspended = true }
@@ -277,12 +330,16 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     private func finishWake(_ why: String) {
         wakeWork = nil
-        PetLog.log.info("system wake (\(why, privacy: .public)): restarting engine and animations")
+        let rebuild = restedSinceWake
+        restedSinceWake = false
+        PetLog.log.info("system wake (\(why, privacy: .public)): resuming engine\(rebuild ? " and rebuilding animations" : "", privacy: .public)")
         engine.resume()
         if shownModelID != nil {
             modelView.suspended = false
-            modelView.restartAnimations(reason: "wake: \(why)")
+            if rebuild { modelView.restartAnimations(reason: "wake: \(why)") }
         }
+        // 睡醒时屏可能换了（合盖接上 / 拔掉外接屏）。
+        rescueIfOffscreen()
         settler?.recheck(reason: "wake", after: 2)
     }
 
@@ -506,6 +563,10 @@ final class PetController: ObservableObject, NotifyPresenting {
     func applyVisibility() {
         guard let panel else { return }
         if PetSettings.enabled {
+            // 先把关掉时停的都恢复（引擎、点击穿透、窗口观察器），再出场。
+            engine.setHidden(false)
+            if clickThroughTimer == nil { startClickThroughTracking() }
+            configureRange()
             if shownModelID != nil { modelView.setActive(true) }
             if switchingCharacter { return }   // 新形象读好后自己出场
             let leaving = isChoreographing && engine.state == .leaving
@@ -521,10 +582,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             bubble.dismissAll()
             let finish: () -> Void = { [weak self] in
                 guard let self, !PetSettings.enabled else { return }
-                // 先把头顶挂件摘下来交还：子窗口会跟着宠物窗一起收起。
-                self.updateAccessory()
-                self.panel?.orderOut(nil)
-                if self.shownModelID != nil { self.modelView.setActive(false) }
+                self.hidePet()
             }
             if panel.isVisible, !(isChoreographing && engine.state == .leaving) {
                 playExit(quick: false, completion: finish)
@@ -536,6 +594,19 @@ final class PetController: ObservableObject, NotifyPresenting {
         }
     }
 
+    /// 宠物关掉、退场播完后收起：窗口拿下来、渲染停掉，引擎 / 点击穿透 / 窗口观察器都停（隐形的宠物不再散步、蹦、冒土，
+    /// 也不再每秒几十次唤醒、取窗口列表）。打开时 applyVisibility 先恢复再出场。
+    private func hidePet() {
+        // 先把头顶挂件摘下来交还：子窗口会跟着宠物窗一起收起。
+        updateAccessory()
+        panel?.orderOut(nil)
+        if shownModelID != nil { modelView.setActive(false) }
+        engine.setHidden(true)
+        clickThroughTimer?.invalidate()
+        clickThroughTimer = nil
+        configureRange()
+    }
+
     /// 按尺寸设置与当前形象调整宠物窗：底边中点不动（换成更大的 VRM 窗时脚还踩在原地），不出屏。
     func applySize() {
         guard let panel else { return }
@@ -545,24 +616,46 @@ final class PetController: ObservableObject, NotifyPresenting {
         let model = shownModelID != nil ? modelView : nil
         engine.footInset = (model?.footInsetFraction ?? 0) * side
         engine.walkSpeed = model?.walkSpeed(viewHeight: side) ?? 34 * side / 104
-        // 跑步、踏台阶、蹲坐：按形象的片段配（没有的形象：快走、原地走着上下、不歇脚）。
-        engine.hurryFactor = model?.runSpeedRatio ?? PetEngine.walkHurryFactor
-        engine.climbStepRise = model?.climbStepRise(viewHeight: side) ?? side * 0.12
-        engine.climbCycle = model?.climbCycle ?? 1.0
+        // 几种走法（动捕走路，各自的步幅）、跑步、蹲坐：按形象的片段配（没有的形象：快走、不歇脚）。
+        engine.gaitSpeeds = model?.gaitSpeeds(viewHeight: side) ?? [:]
+        engine.runSpeed = model?.runSpeed(viewHeight: side)
+        engine.hurryFactor = PetEngine.walkHurryFactor
+        // 跳 / 飞（SETTLE.md §4.4）：跳多高按身高算，蓄力 / 点火 / 伸腿 / 刹车 / 空中转圈按片段的时长排。
+        engine.bodyHeight = (model?.bodyHeightFraction ?? 0.7) * side
+        engine.leapPrepare = model?.clipDuration("jump_crouch") ?? 0.3
+        engine.hopPrepare = model?.clipDuration("hop_crouch") ?? 0.25
+        // 火箭：先弹出助推器（0.35 秒），往上飞再点火蹲下到离地（boostLiftoff），往下飞是淡入悬停姿势（0.3 秒）。
+        let hasRocket = model?.clipDuration("boost_crouch") != nil
+        engine.rocketPrepare = hasRocket ? 0.35 + VRMMotion.boostLiftoff : 0.5
+        engine.rocketDescendPrepare = hasRocket ? 0.35 + 0.3 : 0.4
+        engine.reachLead = model?.clipDuration("jump_reach") ?? 0.2
+        engine.brakeLead = model?.clipDuration("boost_brake") ?? 0.4
+        engine.spinDuration = model?.clipDuration("jump_spin") ?? 0.5
         engine.canLounge = model?.supportsLounge ?? false
         engine.loungeExitDuration = model?.loungeExitDuration ?? 1.2
+        engine.wakeDuration = model?.wakeDuration ?? 0.5
+        engine.landPause = min(model?.clipDuration("jump_land") ?? 0.4, 0.45)
         var frame = panel.frame
-        guard frame.width != side || frame.height != side else { return }
-        frame.origin.x = (frame.midX - side / 2).rounded()
-        frame.size = NSSize(width: side, height: side)
-        if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
-            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - side)
-            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - side)
+        let resized = frame.width != side || frame.height != side
+        if resized {
+            frame.origin.x = (frame.midX - side / 2).rounded()
+            frame.size = NSSize(width: side, height: side)
+            if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+                frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - side)
+                frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - side)
+            }
+            engine.setOrigin(frame.origin)
         }
-        panel.setFrame(frame, display: true)
-        engine.setOrigin(frame.origin)
-        bubble.relayout()
-        layoutAccessory()
+        // 形象换了 / 大小变了，脚离窗口底边的距离（footInset）跟着变：按新的距离重新站到台面上
+        // （上面把窗口夹进可见区时，站在地面上的窗口底边本来就低于可见区一点，也在这里放回去）。
+        // 不然出场在「脚离地」的位置播完，下一拍才掉一截、打断招手。
+        engine.resettle()
+        frame.origin = engine.origin
+        if resized || panel.frame.origin != frame.origin {
+            panel.setFrame(frame, display: true)
+            bubble.relayout()
+            layoutAccessory()
+        }
     }
 
     // MARK: - 点击穿透（VRM：只有人身上接鼠标）
@@ -712,6 +805,8 @@ final class PetController: ObservableObject, NotifyPresenting {
             engine.occupy(for: 1)
             engine.notify(level: .bubble)
         }
+        // 被摸、被戳、被喂、陪着玩：高兴一阵，接下来走路蹦蹦跳跳的（MOCAP.md §3）。
+        engine.cheer()
         say(Self.line(for: used))
     }
 
@@ -835,9 +930,11 @@ final class PetController: ObservableObject, NotifyPresenting {
         radial.open(around: body, inner: inner, outer: outer)
     }
 
-    /// 内圈 7 格（最后一格由菜单补「更多」）：最常用的工具 + 宠物动作；外圈：其他功能的快捷操作 + 宠物设置。
+    /// 内圈 7 格（最后一格由菜单补「更多」）：专注、防休眠、换形象、实时翻译 + 喂食、陪玩、安静；外圈：其余工具 + 测试通知、设置、隐藏。
+    /// 2026-11-08 用户先说「优先放没有快捷键的常用按钮，截图、剪贴板之类的都有快捷键」，又点名内圈放「专注、防休眠、换宠物、实时翻译」，
+    /// Claude Code 不要。外圈的工具按常用程度排，没绑快捷键的在前、绑了的整体排后（键盘就按得到）；绑没绑按当前键位实时判断。
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
-    /// 当前形象没有喂食 / 陪玩动作时，从外圈挪工具进内圈，保证内圈是满的。
+    /// 内圈缺了谁（形象没有喂食 / 陪玩动作、某个工具没注册）就从外圈挪工具进来，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
         let hotkeys = AppDelegate.shared?.registry.allHotkeys().flatMap(\.defs) ?? []
         func tool(_ id: String, _ symbol: String, _ title: String) -> RadialMenuItem? {
@@ -848,9 +945,11 @@ final class PetController: ObservableObject, NotifyPresenting {
         let quiet = PetSettings.quietUntil.map { $0 > Date() } ?? false
 
         var inner: [RadialMenuItem] = [
-            tool("screenshot.capture", "camera.viewfinder", L("pet.ring.screenshot")),
-            tool("screenshot.ocr", "text.viewfinder", L("pet.ring.ocr")),
-            tool("clipboard.togglePanel", "doc.on.clipboard", L("pet.ring.clipboard")),
+            tool("focushealth.focus", "timer", L("pet.ring.focus")),
+            tool("caffeinate.toggle", "cup.and.saucer.fill", L("pet.ring.caffeinate")),
+            RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
+                self?.nextCharacter()
+            },
             tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate")),
         ].compactMap { $0 }
         if supports("feed") {
@@ -868,20 +967,22 @@ final class PetController: ObservableObject, NotifyPresenting {
             if quiet { self?.clearQuiet() } else { self?.quietForOneHour() }
         })
 
-        var outer: [RadialMenuItem] = [
-            tool("screenshot.record", "record.circle", L("pet.ring.record")),
-            tool("screenshot.draw", "scribble", L("pet.ring.draw")),
-            tool("selectiontranslate.regionOCR", "rectangle.and.text.magnifyingglass", L("pet.ring.regionTranslate")),
-            tool("claudecode.center", "sparkle", "Claude"),
+        // 外圈的工具：按常用程度排；没绑快捷键的在前，绑了的整体排到后面。
+        let tools: [RadialMenuItem] = [
+            tool("screenshot.ocr", "text.viewfinder", L("pet.ring.ocr")),
+            tool("focushealth.breakNow", "figure.walk", L("pet.ring.breakNow")),
             tool("aitools.center", "chevron.left.forwardslash.chevron.right", "Codex"),
+            tool("screenshot.draw", "scribble", L("pet.ring.draw")),
+            tool("meeting.startOnline", "person.2.wave.2", L("pet.ring.meeting")),
+            tool("screenshot.capture", "camera.viewfinder", L("pet.ring.screenshot")),
+            tool("clipboard.togglePanel", "doc.on.clipboard", L("pet.ring.clipboard")),
+            tool("selectiontranslate.regionOCR", "rectangle.and.text.magnifyingglass", L("pet.ring.regionTranslate")),
+            tool("screenshot.record", "record.circle", L("pet.ring.record")),
             tool("keyboardnav.click", "keyboard", L("pet.ring.keyboard")),
             tool("windowmanager.maximize", "macwindow", L("pet.ring.maximize")),
-            tool("caffeinate.toggle", "cup.and.saucer.fill", L("pet.ring.caffeinate")),
-            tool("focushealth.focus", "timer", L("pet.ring.focus")),
         ].compactMap { $0 }
-        outer.append(RadialMenuItem(id: "pet.character", symbol: "arrow.triangle.2.circlepath", title: L("pet.ring.character")) { [weak self] in
-            self?.nextCharacter()
-        })
+        let hasHotkey = { (item: RadialMenuItem) in HotkeyCenter.shared.combo(for: item.id) != nil }
+        var outer = tools.filter { !hasHotkey($0) } + tools.filter(hasHotkey)
         outer.append(RadialMenuItem(id: "pet.test", symbol: "bell.badge", title: L("pet.ring.test")) { [weak self] in
             self?.sendTestNotification(.toast)
             self?.sendTestNotification(.card)
@@ -1094,12 +1195,15 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     private func restoredOrigin() -> NSPoint {
         let defaults = UserDefaults.standard
-        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let main = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         guard defaults.object(forKey: PetSettings.originXKey) != nil else {
-            return NSPoint(x: visible.minX + 24, y: visible.minY + 2)
+            return NSPoint(x: main.minX + 24, y: main.minY + 2)
         }
         var point = NSPoint(x: defaults.double(forKey: PetSettings.originXKey),
                             y: defaults.double(forKey: PetSettings.originYKey))
+        // 按保存的位置所在（或最近）的那块屏夹：放在副屏上的宠物下次启动还在副屏，那块屏没了就去最近的屏。
+        let center = NSPoint(x: point.x + panelSide / 2, y: point.y + panelSide / 2)
+        let visible = PetEngine.nearestScreen(to: center)?.visibleFrame ?? main
         point.x = min(max(point.x, visible.minX), visible.maxX - panelSide)
         point.y = min(max(point.y, visible.minY), visible.maxY - panelSide)
         return point

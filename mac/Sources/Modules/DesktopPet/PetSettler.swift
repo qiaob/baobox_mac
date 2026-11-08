@@ -39,6 +39,9 @@ final class PetSettler {
     /// 上一次挪窝：之后 60 秒里每 2 秒的「挡着没有」不看（切换 App / 桌面、在旁边点照样看）。
     private var lastMoveAt = Date.distantPast
     private var nextVarietyAt = Date.distantFuture
+    /// 事件触发的「让开」（切 App、旁边连点、睡醒）碰上宠物正忙（气泡开着、在做互动、在空中、还没醒）：记下来，
+    /// 能挪了马上补做（20 秒内有效）。不然这次就丢了 —— 碍事分没到「该让开」的程度时，之后就一直挡着。
+    private var pendingUrgent: (reason: String, until: Date)?
 
     /// 「挡着」：碍事分到这个数（身子一多半挡在正在用的窗口上）。2026-11-07 试用「挪得太勤」后从 0.45 调高。
     private static let badThreshold = 0.55
@@ -163,6 +166,13 @@ final class PetSettler {
         return there < Self.badThreshold && there <= scorer.cost(at: engine.origin) + 0.05
     }
 
+    /// 「活泼」上下左右溜达：只要不碍事（没到「该让开」的程度）就能去，不要求比现在更空 ——
+    /// 落到那儿也不会被「让开」马上拉回来。
+    func roamAcceptable(_ origin: NSPoint) -> Bool {
+        guard PetSettings.avoidsActiveWindow else { return true }
+        return makeScorer(withPixels: true).cost(at: origin) < Self.badThreshold
+    }
+
     private func schedule(after delay: TimeInterval, _ work: @escaping () -> Void) {
         pending?.cancel()
         let item = DispatchWorkItem { MainActor.assumeIsolated { work() } }
@@ -192,6 +202,13 @@ final class PetSettler {
         guard env.isAvailable(), engine.canRelocate, !engine.isHeadingSomewhere, now >= calmUntil else {
             badChecks = 0
             return
+        }
+        if let pending = pendingUrgent {
+            pendingUrgent = nil
+            if now < pending.until {
+                evaluate(reason: pending.reason + " (retry)", variety: false, ignoringPin: true, urgent: true)
+                return
+            }
         }
         if PetSettings.avoidsActiveWindow, now >= pinnedUntil, now.timeIntervalSince(lastMoveAt) >= 60 {
             let scorer = makeScorer(withPixels: true)
@@ -236,7 +253,11 @@ final class PetSettler {
     }
 
     private func evaluate(reason: String, variety: Bool, ignoringPin: Bool, urgent: Bool, usePixels: Bool = true) {
-        guard env.isAvailable(), engine.canRelocate, let screen = engine.screen else { return }
+        guard env.isAvailable(), engine.canRelocate, let screen = engine.screen else {
+            if urgent { pendingUrgent = (reason, Date().addingTimeInterval(20)) }
+            return
+        }
+        if urgent { pendingUrgent = nil }
         let now = Date()
         if !ignoringPin, now < pinnedUntil { return }
         if !variety, !PetSettings.avoidsActiveWindow { return }
@@ -308,15 +329,16 @@ final class PetSettler {
         }
     }
 
-    /// 怎么去（SETTLE.md §4.3–4.4）：近的按路线过去 —— 同一个台面走过去；随意放先踩台阶到那个高度再走；
-    /// 地面 → 窗口顶走到窗口侧边踩台阶上去；窗口顶 → 地面从一头跳下去。台阶爬太高、路太远、排不出路线的钻黑洞过去。
+    /// 怎么去（SETTLE.md §4.3–4.4）：近的按路线过去 —— 同一个台面走过去；随意放、地面 ↔ 窗口顶，够得着的跳过去，
+    /// 太高太低的背火箭飞过去。路太远、高低差大到火箭也要飞很久、排不出路线的钻黑洞过去。
     /// 让路（切换 App / 桌面、旁边连着点）时跑过去，其余慢慢走。
     private func move(to spot: PetSpot, hurry: Bool, reason: String, from current: Double) {
         let origin = engine.origin
         let side = env.metrics().side
         let dx = abs(spot.origin.x - origin.x), dy = abs(spot.origin.y - origin.y)
-        let climbsUp = engine.range == .screen ? dy > 2 : (spot.ledgeID != nil && spot.ledgeID != engine.currentLedgeID)
-        let nearEnough = dx <= max(700, side * 4) && (!climbsUp || dy <= max(260, side * 2))
+        // 换高度（随意放上下挪、地面 ↔ 窗口顶两个方向）都要在火箭飞得过去的范围里，太高太远钻黑洞。
+        let changesLevel = engine.range == .screen ? dy > 2 : spot.ledgeID != engine.currentLedgeID
+        let nearEnough = dx <= max(700, side * 4) && (!changesLevel || dy <= max(600, side * 4.5))
         PetLog.log.info("relocate (\(reason, privacy: .public)): cost \(current, format: .fixed(precision: 2)) → \(spot.cost, format: .fixed(precision: 2)), dx \(Int(dx)) dy \(Int(dy))")
         if !(nearEnough && engine.travel(to: spot.origin, ledgeID: spot.ledgeID, hurry: hurry)) {
             env.transit(spot.origin)
