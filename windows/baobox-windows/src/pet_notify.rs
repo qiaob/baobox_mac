@@ -6,11 +6,13 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, HBRUSH, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+use windows::Win32::Foundation::{
+    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const HISTORY: &str = "desktop-pet.history";
@@ -319,9 +321,43 @@ struct Bubble {
     user_feedback: bool,
 }
 
+const KEY: COLORREF = COLORREF(0xff00ff);
+const SURFACE: COLORREF = COLORREF(0xffffff);
+const LINE: COLORREF = COLORREF(0xe2e4dd);
+const INK: COLORREF = COLORREF(0x24221c);
+const MUTED: COLORREF = COLORREF(0x686b5d);
+const ACCENT: COLORREF = COLORREF(0x74_7c_0e);
+const TINT: COLORREF = COLORREF(0xf0f7de);
+
 struct BubbleInput {
     selected: Cell<Option<&'static str>>,
     actions: Vec<(&'static str, &'static str)>,
+    source: &'static str,
+    icon: u16,
+    title: Vec<u16>,
+    body: Vec<u16>,
+    ambient: bool,
+    dpi: i32,
+    fonts: [HFONT; 3],
+    title_height: i32,
+    body_height: i32,
+    tail: Cell<(i32, bool)>,
+}
+
+impl BubbleInput {
+    fn px(&self, value: i32) -> i32 {
+        (value * self.dpi + 48) / 96
+    }
+}
+
+impl Drop for BubbleInput {
+    fn drop(&mut self) {
+        for font in self.fonts {
+            unsafe {
+                let _ = DeleteObject(font);
+            }
+        }
+    }
 }
 
 impl Bubble {
@@ -331,27 +367,129 @@ impl Bubble {
             RegisterClassW(&WNDCLASSW {
                 lpfnWndProc: Some(bubble_proc),
                 hInstance: instance,
-                hbrBackground: HBRUSH(6 as _), // COLOR_WINDOW + 1
                 lpszClassName: CLASS,
                 ..Default::default()
             });
-            let width = 300;
-            let base_height = if notice.body.is_empty() { 56 } else { 108 };
-            let height = base_height + if notice.actions.is_empty() { 0 } else { 35 };
             let window = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOACTIVATE
+                    | if crate::pet::is_preview() {
+                        WS_EX_APPWINDOW
+                    } else {
+                        WS_EX_TOOLWINDOW
+                    },
                 CLASS,
                 w!("BaoBox 通知"),
-                WS_POPUP | WS_BORDER,
+                WS_POPUP,
                 0,
                 0,
-                width,
-                height,
+                0,
+                0,
                 pet,
                 None,
                 instance,
                 None,
             )?;
+            let dpi = match GetDpiForWindow(pet) {
+                0 => 96,
+                dpi => dpi as i32,
+            };
+            let (source, icon) = match notice.source.as_str() {
+                "screenshot" | "capture-result" => ("截图", 0xe722),
+                "clipboard" => ("剪贴板", 0xe77f),
+                "claudecode" => ("Claude Code", 0xe734),
+                "aitools" | "codex" => ("Codex", 0xe943),
+                "digest" => ("消息摘要", 0xe8b7),
+                crate::pet::ID => ("桌面宠物", 0xed54),
+                other => (
+                    SOURCES
+                        .iter()
+                        .find(|(id, _)| *id == other)
+                        .map_or("BaoBox", |(_, name)| *name),
+                    0xea8f,
+                ),
+            };
+            let mut input = Box::new(BubbleInput {
+                selected: Cell::new(None),
+                actions: notice.actions.clone(),
+                source,
+                icon,
+                title: notice.title.encode_utf16().collect(),
+                body: notice.body.encode_utf16().collect(),
+                ambient: notice.level == Level::Ambient && notice.actions.is_empty(),
+                dpi,
+                fonts: [(14, 600), (13, 400), (11, 400)].map(|(size, weight)| {
+                    let face = if size == 11 {
+                        w!("Segoe MDL2 Assets")
+                    } else {
+                        w!("Microsoft YaHei UI")
+                    };
+                    CreateFontW(
+                        -(size * dpi + 48) / 96,
+                        0,
+                        0,
+                        0,
+                        weight,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        4,
+                        0,
+                        face,
+                    )
+                }),
+                title_height: 0,
+                body_height: 0,
+                tail: Cell::new((0, false)),
+            });
+            let dc = GetDC(window);
+            let width = input.px(300);
+            let text_width = width - input.px(if input.ambient { 58 } else { 28 });
+            input.title_height =
+                measure(dc, input.fonts[0], &input.title, text_width, input.px(36));
+            input.body_height = measure(
+                dc,
+                input.fonts[1],
+                &input.body,
+                text_width,
+                input.px(if input.ambient { 18 } else { 64 }),
+            );
+            let content = input.title_height
+                + input.body_height
+                + if input.body_height > 0 {
+                    input.px(4)
+                } else {
+                    0
+                };
+            let actions_y = input.px(47) + content;
+            let height = if input.ambient {
+                input.px(34) + content.max(input.px(22))
+            } else if input.actions.is_empty() {
+                input.px(54) + content
+            } else {
+                actions_y + input.px(43)
+            };
+            let button_widths: Vec<_> = input
+                .actions
+                .iter()
+                .take(3)
+                .map(|(_, label)| {
+                    let label: Vec<u16> = label.encode_utf16().collect();
+                    let old = SelectObject(dc, input.fonts[1]);
+                    let mut size = SIZE::default();
+                    let _ = GetTextExtentPoint32W(dc, &label, &mut size);
+                    SelectObject(dc, old);
+                    (size.cx + input.px(24)).clamp(
+                        input.px(48),
+                        input.px(if input.actions.len() == 1 { 272 } else { 86 }),
+                    )
+                })
+                .collect();
+            ReleaseDC(window, dc);
             let bubble = Self {
                 window,
                 level: notice.level,
@@ -364,85 +502,63 @@ impl Bubble {
                 expires: notice.expires,
                 width,
                 height,
-                input: Box::new(BubbleInput {
-                    selected: Cell::new(None),
-                    actions: notice.actions.clone(),
-                }),
+                input,
             };
-            let title = wide(&notice.title);
-            CreateWindowExW(
-                Default::default(),
-                w!("STATIC"),
-                PCWSTR(title.as_ptr()),
-                WS_CHILD | WS_VISIBLE,
-                12,
-                12,
-                width - 58,
-                31,
-                window,
-                None,
-                instance,
-                None,
-            )?;
-            if !notice.body.is_empty() {
-                let body = wide(&notice.body);
-                CreateWindowExW(
-                    Default::default(),
-                    w!("STATIC"),
-                    PCWSTR(body.as_ptr()),
-                    WS_CHILD | WS_VISIBLE,
-                    12,
-                    48,
-                    width - 24,
-                    base_height - 54,
-                    window,
-                    None,
-                    instance,
-                    None,
-                )?;
-            }
-            CreateWindowExW(
-                Default::default(),
-                w!("BUTTON"),
-                w!("×"),
-                WS_CHILD | WS_VISIBLE,
-                width - 40,
-                8,
-                26,
-                24,
-                window,
-                HMENU(1 as _),
-                instance,
-                None,
-            )?;
-            for (index, (_, label)) in bubble.input.actions.iter().take(3).enumerate() {
-                let label = wide(label);
-                CreateWindowExW(
-                    Default::default(),
-                    w!("BUTTON"),
-                    PCWSTR(label.as_ptr()),
-                    WS_CHILD | WS_VISIBLE,
-                    12 + 94 * index as i32,
-                    base_height,
-                    89,
-                    26,
-                    window,
-                    HMENU((index + 2) as _),
-                    instance,
-                    None,
-                )?;
-            }
             SetWindowLongPtrW(
                 window,
                 GWLP_USERDATA,
                 &*bubble.input as *const BubbleInput as isize,
             );
+            SetLayeredWindowAttributes(window, KEY, 255, LWA_COLORKEY)?;
+            SetWindowPos(
+                window,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )?;
+            let px = |n| bubble.input.px(n);
+            let button = |id, label: PCWSTR, x, y, width, height| {
+                CreateWindowExW(
+                    Default::default(),
+                    w!("BUTTON"),
+                    label,
+                    WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_OWNERDRAW as u32),
+                    x,
+                    y,
+                    width,
+                    height,
+                    window,
+                    HMENU(id as _),
+                    instance,
+                    None,
+                )
+            };
+            if !bubble.input.ambient {
+                button(1, w!("关闭"), width - px(35), px(18), px(20), px(20))?;
+                let mut x = px(14);
+                for (index, ((_, label), button_width)) in
+                    bubble.input.actions.iter().zip(button_widths).enumerate()
+                {
+                    let label = wide(label);
+                    button(
+                        index + 2,
+                        PCWSTR(label.as_ptr()),
+                        x,
+                        actions_y,
+                        button_width,
+                        px(26),
+                    )?;
+                    x += button_width + px(6);
+                }
+            }
             bubble.position(pet);
             let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
             Ok(bubble)
         }
     }
-
     unsafe fn position(&self, pet: HWND) {
         let mut rect = RECT::default();
         if GetWindowRect(pet, &mut rect).is_err() {
@@ -451,14 +567,25 @@ impl Bubble {
         let Some(info) = monitor_info(pet) else {
             return;
         };
+        let rect = crate::pet::body_bounds(pet, rect);
         let area = info.rcWork;
         let x = ((rect.left + rect.right - self.width) / 2)
             .clamp(area.left, (area.right - self.width).max(area.left));
-        let y = if rect.top - self.height - 8 >= area.top {
-            rect.top - self.height - 8
+        let gap = self.input.px(4);
+        let below = rect.top - self.height - gap < area.top;
+        let y = if below {
+            (rect.bottom + gap).min((area.bottom - self.height).max(area.top))
         } else {
-            (rect.bottom + 8).min((area.bottom - self.height).max(area.top))
+            rect.top - self.height - gap
         };
+        let inset = self.input.px(22);
+        let tail = (
+            ((rect.left + rect.right) / 2 - x).clamp(inset, self.width - inset),
+            below,
+        );
+        if self.input.tail.replace(tail) != tail {
+            let _ = InvalidateRect(self.window, None, false);
+        }
         let _ = SetWindowPos(
             self.window,
             None,
@@ -512,11 +639,221 @@ impl Drop for Bubble {
     }
 }
 
+const WRAP: DRAW_TEXT_FORMAT = DRAW_TEXT_FORMAT(DT_WORDBREAK.0 | DT_NOPREFIX.0 | DT_EDITCONTROL.0);
+const ONE_LINE: DRAW_TEXT_FORMAT =
+    DRAW_TEXT_FORMAT(DT_SINGLELINE.0 | DT_VCENTER.0 | DT_END_ELLIPSIS.0 | DT_NOPREFIX.0);
+
+fn bounds(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+    RECT {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+unsafe fn measure(dc: HDC, font: HFONT, text: &[u16], width: i32, limit: i32) -> i32 {
+    if text.is_empty() {
+        return 0;
+    }
+    let old = SelectObject(dc, font);
+    let mut rect = bounds(0, 0, width, 0);
+    DrawTextW(dc, &mut text.to_vec(), &mut rect, WRAP | DT_CALCRECT);
+    SelectObject(dc, old);
+    rect.bottom.min(limit)
+}
+
+unsafe fn fill(dc: HDC, rect: RECT, color: COLORREF) {
+    let brush = CreateSolidBrush(color);
+    FillRect(dc, &rect, brush);
+    let _ = DeleteObject(brush);
+}
+
+unsafe fn rounded(dc: HDC, rect: RECT, radius: i32, color: COLORREF, outline: COLORREF) {
+    let brush = CreateSolidBrush(color);
+    let pen = CreatePen(PS_SOLID, 1, outline);
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, pen);
+    let _ = RoundRect(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        radius,
+        radius,
+    );
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    let _ = DeleteObject(pen);
+    let _ = DeleteObject(brush);
+}
+
+unsafe fn draw_label(
+    dc: HDC,
+    font: HFONT,
+    text: &[u16],
+    mut rect: RECT,
+    color: COLORREF,
+    format: DRAW_TEXT_FORMAT,
+) {
+    let old = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextW(dc, &mut text.to_vec(), &mut rect, format);
+    SelectObject(dc, old);
+}
+
+unsafe fn paint_bubble(hwnd: HWND, input: &BubbleInput) {
+    let mut paint = PAINTSTRUCT::default();
+    let dc = BeginPaint(hwnd, &mut paint);
+    let mut rect = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rect);
+    let px = |n| input.px(n);
+    let width = rect.right;
+    let height = rect.bottom;
+    let (tail, below) = input.tail.get();
+    fill(dc, rect, KEY);
+    rounded(
+        dc,
+        bounds(0, px(7), width, height - px(7)),
+        px(28),
+        SURFACE,
+        LINE,
+    );
+
+    let edge = if below { px(7) } else { height - px(7) - 1 };
+    let tip = if below { 0 } else { height - 1 };
+    let seam = if below { edge + 1 } else { edge - 1 };
+    let brush = CreateSolidBrush(SURFACE);
+    let pen = CreatePen(PS_SOLID, 1, LINE);
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, pen);
+    let _ = Polygon(
+        dc,
+        &[
+            POINT {
+                x: tail - px(7),
+                y: seam,
+            },
+            POINT { x: tail, y: tip },
+            POINT {
+                x: tail + px(7),
+                y: seam,
+            },
+        ],
+    );
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    let _ = DeleteObject(pen);
+    let _ = DeleteObject(brush);
+    fill(
+        dc,
+        bounds(tail - px(6), seam, tail + px(6) + 1, seam + 1),
+        SURFACE,
+    );
+
+    let icon_y = if input.ambient {
+        (height - px(22)) / 2
+    } else {
+        px(17)
+    };
+    let icon_rect = bounds(px(14), icon_y, px(36), icon_y + px(22));
+    rounded(dc, icon_rect, px(22), TINT, TINT);
+    draw_label(
+        dc,
+        input.fonts[2],
+        &[input.icon],
+        icon_rect,
+        ACCENT,
+        ONE_LINE | DT_CENTER,
+    );
+    if !input.ambient {
+        let source: Vec<u16> = input.source.encode_utf16().collect();
+        draw_label(
+            dc,
+            input.fonts[1],
+            &source,
+            bounds(px(43), px(17), width - px(42), px(39)),
+            MUTED,
+            ONE_LINE,
+        );
+    }
+
+    let x = px(if input.ambient { 44 } else { 14 });
+    let y = if input.ambient {
+        (height
+            - input.title_height
+            - input.body_height
+            - if input.body_height > 0 { px(4) } else { 0 })
+            / 2
+    } else {
+        px(42)
+    };
+    draw_label(
+        dc,
+        input.fonts[0],
+        &input.title,
+        bounds(x, y, width - px(14), y + input.title_height),
+        INK,
+        WRAP | DT_END_ELLIPSIS,
+    );
+    if input.body_height > 0 {
+        let y = y + input.title_height + px(4);
+        draw_label(
+            dc,
+            input.fonts[1],
+            &input.body,
+            bounds(x, y, width - px(14), y + input.body_height),
+            MUTED,
+            WRAP | DT_END_ELLIPSIS,
+        );
+    }
+    let _ = EndPaint(hwnd, &paint);
+}
+
+unsafe fn paint_button(item: &DRAWITEMSTRUCT, input: &BubbleInput) {
+    let dc = item.hDC;
+    let rect = item.rcItem;
+    let pressed = item.itemState.0 & ODS_SELECTED.0 != 0;
+    fill(dc, rect, SURFACE);
+    let (label, background, color, font) = match item.CtlID {
+        1 => (
+            vec![0x00d7],
+            COLORREF(if pressed { 0xd9e1de } else { 0xecf0ee }),
+            MUTED,
+            input.fonts[0],
+        ),
+        2 => (
+            input.actions[0].1.encode_utf16().collect(),
+            if pressed { COLORREF(0x615d0a) } else { ACCENT },
+            SURFACE,
+            input.fonts[1],
+        ),
+        id => (
+            input.actions[(id - 2) as usize].1.encode_utf16().collect(),
+            if pressed { COLORREF(0xd5e9ba) } else { TINT },
+            ACCENT,
+            input.fonts[1],
+        ),
+    };
+    let rect = bounds(rect.left, rect.top, rect.right - 1, rect.bottom - 1);
+    rounded(dc, rect, rect.bottom - rect.top, background, background);
+    draw_label(dc, font, &label, rect, color, ONE_LINE | DT_CENTER);
+}
 unsafe extern "system" fn bubble_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let input = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const BubbleInput).as_ref();
     match message {
+        WM_PAINT if input.is_some() => {
+            paint_bubble(hwnd, input.unwrap());
+            LRESULT(0)
+        }
+        WM_DRAWITEM if input.is_some() && (1..=4).contains(&wp.0) => {
+            paint_button(&*(lp.0 as *const DRAWITEMSTRUCT), input.unwrap());
+            LRESULT(1)
+        }
         WM_COMMAND if (1..=4).contains(&wp.0) => {
-            let input = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const BubbleInput;
-            if let Some(input) = input.as_ref() {
+            if let Some(input) = input {
                 input.selected.set(
                     wp.0.checked_sub(2)
                         .and_then(|index| input.actions.get(index))

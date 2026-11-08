@@ -151,6 +151,20 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
         } else {
             None
         };
+        let mut notices = crate::pet_notify::Center::default();
+        if matches!(mode, Some("--card" | "--toast")) {
+            use crate::pet_notify::{Level, Notice, HISTORY};
+            set_menu_open(true);
+            let mut notice = Notice::ambient("capture-result", "截图完成");
+            notice.expires = Instant::now() + Duration::from_secs(20);
+            if mode == Some("--card") {
+                notice.level = Level::Alert;
+                notice.body = "截图已复制到剪贴板，可以直接粘贴到聊天输入框。".into();
+                notice.actions.push((HISTORY, "通知历史"));
+            }
+            notices.post(notice);
+            notices.tick(Some(hwnd), |_, _| {});
+        }
         if SetTimer(hwnd, 2, 20_000, None) == 0 {
             return Err("无法启动验收计时器".into());
         }
