@@ -51,7 +51,9 @@ final class MeetingStatusItem: NSObject, NSMenuDelegate {
             return
         }
         if item == nil {
-            let created = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            // 排在 Baobox 主图标右边：系统默认的最左边可能是菜单栏管理的隐藏区，录音指示被藏起来就看不到了。
+            let created = StatusItemController.makeCompanionItem(autosaveName: "baobox.meeting.indicator", offset: 2,
+                                                                 length: NSStatusItem.variableLength)
             created.menu = menu
             item = created
         }

@@ -8,7 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) static weak var shared: AppDelegate?
 
     let registry = ToolRegistry()
-    private var statusItemController: StatusItemController?
+    /// 菜单栏管理要用它挪 Baobox 图标、在鼠标位置弹菜单。
+    private(set) var statusItemController: StatusItemController?
 
     override init() {
         super.init()
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(CaffeinateTool())
         registry.register(FocusHealthTool())
         registry.register(WindowManagerTool())
+        registry.register(MenuBarManagerTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())

@@ -53,6 +53,7 @@ BaoboxApp(@main, Settings scene)
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | FocusHealth | `focushealth` | **专注与健康**：专注计时（番茄钟，专注中勿扰）+ 健康提醒（喝水 / 站立 / 护眼 / 整段休息，可增删改）。提醒经桌面宠物呈现；强提醒 = 宠物走到屏幕中央变大陪你休息（轻松 / 标准 / 严格三档，标准起变暗并拦截键鼠），宠物关闭时回退全屏画面。避让开会（麦克风占用）/ 全屏 / 录屏，离开电脑算自然休息。`docs/focus-health/` |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
+| MenuBarManager | `menubar` | **菜单栏管理**：设置里给每个菜单栏图标选显示 / 隐藏（看不见的占位项 + 模拟 ⌘ 拖，用户不碰分隔线），隐藏的与此刻被挤掉 / 被刘海挡住的放在 Baobox 主菜单最上面一行（`ToolModule.statusMenuHeaderItems`），点一下 = 让它回到屏上再点；Baobox 图标一键挪到最右，Baobox 自己的临时图标排在它右边（`StatusItemController.makeCompanionItem`）。默认关。`docs/menubar-manager/` |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |

@@ -26,7 +26,9 @@ final class FocusStatusItem: NSObject, NSMenuDelegate {
             return
         }
         if item == nil {
-            let created = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            // 排在 Baobox 主图标右边：系统默认的最左边可能是菜单栏管理的隐藏区。
+            let created = StatusItemController.makeCompanionItem(autosaveName: "baobox.focus.countdown", offset: 1,
+                                                                 length: NSStatusItem.variableLength)
             created.menu = menu
             item = created
         }
