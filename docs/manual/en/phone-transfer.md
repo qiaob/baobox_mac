@@ -16,14 +16,33 @@ Menu bar → **Phone Transfer** → Open Phone Transfer…. Send files and text 
 
 Switch modes at the top left of the window. The QR code changes, so scan again.
 
+### Which network LAN mode listens on
+
+The "Network" menu above the QR code:
+
+- **Automatic** (default): accept connections only on the interface of the default route (usually Wi-Fi); devices on other
+  interfaces can't connect.
+- **A specific interface**: when the Mac is on both Ethernet and Wi-Fi, shares its connection, or the phone and the Mac
+  are both on a VPN such as Tailscale, pick that one.
+- **All interfaces**: no restriction; connections are accepted on every interface, including VPNs and virtual adapters.
+
+The choice is remembered; changing it makes a new QR code.
+
 ## Using it
 
 1. Open the window, scan the QR code with the phone camera and open the page.
 2. The Mac window shows "… wants to connect". Click **Allow** (only for devices you recognize).
-3. **Phone → Mac**: tap "Choose files" or type text on the phone page. Files go to the receive folder
-   (`~/Downloads/Baobox` by default); the window shows progress and "Show in Finder".
+3. **Phone → Mac**: tap "Choose photos" (opens the photo library, multiple selection) or "Choose files", or type text
+   on the phone page. Files go to the receive folder (`~/Downloads/Baobox` by default); the window shows progress and
+   "Show in Finder". **Images** get a thumbnail: click it for a large preview, or click "Copy" to put the image on the
+   clipboard (it pastes into chat apps as an image).
 4. **Mac → phone**: drag files into the window (or "Choose Files…"), or type text. In LAN mode the phone page lists
-   the files with a "Download" button; in Internet mode files are pushed to the phone with a "Save" button.
+   the files with a "Download" button; in Internet mode files are pushed to the phone with a "Save" button. **Images**
+   get a "View" button instead: it opens the image, and **long-pressing it saves it to Photos** (on iPhone, "Download"
+   can only save to the Files app).
+
+Every entry shows the time, and finished transfers also show how long they took, e.g.
+`2.4 MB · Received · 5:30:12 PM · took 1.2 s`.
 
 Closing the window ends the session: the LAN server stops, the internet connection closes and the QR code is void.
 A QR code nobody scans expires after 10 minutes; click to refresh.
