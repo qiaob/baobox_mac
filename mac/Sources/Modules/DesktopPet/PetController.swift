@@ -675,7 +675,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         radial.open(around: body, inner: inner, outer: outer)
     }
 
-    /// 内圈 7 格（最后一格由菜单补「更多」）：最常用的工具 + 宠物动作；外圈：其他功能的快捷操作 + 宠物设置。
+    /// 内圈 7 格（最后一格由菜单补「更多」）：最常用的工具（含手机互传）+ 宠物动作；外圈：其他功能的快捷操作 + 宠物设置。
     /// 工具按各模块的快捷键定义调用（宠物模块不认识具体工具）；没装 / 没注册的工具自动不显示。
     /// 当前形象没有喂食 / 陪玩动作时，从外圈挪工具进内圈，保证内圈是满的。
     private func radialItems() -> (inner: [RadialMenuItem], outer: [RadialMenuItem]) {
@@ -691,6 +691,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             tool("screenshot.capture", "camera.viewfinder", L("pet.ring.screenshot")),
             tool("screenshot.ocr", "text.viewfinder", L("pet.ring.ocr")),
             tool("clipboard.togglePanel", "doc.on.clipboard", L("pet.ring.clipboard")),
+            tool("phonetransfer.open", "iphone.and.arrow.forward", L("pet.ring.phoneTransfer")),
             tool("livetranslate.toggle", "captions.bubble", L("pet.ring.translate")),
         ].compactMap { $0 }
         if supports("feed") {
@@ -735,7 +736,11 @@ final class PetController: ObservableObject, NotifyPresenting {
             self?.setEnabled(false)
         })
 
-        // 内圈凑满 7 格（第 8 格是「更多」）。
+        // 内圈最多 7 格（第 8 格是「更多」）：形象有喂食 + 陪玩时会多出来，把排在最后的工具（实时翻译，已并入会议）挪到外圈最前。
+        while inner.count > 7, let last = inner.lastIndex(where: { !$0.id.hasPrefix("pet.") }) {
+            outer.insert(inner.remove(at: last), at: 0)
+        }
+        // 内圈凑满 7 格。
         while inner.count < 7, !outer.isEmpty {
             inner.insert(outer.removeFirst(), at: max(inner.count - 1, 0))
         }
