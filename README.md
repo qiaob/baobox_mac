@@ -54,7 +54,7 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 | [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar, transcripts; offline model fallback on macOS 14 |
 | [Selection translate](docs/selection-translate/DESIGN.md) | unbound | Select text in any app → floating panel with English ⇄ Chinese translation and read-aloud |
 | [Meeting](docs/meeting/REQUIREMENTS.md) | unbound | Next-meeting countdown, one-click join, auto-detects meetings, local transcript and minutes, action items |
-| [Voice dictation](docs/dictation/REQUIREMENTS.md) | unbound | Hold-to-talk or toggle, speak and the text lands at your cursor in any app, with history |
+| [Voice dictation](docs/dictation/REQUIREMENTS.md) | ⌥Space (start / stop) | Hold-to-talk, continuous (sentence by sentence) or long dictation; the text lands at your cursor in any app, with history |
 | [Focus & health](docs/focus-health/REQUIREMENTS.md) | unbound | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
 | [Desktop pet](docs/desktop-pet/DESIGN.md) | unbound | A pet on your desktop that is also Baobox's unified notification center |
 | [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
@@ -196,10 +196,11 @@ at a time.
 
 Speak anywhere and the words land **at the cursor in whatever app you're in** — no
 switching windows, no pasting. Three modes: **hold to talk** (press and hold, release to
-insert), **toggle** (press once to start, press again or pause ~3 seconds to finish), and
+insert), **continuous** (press once to start; each sentence is typed in as soon as you pause,
+so you can keep going; press again or stay quiet for 30 seconds to stop), and
 **long dictation** (keeps going until you stop; results collect in a panel you can edit
-before inserting). Recognition prefers on-device, shares Live Translate's language settings
-and glossary, and auto-detects Chinese vs English.
+before inserting). Recognition prefers on-device, auto-detects Chinese vs English (sentence
+by sentence in continuous mode), and shares Live Translate's glossary.
 
 - **Text cleanup before it lands**: voice commands ("new line", "句号", "delete last
   sentence"), filler-word filtering, punctuation tidied for the language
@@ -327,12 +328,13 @@ Bound out of the box:
 | ⌘⌥V | Paste last item as plain text |
 | ⌘⇧Space | Keyboard clicking |
 | ⌃⇧Space | Claude Code quick resume |
+| ⌥Space | Start / stop dictation (continuous) |
 | ⌃⌥ ← → ↑ ↓ / U I J K / ⏎ / C / ⌫ | The 13 window actions |
 | ⌃⌥⌘ ← → | Move window across displays |
 
 OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files,
-both Codex panels, and every shortcut of the Meeting, dictation, desktop pet, focus &
-health, and selection translate tools ship **unbound** — assign them under
+both Codex panels, every shortcut of the Meeting, desktop pet, focus & health, and
+selection translate tools, and dictation's hold-to-talk and long dictation ship **unbound** — assign them under
 Settings → Shortcuts. Full list in [Shortcuts](docs/manual/en/shortcuts.md).
 
 ## Data and privacy

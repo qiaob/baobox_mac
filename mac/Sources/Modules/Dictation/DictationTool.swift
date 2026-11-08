@@ -48,7 +48,8 @@ final class DictationTool: ToolModule {
         return items
     }
 
-    /// 出厂都不绑定（仓库惯例：易冲突的组合由用户自设）。
+    /// 「开始 / 结束听写」出厂绑定 ⌥Space（2026-11-08 用户定：连续听写是主力用法，⌥Space 也是语音输入工具的惯用键；
+    /// 被别的 App 的启动器占着时用户在快捷键页改）。另外两个出厂不绑定（仓库惯例：易冲突的组合由用户自设）。
     func hotkeys() -> [HotkeyDefinition] {
         [
             HotkeyDefinition(
@@ -63,7 +64,7 @@ final class DictationTool: ToolModule {
                 id: Self.toggleHotkeyID,
                 title: L("dictation.hotkey.toggle"),
                 subtitle: L("dictation.hotkey.toggleHelp"),
-                defaultCombo: nil
+                defaultCombo: KeyCombo(keyCode: 0x31, carbonModifiers: KeyCombo.option) // ⌥Space
             ) {
                 DictationController.shared.toggle()
             },

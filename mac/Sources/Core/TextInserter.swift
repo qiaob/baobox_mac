@@ -20,7 +20,7 @@ enum TextInserter {
     enum Result: Equatable {
         case ax
         case paste
-        /// 已复制到剪贴板（会进剪贴板历史：这是给用户的复制）。
+        /// 已复制到剪贴板（会进剪贴板历史：这是给用户的复制）。`copyOnFailure: false` 时只表示没插进去、没复制。
         case copied(TextInsertionPolicy.CopyReason)
 
         var inserted: Bool {
@@ -35,22 +35,27 @@ enum TextInserter {
     /// 辅助功能查询的超时（秒）：目标 App 卡住时别把我们一起拖住（系统默认要等好几秒）。
     private static let messagingTimeout: Float = 0.5
 
-    /// `target` 为 nil = 此刻的前台 App。
-    static func insert(_ text: String, into target: NSRunningApplication? = nil, mode: Mode = .auto) async -> Result {
+    /// `target` 为 nil = 此刻的前台 App。`copyOnFailure` 为 false 时插不进去只返回 `.copied(原因)`、不动剪贴板
+    /// （连续听写攒到结束一次复制，docs/dictation/TECH_DESIGN.md §3.1）。
+    static func insert(_ text: String, into target: NSRunningApplication? = nil, mode: Mode = .auto,
+                       copyOnFailure: Bool = true) async -> Result {
         guard !text.isEmpty else { return .ax }
+        func fail(_ reason: TextInsertionPolicy.CopyReason) -> Result {
+            copyOnFailure ? copy(text, reason: reason) : .copied(reason)
+        }
         // 密码框（安全输入）不粘贴：粘进去的东西用户看不见，也可能被当成密码提交。
         if IsSecureEventInputEnabled() {
-            return copy(text, reason: .secureInput)
+            return fail(.secureInput)
         }
         guard Permissions.hasAccessibility else {
-            return copy(text, reason: .noAccessibility)
+            return fail(.noAccessibility)
         }
         guard let app = target ?? NSWorkspace.shared.frontmostApplication else {
-            return copy(text, reason: .noTextFocus)
+            return fail(.noTextFocus)
         }
         if app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
             // 焦点在 Baobox 自己的窗口里（设置页、剪贴板搜索框…）：直接交给第一响应者。
-            return insertIntoOwnWindow(text) ? .ax : copy(text, reason: .noTextFocus)
+            return insertIntoOwnWindow(text) ? .ax : fail(.noTextFocus)
         }
 
         let pasteOnly = TextInsertionPolicy.isPasteOnly(bundleID: app.bundleIdentifier, appURL: app.bundleURL)
@@ -63,16 +68,43 @@ enum TextInserter {
 
         switch route {
         case .copy(let reason):
-            return copy(text, reason: reason)
+            return fail(reason)
         case .paste:
-            return await paste(text)
+            return await paste(text, copyOnFailure: copyOnFailure)
         case .accessibility:
             if let element = probe?.element, await writeViaAccessibility(text, into: element) {
                 return .ax
             }
             log.notice("accessibility write did not take in \(bundle, privacy: .public), pasting instead")
-            return await paste(text)
+            return await paste(text, copyOnFailure: copyOnFailure)
         }
+    }
+
+    /// 往前台 App 发 `count` 次退格（连续听写的「删除上一句」：上一句已经输入进去了，docs/dictation/TECH_DESIGN.md §3.1）。
+    /// 密码框（安全输入）里、没有辅助功能权限时不发，返回 false。合成按键走事件队列、AX 写入是同步的：
+    /// 发完等一会儿让目标 App 先处理完，后面的写入才不会跑到退格前面。
+    @discardableResult
+    static func deleteBackward(_ count: Int) async -> Bool {
+        guard count > 0, Permissions.hasAccessibility, !IsSecureEventInputEnabled() else { return false }
+        // 同 `PasteboardBorrow.paste`：快捷键刚松开时修饰键可能还按着，叠上去就成了 ⌥⌫（删一个词）之类。
+        let deadline = Date().addingTimeInterval(0.5)
+        let held: NSEvent.ModifierFlags = [.command, .option, .shift, .control]
+        while !NSEvent.modifierFlags.intersection(held).isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let key = CGKeyCode(kVK_Delete)
+        for _ in 0..<count {
+            let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
+            let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
+            down?.flags = []
+            up?.flags = []
+            down?.post(tap: .cghidEventTap)
+            up?.post(tap: .cghidEventTap)
+            try? await Task.sleep(nanoseconds: 4_000_000)
+        }
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        return true
     }
 
     /// 普通复制（进剪贴板历史）。
@@ -87,12 +119,13 @@ enum TextInserter {
         return .copied(reason)
     }
 
-    private static func paste(_ text: String) async -> Result {
+    private static func paste(_ text: String, copyOnFailure: Bool) async -> Result {
         // 划词翻译正借着剪贴板（一秒内就还原）：等它还完再粘。抢着写的话，它一还原就把我们的文字盖掉了。
         for _ in 0..<20 where PasteboardBorrow.isActive {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        return await PasteboardBorrow.paste(text) ? .paste : copy(text, reason: .busy)
+        if await PasteboardBorrow.paste(text) { return .paste }
+        return copyOnFailure ? copy(text, reason: .busy) : .copied(.busy)
     }
 
     // MARK: - 辅助功能写入

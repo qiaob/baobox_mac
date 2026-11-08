@@ -15,7 +15,7 @@ final class DictationController: ObservableObject {
     enum Mode {
         /// 按住说话：按下开始，松开结束并上屏。
         case hold
-        /// 点按切换：按一下开始，再按一下或停顿自动结束。
+        /// 点按切换 = 连续听写：按一下开始，一句定稿就上屏；再按一下或安静一阵后结束。
         case toggle
         /// 长听写：一段段进收集面板，编辑后整段插入 / 复制。
         case long
@@ -61,6 +61,8 @@ final class DictationController: ObservableObject {
     private var pauseSeconds = 0
     /// 长听写：各段按顺序处理（润色是异步的），插入 / 复制前等它们都接上。
     private var longPipeline: Task<Void, Never>?
+    /// 连续听写（点按切换）这一次的状态。
+    private var stream: DictationStream?
     /// 结果条上「复制」复制的文字。
     private var resultText = ""
 
@@ -74,12 +76,14 @@ final class DictationController: ObservableObject {
     // MARK: - 生命周期
 
     func activate() {
+        DictationSettings.migrateLegacyValues()
         history.load(limit: DictationSettings.historyLimit)
         // 识别器对象先建好（不录音、不申请权限），按下时少等一截。
         DictationRecognizer.prewarm(DictationSettings.speechLanguages)
     }
 
     func terminate() {
+        if let stream { recordStream(stream) }
         if phase != .idle { cancelSession() }
         if let collect, !collect.model.isEmpty { record(collect.model.text, app: target) }
         collect?.close()
@@ -181,7 +185,7 @@ final class DictationController: ObservableObject {
             return
         }
         guard session == self.session, phase == .starting else { return }
-        guard let recognizer = DictationRecognizer(mode: mode == .long ? .long : .utterance,
+        guard let recognizer = DictationRecognizer(mode: mode == .hold ? .utterance : .segmented,
                                                    languages: DictationSettings.speechLanguages,
                                                    preferOnDevice: DictationSettings.preferOnDevice,
                                                    vocabulary: LiveTranslateSettings.vocabulary) else {
@@ -193,7 +197,7 @@ final class DictationController: ObservableObject {
             self?.previewChanged(text)
         }
         recognizer.onSegment = { [weak self] text, language in
-            self?.longSegment(text, language: language)
+            self?.segmentFinished(text, language: language)
         }
         recognizer.onFailure = { [weak self] message, kept in
             self?.recognitionFailed(message, kept: kept, session: session)
@@ -204,6 +208,7 @@ final class DictationController: ObservableObject {
             DictationPolisher.warmUp()
             modelWarm = true
         }
+        if mode == .toggle { stream = DictationStream(session: session) }
         do {
             try recognizer.start()
         } catch {
@@ -232,6 +237,7 @@ final class DictationController: ObservableObject {
 
     /// 开不起来（没权限、识别器不可用…）：收起界面、让出占用。
     private func abortStart() {
+        stream = nil
         AudioCaptureCoordinator.shared.release(owner: Self.source)
         coolModel()
         if mode == .long {
@@ -293,6 +299,7 @@ final class DictationController: ObservableObject {
         let bar = DictationBarController()
         bar.model.phase = .listening
         bar.model.hint = hint(for: mode)
+        bar.model.placeholder = mode == .toggle ? L("dictation.bar.placeholderStream") : ""
         bar.model.onCancel = { [weak self] in
             self?.cancel()
         }
@@ -414,6 +421,13 @@ final class DictationController: ObservableObject {
         let session = self.session
         bar?.model.level = 0
         bar?.model.phase = .working(L("dictation.bar.recognizing"))
+        if mode == .toggle {
+            // 连续听写：前面的句子已经上屏了，冲刷最后一句（照常经 onSegment 上屏）后收尾。
+            recognizer.finish(tail: 0) { [weak self] _ in
+                self?.streamRecognitionFinished(session: session)
+            }
+            return
+        }
         // 按住说话松手时最后一个字可能还没说完：多收 0.2 秒。
         recognizer.finish(tail: mode == .hold ? 0.2 : 0) { [weak self] transcript in
             self?.recognitionFinished(transcript, session: session)
@@ -443,6 +457,13 @@ final class DictationController: ObservableObject {
         recognizer = nil
         AudioCaptureCoordinator.shared.release(owner: Self.source)
         notify(L("dictation.toast.failed"), body: message)
+        if mode == .toggle, let stream {
+            // 连续听写：已经上屏的不动，等排队的句子上完照常收尾。
+            phase = .finishing
+            stopUITimer()
+            Task { await self.wrapUpStream(stream, failure: message) }
+            return
+        }
         if mode == .long {
             stopUITimer()
             escape.stop()
@@ -558,6 +579,11 @@ final class DictationController: ObservableObject {
         session += 1
         recognizer?.cancel()
         recognizer = nil
+        if let stream {
+            // 连续听写：只丢正在说、还没定稿的那句（识别器已取消）；已经定稿、还在排队的照常上完，再记历史。
+            self.stream = nil
+            Task { await self.drainCancelledStream(stream) }
+        }
         AudioCaptureCoordinator.shared.release(owner: Self.source)
         escape.stop()
         coolModel()
@@ -587,6 +613,132 @@ final class DictationController: ObservableObject {
     private func coolModelIfIdle() {
         guard phase == .idle || mode != .long else { return }
         coolModel()
+    }
+
+    // MARK: - 连续听写（点按切换：一句定稿就上屏）
+
+    /// 分段模式下一段定稿：长听写进收集面板，连续听写直接上屏。
+    private func segmentFinished(_ raw: String, language: TranslationLanguage) {
+        switch mode {
+        case .long: longSegment(raw, language: language)
+        case .toggle: streamSegment(raw, language: language)
+        case .hold, .none: break
+        }
+    }
+
+    /// 一句定稿：后处理（按需润色）后按顺序上屏（docs/dictation/TECH_DESIGN.md §3.1）。
+    private func streamSegment(_ raw: String, language: TranslationLanguage) {
+        guard let stream, stream.session == session else { return }
+        let processing = DictationSettings.processingLanguage(for: language)
+        // 只有口头禅的一句（停下来想的时候「嗯」了一声）不上屏。
+        let prepared = DictationTextProcessor.prepare(raw, language: processing,
+                                                      options: DictationSettings.processingOptions,
+                                                      keepLoneFiller: false)
+        guard !prepared.isEmpty else { return }
+        let polish = polishes && DictationPolisher.isReady && !DictationTextProcessor.containsDelete(prepared)
+        if polishes, !DictationPolisher.isReady, !polishHintShown {
+            polishHintShown = true
+            notify(L("dictation.toast.polishNoModel"))
+        }
+        let previous = stream.pipeline
+        stream.pipeline = Task { [weak self] in
+            await previous?.value
+            var piece = prepared
+            if polish {
+                let standalone = DictationTextProcessor.render(prepared, into: "")
+                piece = await DictationPolisher.polish(standalone, language: processing) ?? standalone
+            }
+            guard let self else { return }
+            await self.place(piece, in: stream)
+        }
+    }
+
+    /// 一句上屏：接在这次已经输入的字后面（英文补空格；「删除上一句」先退格删掉上一句）。
+    /// 插不进去的攒着，结束时一次复制（不每句覆盖剪贴板）。
+    private func place(_ piece: String, in stream: DictationStream) async {
+        stream.transcript = DictationTextProcessor.render(piece, into: stream.transcript)
+        // 状态栏菜单开着（多半正要点「结束听写」）：合成的 ⌘V / 退格会被菜单吃掉、这句就丢了 —— 等菜单关了再上屏。
+        let menuDeadline = Date().addingTimeInterval(30)
+        while StatusItemController.isMenuOpen, Date() < menuDeadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.processIdentifier != stream.typedApp {
+            // 第一句，或中途换了 App：接缝与删除都只认这次在当前 App 里输入的字，绝不删到别的字。
+            stream.typed = ""
+            stream.typedApp = front?.processIdentifier
+        }
+        let edit = DictationTextProcessor.streamEdit(piece, after: stream.typed)
+        var typed = stream.typed
+        if edit.deleteCount > 0, await TextInserter.deleteBackward(edit.deleteCount) {
+            typed = String(typed.dropLast(edit.deleteCount))
+        }
+        stream.typed = typed
+        guard !edit.insertion.isEmpty else { return }
+        let mode: TextInserter.Mode = DictationSettings.insertMode == .paste ? .alwaysPaste : .auto
+        let result = await TextInserter.insert(edit.insertion, mode: mode, copyOnFailure: false)
+        switch result {
+        case .ax, .paste:
+            stream.typed = typed + edit.insertion
+            stream.placedAny = true
+            if stream.app == nil { stream.app = front }
+            if stream.session == session { followCaret() }
+        case .copied(let reason):
+            stream.unplaced = DictationTextProcessor.join(stream.unplaced,
+                                                          edit.insertion.trimmingCharacters(in: .whitespaces))
+            stream.unplacedReason = reason
+        }
+    }
+
+    /// 每上屏一句，录音条挪到新的光标旁（免得挡住刚输入的字）。取不到光标位置就不动。
+    private func followCaret() {
+        guard phase == .listening, DictationSettings.barPosition == .caret, let bar,
+              let caret = TextInserter.caretRect() else { return }
+        bar.show(near: caret)
+    }
+
+    /// 识别器交完最后一句（它的 `onSegment` 先于这里）：让出麦克风，等排队的句子都上屏再收尾。
+    private func streamRecognitionFinished(session: Int) {
+        guard session == self.session, let stream else { return }
+        recognizer = nil
+        AudioCaptureCoordinator.shared.release(owner: Self.source)
+        Task { await self.wrapUpStream(stream, failure: nil) }
+    }
+
+    /// 连续听写收尾：等排队的句子都上屏 → 没插进去的一次复制 → 结果条 → 历史（全文一条）。
+    private func wrapUpStream(_ stream: DictationStream, failure: String?) async {
+        await stream.pipeline?.value
+        // 等的时候按了 Esc / ✕：取消那边收了界面，也会自己记历史。
+        guard stream.session == session else { return }
+        self.stream = nil
+        recordStream(stream)
+        coolModel()
+        escape.stop()
+        if !stream.unplaced.isEmpty {
+            TextInserter.copyToClipboard(stream.unplaced)
+            showResult(.copied(stream.unplacedReason ?? .noTextFocus), text: stream.unplaced)
+        } else if stream.placedAny {
+            showResult(.ax, text: stream.transcript)
+        } else {
+            showMessage(failure ?? L("dictation.bar.nothingHeard"))
+        }
+        if DictationSettings.sounds, stream.placedAny || !stream.unplaced.isEmpty {
+            NSSound(named: "Pop")?.play()
+        }
+        endSession()
+    }
+
+    /// Esc / ✕ 之后：已经定稿、还在排队的句子上完再记历史。界面已经收了，没插进去的不复制（历史里有）。
+    private func drainCancelledStream(_ stream: DictationStream) async {
+        await stream.pipeline?.value
+        recordStream(stream)
+    }
+
+    /// 连续听写记历史：全文一条，只记一次。
+    private func recordStream(_ stream: DictationStream) {
+        guard !stream.recorded else { return }
+        stream.recorded = true
+        record(stream.transcript, app: stream.app ?? target)
     }
 
     // MARK: - 长听写
@@ -819,5 +971,31 @@ final class DictationController: ObservableObject {
     private func notify(_ title: String, body: String = "") {
         NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: title, body: body,
                                                  icon: "mic.fill"))
+    }
+}
+
+/// 连续听写这一次的状态（docs/dictation/TECH_DESIGN.md §3.1）。每次听写一个：取消后新开的听写不会和它串。
+@MainActor
+private final class DictationStream {
+    let session: Int
+    /// 各句按顺序处理（润色、插入都是异步的）。
+    var pipeline: Task<Void, Never>?
+    /// 这次听写在当前前台 App 里输入成功的字（接缝空格、「删除上一句」据此算）；前台 App 变了就清空。
+    var typed = ""
+    var typedApp: pid_t?
+    /// 插不进去的句子：结束时一次复制。
+    var unplaced = ""
+    var unplacedReason: TextInsertionPolicy.CopyReason?
+    /// 有句子上屏了。
+    var placedAny = false
+    /// 整次听写的全文（历史记这个；「删除上一句」也作用在它上面）。
+    var transcript = ""
+    /// 第一句上屏时的前台 App（历史记它）。
+    var app: NSRunningApplication?
+    /// 已经记进历史（收尾、取消、退出 App 三条路只记一次）。
+    var recorded = false
+
+    init(session: Int) {
+        self.session = session
     }
 }
