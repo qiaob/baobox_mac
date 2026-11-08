@@ -180,6 +180,7 @@ enum VRMMotion {
             Definition(name: "fly_down", duration: flyCycle) { t in flying(t, lean: 3, tuck: 0.45) },
             Definition(name: "boost_brake", duration: boostBrakeLead, pose: boostBrakeClip),
             // 蹲、坐地（引擎的「歇脚」：坐下 → 坐着循环 → 起身）。坐下停在最后一帧，接循环的第一帧；起身从循环的姿势出发。
+            // 蹲着这三段 2026-11-08 起歇脚不用了（用户嫌丑），片段留着；squatting 仍是睡下、坐地蹲下去的前半段。
             Definition(name: "squat_down", duration: 0.9) { t in squatting(0, body: body, depth: smooth(t / 0.9)) },
             Definition(name: "squat", duration: 3.2) { t in squatting(t, body: body, depth: 1) },
             Definition(name: "squat_up", duration: 0.8) { t in squatting(0, body: body, depth: 1 - smooth(t / 0.8)) },

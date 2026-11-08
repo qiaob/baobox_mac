@@ -273,7 +273,7 @@ final class PetModelView: SCNView {
     private var boosterHideWork: DispatchWorkItem?
     /// 当前跳 / 飞片段是什么时候开始播的（点火蹲下要播完才接飞行）。
     private var flightClipStartedAt = Date.distantPast
-    /// 歇脚的几种（坐地、蹲着）：坐下 → 坐着循环 → 起身；这一回用的是哪种。
+    /// 歇脚的几种（现在只有坐地）：坐下 → 坐着循环 → 起身；这一回用的是哪种。
     private typealias Lounge = (down: GLTFClip, loop: GLTFClip, up: GLTFClip)
     private var lounges: [Lounge] = []
     private var lounge: Lounge?
@@ -487,7 +487,8 @@ final class PetModelView: SCNView {
                 loaded.clips[name].map { (name, $0) }
             })
             if let rig = loaded.vrm, flightClips["fly"] != nil { booster = VRMBooster(rig: rig) }
-            lounges = [("sit_ground_down", "sit_ground", "sit_ground_up"), ("squat_down", "squat", "squat_up")]
+            // 只坐地：蹲着歇脚（squat_down / squat / squat_up）用户嫌丑，2026-11-08 停用（SETTLE.md §5.5）。
+            lounges = [("sit_ground_down", "sit_ground", "sit_ground_up")]
                 .compactMap { names -> Lounge? in
                     guard let down = loaded.clips[names.0], let loop = loaded.clips[names.1],
                           let up = loaded.clips[names.2] else { return nil }
