@@ -81,6 +81,16 @@ Sources/Resources/   Localizable.xcstrings
    python3 -c "import json;json.load(open('Sources/Resources/Localizable.xcstrings'));print('valid')"
    ```
 
+## 普通窗口与全屏空间
+
+菜单栏 App（`.accessory`）的普通窗口会被系统放进别的 App 的**全屏空间**当附属窗口：从全屏 App 里打开，
+窗口就叠在全屏窗口上，点回那个 App 也一直盖着（全屏窗口在自己的空间里永远排最底下）。
+**要拿焦点的普通窗口**（设置这类）开着期间临时当普通 App（有 Dock 图标、能 ⌘Tab），系统改为切到桌面显示：
+**创建窗口之前**调 `AppWindowActivation.becomeRegular()`，显示后 `windowDidShow(_:)`，`windowWillClose` 里调
+`windowWillClose(_:)` 并放掉窗口、下次重建。窗口会不会叠进全屏空间是按**创建那一刻** App 的身份定的（实测：
+`.accessory` 时建的窗口之后再切 `.regular` 也照样叠上去），所以顺序不能反、也不能复用 `.accessory` 时期的窗口。
+浮条、贴图、气泡这类**有意叠在全屏 App 上**的面板不要调，它们用 `.nonactivatingPanel` + `.fullScreenAuxiliary`。
+
 ## 无法本地编译时的自查清单
 
 1. 只引用真实存在的类型 / 方法 —— 先 grep 确认签名，别凭印象写。
