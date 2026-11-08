@@ -1,6 +1,6 @@
 import Foundation
 
-/// 识别语言（需求 §3）。
+/// 识别语言（需求 §3）。默认自动（2026-11-08 前默认跟随实时翻译，而它出厂是固定英文）。
 enum DictationLanguageSetting: String, CaseIterable, Identifiable {
     /// 跟随实时翻译的说话语言（实时翻译是「自动 A / B」时这里也自动判别）。
     case follow
@@ -57,19 +57,28 @@ enum DictationSettings {
     static let historyEnabledKey = DictationHistoryDefaults.enabledKey
     static let historyLimitKey = DictationHistoryDefaults.limitKey
 
-    /// 停顿自动结束可选的秒数（0 = 关）。
-    static let pauseOptions = [0, 2, 3, 5]
+    /// 连续听写安静多久自动结束，可选的秒数（0 = 关）。每句停顿约 1 秒就上屏（`DictationRecognizer.pauseCut`），
+    /// 这里是整次听写的收尾，所以比旧版的 2 / 3 / 5 秒长得多。
+    static let pauseOptions = [0, 10, 30, 60]
+    static let defaultPauseSeconds = 30
 
     private static var defaults: UserDefaults { .standard }
 
     static var language: DictationLanguageSetting {
-        DictationLanguageSetting(rawValue: defaults.string(forKey: languageKey) ?? "") ?? .follow
+        DictationLanguageSetting(rawValue: defaults.string(forKey: languageKey) ?? "") ?? .auto
     }
 
-    /// 点按切换模式下停顿多少秒自动结束；0 = 不自动结束。
+    /// 连续听写（点按切换）安静多少秒自动结束；0 = 不自动结束。
     static var pauseSeconds: Int {
-        let value = defaults.object(forKey: pauseKey) as? Int ?? 3
-        return pauseOptions.contains(value) ? value : 3
+        let value = defaults.object(forKey: pauseKey) as? Int ?? defaultPauseSeconds
+        return pauseOptions.contains(value) ? value : defaultPauseSeconds
+    }
+
+    /// 旧版本存的停顿秒数（2 / 3 / 5）不在新选项里：清掉回到默认，设置页的选择器才有选中项。
+    static func migrateLegacyValues() {
+        if let value = defaults.object(forKey: pauseKey) as? Int, !pauseOptions.contains(value) {
+            defaults.removeObject(forKey: pauseKey)
+        }
     }
 
     static var preferOnDevice: Bool { defaults.object(forKey: onDeviceKey) as? Bool ?? true }

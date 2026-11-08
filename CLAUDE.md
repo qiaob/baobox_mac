@@ -59,7 +59,7 @@ BaoboxApp(@main, Settings scene)
 | Meeting | `meeting` | **会议**（#42）：线上会议（麦克风 + 系统声音混成一路进一个识别器，按两路音量标「我 / 对方」）/ 线下会议（仅麦克风）/ 自由听译（= 实时翻译）；控制条（暂停、🔖 标记、速记、字幕、结束）、菜单栏录音指示 / 下一场倒计时、`meeting` 勿扰、本地纪要模板（默认 / 站会 / 1:1 / 面试）与行动项、会议库（`Application Support/Baobox/Meetings/`，旧实时翻译记录按引用迁入）。日历（EventKit，设置里打开才申请权限）、会前提醒、一键入会、会议检测（会议 App + 麦克风占用 / 日历会议已开始）、会议库窗口（搜索、行动项、会前简报、系列时间线、周报）、设备自检。引擎就是实时翻译的 `LiveTranslateController.start(config:)`。`docs/meeting/` |
 | LiveTranslate | `livetranslate` | **实时翻译**（菜单与设置 Tab 已改名「字幕与同传」，注明已并入「会议」，下个版本删入口）：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
 | SelectionTranslate | `selectiontranslate` | 划词翻译：全系统选中文字就地浮层翻译 + 朗读（AX 取词 / 借剪贴板兜底（App 自己的「拷贝」菜单项，终端等 AX 读不到的 App 自动弹出也能用）/ 框选 OCR；原文语种自动识别，译成可选语言；系统翻译 / 离线模型，macOS 14 也能翻）。`docs/selection-translate/` |
-| Dictation | `dictation` | **语音听写**（#45）：按住说话 / 开始·结束听写（停顿自动结束）/ 长听写（收集面板，可编辑再插入）；录音条不抢焦点，Esc 取消；识别走自己的 `SFSpeechRecognizer`（taskHint 听写、优先设备端、术语表共用），中英自动判别（低置信度时换语言重认）；后处理：语音指令、口头禅过滤、标点规整、可选本地 AI 润色（按 App）；插入按可靠性降级：AX 写入焦点（读回校验）→ 借剪贴板 ⌘V（不进剪贴板历史）→ 复制 + 提示（密码框 / 无权限）。听写历史只存文本。`docs/dictation/` |
+| Dictation | `dictation` | **语音听写**（#45）：按住说话 / 连续听写（开始·结束听写，出厂快捷键 ⌥Space：一句定稿就上屏，可以一直说，安静 30 秒自动结束）/ 长听写（收集面板，可编辑再插入）；录音条不抢焦点，Esc 取消；识别走自己的 `SFSpeechRecognizer`（taskHint 听写、优先设备端、术语表共用），默认中英自动判别（低置信度时换语言重认；连续听写与长听写按停顿切段、逐句判）；后处理：语音指令、口头禅过滤、标点规整、可选本地 AI 润色（按 App）；插入按可靠性降级：AX 写入焦点（读回校验）→ 借剪贴板 ⌘V（不进剪贴板历史）→ 复制 + 提示（密码框 / 无权限）。听写历史只存文本。`docs/dictation/` |
 | PhoneTransfer | `phonetransfer` | **手机互传**：扫码连接，Mac ↔ 手机互传文件和文字，手机只用浏览器。局域网模式 = `NWListener` 极简 HTTP 服务（令牌 + Mac 端允许）；公网模式 = 隐藏 `WKWebView` 跑 WebRTC DataChannel（UDP 打洞，**不做中继**），信令 AES-GCM 加密后经公共 ntfy.sh / MQTT 中转。网页在 `Resources/PhoneTransfer/`（folder 资源，同一份由 `pages.yml` 发布到 GitHub Pages `/transfer/`）。`docs/phone-transfer/` |
 | NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
@@ -84,6 +84,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/claude-code-assistant/` —— REQUIREMENTS + TECH_DESIGN + `WEEKLY_QUOTA.md`（周额度增量）+ `RECENT_FILES.md`（最近文件增量）。
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态）。2026-11 起是菜单栏一级入口（`ScreenDrawTool`），代码仍在 Screenshot 目录、与截图共用标注引擎。
+- `docs/desktop-pet/` —— 桌面宠物：DESIGN（总设计）、INTERACTION、PACKS（素材包）、ROAM（活动范围 / 跳窗口）、VRM（二次元人形 + 程序化动作）、ENTRANCE（黑洞出场 / 退场）、SETTLE（找个不碍事的地方待着 + 原地动作）、WAKE（系统睡眠唤醒、动画重建与看门狗，日志 category `pet`）、MOCAP（走路用开源真人动捕数据，三种走法按场景换）。
 - `docs/focus-health/` —— 专注与健康 REQUIREMENTS + TECH_DESIGN：计时规则（用电脑的时间 / 实际时间 / 固定时刻、自然休息）、专注—休息状态机、避让与撞车、休息画面（借宠物渲染视图放大、拦截边界、看门狗）。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。
 - `docs/meeting/` —— 会议 REQUIREMENTS + TECH_DESIGN（§9 第一段落地记录：引擎配置、混音与说话人、结束冲刷、会议库；§10 第二段：日历、提醒、检测状态机、会议库窗口、周报、自检、菜单迁移）。

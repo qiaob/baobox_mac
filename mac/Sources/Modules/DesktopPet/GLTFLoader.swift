@@ -105,13 +105,16 @@ final class GLTFModel {
     }
 
     /// 播放一段动画（同名片段重复播放 = 从头开始）。`hold` = 播完停在最后一帧（坐下 / 躺下这类过渡动作）。
+    /// 播一个片段。一次性的片段（`loop` 为假）都停在最后一帧，直到被 `stop`（调用方每次换片段都会先 stop 上一个）：
+    /// 播完自动移除的话，从播完到下一段接上之间（≤ 一拍）骨骼会回到绑定姿势（VRM 是 T 字），下一段又从那儿淡入，闪一下。
+    /// `hold` 只是给调用方表达「这一段要停住」，行为上一次性片段一律停住。
     func play(_ clip: GLTFClip, loop: Bool, hold: Bool, fadeIn: CGFloat) {
         for track in clip.tracks {
             let group = CAAnimationGroup()
             group.animations = track.animations
             group.duration = clip.duration
             group.repeatCount = loop ? .infinity : 1
-            if hold, !loop {
+            if !loop {
                 group.isRemovedOnCompletion = false
                 group.fillMode = .forwards
             }
@@ -123,6 +126,13 @@ final class GLTFModel {
     func stop(_ clip: GLTFClip, fadeOut: CGFloat) {
         for track in clip.tracks {
             track.node.removeAnimation(forKey: clip.key, blendOutDuration: fadeOut)
+        }
+    }
+
+    /// 改正在播的片段的速度（赶路时走路片段跟着加快，脚不打滑）。
+    func setSpeed(_ clip: GLTFClip, _ speed: CGFloat) {
+        for track in clip.tracks {
+            track.node.animationPlayer(forKey: clip.key)?.speed = speed
         }
     }
 }

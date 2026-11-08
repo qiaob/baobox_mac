@@ -1,4 +1,5 @@
 import AppKit
+import LocalAuthentication
 import SwiftUI
 import os
 
@@ -20,6 +21,8 @@ struct BreakRequest {
     var style: BreakStageStyle
     /// 护眼：宠物侧身看远处；否则躺下休息。
     var lookAway: Bool
+    /// 结束（到点 / 跳过）前要用 Touch ID / 密码确认是本人，30 秒没人确认就锁屏（标准 / 严格档，TECH_DESIGN.md §5.6）。
+    var confirmIdentity = false
 }
 
 enum BreakOutcome {
@@ -39,6 +42,14 @@ final class BreakStageModel: ObservableObject {
     /// 被戳 / 点了暗处时临时顶替标题的一句话。
     @Published var nudge: String?
     @Published var infoVisible = false
+    /// 正在等 Touch ID 确认是本人（结束前）；`confirmSkipping` = 是跳过触发的。
+    @Published var confirming = false
+    @Published var confirmSkipping = false
+    /// 再过几秒没人确认就锁屏。
+    @Published var confirmLeft = 0
+    /// 嵌在卡片里的 Touch ID（`LAAuthenticationView` 绑这个 context）：验证在自己的界面里完成，不弹系统对话框，
+    /// Baobox 一直在前台，展示模式不断（TECH_DESIGN.md §5.6–5.7）。
+    @Published var authContext: LAContext?
     var onSkip: () -> Void = {}
 }
 
@@ -53,7 +64,26 @@ final class BreakStageController {
     private static let inputWait: TimeInterval = 15
 
     private enum Phase {
-        case idle, waiting, flyingIn, resting, celebrating, flyingOut
+        case idle, waiting, flyingIn, resting, celebrating, confirming, flyingOut
+    }
+
+    /// 结束前等 Touch ID 的时长：过了就锁屏（TECH_DESIGN.md §5.6）。
+    private static let confirmWindow: TimeInterval = 30
+    private var authContext: LAContext?
+    private var confirmTimer: Timer?
+    private var confirmDeadline = Date()
+    private var confirmOutcome: BreakOutcome = .completed
+    /// 这一场已经确认过本人 / 已经锁屏了：之后怎么撤都不用再管。
+    private var identitySettled = false
+    /// 全屏遮罩在场时的展示模式（TECH_DESIGN.md §5.7）：Baobox 切到前台、隐藏 Dock 与菜单栏、禁 ⌘Tab。
+    /// 切桌面 / 调度中心归 Dock 管，Dock 被隐藏时一起被禁 —— 否则三指滑切桌面时，滑动动画里遮罩不画，
+    /// 别的桌面的窗口先露出来（2026-11-08 用户反馈；探针实测开着时滑不动）。被切走（只在前台生效）就立刻切回来。
+    private var kioskObserver: NSObjectProtocol?
+
+    /// 这一场的全屏遮罩撤下前要确认本人（标准 / 严格档、设置开着、还没确认过）。
+    private var mustConfirm: Bool {
+        guard let request else { return false }
+        return request.confirmIdentity && request.style != .gentle && !identitySettled
     }
 
     /// 等待出场或在场（控制器据此顺延别的提醒）。
@@ -132,7 +162,10 @@ final class BreakStageController {
         model.finished = false
         model.nudge = nil
         model.infoVisible = false
-        model.onSkip = { [weak self] in self?.finish(.skipped) }
+        model.confirming = false
+        model.confirmSkipping = false
+        identitySettled = false
+        model.onSkip = { [weak self] in self?.requestFinish(.skipped) }
 
         previousApp = NSWorkspace.shared.frontmostApplication
         // 休息期间其他模块的非重要通知攒着，结束后合并补呈。
@@ -143,7 +176,10 @@ final class BreakStageController {
         buildStageWindow(blocking: blocking)
         startTimers()
         scheduleDeadline(request.seconds + Self.flightDuration * 2 + 50)
-        if blocking { watchdog.arm() }
+        if blocking {
+            watchdog.arm(lockOnKill: request.confirmIdentity)
+            startKiosk()
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -319,13 +355,146 @@ final class BreakStageController {
         DispatchQueue.main.asyncAfter(deadline: .now() + pause) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.generation == current else { return }
-                self.finish(.completed)
+                self.requestFinish(.completed)
             }
         }
     }
 
+    // MARK: - 结束前确认是本人（TECH_DESIGN.md §5.6）
+
+    /// 外面要撤休息画面（菜单「结束休息」、开始专注…）都走这里：全屏遮罩在场就先确认本人，和到点、长按跳过一样。
+    func end(_ outcome: BreakOutcome) {
+        requestFinish(outcome)
+    }
+
+    /// 到点 / 跳过 / 外面要撤：全屏遮罩在场、要确认本人的先等 Touch ID，否则直接结束。
+    private func requestFinish(_ outcome: BreakOutcome) {
+        guard mustConfirm, phase == .flyingIn || phase == .resting || phase == .celebrating else {
+            if phase != .confirming { finish(outcome) }
+            return
+        }
+        startConfirm(outcome)
+    }
+
+    /// 遮罩留着，卡片换成「确认是你本人」，暗幕和舞台降到 1000 以下：Touch ID 对话框（coreautha，1000 层，
+    /// 2026-11-08 探针实测）排到最上面。30 秒没人确认就锁屏。截止看门狗顺延，遮罩到点一定撤。
+    private func startConfirm(_ outcome: BreakOutcome) {
+        phase = .confirming
+        confirmOutcome = outcome
+        confirmDeadline = Date().addingTimeInterval(Self.confirmWindow)
+        model.confirming = true
+        model.confirmSkipping = outcome == .skipped
+        model.confirmLeft = Int(Self.confirmWindow)
+        model.infoVisible = true
+        // 层级不动（暗幕 1000、舞台 1001）：指纹验证嵌在卡片里，没有系统对话框要让位。2026-11-08 第一版降到同一层
+        // 给系统对话框让位，结果点一下暗幕，暗幕就排到宠物和卡片上面，卡片被盖住、指纹也不响应了（用户反馈）。
+        stageWindow?.makeKey()
+        scheduleDeadline(Self.confirmWindow + 25)
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickConfirm() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        confirmTimer = timer
+        Self.log.info("break end: waiting for Touch ID (\(outcome == .skipped ? "skip" : "done", privacy: .public))")
+        evaluateIdentity()
+    }
+
+    /// 指纹验证嵌在卡片里（`LAAuthenticationView`，只支持指纹）：先把 context 交给卡片挂好视图，再开始验证；
+    /// 按错手指由系统在视图里提示，取消 / 失败就过一秒再验，直到确认或时间到。
+    /// 没有 Touch ID、指纹被系统锁住（连错几次）：确认不了，直接锁屏 —— 用密码从系统锁屏界面回来，同样是本人。
+    private func evaluateIdentity() {
+        guard phase == .confirming else { return }
+        let context = authContext ?? LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            Self.log.info("break end: Touch ID unavailable (\(error?.localizedDescription ?? "-", privacy: .public)); locking")
+            lockAndFinish()
+            return
+        }
+        let current = generation
+        if authContext == nil {
+            authContext = context
+            model.authContext = context
+            // 等卡片把视图挂上（绑了视图的 context 验证时不弹系统对话框）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.generation == current else { return }
+                    self.evaluateIdentity()
+                }
+            }
+            return
+        }
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                               localizedReason: L("focus.break.confirmReason")) { ok, error in
+            let code = (error as? LAError)?.code
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { [weak self] in
+                    guard let self, self.generation == current, self.phase == .confirming else { return }
+                    if ok {
+                        Self.log.info("break end: identity confirmed")
+                        self.identitySettled = true
+                        self.endConfirm()
+                        self.finish(self.confirmOutcome)
+                    } else if code == .biometryLockout || code == .biometryNotAvailable || code == .biometryNotEnrolled {
+                        Self.log.info("break end: Touch ID locked out / unavailable; locking")
+                        self.lockAndFinish()
+                    } else if Date() < self.confirmDeadline {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                            MainActor.assumeIsolated {
+                                guard let self, self.generation == current else { return }
+                                self.evaluateIdentity()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func tickConfirm() {
+        guard phase == .confirming else { return }
+        let left = confirmDeadline.timeIntervalSinceNow
+        model.confirmLeft = max(0, Int(left.rounded(.up)))
+        if left <= 0 { lockAndFinish() }
+    }
+
+    /// 没人确认（人不在）：收起对话框，替用户按 ⌃⌘Q 锁屏，确认锁上了再撤遮罩；没锁上记日志、发一条提醒，遮罩照样撤。
+    private func lockAndFinish() {
+        guard phase == .confirming else { return }
+        let outcome = confirmOutcome
+        endConfirm()
+        identitySettled = true
+        Self.log.info("break end: no confirmation in \(Int(Self.confirmWindow))s; locking the screen")
+        ScreenLock.lockNow()
+        let current = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == current else { return }
+                if ScreenLock.isLocked {
+                    Self.log.info("break end: screen locked")
+                } else {
+                    Self.log.error("break end: screen did not lock (accessibility permission?)")
+                    NotifyCenter.shared.post(PetNotification(
+                        source: FocusHealthController.source, level: .bubble, title: L("focus.lock.failedTitle"),
+                        body: L("focus.lock.failedBody"), icon: "lock.slash"))
+                }
+                self.finish(outcome)
+            }
+        }
+    }
+
+    private func endConfirm() {
+        confirmTimer?.invalidate()
+        confirmTimer = nil
+        authContext?.invalidate()
+        authContext = nil
+        model.authContext = nil
+        model.confirming = false
+    }
+
     /// 结束（完成 / 跳过 / 推迟）：卡片收起、暗幕淡出、宠物飞回原位，然后归还视图、回调结果。
-    func finish(_ outcome: BreakOutcome) {
+    /// 外面别直接调（会绕过确认本人），用 `end(_:)`。
+    private func finish(_ outcome: BreakOutcome) {
         guard isBusy else { return }
         switch phase {
         case .idle, .waiting:
@@ -334,9 +503,10 @@ final class BreakStageController {
             return
         case .flyingOut:
             return
-        case .flyingIn, .resting, .celebrating:
+        case .flyingIn, .resting, .celebrating, .confirming:
             break
         }
+        endConfirm()
         let arrived = infoView != nil && loan != nil
         animTimer?.invalidate()
         animTimer = nil
@@ -371,9 +541,15 @@ final class BreakStageController {
         }
     }
 
-    /// 退出 App、截止看门狗：不走动画，立刻撤下。
+    /// 退出 App、截止看门狗：不走动画，立刻撤下。全屏遮罩在场、还没确认本人的，撤之前先锁屏（不能卡着不撤，
+    /// 那会把电脑锁死；锁屏后再撤，等于没把屏幕放出去）。
     func forceTeardown() {
         guard isBusy else { return }
+        if mustConfirm, phase != .idle, phase != .waiting {
+            identitySettled = true
+            Self.log.info("break torn down without confirmation; locking the screen first")
+            ScreenLock.lockNow()
+        }
         let outcome = pendingOutcome ?? .skipped
         cleanup()
         deliver(outcome)
@@ -385,7 +561,39 @@ final class BreakStageController {
         deliver(outcome)
     }
 
+    // MARK: - 展示模式（全屏遮罩在场时挡住切桌面 / 调度中心 / ⌘Tab）
+
+    /// 强制退出（⌘⌥Esc）、关机注销不禁：留着当逃生口；Baobox 崩了系统会自己解除展示模式。
+    private static let kioskOptions: NSApplication.PresentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching]
+
+    private func startKiosk() {
+        assertKiosk()
+        kioskObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // 确认阶段也抢回：指纹验证嵌在自己的卡片里，没有系统对话框要拿焦点（2026-11-08 探针）。
+                guard let self, self.kioskObserver != nil else { return }
+                self.assertKiosk()
+            }
+        }
+    }
+
+    private func assertKiosk() {
+        NSApp.activate(ignoringOtherApps: true)
+        if NSApp.presentationOptions != Self.kioskOptions { NSApp.presentationOptions = Self.kioskOptions }
+        stageWindow?.makeKey()
+    }
+
+    private func stopKiosk() {
+        if let kioskObserver { NotificationCenter.default.removeObserver(kioskObserver) }
+        kioskObserver = nil
+        if !NSApp.presentationOptions.isEmpty { NSApp.presentationOptions = [] }
+    }
+
     private func cleanup() {
+        endConfirm()
+        stopKiosk()
         animTimer?.invalidate()
         animTimer = nil
         tickTimer?.invalidate()
@@ -467,7 +675,8 @@ final class BreakStageController {
             pose.lying = pose.state == .sleep
             pose.eyesClosed = pose.state == .sleep
             pose.bob = pose.state == .idle ? CGFloat(sin(pose.time * 1.7)) * 1.4 : 0
-        case .celebrating:
+        case .celebrating, .confirming:
+            // 休息好了 / 等你确认：站着面向你。
             pose.state = .idle
             pose.attentive = true
             pose.lying = false
@@ -491,6 +700,12 @@ final class BreakStageController {
 
     /// 点了暗处想接着干活：宠物摇摇头。
     private func nudge() {
+        // 等指纹时点了暗处：把卡片（舞台窗）重新放到最前、拿回焦点，嵌在里面的指纹验证不被打断。
+        if phase == .confirming {
+            stageWindow?.orderFrontRegardless()
+            stageWindow?.makeKey()
+            return
+        }
         guard phase == .resting, Date().timeIntervalSince(lastNudge) > 2.5 else { return }
         lastNudge = Date()
         PetController.shared.performLent("poke")
@@ -784,15 +999,18 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private static let limit: TimeInterval = 20
     private let lock = NSLock()
     private var armed = false
+    /// 结束进程前先锁屏（这一场要确认本人：遮罩随进程消失，屏幕不能就这么放出去，TECH_DESIGN.md §5.6）。
+    private var lockOnKill = false
     private var lastBeat = Date()
     private var source: DispatchSourceTimer?
     private var beatTimer: Timer?
 
     @MainActor
-    func arm() {
+    func arm(lockOnKill: Bool = false) {
         disarm()
         lock.lock()
         armed = true
+        self.lockOnKill = lockOnKill
         lastBeat = Date()
         lock.unlock()
         let beat = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.beat() }
@@ -825,10 +1043,16 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private func check() {
         lock.lock()
         let stuck = armed && Date().timeIntervalSince(lastBeat) > Self.limit
+        let lockFirst = lockOnKill
         lock.unlock()
         guard stuck else { return }
         Logger(subsystem: "com.baobox.app", category: "focushealth")
             .fault("main thread unresponsive for 20s while the break stage blocks input; terminating")
+        if lockFirst {
+            // 发按键不用主线程（CGEvent 可以在任意线程发），给系统一点时间接住再退出。
+            ScreenLock.lockNow()
+            usleep(300_000)
+        }
         abort()
     }
 }

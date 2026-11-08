@@ -230,9 +230,22 @@ final class VRMRig {
         let weight: Float
     }
 
+    /// 一条裙片的根骨骼（VRoid 命名 J_Sec_*Skirt*）：裙子没有物理，动作按大腿姿态转它，让裙子盖在腿上（VRMMotion.skirtRotations）。
+    struct SkirtPanel {
+        let bone: Bone
+        /// 最近的人形祖先：hips / leftUpperLeg / rightUpperLeg。
+        let parent: String
+        /// 根关节相对 parent 关节的静止位置（规范化空间，模型单位）。
+        let offset: SIMD3<Float>
+        /// 静止时从根关节指向裙片末端的方向（规范化空间，单位向量）与长度。
+        let direction: SIMD3<Float>
+        let length: Float
+    }
+
     let isVRM0: Bool
     let bones: [String: Bone]
     let expressions: [String: [MorphTarget]]
+    let skirt: [SkirtPanel]
     /// 腿长、hips 高度等（跪坐 / 下蹲时算 hips 降多少）。
     let body: VRMBody
 
@@ -260,6 +273,9 @@ final class VRMRig {
         let position = { (name: String) in bones[name]?.node.simdConvertPosition(.zero, to: root) }
         let hipsPosition = hips.node.simdConvertPosition(.zero, to: root)
         body.hipsHeight = max(hipsPosition.y, 0.1)
+        // 身高 = 整个模型静止时外包框的高度，与 PetModelView.fit 取景缩放到 1.26 的是同一个高度（踏台阶的每级高度按它的比例算）。
+        let (lo, hi) = root.boundingBox
+        body.height = max(Float(hi.y - lo.y), 0.1)
         if let upper = position("leftUpperLeg"), let lower = position("leftLowerLeg"), let foot = position("leftFoot") {
             body.hipToLeg = max(hipsPosition.y - upper.y, 0)
             body.thigh = max(simd_distance(upper, lower), 0.05)
@@ -268,9 +284,11 @@ final class VRMRig {
             // 钉脚用（VRMMotion.plantFeet）：左腿根、左踝相对 hips 的位置，换到规范化空间（0.x 面朝 −Z，x、z 取反）。
             let canonical = { (v: SIMD3<Float>) in spec.isVRM0 ? SIMD3(-v.x, v.y, -v.z) : v }
             body.legOffset = canonical(upper - hipsPosition)
+            body.kneeRest = canonical(lower - hipsPosition)
             body.ankleRest = canonical(foot - hipsPosition)
         }
         self.body = body
+        skirt = Self.findSkirt(nodes: nodes, root: root, bones: bones, isVRM0: spec.isVRM0)
 
         var expressions: [String: [MorphTarget]] = [:]
         for (name, binds) in spec.expressions {
@@ -289,6 +307,53 @@ final class VRMRig {
             expressions["blink"] = left + right
         }
         self.expressions = expressions
+    }
+
+    /// 找裙片：名字带 skirt、上一级不是裙子骨骼的节点是一条裙片的根，顺着名字带 skirt 的子节点走到末端量方向和长度。
+    /// 只认挂在 hips / 大腿下面的（挂在小腿上的是靴子、护腿，或者整件挂在腿上的长外套，跟着腿走就对了）。
+    /// 找不到（不是 VRoid 的模型、裙子没单独的骨骼）就是空的，动作照旧。
+    private static func findSkirt(nodes: [SCNNode], root: SCNNode, bones: [String: Bone], isVRM0: Bool) -> [SkirtPanel] {
+        var human: [ObjectIdentifier: String] = [:]
+        for (name, bone) in bones { human[ObjectIdentifier(bone.node)] = name }
+        let isSkirt = { (node: SCNNode) -> Bool in
+            human[ObjectIdentifier(node)] == nil && node.name?.range(of: "skirt", options: .caseInsensitive) != nil
+        }
+        let canonical = { (v: SIMD3<Float>) in isVRM0 ? SIMD3(-v.x, v.y, -v.z) : v }
+        var panels: [SkirtPanel] = []
+        for node in nodes where isSkirt(node) {
+            guard let parentNode = node.parent, !isSkirt(parentNode) else { continue }
+            var ancestor: SCNNode? = parentNode
+            var owner: String?
+            while let current = ancestor, current !== root {
+                if let name = human[ObjectIdentifier(current)] {
+                    owner = name
+                    break
+                }
+                ancestor = current.parent
+            }
+            guard let owner, ["hips", "leftUpperLeg", "rightUpperLeg"].contains(owner),
+                  let ownerNode = bones[owner]?.node else { continue }
+            var tip = node
+            while let next = tip.childNodes.first(where: isSkirt) { tip = next }
+            let start = node.simdConvertPosition(.zero, to: root)
+            let end = tip.simdConvertPosition(.zero, to: root)
+            let length = simd_distance(start, end)
+            guard length > 0.01 else { continue }
+            var parentRotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            var parentScale: Float = 1
+            var walker = node.parent
+            while let current = walker, current !== root {
+                parentRotation = current.simdOrientation * parentRotation
+                parentScale *= max(abs(current.simdScale.y), 1e-4)
+                walker = current.parent
+            }
+            let bone = Bone(node: node, restLocal: node.simdOrientation, restPosition: node.simdPosition,
+                            parentWorldRest: parentRotation, parentWorldScale: parentScale)
+            panels.append(SkirtPanel(bone: bone, parent: owner,
+                                     offset: canonical(start - ownerNode.simdConvertPosition(.zero, to: root)),
+                                     direction: simd_normalize(canonical(end - start)), length: length))
+        }
+        return panels
     }
 
     /// 规范化旋转（面朝 +Z、T 字姿势为单位旋转）→ 骨骼实际的局部旋转。
@@ -313,6 +378,9 @@ final class VRMRig {
             bone.node.simdOrientation = localRotation(bone, pose.rotations[name] ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
         }
         if let position = hipsPosition(pose.hips) { bones["hips"]?.node.simdPosition = position }
+        for (panel, rotation) in zip(skirt, VRMMotion.skirtRotations(pose, rig: self)) {
+            panel.bone.node.simdOrientation = localRotation(panel.bone, rotation)
+        }
         for targets in expressions.values {
             for target in targets { target.node.morpher?.setWeight(0, forTargetAt: target.index) }
         }

@@ -21,10 +21,12 @@ final class SettingsWindowController {
 
         if window == nil {
             let hosting = NSHostingController(rootView: SettingsView(registry: registry))
-            let created = NSWindow(contentViewController: hosting)
+            // 从全屏 App 里打开时别叠在全屏窗口上、一直盖着它（见 DesktopSpaceWindow）。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("settings.window.title")
             created.styleMask = [.titled, .closable]
-            // 关闭窗口后复用同一实例，避免默认的 close 即释放导致再次打开时崩溃。
+            // 关闭窗口后复用同一实例：避免默认的 close 即释放导致再次打开时崩溃，
+            // 也留住「建窗口时是普通 App」的身份 —— 重建就得再走一遍 DesktopSpaceWindow。
             created.isReleasedWhenClosed = false
             created.center()
             window = created

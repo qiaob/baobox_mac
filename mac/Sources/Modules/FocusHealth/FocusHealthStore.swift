@@ -20,7 +20,8 @@ final class FocusHealthStore {
         var items = ReminderPreset.defaults()
         if let data = try? Data(contentsOf: itemsURL) {
             if let decoded = try? JSONDecoder().decode([ReminderItem].self, from: data) {
-                items = decoded
+                // 没改过的旧预置换成统一节拍的新默认值（REQUIREMENTS.md §7）。
+                items = ReminderPreset.migrated(decoded)
             } else {
                 // 整个文件坏了：改名留底，回落预置（下次保存会写出新的 items.json）。
                 let bad = itemsURL.appendingPathExtension("bad")

@@ -40,11 +40,14 @@ enum DictationTextProcessor {
     }
 
     /// 第 1–3 步，结果里还留着占位符（长听写拿它接到收集面板已有的文字后面，见 `render`）。
-    static func prepare(_ raw: String, language: Language, options: Options) -> String {
+    /// `keepLoneFiller`：整段都是口头禅时是否原样保留。整次听写保留（可能就是只「嗯」了一声当回答）；
+    /// 连续听写传 false —— 那多半是停下来想的时候「嗯」了一声，逐句上屏会变成一句「嗯。」打进去。
+    static func prepare(_ raw: String, language: Language, options: Options, keepLoneFiller: Bool = true) -> String {
         var text = raw
         if options.voiceCommands { text = markCommands(text, language: language) }
         if options.fillerFilter, language != .other {
             let filtered = filterFillers(text, language: language)
+            guard hasContent(filtered) || !hasContent(text) || keepLoneFiller else { return "" }
             // 整段都是口头禅（比如只「嗯」了一声当回答）：原样保留，不把整句吞掉。
             if hasContent(filtered) || !hasContent(text) { text = filtered }
         }
@@ -101,6 +104,19 @@ enum DictationTextProcessor {
         guard let last = first.last else { return second }
         guard let next = second.first else { return first }
         return needsSpace(between: last, and: next) ? first + " " + second : first + second
+    }
+
+    /// 连续听写一句上屏要做的编辑（docs/dictation/TECH_DESIGN.md §3.1）：把 `piece`（`prepare` 的结果，或润色后的文字）
+    /// 接到这次已经输入的 `typed` 后面，算出先退格删掉几个字（按 Character）、再输入什么。
+    /// 接缝空格与「删除上一句」都交给 `render`，这里只对新旧两串做公共前缀差分。
+    static func streamEdit(_ piece: String, after typed: String) -> (deleteCount: Int, insertion: String) {
+        let old = Array(typed)
+        let new = Array(render(piece, into: typed))
+        var common = 0
+        while common < old.count, common < new.count, old[common] == new[common] {
+            common += 1
+        }
+        return (old.count - common, String(new[common...]))
     }
 
     /// 删掉最后一句：句末标点（。！？.!?）或换行之后的那一截。不跨行删。

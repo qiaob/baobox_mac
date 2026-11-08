@@ -358,7 +358,7 @@ final class SpritePetView: NSView {
         case .sleep, .rest: return "sleep"
         case .wander: return "walk"
         case .notify, .jump: return "happy"
-        case .idle, .dragged, .fall, .entering, .leaving: return "idle"
+        case .idle, .dragged, .fall, .entering, .leaving, .lounge: return "idle"
         }
     }
 

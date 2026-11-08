@@ -81,6 +81,20 @@ Sources/Resources/   Localizable.xcstrings
    python3 -c "import json;json.load(open('Sources/Resources/Localizable.xcstrings'));print('valid')"
    ```
 
+## 普通窗口与全屏空间
+
+菜单栏 App（`.accessory`）的普通窗口会被系统放进别的 App 的**全屏空间**当附属窗口：从全屏 App 里打开，
+窗口就叠在全屏窗口上，点回那个 App 也一直盖着（全屏窗口在自己的空间里永远排最底下）。
+窗口进不进全屏空间，**按它建出来那一刻 App 的身份定**，之后不再变（2026-11-08 探针实测）：`.regular` 时建的，
+之后在 `.accessory` 下显示，系统切到桌面显示；`.accessory` 时建的，切成 `.regular` 再显示也照样叠进去。
+窗口级开关改不了这一点（`.auxiliary` / `.primary` / `.canJoinAllApplications` / `.nonactivatingPanel` 都试过）。
+
+**要拿焦点的普通窗口**（设置这类）用 `DesktopSpaceWindow.make { NSWindow(contentViewController: …) }` 建：
+只在建窗口那一下临时切 `.regular`，建完、显示前就切回；关窗后复用同一实例（重建得再走一遍）。
+**App 不能停在 `.regular`**：那期间建的截图遮罩、浮条、贴图都进不了全屏空间（第一版修法「设置开着期间当普通 App」
+就踩了：设置开着时在全屏 App 上截图，遮罩跑到设置所在的桌面）；显示后再切回 `.accessory` 又会把用户拽回原来的 App。
+浮条、贴图、气泡这类**有意叠在全屏 App 上**的窗口不要用它，照旧在 `.accessory` 下建 + `.fullScreenAuxiliary`。
+
 ## 无法本地编译时的自查清单
 
 1. 只引用真实存在的类型 / 方法 —— 先 grep 确认签名，别凭印象写。

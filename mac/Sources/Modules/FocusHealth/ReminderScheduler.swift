@@ -156,14 +156,53 @@ enum ReminderScheduler {
         }
     }
 
-    /// 撞车判定：另一项休息更长的休息画面项 window 秒内也要到点（需求 §7）。
-    static func longerRestDueSoon(than item: ReminderItem, items: [ReminderItem],
-                                  runtime: [String: ReminderRuntime], now: Date,
-                                  within window: TimeInterval) -> Bool {
-        items.contains { other in
-            other.id != item.id && other.enabled && other.style == .rest
-                && other.restSeconds > item.restSeconds
-                && timeUntilDue(other, runtime[other.id], now: now) <= window
+}
+
+/// 一次提醒的安排：一起提醒哪几项（第一个是主项，决定用什么形式提醒），顺带算完成哪几项。
+struct ReminderPlan: Equatable {
+    var items: [String]
+    var covered: [String]
+}
+
+/// 统一节拍（docs/focus-health/REQUIREMENTS.md §7、TECH_DESIGN.md §4.1）：各项照旧各自计时，
+/// 但什么时候真的打扰、一次说几件事由这里统一定，不再各自弹：
+/// 1. 最小间隔：离上一次提醒不到 `minSpacing`，有间隔的项先等着（每天固定时刻的项不等）；
+/// 2. 等大的：比到点项高一级的项 10 分钟内就到，先不打扰，等它来了一起说；
+/// 3. 顺手合并：同级或更低级的项在自己间隔的 30%（最多 15 分钟）之内也要到点的，提前一起说；
+/// 4. 大的包含小的：这次的级别比谁高，谁就算做过了（大休息 ⊃ 起身 ⊃ 小歇）。
+enum ReminderCoordinator {
+    static let mergeCap: TimeInterval = 15 * 60
+    static let mergeFraction = 0.3
+    static let waitForBigger: TimeInterval = 10 * 60
+
+    /// 这一跳到点的项怎么提醒；nil = 这一跳先不提醒（离上次太近 / 在等更大的那项）。
+    static func plan(due: [ReminderItem], items: [ReminderItem], runtime: [String: ReminderRuntime], now: Date,
+                     lastPromptAt: Date?, minSpacing: TimeInterval) -> ReminderPlan? {
+        guard let topTier = due.map(\.tier).max() else { return nil }
+        let hasDaily = due.contains { $0.schedule == .daily }
+        if !hasDaily, let last = lastPromptAt, now.timeIntervalSince(last) < minSpacing { return nil }
+        let dueIDs = Set(due.map(\.id))
+        let intervalItems = items.filter { $0.enabled && $0.schedule == .interval && !dueIDs.contains($0.id) }
+        func untilDue(_ item: ReminderItem) -> TimeInterval {
+            ReminderScheduler.timeUntilDue(item, runtime[item.id], now: now)
         }
+        if !hasDaily, intervalItems.contains(where: { $0.tier > topTier && untilDue($0) <= waitForBigger }) {
+            return nil
+        }
+        var members = due
+        for other in intervalItems where other.tier <= topTier {
+            if untilDue(other) <= min(mergeCap, other.intervalSeconds * mergeFraction) { members.append(other) }
+        }
+        // 主项：级别最高的，其次休息最长的，再按原来的顺序。
+        let order = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        members.sort {
+            if $0.tier != $1.tier { return $0.tier > $1.tier }
+            if $0.restSeconds != $1.restSeconds { return $0.restSeconds > $1.restSeconds }
+            return (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
+        }
+        let memberIDs = Set(members.map(\.id))
+        let tier = members.first?.tier ?? topTier
+        let covered = intervalItems.filter { $0.tier < tier && !memberIDs.contains($0.id) }.map(\.id)
+        return ReminderPlan(items: members.map(\.id), covered: covered)
     }
 }
