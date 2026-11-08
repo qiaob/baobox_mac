@@ -142,7 +142,10 @@ STUN：`stun.cloudflare.com:3478`、`stun.miwifi.com:3478`、`stun.chat.bilibili
 
 ### 5.2 手机网页
 
-- 两个隐藏的 `<input type=file multiple>`：一个 `accept="image/*"`（「选择图片」），一个不限类型（「选择文件」），进同一个发送队列。
+- 一个隐藏的 `<input type=file multiple>` + 一组类型按钮（`phone.js` 的 `TYPES` 表，界面见 REQUIREMENTS §3.3）：
+  点按钮时先设 `accept`（「全部文件」去掉 accept）再 `click()`，在同一个点击事件里，算用户手势，iOS 也会弹选择器。
+  accept 同时写扩展名和 MIME：安卓 Chrome 把扩展名换成 MIME 交给系统选择器，iOS 两种都认。WPS 自有格式额外写上
+  `application/kswps` 这类 MIME（WPS 在部分系统上注册的类型），写多了不影响。
 - 发出的每行：开始发送记时刻，成功后显示 `已发送 · 时刻 · 用时`。
 - 收到的图片（按扩展名判断）：按钮「查看」，打开全屏浮层 `<img>`：局域网直接用 `/api/file?...` 地址
   （`<img>` 不理会 `Content-Disposition`），公网用 Blob URL。浮层里有「长按图片可存到相册」提示、下载 / 保存、关闭；

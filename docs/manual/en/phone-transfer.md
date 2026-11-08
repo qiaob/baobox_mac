@@ -32,8 +32,9 @@ The choice is remembered; changing it makes a new QR code.
 
 1. Open the window, scan the QR code with the phone camera and open the page.
 2. The Mac window shows "… wants to connect". Click **Allow** (only for devices you recognize).
-3. **Phone → Mac**: tap "Choose photos" (opens the photo library, multiple selection) or "Choose files", or type text
-   on the phone page. Files go to the receive folder (`~/Downloads/Baobox` by default); the window shows progress and
+3. **Phone → Mac**: on the phone page, tap a type button to pick files: Photos, Videos, Music, PDF, Word, Excel, PPT,
+   Text, Archives, or All files (multiple selection everywhere; "Photos" opens the photo library, the others list only
+   files of that type, and WPS formats count as Word / Excel / PPT). You can also type text. Files go to the receive folder (`~/Downloads/Baobox` by default); the window shows progress and
    "Show in Finder". **Images** get a thumbnail: click it for a large preview, or click "Copy" to put the image on the
    clipboard (it pastes into chat apps as an image).
 4. **Mac → phone**: drag files into the window (or "Choose Files…"), or type text. In LAN mode the phone page lists

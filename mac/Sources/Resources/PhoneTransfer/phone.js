@@ -13,8 +13,16 @@
     zh: {
       title: 'Baobox 互传',
       sendTitle: '发送到电脑',
-      pickImages: '选择图片',
-      pickFiles: '选择文件',
+      typeImages: '图片',
+      typeVideos: '视频',
+      typeMusic: '音乐',
+      typePdf: 'PDF',
+      typeWord: 'Word',
+      typeExcel: 'Excel',
+      typePpt: 'PPT',
+      typeText: '文本',
+      typeArchive: '压缩包',
+      typeAll: '全部文件',
       view: '查看',
       close: '关闭',
       saveHint: '长按图片可存到相册',
@@ -78,8 +86,16 @@
     en: {
       title: 'Baobox Transfer',
       sendTitle: 'Send to computer',
-      pickImages: 'Choose photos',
-      pickFiles: 'Choose files',
+      typeImages: 'Photos',
+      typeVideos: 'Videos',
+      typeMusic: 'Music',
+      typePdf: 'PDF',
+      typeWord: 'Word',
+      typeExcel: 'Excel',
+      typePpt: 'PPT',
+      typeText: 'Text',
+      typeArchive: 'Archives',
+      typeAll: 'All files',
       view: 'View',
       close: 'Close',
       saveHint: 'Long-press the image to save it to Photos',
@@ -395,17 +411,45 @@
     sending = false;
   }
 
-  // 「选择图片」（相册）和「选择文件」进同一个发送队列。
   function enqueue(input) {
     const files = Array.prototype.slice.call(input.files || []);
     input.value = '';
     files.forEach(function (f) { queue.push({ file: f, row: outRow(uploadName(f), f.size) }); });
     pump();
   }
-  $('pick-images').addEventListener('click', function () { $('image-input').click(); });
-  $('pick').addEventListener('click', function () { $('file-input').click(); });
-  $('image-input').addEventListener('change', function () { enqueue($('image-input')); });
-  $('file-input').addEventListener('change', function () { enqueue($('file-input')); });
+
+  // 按类型选文件：筛选由手机系统的选择器做（安卓只列匹配的，iOS「文件」里不匹配的置灰）。
+  // accept 同时写扩展名和 MIME：安卓 Chrome 把扩展名换成 MIME 交给系统，iOS 两种都认。
+  // WPS 的 .wps / .et / .dps 并入 Word / Excel / PPT，.csv 并入 Excel。
+  const TYPES = [
+    { key: 'typeImages', icon: '🖼️', accept: 'image/*' },
+    { key: 'typeVideos', icon: '🎬', accept: 'video/*' },
+    { key: 'typeMusic', icon: '🎵', accept: 'audio/*' },
+    { key: 'typePdf', icon: '📄', accept: '.pdf,application/pdf' },
+    { key: 'typeWord', icon: '📝', accept: '.doc,.docx,.wps,application/msword,' +
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-works,application/kswps' },
+    { key: 'typeExcel', icon: '📊', accept: '.xls,.xlsx,.et,.csv,application/vnd.ms-excel,' +
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/kset,text/csv,text/comma-separated-values' },
+    { key: 'typePpt', icon: '📽️', accept: '.ppt,.pptx,.dps,application/vnd.ms-powerpoint,' +
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation,application/ksdps' },
+    { key: 'typeText', icon: '🗒️', accept: '.txt,text/plain' },
+    { key: 'typeArchive', icon: '🗜️', accept: '.zip,.rar,.7z,application/zip,application/x-zip-compressed,' +
+      'application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed' },
+    { key: 'typeAll', icon: '📁', accept: '' }
+  ];
+  const fileInput = $('file-input');
+  TYPES.forEach(function (t) {
+    const btn = el('button', t.accept ? 'secondary' : 'all', t.icon + ' ' + T(t.key));
+    btn.type = 'button';
+    // 在同一个点击事件里设 accept 再 click()，算用户手势，iOS 也会弹选择器。
+    btn.addEventListener('click', function () {
+      if (t.accept) fileInput.setAttribute('accept', t.accept);
+      else fileInput.removeAttribute('accept');
+      fileInput.click();
+    });
+    $('types').appendChild(btn);
+  });
+  fileInput.addEventListener('change', function () { enqueue(fileInput); });
   $('send-text').addEventListener('click', async function () {
     const ta = $('text-input');
     const text = ta.value;

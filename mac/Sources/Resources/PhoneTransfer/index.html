@@ -56,7 +56,10 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   #error h2 { color: var(--danger); }
   #error ul { margin: 8px 0 0; padding-left: 20px; }
-  .picks { margin: 0 0 10px; }
+  /* 按类型选文件：九种类型 3×3，「全部文件」占满一行。 */
+  .types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; }
+  .types button { padding: 10px 6px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .types .all { grid-column: 1 / -1; }
   /* 看大图：长按图片存相册，所以不能禁用 -webkit-touch-callout / pointer-events。 */
   .viewer { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, .92); display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 12px; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
@@ -88,12 +91,8 @@
   <div id="main" class="hidden">
     <section class="card">
       <h2 data-i18n="sendTitle"></h2>
-      <input id="image-input" type="file" accept="image/*" multiple class="hidden">
       <input id="file-input" type="file" multiple class="hidden">
-      <div class="row picks">
-        <button id="pick-images" data-i18n="pickImages"></button>
-        <button id="pick" data-i18n="pickFiles"></button>
-      </div>
+      <div id="types" class="types"></div>
       <textarea id="text-input" data-i18n-placeholder="textPlaceholder"></textarea>
       <div class="row"><button id="send-text" class="secondary" data-i18n="sendText"></button></div>
       <ul id="out-list" class="list" style="margin-top:10px"></ul>
