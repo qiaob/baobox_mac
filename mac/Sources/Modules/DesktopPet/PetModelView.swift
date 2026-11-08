@@ -288,6 +288,8 @@ final class PetModelView: SCNView {
     private var mouseMovedAt = Date.distantPast
 
     private static let fieldOfView: CGFloat = 28
+    /// 人形睡觉时转多少（弧度，约 57°）：侧身坐着，正面的裙底被大腿挡住；再转多了脸被头发挡住。
+    private static let sleepYaw: Float = 1.0
     private static let cameraDistance: Float = 3.0
     /// 取景时模型被缩放了多少（模型单位 → 场景单位）。
     private var fitScale: Float = 1
@@ -1095,7 +1097,7 @@ final class PetModelView: SCNView {
             updateRenderLoop()
         }
 
-        let target: Float
+        var target: Float
         switch pose.state {
         case .wander: target = pose.facingLeft ? -.pi / 2 : .pi / 2
         case .jump where pose.flight != nil: target = pose.facingLeft ? -.pi / 2 : .pi / 2
@@ -1103,6 +1105,10 @@ final class PetModelView: SCNView {
         case .idle, .sleep, .dragged, .jump, .fall, .entering, .leaving, .lounge:
             target = pose.attentive ? 0 : (pose.facingLeft ? -0.45 : 0.45)
         }
+        // 人形睡觉是侧身坐地抱膝（VRMMotion.hugKnees）：正对镜头会看到裙底，睡下、睡着、起身的整段都固定侧过去，
+        // 方向固定（头往右肩靠、脸转向右边，侧向画面右边时脸才朝着镜头）；起身播完再转回来。
+        let sleepingVRM = model.vrm != nil && (pose.state == .sleep || currentClip?.clip.name == "get_up")
+        if sleepingVRM { target = Self.sleepYaw }
         // 在空中时脚下的影子藏起来（影子在宠物窗里，跟着窗口飞，留着反而像踩着它）。
         let airborne = pose.state == .jump || pose.state == .fall
         if shadowNode.isHidden != (airborne || model.vrm == nil) { shadowNode.isHidden = airborne || model.vrm == nil }
