@@ -124,8 +124,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// 「打开 Baobox 菜单」快捷键：图标看得见就像点了它；被挤掉、被刘海挡住、在全屏 App 里菜单栏收着时，在鼠标位置弹出。
     func showMenu() {
-        if let button = statusItem.button, let window = button.window,
-           window.occlusionState.contains(.visible), Self.isOnVisibleMenuBar(window.frame) {
+        // 多显示器：鼠标所在那块屏上有一份看得见的 Baobox 图标（每块屏各有一份；活跃屏上开着全屏 App、菜单栏收着时也一样），
+        // 就开在它下面。
+        if let window = statusItem.button?.window, let screen = MenuBarItemScanner.screenUnderMouse(),
+           let replica = MenuBarItemScanner.replicaFrame(pid: getpid(), of: Geometry.cgRect(fromAppKit: window.frame),
+                                                         onScreen: screen) {
+            let below = Geometry.appKitRect(fromCG: replica)
+            menu.popUp(positioning: nil, at: NSPoint(x: below.minX, y: below.minY), in: nil)
+        } else if let button = statusItem.button, let window = button.window,
+                  window.occlusionState.contains(.visible), Self.isOnVisibleMenuBar(window.frame) {
             button.performClick(nil)
         } else {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)

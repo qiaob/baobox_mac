@@ -60,6 +60,8 @@ final class MenuBarManager {
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var lastRescue = Date.distantPast
+    /// 第一次看到 Baobox 图标「被挤掉」的时间；连着看到、隔 2 秒以上才挪。
+    private var squeezedSince: Date?
     private static let log = Logger(subsystem: "com.baobox.app", category: "menubar")
 
     private init() {}
@@ -90,8 +92,13 @@ final class MenuBarManager {
               let controller = AppDelegate.shared?.statusItemController,
               let main = controller.mainFrame, let gap = spacer.frameX else { return }
         let hidden = main.maxX <= gap.minX + 2
-        let squeezed = !hidden && MenuBarItemScanner.shared.menuBarShown && !controller.mainIsVisible
-        guard hidden || (squeezed && !controller.isAtFarRight) else { return }
+        let squeezed = !hidden && MenuBarItemScanner.shared.menuBarShown(at: Geometry.cgRect(fromAppKit: main))
+            && !controller.mainIsVisible
+        // 「被挤掉」要连着几次扫描、隔 2 秒以上都是才算：换活跃屏时 Baobox 的图标窗口搬到另一块屏上，那一下读到的
+        // 「看不见」是假的（2026-11-08 外接屏自测：图标明明在，却被当成挤掉、重建了一遍）。
+        if squeezed { squeezedSince = squeezedSince ?? Date() } else { squeezedSince = nil }
+        let stillSqueezed = squeezedSince.map { Date().timeIntervalSince($0) >= 2 } ?? false
+        guard hidden || (stillSqueezed && !controller.isAtFarRight) else { return }
         guard Date().timeIntervalSince(lastRescue) > 10 else { return }
         lastRescue = Date()
         Self.log.notice("Baobox icon \(hidden ? "fell into the hidden area" : "was squeezed out", privacy: .public); moving it to the right end")

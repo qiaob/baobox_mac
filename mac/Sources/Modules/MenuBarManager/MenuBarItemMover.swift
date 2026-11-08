@@ -10,7 +10,8 @@ import os
 /// 2. 每个事件「转一手」：先给那个 App 发一个空事件；挂在那个 App 上的拦截（`tapCreateForPid`）收到空事件后把真事件
 ///    发进会话事件流；会话流上只听不改的拦截看到真事件后，再把它直接发给那个 App —— 系统和那个 App 都收到。
 ///    （单发会话流、单发给那个 App，2026-11-08 探针里都不起作用。）
-/// 3. 每一步等图标的位置真的变了（最多约 80 毫秒）；不变就先「叫醒」它（在它中心按住 ⌘ 按一下）再重试，最多 5 次。
+/// 3. 每一步等图标的位置真的变了（最多约 80 毫秒），再等位置稳住（系统可能播放滑动动画）才核对；
+///    没落到位就先「叫醒」它（在它中心按住 ⌘ 按一下）再重试，最多 5 次。
 /// 全程隐藏鼠标指针，做完放回原处。需要辅助功能权限。
 @MainActor
 final class MenuBarItemMover {
@@ -31,7 +32,8 @@ final class MenuBarItemMover {
 
     private init() {}
 
-    /// 把 item 挪到 target 的左边 / 右边。挪完按位置核对：item 的窗口位置变了、并且落在目标那一侧，返回 true。
+    /// 把 item 挪到 target 的左边 / 右边。挪完按位置核对：item 紧挨在目标那一侧（菜单栏图标窗口一个挨一个、没有空隙），返回 true。
+    /// 只看「在那一侧」不够：本来就在远处那一侧的（隐藏区里的图标在 Baobox 左边几千像素）没挪也会算成功（2026-11-08）。
     func move(_ item: Window, _ side: Side, of target: Window) async -> Bool {
         guard let startFrame = Self.windowFrame(item.windowID) else {
             Self.log.notice("relay move: no frame for item window \(item.windowID) (pid \(item.pid))")
@@ -74,16 +76,19 @@ final class MenuBarItemMover {
                 _ = await waitForFrameChange(item.windowID, from: before)
                 let afterDown = Self.windowFrame(item.windowID) ?? before
                 ok = await relay(up, to: item.pid)
-                if ok { _ = await waitForFrameChange(item.windowID, from: afterDown) }
+                if ok {
+                    _ = await waitForFrameChange(item.windowID, from: afterDown)
+                    await waitForSettle([item.windowID, target.windowID])
+                }
             }
             if ok, let frame = Self.windowFrame(item.windowID), let targetNow = Self.windowFrame(target.windowID) {
-                let landed = side == .leftOf ? frame.maxX <= targetNow.minX + 2 : frame.minX >= targetNow.maxX - 2
+                let landed = side == .leftOf ? abs(frame.maxX - targetNow.minX) <= 3 : abs(frame.minX - targetNow.maxX) <= 3
                 if landed {
-                    Self.log.notice("relay move ok after \(attempt) attempt(s): \(NSStringFromRect(startFrame), privacy: .public) → \(NSStringFromRect(frame), privacy: .public)")
+                    Self.log.notice("relay move ok after \(attempt) attempt(s): \(NSStringFromRect(startFrame), privacy: .public) → \(NSStringFromRect(frame), privacy: .public), target \(NSStringFromRect(targetNow), privacy: .public), cursor \(String(describing: savedCursor), privacy: .public)")
                     return true
                 }
             }
-            Self.log.notice("relay move attempt \(attempt) missed: relayed \(ok), item at \(NSStringFromRect(Self.windowFrame(item.windowID) ?? .zero), privacy: .public)")
+            Self.log.notice("relay move attempt \(attempt) missed: relayed \(ok), item at \(NSStringFromRect(Self.windowFrame(item.windowID) ?? .zero), privacy: .public), target was \(NSStringFromRect(targetFrame), privacy: .public) now \(NSStringFromRect(Self.windowFrame(target.windowID) ?? .zero), privacy: .public), cursor \(String(describing: savedCursor), privacy: .public)")
             // 没挪成：补一个抬起结束可能挂着的拖动，再叫醒它（在它中心按住 ⌘ 按一下，不会打开它的菜单）。
             if let frame = Self.windowFrame(item.windowID) {
                 let center = CGPoint(x: frame.midX, y: frame.midY)
@@ -263,6 +268,19 @@ final class MenuBarItemMover {
             return CGRect(dictionaryRepresentation: bounds as CFDictionary)
         }
         return nil
+    }
+
+    /// 等这几个窗口的位置连续 3 次（约 45 毫秒）不变，最多 0.6 秒：滑动动画中途读到的位置不算数。
+    private func waitForSettle(_ ids: [CGWindowID]) async {
+        var last = ids.map { Self.windowFrame($0) }
+        var stable = 0
+        let started = Date()
+        while stable < 3, Date().timeIntervalSince(started) < 0.6 {
+            try? await Task.sleep(nanoseconds: 15_000_000)
+            let now = ids.map { Self.windowFrame($0) }
+            stable = now == last ? stable + 1 : 0
+            last = now
+        }
     }
 
     private func waitForFrameChange(_ id: CGWindowID, from start: CGRect) async -> Bool {

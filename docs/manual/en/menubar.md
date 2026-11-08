@@ -41,9 +41,10 @@ Click the Baobox icon. The first row of the menu (above Screenshot) holds:
 
 They look the same as in the menu bar and show their name on hover. A click works like clicking the icon itself
 and opens its menu. For a hidden icon, Baobox moves just that one next to the Baobox icon for a moment, opens its menu,
-and moves it back into the hidden area once the menu closes; the other hidden icons don't move. If it can't be moved,
-Baobox falls back to an older way of revealing it (which may bring a few other hidden icons along); if there's really no
-room, the pet says the menu bar is full.
+and moves it back to where it was once the menu closes; the other hidden icons don't move and keep their order. If it
+can't be moved, or there's no room even next to the Baobox icon (the front app's menus reach all the way to it), the pet
+tells you; no other hidden icons are brought out. With several displays, the icon's menu opens on the display whose menu
+bar you clicked the Baobox icon in.
 
 The row doesn't appear when nothing is hidden or squeezed out.
 
@@ -57,7 +58,8 @@ hand with Menu Bar → "Move the Baobox Icon to the Right". Baobox's own tempora
 appear to its right.
 
 There's also a shortcut, "Open the Baobox Menu" (unbound by default; set it in Settings → Shortcuts). It pops the
-Baobox menu up at the pointer when the icon is hidden, or when a full-screen app has the menu bar tucked away.
+Baobox menu up at the pointer when the icon is hidden, or when a full-screen app has the menu bar tucked away. With
+several displays, it opens under the Baobox icon on the display the pointer is on.
 
 ## Notes
 

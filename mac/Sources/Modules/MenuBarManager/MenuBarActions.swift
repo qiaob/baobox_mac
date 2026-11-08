@@ -1,11 +1,12 @@
 import AppKit
 import os
 
-/// 挪图标（设置里的显示 / 隐藏）与点图标（Baobox 菜单顶部那一行）。docs/menubar-manager/TECH_DESIGN.md §3、§5、§8b。
+/// 挪图标（设置里的显示 / 隐藏）与点图标（Baobox 菜单顶部那一行）。docs/menubar-manager/TECH_DESIGN.md §5、§8c、§8d。
 ///
-/// 只在屏上发普通的合成鼠标事件（`.cghidEventTap`），等同用户自己 ⌘ 拖、点一下：
-/// 2026-11-08 探针里给屏外的图标发事件（postToPid、会话事件流加窗口字段）点、拖都不起作用，
-/// 所以要碰隐藏的图标时，先把占位项缩短让它回到屏上。位置不够时临时把 Baobox 切到前台腾地方。
+/// 都只**单独挪**那一个图标（MenuBarItemMover：屏外的也能挪，菜单栏上别的图标不动）；挪不动先重新扫一遍再挪一次，还不行就提示。
+/// 以前还有一条老办法：缩短占位项让一串隐藏图标回到屏上，在看得见那段的最左边点；位置不够时临时把 Baobox 切到前台腾地方。
+/// 它会带出别的隐藏图标、鼠标从右边跳到最左边，切到 Baobox 也腾不出地方（Baobox 没有窗口，切到前台后菜单栏仍是原来 App 的，
+/// 2026-11-08 实测）。用户：「还是都出来了」「没有刘海，也不应该展示在最左边，鼠标跳的太大了」—— 老办法删掉。
 @MainActor
 final class MenuBarActions: ObservableObject {
     static let shared = MenuBarActions()
@@ -23,9 +24,6 @@ final class MenuBarActions: ObservableObject {
     // MARK: - 显示 / 隐藏
 
     /// 把图标挪到占位项左边（隐藏）或右边（显示）。返回挪没挪成。
-    ///
-    /// 先**单独挪**这一个（MenuBarItemMover：屏外的也能挪，菜单栏只动它一个）；不灵再退回老办法
-    /// （缩短占位项让它回到屏上、⌘ 拖，会带出别的隐藏图标）。
     @discardableResult
     func setHidden(_ hidden: Bool, itemID: String) async -> Bool {
         guard !busy, spacer.isInstalled else { return false }
@@ -36,138 +34,145 @@ final class MenuBarActions: ObservableObject {
         busy = true
         defer { busy = false }
 
-        if let item = scanner.items.first(where: { $0.id == itemID }), let gap = spacerWindow() {
-            let window = MenuBarItemMover.Window(pid: item.pid, windowID: item.windowID)
-            if await MenuBarItemMover.shared.move(window, hidden ? .leftOf : .rightOf, of: gap) {
+        for attempt in 1...2 {
+            // 第二次先重新扫一遍拿新的窗口（换活跃屏时图标窗口会在两块屏之间搬家）。
+            if attempt == 2 { await scanner.refreshNow() }
+            guard let item = scanner.items.first(where: { $0.id == itemID }), let gap = spacerWindow() else { break }
+            if await MenuBarItemMover.shared.move(window(of: item), hidden ? .leftOf : .rightOf, of: gap) {
                 await scanner.refreshNow()
-                Self.log.notice("\(hidden ? "hide" : "show", privacy: .public) \(itemID, privacy: .public): ok (single move)")
+                Self.log.notice("\(hidden ? "hide" : "show", privacy: .public) \(itemID, privacy: .public): ok (try \(attempt))")
                 return true
             }
-            Self.log.notice("\(hidden ? "hide" : "show", privacy: .public) \(itemID, privacy: .public): single move failed, falling back")
         }
-
-        var previous: NSRunningApplication?
-        var ready = await prepareMove(hidden: hidden, itemID: itemID)
-        if ready == nil {
-            // 前台 App 菜单太长、位置不够：临时把 Baobox 切到前台（菜单栏换成 Baobox 自己很短的菜单）再试。
-            previous = activateBaoboxForRoom()
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            ready = await prepareMove(hidden: hidden, itemID: itemID)
-        }
-        var moved = false
-        if let item = ready, let gap = spacer.frameX {
-            await waitForMouseIdle()
-            let target = hidden ? CGPoint(x: gap.minX - 3, y: item.center.y) : CGPoint(x: gap.maxX + 3, y: item.center.y)
-            await commandDrag(from: item.center, to: target)
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            await scanner.refreshNow()
-            if let after = scanner.items.first(where: { $0.id == itemID }), let gapNow = spacer.frameX {
-                moved = hidden ? after.frame.maxX <= gapNow.minX + 2 : after.frame.minX >= gapNow.maxX - 2
-            }
-        }
-        spacer.collapse()
-        restoreFrontmost(previous)
-        try? await Task.sleep(nanoseconds: 250_000_000)
         await scanner.refreshNow()
-        Self.log.notice("\(hidden ? "hide" : "show", privacy: .public) \(itemID, privacy: .public): \(moved ? "ok" : (ready == nil ? "no room" : "failed"), privacy: .public)")
-        if !moved { Self.toast(ready == nil ? L("menubar.toast.noRoom") : L("menubar.toast.moveFailed")) }
-        return moved
+        Self.log.notice("\(hidden ? "hide" : "show", privacy: .public) \(itemID, privacy: .public): failed")
+        Self.toast(L("menubar.toast.moveFailed"))
+        return false
     }
 
     // MARK: - 点开
 
-    /// 顶部图标行里点了一个隐藏 / 被挤掉的图标：先把它一个单独挪到 Baobox 图标左边（最右侧，不会被挤），点开它的菜单，
-    /// 菜单关掉后挪回原处 —— 别的隐藏图标都不动（2026-11-08 用户：「还是都出来了」）。不灵再退回老办法。
+    private enum OpenOutcome {
+        case opened
+        /// 挪到了 Baobox 左边，可那儿也被挤掉了（前台 App 的菜单一直排到了 Baobox 跟前）。
+        case noRoom
+        case notMoved
+    }
+
+    /// 顶部图标行里点了一个隐藏 / 被挤掉的图标：把它一个单独挪到 Baobox 图标左边（最右侧，不会被挤），点开它的菜单，
+    /// 菜单关掉后挪回原处 —— 别的隐藏图标都不动。在用户点 Baobox 的那块屏上点（多显示器），鼠标指针不跳。
     func open(itemID: String) async {
         guard !busy else { return }
         guard Permissions.hasAccessibility else {
             Self.toast(L("menubar.toast.needAccessibility"))
             return
         }
-        guard let current = scanner.items.first(where: { $0.id == itemID }) else { return }
+        guard let first = scanner.items.first(where: { $0.id == itemID }) else { return }
+        // 用户是在哪块屏的菜单栏上点的（多显示器）：就在那块屏上点开 —— 菜单开在眼前。
+        let screen = MenuBarItemScanner.screenUnderMouse()
         busy = true
         defer { busy = false }
 
-        if await openByMovingAlone(current) { return }
-
-        let wasHidden = current.state == .hidden
-        var previous: NSRunningApplication?
-        var ready = await prepareOpen(wasHidden: wasHidden, itemID: itemID)
-        if ready == nil {
-            previous = activateBaoboxForRoom()
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            ready = await prepareOpen(wasHidden: wasHidden, itemID: itemID)
-        }
-        guard let item = ready else {
-            spacer.collapse()
-            restoreFrontmost(previous)
+        var outcome = await openByMovingAlone(first, on: screen)
+        if outcome == .notMoved {
+            // 再试一次：重新扫一遍拿新的窗口（换活跃屏时图标窗口会在两块屏之间搬家）。
             await scanner.refreshNow()
-            Self.log.notice("open \(itemID, privacy: .public): no room")
-            Self.toast(L("menubar.toast.noRoom"))
-            return
+            if let fresh = scanner.items.first(where: { $0.id == itemID }), fresh.state == first.state {
+                outcome = await openByMovingAlone(fresh, on: screen)
+            }
         }
-        await clickAndWait(item, path: "reveal, roomByActivating \(previous != nil)")
-        spacer.collapse()
-        restoreFrontmost(previous)
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        scanner.refresh()
+        switch outcome {
+        case .opened: break
+        case .noRoom: Self.toast(L("menubar.toast.noRoom"))
+        case .notMoved: Self.toast(L("menubar.toast.noResponse \(first.displayName)"))
+        }
     }
 
-    /// 单独挪过去点开，用完挪回：隐藏的回到占位项左边，被挤掉的回到它原来左邻的右边。返回 false = 没挪成，交给老办法。
-    private func openByMovingAlone(_ current: MenuBarItem) async -> Bool {
+    /// 单独挪过去点开，用完挪回原处：隐藏的回到它原来右邻（隐藏图标或占位项）的左边，被挤掉的回到它原来左邻的右边
+    /// —— 顶部那一行的顺序不变。
+    private func openByMovingAlone(_ current: MenuBarItem, on screen: CGRect?) async -> OpenOutcome {
         guard let anchor = baoboxWindow(), let gap = spacerWindow() else {
             Self.log.notice("open \(current.id, privacy: .public): no Baobox / spacer window")
-            return false
+            return .notMoved
         }
         Self.log.notice("open \(current.id, privacy: .public): state \(String(describing: current.state), privacy: .public), window \(current.windowID) at \(NSStringFromRect(current.frame), privacy: .public)")
         let mover = MenuBarItemMover.shared
-        let window = MenuBarItemMover.Window(pid: current.pid, windowID: current.windowID)
+        let item = window(of: current)
         let back: (MenuBarItemMover.Window, MenuBarItemMover.Side)
         if current.state == .hidden {
-            back = (gap, .leftOf)
+            let rightNeighbor = scanner.items
+                .filter { $0.id != current.id && $0.state == .hidden && $0.frame.minX >= current.frame.maxX - 1 }
+                .min { $0.frame.minX < $1.frame.minX }
+            back = rightNeighbor.map { (window(of: $0), .leftOf) } ?? (gap, .leftOf)
         } else {
             let leftNeighbor = scanner.items
                 .filter { $0.id != current.id && $0.state != .hidden && $0.frame.maxX <= current.frame.minX + 1 }
                 .max { $0.frame.maxX < $1.frame.maxX }
-            back = leftNeighbor.map { (MenuBarItemMover.Window(pid: $0.pid, windowID: $0.windowID), .rightOf) } ?? (gap, .rightOf)
+            back = leftNeighbor.map { (window(of: $0), .rightOf) } ?? (gap, .rightOf)
         }
-        guard await mover.move(window, .leftOf, of: anchor) else {
-            Self.log.notice("open \(current.id, privacy: .public): single move failed, falling back")
-            return false
-        }
+        let moved = await mover.move(item, .leftOf, of: anchor)
+        let movedAt = Date()
         await scanner.refreshNow()
-        guard let shown = scanner.items.first(where: { $0.id == current.id }), shown.onScreen else {
-            // 挪过去了却仍不在屏上（右边也满了）：放回去，交给老办法。
-            _ = await mover.move(window, back.1, of: back.0)
-            await scanner.refreshNow()
-            return false
+        let now = scanner.items.first { $0.id == current.id }
+        // 点得着：活跃屏上那份看得见，或者用户那块屏上那份看得见（活跃屏上开着全屏 App、菜单栏收着时，只有别的屏上的看得见）。
+        let clickable = now.flatMap { item -> MenuBarItem? in
+            if item.onScreen { return item }
+            guard let screen, MenuBarItemScanner.replicaFrame(pid: item.pid, of: item.frame, onScreen: screen) != nil else { return nil }
+            return item
         }
-        await clickAndWait(shown, path: "single move")
-        if !(await mover.move(window, back.1, of: back.0)) {
+        guard let shown = clickable else {
+            // 不在屏上（没挪动，或挪过去了那儿也被挤掉）。挪了一半的话它可能已经不在原来那一侧：先放回去。
+            if now?.state != current.state {
+                _ = await mover.move(item, back.1, of: back.0)
+                await scanner.refreshNow()
+            }
+            Self.log.notice("open \(current.id, privacy: .public): \(moved ? "moved but not on screen" : "move failed", privacy: .public)")
+            return moved ? .noRoom : .notMoved
+        }
+        // 落在 Baobox 左边，或者没完全挪对、但已经在屏上看得见了：都直接点，点完照样挪回去。
+        // 挪完至少等 0.6 秒再点：有的 App 要过一会儿才处理「图标被挪走了」，这之前开的菜单会被它自己收掉
+        // （2026-11-08 自测：Electron 做的 1Password，挪完 0.2 秒点，菜单一闪就没；等 0.5 秒、1 秒都正常）。
+        let settle = 0.6 - Date().timeIntervalSince(movedAt)
+        if settle > 0 { try? await Task.sleep(nanoseconds: UInt64(settle * 1_000_000_000)) }
+        await clickAndWait(shown, on: screen, path: moved ? "single move" : "single move, landed elsewhere")
+        if !(await mover.move(item, back.1, of: back.0)) {
             Self.log.notice("open \(current.id, privacy: .public): could not move it back")
         }
         await scanner.refreshNow()
-        return true
+        return .opened
     }
 
     /// 像用户一样点它一下；第一下没弹出东西就按住久一点再点一次；弹出了就等它关掉。
-    private func clickAndWait(_ item: MenuBarItem, path: String) async {
+    /// 扫描、挪动用的是活跃屏上那份图标；用户在别的屏上（screen），点那块屏上的那份。那块屏上找不到（比如屏窄、它在那儿被挤掉了）仍点活跃屏上的。
+    private func clickAndWait(_ item: MenuBarItem, on screen: CGRect?, path: String) async {
         let before = Set(appWindows(pid: item.pid).keys)
         await waitForMouseIdle()
-        await click(at: item.center, hold: 0.05)
-        var opened = await waitForNewWindows(pid: item.pid, before: before, within: 1.0)
-        var attempts = 1
-        if opened.isEmpty {
-            attempts = 2
-            await click(at: item.center, hold: 0.2)
+        let replica = screen.flatMap { MenuBarItemScanner.replicaFrame(pid: item.pid, of: item.frame, onScreen: $0) }
+        let frame = replica ?? item.frame
+        var opened: [CGWindowID: Int] = [:]
+        var attempts = 0
+        var how = "click"
+        if replica == nil {
+            // 先用辅助功能「按一下」：不动鼠标。Electron 做的 1Password 对合成的鼠标点击时灵时不灵（菜单一闪就没、或者不弹），
+            // 2026-11-08 自测。用户在别的屏上（要点那块屏上的那份）时不用它 —— 它总在活跃屏上的那份下面开菜单。
+            let pid = item.pid, target = item.frame
+            Task.detached { _ = MenuBarItemScanner.axPress(pid: pid, at: target) }
             opened = await waitForNewWindows(pid: item.pid, before: before, within: 1.5)
+            if !opened.isEmpty { how = "AXPress" }
         }
-        Self.log.notice("open \(item.id, privacy: .public) at \(NSStringFromRect(item.frame), privacy: .public) via \(path, privacy: .public), clicks \(attempts) → \(opened.isEmpty ? "nothing appeared" : "windows \(opened.values.sorted())", privacy: .public)")
+        if opened.isEmpty {
+            (opened, attempts) = await clickAndCollect(at: CGPoint(x: frame.midX, y: frame.midY), pid: item.pid, before: before)
+        }
+        Self.log.notice("open \(item.id, privacy: .public) at \(NSStringFromRect(frame), privacy: .public) via \(path, privacy: .public), \(how, privacy: .public), clicks \(attempts) → \(opened.isEmpty ? "nothing appeared" : "windows \(opened.values.sorted())", privacy: .public)")
         if opened.isEmpty {
             Self.toast(L("menubar.toast.noResponse \(item.displayName)"))
         } else {
-            await waitForInterfaceToClose(pid: item.pid, windows: opened)
+            await waitForInterfaceToClose(pid: item.pid, opened: opened, before: before)
         }
+    }
+
+    private func window(of item: MenuBarItem) -> MenuBarItemMover.Window {
+        MenuBarItemMover.Window(pid: item.pid, windowID: item.windowID)
     }
 
     private func baoboxWindow() -> MenuBarItemMover.Window? {
@@ -176,101 +181,6 @@ final class MenuBarActions: ObservableObject {
 
     private func spacerWindow() -> MenuBarItemMover.Window? {
         spacer.windowID.map { MenuBarItemMover.Window(pid: getpid(), windowID: $0) }
-    }
-
-    // MARK: - 只让一个图标回到屏上
-
-    /// 菜单栏上图标能露出来的最左边（CG x）：刘海右边；菜单栏属主 App 的菜单越过刘海时，在它的菜单后面。
-    private func visibleBandMinX(nearX x: CGFloat) -> CGFloat {
-        let screen = NSScreen.screens.first { screen in
-            let frame = Geometry.cgRect(fromAppKit: screen.frame)
-            return x >= frame.minX && x <= frame.maxX
-        } ?? NSScreen.main
-        guard let screen else { return 0 }
-        let frame = Geometry.cgRect(fromAppKit: screen.frame)
-        var minX = screen.auxiliaryTopRightArea?.minX ?? frame.minX
-        if let owner = NSWorkspace.shared.menuBarOwningApplication,
-           let menusMaxX = MenuBarItemScanner.appMenusMaxX(pid: owner.processIdentifier),
-           menusMaxX >= frame.minX, menusMaxX <= frame.maxX {
-            minX = max(minX, menusMaxX + 6)
-        }
-        return minX
-    }
-
-    /// 把占位项的左边放到 x：右边钉在原位，按需要的宽度设长度；窗口比长度多一截留白，第一次按 16 估，再按实际偏差修一次。
-    private func moveSpacerLeftEdge(to x: CGFloat) async {
-        guard let gap = spacer.frameX else { return }
-        var length = max(2, gap.maxX - x - 16)
-        spacer.setLength(length)
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        if let now = spacer.frameX, abs(now.minX - x) > 1.5 {
-            length = max(2, length + (now.minX - x))
-            spacer.setLength(length)
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-    }
-
-    /// 隐藏的图标挨个排在占位项左边，缩放占位项时它们一起平移、彼此距离不变：
-    /// 按这个图标离占位项左边的距离，把占位项的左边放到「它刚好落在看得见那段最左边」的位置。
-    /// 夹在它和占位项之间的隐藏图标会一起露出来，更左边的仍在屏外。放不下（夹在中间的太多 / 看得见那段太窄）返回 nil。
-    private func revealOnly(_ itemID: String) async -> MenuBarItem? {
-        spacer.collapse()
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        await scanner.refreshNow()
-        guard let item = scanner.items.first(where: { $0.id == itemID }), item.state == .hidden,
-              let gap = spacer.frameX else { return nil }
-        let band = visibleBandMinX(nearX: gap.maxX - 1)
-        let offset = gap.minX - item.frame.minX
-        let left = band + 3 + offset
-        guard left <= gap.maxX - 4 else { return nil }
-        await moveSpacerLeftEdge(to: left)
-        await scanner.refreshNow()
-        if let now = scanner.items.first(where: { $0.id == itemID }), now.onScreen { return now }
-        return nil
-    }
-
-    /// 隐藏前：只把占位项的左边露进看得见那段（离左边 40），好把显示着的图标拖到它左边。
-    private func exposeSpacerEdge(for itemID: String) async -> MenuBarItem? {
-        spacer.collapse()
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        await scanner.refreshNow()
-        guard let gap = spacer.frameX,
-              scanner.items.contains(where: { $0.id == itemID && $0.onScreen && $0.state != .hidden }) else { return nil }
-        let band = visibleBandMinX(nearX: gap.maxX - 1)
-        let left = min(band + 40, gap.maxX - 10)
-        guard left >= band + 4 else { return nil }
-        await moveSpacerLeftEdge(to: left)
-        await scanner.refreshNow()
-        return scanner.items.first { $0.id == itemID && $0.onScreen && $0.state != .hidden }
-    }
-
-    private func prepareMove(hidden: Bool, itemID: String) async -> MenuBarItem? {
-        if hidden { return await exposeSpacerEdge(for: itemID) }
-        return await revealOnly(itemID)
-    }
-
-    private func prepareOpen(wasHidden: Bool, itemID: String) async -> MenuBarItem? {
-        if wasHidden { return await revealOnly(itemID) }
-        return await onScreenNow(itemID)
-    }
-
-    /// 被挤掉 / 显示着的图标此刻在不在屏上。
-    private func onScreenNow(_ itemID: String) async -> MenuBarItem? {
-        await scanner.refreshNow()
-        return scanner.items.first { $0.id == itemID && $0.onScreen }
-    }
-
-    private func activateBaoboxForRoom() -> NSRunningApplication? {
-        let previous = NSWorkspace.shared.frontmostApplication
-        guard previous?.processIdentifier != getpid() else { return nil }
-        NSApp.activate(ignoringOtherApps: true)
-        return previous
-    }
-
-    /// 切回原来的前台 App —— 只在 Baobox 还在前台时：点开的图标可能自己弹出了窗口、成了前台，那就别抢回来。
-    private func restoreFrontmost(_ previous: NSRunningApplication?) {
-        guard let previous, NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() else { return }
-        previous.activate(options: [])
     }
 
     // MARK: - 等它的菜单关掉
@@ -300,21 +210,25 @@ final class MenuBarActions: ObservableObject {
         return [:]
     }
 
-    /// 等弹出来的菜单 / 面板关掉（最长 2 分钟）再把占位项撑回去：菜单开着时图标被推走，有的 App 会把菜单一起收掉。
+    /// 等弹出来的菜单 / 面板关掉（最长 2 分钟）再把图标挪回去：菜单开着时图标被挪走，菜单会跟着收掉。
     /// 弹出的是普通窗口（层 0，比如点了直接打开主窗口）就不等。
-    private func waitForInterfaceToClose(pid: pid_t, windows: [CGWindowID: Int]) async {
-        let floating = Set(windows.filter { $0.value != 0 }.keys)
-        guard !floating.isEmpty else { return }
+    /// 「关掉」= 那个进程连着 0.5 秒没有点之后新冒出来的浮层窗口；不只盯第一次看到的那个窗口号 —— 菜单开着时换一个窗口
+    /// 也还算开着（2026-11-08 自测：1Password 的菜单开了半秒就被当成关了，图标被挪回去、菜单跟着收掉）。
+    private func waitForInterfaceToClose(pid: pid_t, opened: [CGWindowID: Int], before: Set<CGWindowID>) async {
+        guard opened.values.contains(where: { $0 != 0 }) else { return }
         let started = Date()
+        var quietPolls = 0
         while Date().timeIntervalSince(started) < 120 {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if appWindows(pid: pid).keys.allSatisfy({ !floating.contains($0) }) { return }
+            let floating = appWindows(pid: pid).filter { !before.contains($0.key) && $0.value != 0 }
+            quietPolls = floating.isEmpty ? quietPolls + 1 : 0
+            if quietPolls >= 2 { return }
         }
     }
 
     // MARK: - 合成鼠标事件
 
-    /// 用户正在动鼠标时开拖会拖歪：等它静止 0.1 秒（最多等 1.5 秒）。
+    /// 用户正在动鼠标时先等它静止 0.1 秒（最多等 1.5 秒），免得点歪。
     private func waitForMouseIdle() async {
         var last = NSEvent.mouseLocation
         let started = Date()
@@ -326,10 +240,9 @@ final class MenuBarActions: ObservableObject {
         }
     }
 
-    private func postMouse(_ type: CGEventType, _ point: CGPoint, flags: CGEventFlags = []) {
+    private func postMouse(_ type: CGEventType, _ point: CGPoint) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
                                   mouseButton: .left) else { return }
-        event.flags = flags
         // 单击次数要标成 1：合成事件默认是 0，Electron 做的菜单栏图标（Slack）只认 clickCount == 1，
         // 点了没反应（2026-11-08 日志：Slack 在屏上的 941 处点了两下，什么都没弹出来）。原生 App 不看这一项。
         if type == .leftMouseDown || type == .leftMouseUp {
@@ -338,39 +251,26 @@ final class MenuBarActions: ObservableObject {
         event.post(tap: .cghidEventTap)
     }
 
-    private func postCommandKey(down: Bool) {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: down) else { return }
-        event.flags = down ? .maskCommand : []
-        event.post(tap: .cghidEventTap)
+    /// 点一下（第一下没弹出东西就按住久一点再点一次），返回新弹出的窗口和点了几下。
+    ///
+    /// 鼠标指针留在图标上，跟用户自己点的一样：菜单开在图标下面，指针正好在菜单上方。图标就挪在 Baobox 旁边（用户刚点的地方），
+    /// 指针只挪一小段（以前老办法在最左边点，指针横跨整块屏，2026-11-08 用户：「鼠标跳的太大了」）。
+    /// 试过藏起指针、点完放回原处（Ice 的做法）：App 处理松手时、或菜单开着时指针一离开图标，菜单就收掉；放回早了什么都不弹，
+    /// 晚了菜单一闪就没（2026-11-08 自测：1Password、Tailscale），原生 App 和 Electron 做的 App 时机还不一样，不可靠。
+    private func clickAndCollect(at point: CGPoint, pid: pid_t,
+                                 before: Set<CGWindowID>) async -> (opened: [CGWindowID: Int], attempts: Int) {
+        // 等得宽一点：在后台被系统节能挂起的 App（Electron 做的 1Password 等）第一下要先醒过来。
+        await click(at: point, hold: 0.05)
+        var opened = await waitForNewWindows(pid: pid, before: before, within: 1.5)
+        var attempts = 1
+        if opened.isEmpty {
+            attempts = 2
+            await click(at: point, hold: 0.2)
+            opened = await waitForNewWindows(pid: pid, before: before, within: 2.0)
+        }
+        return (opened, attempts)
     }
 
-    /// 按住 ⌘ 从 start 拖到 end（CG 坐标），做完把鼠标放回原处。
-    private func commandDrag(from start: CGPoint, to end: CGPoint) async {
-        let saved = CGEvent(source: nil)?.location
-        postMouse(.mouseMoved, start)
-        try? await Task.sleep(nanoseconds: 80_000_000)
-        postCommandKey(down: true)
-        try? await Task.sleep(nanoseconds: 60_000_000)
-        postMouse(.leftMouseDown, start, flags: .maskCommand)
-        try? await Task.sleep(nanoseconds: 180_000_000)
-        for step in 1...12 {
-            let t = CGFloat(step) / 12
-            postMouse(.leftMouseDragged,
-                      CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t),
-                      flags: .maskCommand)
-            try? await Task.sleep(nanoseconds: 30_000_000)
-        }
-        try? await Task.sleep(nanoseconds: 180_000_000)
-        postMouse(.leftMouseUp, end, flags: .maskCommand)
-        try? await Task.sleep(nanoseconds: 60_000_000)
-        postCommandKey(down: false)
-        if let saved {
-            CGWarpMouseCursorPosition(saved)
-            CGAssociateMouseAndMouseCursorPosition(1)
-        }
-    }
-
-    /// 普通点一下。鼠标留在图标上：菜单就开在它下面，跟用户自己点的一样。
     private func click(at point: CGPoint, hold: TimeInterval) async {
         postMouse(.mouseMoved, point)
         try? await Task.sleep(nanoseconds: 60_000_000)
