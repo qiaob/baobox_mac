@@ -89,8 +89,7 @@ impl App {
         };
         let inner = {
             let mut items = ring::ITEMS.to_vec();
-            items[4] = if has_action(awake::ID, awake::STOP) { (awake::STOP, "关闭防休眠") } else { (awake::TOGGLE, "防休眠") };
-            items[5] = (crate::pet::NEXT_CHARACTER, "换形象");
+            items[1] = if has_action(awake::ID, awake::STOP) { (awake::STOP, "关闭防休眠") } else { (awake::TOGGLE, "防休眠") };
             if self.notices.manually_quiet() { items[6] = (pet_notify::RESUME, "结束勿扰"); }
             items
         };
@@ -212,11 +211,24 @@ impl App {
             return;
         }
         self.settings = None;
-        let pages = self.registry.settings_pages();
+        let mut pages = self.registry.settings_pages();
+        use baobox_app::{Field, SettingsPage};
+        let hotkeys = self.registry.hotkeys().into_iter().map(|spec| {
+            let default = spec.default.map(|combo| combo.to_string());
+            Field::hotkey(&spec.id, &spec.label, default.as_deref())
+        }).collect();
+        pages.insert(0, SettingsPage::new("hotkey", "快捷键", hotkeys));
+        pages.insert(0, SettingsPage::new("general", "通用", vec![Field::toggle("autostart", "开机时自动启动 BaoBox", false)]));
+        pages.push(SettingsPage::new("about", "关于", vec![]));
         let hwnd = self.hwnd;
         let opened = settings_window::open(
             pages,
             self.config.clone(),
+            Box::new(move |index| unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                    hwnd, WM_PET_DOWNLOAD, WPARAM(index), LPARAM(0),
+                );
+            }),
             Box::new(move |updated: &Config| {
                 if let Err(why) = store::save_config(updated) {
                     eprintln!("配置存不下来：{why}");
@@ -253,6 +265,7 @@ impl App {
 }
 
 /// 配置变更的自定义消息。
+const WM_PET_DOWNLOAD: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
 pub(crate) const WM_RELOAD_CONFIG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
 
 /// 定时器 id：给工具喂 `tick`。
@@ -320,6 +333,7 @@ pub fn run(show_settings: bool) -> Result<String, String> {
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            if app.settings.is_some_and(|settings| settings_window::route_input(settings, &message)) { continue; }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -361,6 +375,7 @@ unsafe extern "system" fn wndproc(
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
     let _guard = HandlerGuard;
+    if let Some(result) = tray::paint_menu(message, lparam) { return result; }
     let pointer = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
         hwnd,
         windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
@@ -404,8 +419,15 @@ unsafe extern "system" fn wndproc(
             }
             LRESULT(0)
         }
+        WM_PET_DOWNLOAD => {
+            if let Some(entry) = crate::pet_download::catalog().get(wparam.0) {
+                app.dispatch(&format!("{}{}", crate::pet::DOWNLOAD, entry.id));
+            }
+            LRESULT(0)
+        }
         m if m == WM_RELOAD_CONFIG => {
             app.reload_config();
+            if let Some(settings) = app.settings { settings_window::refresh_pet(settings, &app.config); }
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam.0 == TIMER_TICK => {

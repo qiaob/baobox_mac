@@ -322,12 +322,12 @@ struct Bubble {
 }
 
 const KEY: COLORREF = COLORREF(0xff00ff);
-const SURFACE: COLORREF = COLORREF(0xffffff);
-const LINE: COLORREF = COLORREF(0xe2e4dd);
-const INK: COLORREF = COLORREF(0x24221c);
-const MUTED: COLORREF = COLORREF(0x686b5d);
-const ACCENT: COLORREF = COLORREF(0x74_7c_0e);
-const TINT: COLORREF = COLORREF(0xf0f7de);
+const SURFACE: COLORREF = COLORREF(0x24221c);
+const LINE: COLORREF = COLORREF(0x3a382f);
+const INK: COLORREF = COLORREF(0xe1dfdc);
+const MUTED: COLORREF = COLORREF(0xa6aa9c);
+const ACCENT: COLORREF = COLORREF(0xb8c42b);
+const TINT: COLORREF = COLORREF(0x393626);
 
 struct BubbleInput {
     selected: Cell<Option<&'static str>>,
@@ -337,6 +337,7 @@ struct BubbleInput {
     title: Vec<u16>,
     body: Vec<u16>,
     ambient: bool,
+    progress: Cell<Option<i32>>,
     dpi: i32,
     fonts: [HFONT; 3],
     title_height: i32,
@@ -400,6 +401,7 @@ impl Bubble {
                 "clipboard" => ("剪贴板", 0xe77f),
                 "claudecode" => ("Claude Code", 0xe734),
                 "aitools" | "codex" => ("Codex", 0xe943),
+                "focus" => ("focus", 0xe769),
                 "digest" => ("消息摘要", 0xe8b7),
                 crate::pet::ID => ("桌面宠物", 0xed54),
                 other => (
@@ -418,6 +420,7 @@ impl Bubble {
                 title: notice.title.encode_utf16().collect(),
                 body: notice.body.encode_utf16().collect(),
                 ambient: notice.level == Level::Ambient && notice.actions.is_empty(),
+                progress: Cell::new((notice.level == Level::Card).then_some(1000)),
                 dpi,
                 fonts: [(14, 600), (13, 400), (11, 400)].map(|(size, weight)| {
                     let face = if size == 11 {
@@ -447,7 +450,7 @@ impl Bubble {
                 tail: Cell::new((0, false)),
             });
             let dc = GetDC(window);
-            let width = input.px(300);
+            let width = input.px(280);
             let text_width = width - input.px(if input.ambient { 58 } else { 28 });
             input.title_height =
                 measure(dc, input.fonts[0], &input.title, text_width, input.px(36));
@@ -465,13 +468,14 @@ impl Bubble {
                 } else {
                     0
                 };
-            let actions_y = input.px(47) + content;
+            let actions_y = input.px(43) + content;
+            let progress_height = input.px(if notice.level == Level::Card { 9 } else { 0 });
             let height = if input.ambient {
                 input.px(34) + content.max(input.px(22))
             } else if input.actions.is_empty() {
-                input.px(54) + content
+                input.px(49) + content + progress_height
             } else {
-                actions_y + input.px(43)
+                actions_y + input.px(39) + progress_height
             };
             let button_widths: Vec<_> = input
                 .actions
@@ -485,7 +489,7 @@ impl Bubble {
                     SelectObject(dc, old);
                     (size.cx + input.px(24)).clamp(
                         input.px(48),
-                        input.px(if input.actions.len() == 1 { 272 } else { 86 }),
+                        input.px(if input.actions.len() == 1 { 252 } else { 86 }),
                     )
                 })
                 .collect();
@@ -537,7 +541,7 @@ impl Bubble {
                 )
             };
             if !bubble.input.ambient {
-                button(1, w!("关闭"), width - px(35), px(18), px(20), px(20))?;
+                button(1, w!("关闭"), width - px(30), px(17), px(18), px(18))?;
                 let mut x = px(14);
                 for (index, ((_, label), button_width)) in
                     bubble.input.actions.iter().zip(button_widths).enumerate()
@@ -624,6 +628,24 @@ impl Bubble {
         unsafe {
             if !IsWindowVisible(self.window).as_bool() {
                 return false;
+            }
+            if self.level == Level::Card {
+                let remaining = self
+                    .close_at
+                    .get()
+                    .min(self.expires)
+                    .saturating_duration_since(now);
+                let progress = (remaining.as_millis() / 8).min(1000) as i32;
+                if self.input.progress.replace(Some(progress)) != Some(progress) {
+                    let px = |n| self.input.px(n);
+                    let track = bounds(
+                        px(12),
+                        self.height - px(18),
+                        self.width - px(12),
+                        self.height - px(14),
+                    );
+                    let _ = InvalidateRect(self.window, Some(&track), false);
+                }
             }
             self.position(pet);
         }
@@ -809,6 +831,29 @@ unsafe fn paint_bubble(hwnd: HWND, input: &BubbleInput) {
             WRAP | DT_END_ELLIPSIS,
         );
     }
+    if let Some(progress) = input.progress.get() {
+        let left = px(12);
+        let right = width - left;
+        let y = height - px(17);
+        let thickness = px(2);
+        rounded(
+            dc,
+            bounds(left, y, right, y + thickness),
+            thickness,
+            LINE,
+            LINE,
+        );
+        let end = left + (right - left) * progress / 1000;
+        if end > left {
+            rounded(
+                dc,
+                bounds(left, y, end, y + thickness),
+                thickness,
+                ACCENT,
+                ACCENT,
+            );
+        }
+    }
     let _ = EndPaint(hwnd, &paint);
 }
 
@@ -820,21 +865,21 @@ unsafe fn paint_button(item: &DRAWITEMSTRUCT, input: &BubbleInput) {
     let (label, background, color, font) = match item.CtlID {
         1 => (
             vec![0x00d7],
-            COLORREF(if pressed { 0xd9e1de } else { 0xecf0ee }),
+            COLORREF(if pressed { 0x444643 } else { 0x363835 }),
             MUTED,
             input.fonts[0],
         ),
         2 => (
             input.actions[0].1.encode_utf16().collect(),
-            if pressed { COLORREF(0x615d0a) } else { ACCENT },
-            SURFACE,
-            input.fonts[1],
+            if pressed { COLORREF(0x929c22) } else { ACCENT },
+            COLORREF(0xffffff),
+            input.fonts[0],
         ),
         id => (
             input.actions[(id - 2) as usize].1.encode_utf16().collect(),
-            if pressed { COLORREF(0xd5e9ba) } else { TINT },
-            ACCENT,
-            input.fonts[1],
+            if pressed { COLORREF(0x4b4831) } else { TINT },
+            COLORREF(0xd8e07f),
+            input.fonts[0],
         ),
     };
     let rect = bounds(rect.left, rect.top, rect.right - 1, rect.bottom - 1);

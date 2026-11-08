@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const ID: &str = "desktop-pet";
 const TOGGLE: &str = "desktop-pet.toggle";
-const DOWNLOAD: &str = "desktop-pet.download.";
+pub(crate) const DOWNLOAD: &str = "desktop-pet.download.";
 const REMOVE: &str = "desktop-pet.remove.";
 const SELECT: &str = "desktop-pet.select.";
 const PICK_AREA: &str = "desktop-pet.pick-area";
@@ -152,7 +152,7 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
             None
         };
         let mut notices = crate::pet_notify::Center::default();
-        if matches!(mode, Some("--card" | "--toast")) {
+        if matches!(mode, Some("--card" | "--toast" | "--focus-card")) {
             use crate::pet_notify::{Level, Notice, HISTORY};
             set_menu_open(true);
             let mut notice = Notice::ambient("capture-result", "截图完成");
@@ -161,6 +161,11 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
                 notice.level = Level::Alert;
                 notice.body = "截图已复制到剪贴板，可以直接粘贴到聊天输入框。".into();
                 notice.actions.push((HISTORY, "通知历史"));
+            }
+            if mode == Some("--focus-card") {
+                notice = Notice::ambient("focus", "专注已暂停 · 还剩 24:53");
+                notice.level = Level::Card;
+                notice.actions = vec![(HISTORY, "继续"), (crate::pet_notify::QUIET, "结束这一轮")];
             }
             notices.post(notice);
             notices.tick(Some(hwnd), |_, _| {});
@@ -293,6 +298,16 @@ impl Appearance {
         self.custom_size
             .unwrap_or(self.scale * 13 * if humanoid { 3 } else { 1 })
     }
+}
+
+pub fn configured_size(config: &Config) -> i32 {
+    let appearance = Appearance::read(config);
+    let humanoid = anchor().is_some_and(|hwnd| unsafe {
+        (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State)
+            .as_ref()
+            .is_some_and(|state| state.pack.borrow().as_ref().is_some_and(|pack| pack.is_humanoid()))
+    });
+    appearance.size(humanoid)
 }
 
 fn parse_area(value: &str) -> Option<RECT> {

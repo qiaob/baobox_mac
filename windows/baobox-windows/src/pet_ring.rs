@@ -18,18 +18,17 @@ pub const MORE: &str = "desktop-pet.more";
 pub const ADVANCED: &str = "desktop-pet.advanced";
 pub const ITEMS: [(&str, &str); 8] = [
     (crate::screenshot_module::QUICK_CAPTURE, "截图"),
-    (crate::screenshot_module::OCR, "屏幕取字"),
+    (crate::caffeinate_module::TOGGLE, "防休眠"),
+    (crate::pet::NEXT_CHARACTER, "换形象"),
     (crate::clipboard_module::PANEL, "剪贴板"),
     ("desktop-pet.pet", "摸摸"),
-    ("desktop-pet.feed", "喂食"),
-    ("desktop-pet.play", "陪玩"),
-    (crate::pet_notify::QUIET, "安静一小时"),
+    (crate::screenshot_module::OCR, "取字"),
+    (crate::pet_notify::QUIET, "安静"),
     (MORE, "更多"),
-];
-const CLASS: PCWSTR = w!("BaoboxPetRing");
+];const CLASS: PCWSTR = w!("BaoboxPetRing");
 const KEY: COLORREF = COLORREF(0xff00ff);
 const ICONS: [u16; 8] = [
-    0xe722, 0xe8a5, 0xe77f, 0xeb51, 0xed56, 0xe7fc, 0xe708, 0xe712,
+    0xe722, 0xec32, 0xe8ab, 0xe77f, 0xeb51, 0xe8a5, 0xe708, 0xe712,
 ];
 
 pub struct Ring {
@@ -342,7 +341,7 @@ impl Ring {
                             }
                             crate::screenshot_module::RECORD => 0xe7c8,
                             crate::keyboardnav_module::CLICK => 0xe765,
-                            "desktop-pet.next-character" => 0xe8ab,
+                            crate::pet_notify::RESUME => 0xea8f,
                             "app.settings" => 0xe713,
                             _ => ITEMS
                                 .iter()
@@ -548,15 +547,19 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
 
     let active = hovered || item.itemState.0 & (ODS_SELECTED.0 | ODS_FOCUS.0) != 0;
     let center = (bounds.left + bounds.right) / 2;
-    let surface = CreateSolidBrush(COLORREF(if active { 0x835c45 } else { 0x352a23 }));
+    let surface = CreateSolidBrush(COLORREF(if active { 0xb8c42b } else { 0x24221c }));
     let outline = CreatePen(
         PS_SOLID,
         1,
-        COLORREF(if active { 0xeed4af } else { 0x997561 }),
+        COLORREF(if active { 0xb8c42b } else { 0x3a382f }),
     );
     let old_brush = SelectObject(dc, surface);
     let old_pen = SelectObject(dc, outline);
-    let radius = if active { 22 } else { 19 };
+    let radius = if item.itemState.0 & ODS_SELECTED.0 != 0 {
+        19
+    } else {
+        22
+    };
     let _ = Ellipse(
         dc,
         center - radius,
@@ -568,16 +571,22 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
     let mut label = [0u16; 48];
     let count = GetWindowTextW(item.hwndItem, &mut label).max(0) as usize;
     let label_half = (count as i32 * 7 + 10).clamp(22, 42);
-    let _ = RoundRect(dc, center - label_half, 46, center + label_half, 65, 14, 14);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    let label_brush = CreateSolidBrush(COLORREF(0x24221c));
+    SelectObject(dc, label_brush);
+    SelectObject(dc, outline);
+    let _ = RoundRect(dc, center - label_half, 47, center + label_half, 64, 17, 17);
     SelectObject(dc, old_pen);
     SelectObject(dc, old_brush);
     let _ = DeleteObject(outline);
     let _ = DeleteObject(surface);
+    let _ = DeleteObject(label_brush);
 
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, COLORREF(0xf9f0e3));
+    SetTextColor(dc, COLORREF(if active { 0xffffff } else { 0xb8c42b }));
     let icon_font = CreateFontW(
-        -22,
+        -17,
         0,
         0,
         0,
@@ -607,7 +616,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
     let label_font = CreateFontW(
-        -13,
+        -11,
         0,
         0,
         0,
@@ -623,6 +632,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
         w!("Microsoft YaHei UI"),
     );
     SelectObject(dc, label_font);
+    SetTextColor(dc, COLORREF(0xe1dfdc));
     let mut label_rect = RECT {
         left: center - label_half,
         top: 46,

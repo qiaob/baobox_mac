@@ -19,14 +19,23 @@ use baobox_app::MenuItem;
 use baobox_app::MenuModel;
 use std::collections::HashMap;
 use windows::core::w;
-use windows::Win32::Foundation::{HINSTANCE, HWND, POINT};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{
+    CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, SelectObject, SetBkMode,
+    SetTextColor, DT_END_ELLIPSIS, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, HFONT,
+    TRANSPARENT,
+};
+use windows::Win32::UI::Controls::{
+    DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_GRAYED, ODS_SELECTED, ODT_MENU,
+};
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, LoadIconW, SetForegroundWindow,
-    TrackPopupMenu, HMENU, IDI_APPLICATION, MF_DISABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
+    SetMenuInfo, TrackPopupMenu, HMENU, IDI_APPLICATION, MENUINFO, MF_DISABLED, MF_GRAYED,
+    MF_OWNERDRAW, MF_POPUP, MF_SEPARATOR, MIM_APPLYTOSUBMENUS, MIM_BACKGROUND, TPM_BOTTOMALIGN,
+    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_DRAWITEM, WM_MEASUREITEM,
 };
 
 /// 托盘图标回调消息（自定义，必须落在 `WM_APP` 之后）。
@@ -76,7 +85,18 @@ impl Tray {
             self.actions.clear();
             let mut next = FIRST_ITEM;
             let menu = CreatePopupMenu().ok()?;
-            self.append(menu, &model.items, &mut next);
+            let brush = CreateSolidBrush(MENU_BACKGROUND);
+            let mut paint = MenuPaint::new();
+            self.append(menu, &model.items, &mut next, &mut paint);
+            let _ = SetMenuInfo(
+                menu,
+                &MENUINFO {
+                    cbSize: std::mem::size_of::<MENUINFO>() as u32,
+                    fMask: MIM_APPLYTOSUBMENUS | MIM_BACKGROUND,
+                    hbrBack: brush,
+                    ..Default::default()
+                },
+            );
 
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
@@ -93,6 +113,7 @@ impl Tray {
                 None,
             );
             let _ = DestroyMenu(menu);
+            let _ = DeleteObject(brush);
 
             let id = chosen.0 as u32;
             self.actions.get(&id).cloned()
@@ -100,7 +121,13 @@ impl Tray {
     }
 
     /// 递归把菜单模型建成 `HMENU`。
-    unsafe fn append(&mut self, menu: HMENU, items: &[MenuItem], next: &mut u32) {
+    unsafe fn append(
+        &mut self,
+        menu: HMENU,
+        items: &[MenuItem],
+        next: &mut u32,
+        paint: &mut MenuPaint,
+    ) {
         for item in items {
             match item {
                 MenuItem::Separator => {
@@ -112,48 +139,185 @@ impl Tray {
                     enabled,
                     hint,
                 } => {
-                    // Win32 菜单用制表符把快捷键推到右侧对齐 —— 这是系统的惯例写法
-                    let text = match hint {
-                        Some(hint) => format!("{label}\t{hint}"),
-                        None => label.clone(),
-                    };
-                    let wide = wide(&text);
-                    if *enabled && !id.is_empty() {
+                    let row = paint.row(label, hint.as_deref(), None);
+                    let (flags, item_id) = if *enabled && !id.is_empty() {
                         let item_id = *next;
                         *next += 1;
-                        let _ = AppendMenuW(
-                            menu,
-                            MF_STRING,
-                            item_id as usize,
-                            windows::core::PCWSTR(wide.as_ptr()),
-                        );
                         self.actions.insert(item_id, id.clone());
+                        (MF_OWNERDRAW, item_id)
                     } else {
-                        // 置灰项仍然占位置：功能消失会让用户以为程序坏了
-                        let _ = AppendMenuW(
-                            menu,
-                            MF_STRING | MF_GRAYED | MF_DISABLED,
-                            0,
-                            windows::core::PCWSTR(wide.as_ptr()),
-                        );
-                    }
+                        (MF_OWNERDRAW | MF_GRAYED | MF_DISABLED, 0)
+                    };
+                    let _ = AppendMenuW(menu, flags, item_id as usize, row);
                 }
                 MenuItem::Submenu { label, items } => {
-                    let Ok(child) = CreatePopupMenu() else { continue };
-                    self.append(child, items, next);
-                    let wide = wide(label);
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_POPUP,
-                        child.0 as usize,
-                        windows::core::PCWSTR(wide.as_ptr()),
-                    );
+                    let Ok(child) = CreatePopupMenu() else {
+                        continue;
+                    };
+                    self.append(child, items, next, paint);
+                    let icon = items
+                        .iter()
+                        .flat_map(MenuItem::action_ids)
+                        .next()
+                        .and_then(|id| id.split_once('.'))
+                        .map(|(section, _)| crate::settings_window::page_icon(section));
+                    let row = paint.row(label, None, icon);
+                    let _ = AppendMenuW(menu, MF_OWNERDRAW | MF_POPUP, child.0 as usize, row);
                 }
             }
         }
     }
 }
 
+const MENU_BACKGROUND: COLORREF = COLORREF(0x282827);
+
+struct MenuRow {
+    label: Vec<u16>,
+    hint: Vec<u16>,
+    icon: Option<u16>,
+    font: HFONT,
+    icon_font: HFONT,
+}
+
+struct MenuPaint {
+    rows: Vec<Box<MenuRow>>,
+    font: HFONT,
+    icon_font: HFONT,
+}
+
+impl MenuPaint {
+    unsafe fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            font: CreateFontW(
+                -14,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                4,
+                0,
+                w!("Microsoft YaHei UI"),
+            ),
+            icon_font: CreateFontW(
+                -15,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                4,
+                0,
+                w!("Segoe MDL2 Assets"),
+            ),
+        }
+    }
+
+    fn row(&mut self, label: &str, hint: Option<&str>, icon: Option<u16>) -> windows::core::PCWSTR {
+        self.rows.push(Box::new(MenuRow {
+            label: label.encode_utf16().collect(),
+            hint: hint.unwrap_or_default().encode_utf16().collect(),
+            icon,
+            font: self.font,
+            icon_font: self.icon_font,
+        }));
+        windows::core::PCWSTR(self.rows.last().unwrap().as_ref() as *const MenuRow as _)
+    }
+}
+
+impl Drop for MenuPaint {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DeleteObject(self.font);
+            let _ = DeleteObject(self.icon_font);
+        }
+    }
+}
+
+// TrackPopupMenu sends these synchronously while App already holds its mutable borrow.
+pub unsafe fn paint_menu(message: u32, lp: LPARAM) -> Option<LRESULT> {
+    match message {
+        WM_MEASUREITEM => {
+            let item = (lp.0 as *mut MEASUREITEMSTRUCT).as_mut()?;
+            if item.CtlType != ODT_MENU {
+                return None;
+            }
+            let row = (item.itemData as *const MenuRow).as_ref()?;
+            item.itemHeight = 24;
+            item.itemWidth =
+                (row.label.len() as u32 * 14 + row.hint.len() as u32 * 8 + 42).max(188);
+        }
+        WM_DRAWITEM => {
+            let item = (lp.0 as *const DRAWITEMSTRUCT).as_ref()?;
+            if item.CtlType != ODT_MENU {
+                return None;
+            }
+            let row = (item.itemData as *const MenuRow).as_ref()?;
+            let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+            let disabled = item.itemState.0 & ODS_GRAYED.0 != 0;
+            let dc = item.hDC;
+            let mut bounds = item.rcItem;
+            let brush = CreateSolidBrush(if selected {
+                COLORREF(0xd66a31)
+            } else {
+                MENU_BACKGROUND
+            });
+            FillRect(dc, &bounds, brush);
+            let _ = DeleteObject(brush);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(
+                dc,
+                if disabled {
+                    COLORREF(0x777775)
+                } else {
+                    COLORREF(0xe4e4e4)
+                },
+            );
+            let old = SelectObject(dc, row.icon_font);
+            if let Some(icon) = row.icon {
+                let mut icon_rect = RECT {
+                    left: bounds.left + 8,
+                    right: bounds.left + 31,
+                    ..bounds
+                };
+                DrawTextW(dc, &mut [icon], &mut icon_rect, DT_SINGLELINE | DT_VCENTER);
+            }
+            SelectObject(dc, row.font);
+            bounds.left += if row.icon.is_some() { 34 } else { 10 };
+            bounds.right -= 20;
+            let mut label = row.label.clone();
+            DrawTextW(
+                dc,
+                &mut label,
+                &mut bounds,
+                DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+            );
+            if !row.hint.is_empty() {
+                SetTextColor(dc, COLORREF(0x999997));
+                DrawTextW(
+                    dc,
+                    &mut row.hint.clone(),
+                    &mut bounds,
+                    DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
+                );
+            }
+            SelectObject(dc, old);
+        }
+        _ => return None,
+    }
+    Some(LRESULT(1))
+}
 impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
@@ -200,6 +364,7 @@ pub fn message_window(
     }
 }
 
+#[cfg(test)]
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }

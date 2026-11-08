@@ -31,9 +31,7 @@
 //! 与整个系统格格不入。必须显式取 `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
 //! 里的 `lfMessageFont` 并 `WM_SETFONT` 给每个控件。
 //!
-//! 页标题在此基础上另建一份放大加粗的字体，再在页与页之间压一条蚀刻线 ——
-//! 向 mac / Linux 版的「页标题 + 分组」层级看齐。侧边栏那种大改要重写
-//! 滚动记账，留待能在真机上逐像素验证时再做，不在这里盲改。
+//! 侧栏选择页面，内容区独立滚动。
 //!
 //! # 滚动是自己挪控件，不是 `ScrollWindowEx`
 //!
@@ -51,28 +49,21 @@ use baobox_app::settings::{FieldKind, SettingsPage};
 use baobox_app::Field;
 use baobox_core::config::Config;
 use baobox_core::hotkey::KeyCombo;
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashSet};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, DeleteObject, HFONT, FW_BOLD};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
+};
 use windows::Win32::UI::Controls::{
-    SetScrollInfo, BST_CHECKED, BST_UNCHECKED, HKM_GETHOTKEY, HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL,
-    HOTKEYF_SHIFT, UDM_SETPOS32, UDM_SETRANGE32, UDS_SETBUDDYINT,
+    SetScrollInfo, SetWindowTheme, CDDS_PREPAINT, CDRF_SKIPDEFAULT, DRAWITEMSTRUCT, HKM_GETHOTKEY,
+    HKM_SETHOTKEY, HOTKEYF_ALT, HOTKEYF_CONTROL, HOTKEYF_SHIFT, NMCUSTOMDRAW, NM_CUSTOMDRAW,
+    ODS_FOCUS, ODS_SELECTED, TBM_GETTHUMBRECT, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN,
+    TBS_NOTICKS, UDM_SETPOS32, UDM_SETRANGE32, UDS_SETBUDDYINT,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowTextLengthW,
-    GetWindowTextW, LoadCursorW, RegisterClassW, SendMessageW, SetWindowLongPtrW,
-    ShowWindow, SystemParametersInfoW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE,
-    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, EN_CHANGE, ES_AUTOHSCROLL,
-    EnumChildWindows, GetClientRect, GWLP_USERDATA, IDC_ARROW, NONCLIENTMETRICSW, SB_BOTTOM,
-    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SPI_GETNONCLIENTMETRICS,
-    SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_MOUSEWHEEL, WM_SETFONT,
-    WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
-};
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// 设置窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxSettings");
@@ -81,13 +72,26 @@ const CLASS_NAME: PCWSTR = w!("BaoboxSettings");
 const FIRST_CONTROL: i32 = 100;
 
 /// 行距与各段宽度（像素，96 DPI 下的基准）。
-const ROW_HEIGHT: i32 = 30;
-const HELP_HEIGHT: i32 = 18;
-const MARGIN: i32 = 16;
-const LABEL_WIDTH: i32 = 220;
-const CONTROL_WIDTH: i32 = 264;
+const ROW_HEIGHT: i32 = 37;
+const HELP_HEIGHT: i32 = 24;
+const MARGIN: i32 = 20;
+const SIDEBAR: i32 = 200;
+const NAV_ID: i32 = 20;
+const DOWNLOAD_ID: i32 = 3000;
+const OPEN_PETS_ID: i32 = 2999;
+const TBM_GETPOS: u32 = WM_USER;
+const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+const RUN_VALUE: PCWSTR = w!("BaoBox");
+const BACK: COLORREF = COLORREF(0x282827);
+const PANEL: COLORREF = COLORREF(0x2d2d2c);
+const SIDEBAR_BACK: COLORREF = COLORREF(0x292823);
+const TEXT: COLORREF = COLORREF(0xe8e8e8);
+const MUTED: COLORREF = COLORREF(0xaaaaaa);
+const BLUE: COLORREF = COLORREF(0xd66a31);
+const LABEL_WIDTH: i32 = 322;
+const CONTROL_WIDTH: i32 = 245;
 // 控件右边要给外框、滚动条和客户区留白。
-const WINDOW_WIDTH: i32 = MARGIN * 2 + LABEL_WIDTH + CONTROL_WIDTH + 40;
+const WINDOW_WIDTH: i32 = SIDEBAR + MARGIN * 2 + LABEL_WIDTH + CONTROL_WIDTH + 47;
 
 /// 配置被改动时的回调。
 pub type OnChange = Box<dyn Fn(&Config)>;
@@ -109,6 +113,7 @@ enum Kind {
     Edit,
     Number,
     Hotkey,
+    Slider,
 }
 
 /// 窗口持有的状态。
@@ -116,26 +121,39 @@ struct SettingsState {
     controls: Vec<Bound>,
     config: RefCell<Config>,
     on_change: OnChange,
+    on_download: Box<dyn Fn(usize)>,
     font: HFONT,
     /// 页标题专用：消息字体放大加粗，与正文拉开层级。
     title_font: HFONT,
-    /// 每个子控件与它**设计时**的 (x, y)。滚动就是照着这个重新摆一遍。
-    ///
-    /// x 也要记：`SetWindowPos` 即便带 `SWP_NOSIZE`，位置也是两个坐标
-    /// **一起**生效的 —— 只算 y、x 随手传 0 的话，一滚动所有控件会齐刷刷
-    /// 贴到窗口左边
-    children: Vec<(HWND, i32, i32)>,
+    pages: Vec<PageView>,
+    selected: usize,
+    panel_brush: HBRUSH,
+    background_brush: HBRUSH,
+    icon_font: HFONT,
     /// 已经往下滚了多少像素
     scroll_y: i32,
     /// 内容总高
     content_height: i32,
 }
 
+struct PageView {
+    nav: HWND,
+    icon: u16,
+    children: Vec<(HWND, i32, i32)>,
+    groups: Vec<(i32, i32)>,
+    height: i32,
+}
+
 /// 滚一「行」多少像素。
 const SCROLL_STEP: i32 = 30;
 
 /// 打开设置窗口。必须在有消息循环的线程上调用。
-pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Result<HWND, String> {
+pub fn open(
+    pages: Vec<SettingsPage>,
+    mut config: Config,
+    on_download: Box<dyn Fn(usize)>,
+    on_change: OnChange,
+) -> Result<HWND, String> {
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None)
             .map_err(|e| format!("GetModuleHandle 失败：{e}"))?
@@ -145,28 +163,20 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
             hInstance: instance,
             lpszClassName: CLASS_NAME,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: windows::Win32::Graphics::Gdi::HBRUSH(
-                // COLOR_BTNFACE + 1：对话框的标准底色
-                (windows::Win32::Graphics::Gdi::COLOR_BTNFACE.0 + 1) as isize as *mut _,
-            ),
             ..Default::default()
         };
         RegisterClassW(&class);
 
-        let content_height = window_height(&pages);
-        // 窗口本身不超过 640 —— 再高的话 768 的笔记本上扣掉任务栏就摆不下了。
-        // 超出的部分交给滚动条
-        let height = content_height.min(640);
         let hwnd = CreateWindowExW(
             Default::default(),
             CLASS_NAME,
             w!("Baobox 设置"),
             // WS_VSCROLL 与 WM_VSCROLL 的处理是配套的 —— 见模块文档
-            WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_CLIPCHILDREN,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
             WINDOW_WIDTH,
-            height,
+            620,
             None,
             None,
             instance,
@@ -174,31 +184,113 @@ pub fn open(pages: Vec<SettingsPage>, config: Config, on_change: OnChange) -> Re
         )
         .map_err(|e| format!("创建设置窗口失败：{e}"))?;
 
-        let font = message_font();
+        let font = CreateFontW(
+            -14,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            4,
+            0,
+            w!("Microsoft YaHei UI"),
+        );
         let title_font = title_font();
+        config.set_bool("general", "autostart", starts_at_login());
         let mut state = Box::new(SettingsState {
             controls: Vec::new(),
             config: RefCell::new(config),
             on_change,
+            on_download,
             font,
             title_font,
-            children: Vec::new(),
+            pages: Vec::new(),
+            selected: 0,
+            panel_brush: CreateSolidBrush(PANEL),
+            background_brush: CreateSolidBrush(BACK),
+            icon_font: CreateFontW(
+                -15,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                4,
+                0,
+                w!("Segoe MDL2 Assets"),
+            ),
             scroll_y: 0,
-            content_height,
+            content_height: 0,
         });
-        build(hwnd, instance, &pages, &mut state);
-        // 建完再收一遍子窗口，省得给每个 control() 调用都串一个「记下来」的参数
-        state.children = collect_children(hwnd);
+        let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+        let dark = 1i32;
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const i32 as _,
+            4,
+        );
+
+        let mut known = HashSet::new();
+        for (index, page) in pages.iter().enumerate() {
+            let nav = control(
+                hwnd,
+                instance,
+                w!("BUTTON"),
+                &page.title,
+                (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_OWNERDRAW as u32,
+                10,
+                MARGIN + index as i32 * 29,
+                SIDEBAR - 20,
+                28,
+                NAV_ID + index as i32,
+                font,
+            );
+            known.insert(nav.0 as usize);
+            let (height, groups) = build(hwnd, instance, page, &mut state);
+            let children: Vec<_> = collect_children(hwnd)
+                .into_iter()
+                .filter(|(child, _, _)| known.insert(child.0 as usize))
+                .collect();
+            if index != 0 {
+                for (child, _, _) in &children {
+                    let _ = ShowWindow(*child, SW_HIDE);
+                }
+            } else {
+                state.content_height = height;
+            }
+            state.pages.push(PageView {
+                nav,
+                icon: page_icon(&page.section),
+                children,
+                groups,
+                height,
+            });
+        }
         let raw = Box::into_raw(state);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
         configure_scrollbar(hwnd, &*raw);
 
         let _ = ShowWindow(hwnd, SW_SHOW);
+        if !IsWindowVisible(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
         Ok(hwnd)
     }
 }
 
 /// 窗口该多高：所有页的所有行加起来。
+#[cfg(test)]
 fn window_height(pages: &[SettingsPage]) -> i32 {
     let mut height = MARGIN * 2 + 40;
     for page in pages {
@@ -218,127 +310,445 @@ fn window_height(pages: &[SettingsPage]) -> i32 {
 unsafe fn build(
     parent: HWND,
     instance: HINSTANCE,
-    pages: &[SettingsPage],
+    page: &SettingsPage,
     state: &mut SettingsState,
-) {
+) -> (i32, Vec<(i32, i32)>) {
     let mut y = MARGIN;
-    let mut id = FIRST_CONTROL;
-
-    for (page_index, page) in pages.iter().enumerate() {
-        if page_index > 0 {
-            // 页与页之间压一条蚀刻线，分组才读得出来。
-            // 它落在上一页结尾留出的 MARGIN 空档正中，不占新的高度
-            separator(parent, instance, MARGIN, y - 8, WINDOW_WIDTH - MARGIN * 2, state.font);
+    let left = SIDEBAR + MARGIN + 10;
+    let control_x = left + LABEL_WIDTH;
+    let mut groups = Vec::new();
+    let mut group_start = y;
+    if page.fields.is_empty() {
+        let blocks: &[(&str, &str)] = if page.section == "about" {
+            &[(
+                "BaoBox",
+                concat!("Windows 桌面版 · ", env!("CARGO_PKG_VERSION")),
+            )]
+        } else {
+            &[]
+        };
+        for (title, body) in blocks {
+            static_text(
+                parent,
+                instance,
+                title,
+                left,
+                y,
+                LABEL_WIDTH,
+                24,
+                state.title_font,
+            );
+            y += 33;
+            static_text(
+                parent,
+                instance,
+                body,
+                left,
+                y + 9,
+                LABEL_WIDTH,
+                24,
+                state.font,
+            );
+            groups.push((y, y + 39));
+            y += 64;
         }
-        // 页标题：放大加粗，与下面的字段拉开层级
-        static_text(parent, instance, &page.title, MARGIN, y, WINDOW_WIDTH - MARGIN * 2, 22, state.title_font);
-        y += ROW_HEIGHT;
-
-        for field in &page.fields {
-            let value = field.value(&state.config.borrow(), &page.section);
-            let control_x = MARGIN + LABEL_WIDTH;
-
-            let (hwnd, kind) = match &field.kind {
-                FieldKind::Toggle { .. } => {
-                    // 复选框自带文字，不再单独放标签
-                    let hwnd = control(
-                        parent, instance, w!("BUTTON"), &field.label,
-                        (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_AUTOCHECKBOX as u32,
-                        MARGIN, y, LABEL_WIDTH + CONTROL_WIDTH, 22, id, state.font,
-                    );
-                    SendMessageW(
-                        hwnd,
-                        BM_SETCHECK,
-                        WPARAM(if value == "true" { BST_CHECKED.0 } else { BST_UNCHECKED.0 } as usize),
-                        LPARAM(0),
-                    );
-                    (hwnd, Kind::Check)
-                }
-                FieldKind::Choice { options, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
-                    let hwnd = control(
-                        parent, instance, w!("COMBOBOX"), "",
-                        (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | CBS_DROPDOWNLIST as u32,
-                        control_x, y, CONTROL_WIDTH, 200, id, state.font,
-                    );
-                    for (index, (stored, title)) in options.iter().enumerate() {
-                        let text = wide(title);
-                        SendMessageW(hwnd, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize));
-                        if *stored == value {
-                            SendMessageW(hwnd, CB_SETCURSEL, WPARAM(index), LPARAM(0));
-                        }
-                    }
-                    (hwnd, Kind::Combo)
-                }
-                FieldKind::Number { min, max, .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
-                    let edit = control(
-                        parent, instance, w!("EDIT"), &value,
-                        (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-                        control_x, y, 80, 22, id, state.font,
-                    );
-                    // 配一个上下箭头，省得用户手打数字
-                    let spin = control(
-                        parent, instance, w!("msctls_updown32"), "",
-                        (WS_CHILD | WS_VISIBLE).0 | UDS_SETBUDDYINT as u32,
-                        control_x + 80, y, 18, 22, id + 1000, state.font,
-                    );
-                    SendMessageW(spin, UDM_SETRANGE32, WPARAM(*min as usize), LPARAM(*max as isize));
-                    SendMessageW(
-                        spin,
-                        UDM_SETPOS32,
-                        WPARAM(0),
-                        LPARAM(value.parse::<i32>().unwrap_or(*min as i32) as isize),
-                    );
-                    (edit, Kind::Number)
-                }
-                FieldKind::Hotkey { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
-                    let hwnd = control_ex(
-                        parent, instance, WS_EX_CLIENTEDGE, w!("msctls_hotkey32"), "",
-                        (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0,
-                        control_x, y, CONTROL_WIDTH, 22, id, state.font,
-                    );
-                    let (key, modifiers) = to_hotkey_control(&value);
-                    SendMessageW(
-                        hwnd,
-                        HKM_SETHOTKEY,
-                        WPARAM((key as usize) | ((modifiers as usize) << 8)),
-                        LPARAM(0),
-                    );
-                    (hwnd, Kind::Hotkey)
-                }
-                FieldKind::Text { .. } => {
-                    static_text(parent, instance, &field.label, MARGIN, y + 3, LABEL_WIDTH, 18, state.font);
-                    let hwnd = control_ex(
-                        parent, instance, WS_EX_CLIENTEDGE, w!("EDIT"), &value,
-                        (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-                        control_x, y, CONTROL_WIDTH, 22, id, state.font,
-                    );
-                    (hwnd, Kind::Edit)
-                }
-            };
-
-            state.controls.push(Bound {
-                id,
-                field: field.clone(),
-                section: page.section.clone(),
-                hwnd,
-                kind,
-            });
-            id += 1;
+    }
+    if page.section == crate::pet::ID {
+        static_text(
+            parent,
+            instance,
+            "桌面上的小伙伴。截图反馈和工具通知可由宠物转达。",
+            left,
+            y + 7,
+            LABEL_WIDTH + CONTROL_WIDTH,
+            23,
+            state.font,
+        );
+        groups.push((y, y + 37));
+        y += 61;
+    }
+    for (index, field) in page.fields.iter().enumerate() {
+        if page.section == crate::pet::ID && field.key == "size" {
+            continue;
+        }
+        let group = match (page.section.as_str(), field.key.as_str(), index) {
+            ("desktop-pet", "startup", _) => Some("宠物"),
+            ("general", "autostart", _) => Some("启动"),
+            ("desktop-pet", "coat", _) => Some("形象"),
+            ("desktop-pet", "alert-sound", _) => Some("通知"),
+            (_, _, 0) => Some(page.title.as_str()),
+            _ => None,
+        };
+        if page.section == crate::pet::ID && field.key == "alert-sound" {
+            control(
+                parent,
+                instance,
+                w!("BUTTON"),
+                "打开素材文件夹",
+                (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_OWNERDRAW as u32,
+                left,
+                y,
+                124,
+                25,
+                OPEN_PETS_ID,
+                state.font,
+            );
             y += ROW_HEIGHT;
-
-            if let Some(help) = &field.help {
+            groups.push((group_start, y + 3));
+            y += 25;
+            static_text(
+                parent,
+                instance,
+                "更多形象",
+                left,
+                y,
+                LABEL_WIDTH,
+                24,
+                state.title_font,
+            );
+            y += 32;
+            group_start = y;
+            y += 7;
+            for (index, entry) in crate::pet_download::catalog().iter().enumerate() {
                 static_text(
-                    parent, instance, help,
-                    MARGIN + 2, y - 6, WINDOW_WIDTH - MARGIN * 2, 18, state.font,
+                    parent,
+                    instance,
+                    &entry.name,
+                    left,
+                    y,
+                    LABEL_WIDTH,
+                    20,
+                    state.font,
                 );
-                y += HELP_HEIGHT;
+                static_text(
+                    parent,
+                    instance,
+                    &entry.credit,
+                    left,
+                    y + 21,
+                    LABEL_WIDTH,
+                    18,
+                    state.font,
+                );
+                let installed = crate::pet_download::installed(&entry.id);
+                let button = control(
+                    parent,
+                    instance,
+                    w!("BUTTON"),
+                    if installed { "已安装" } else { "下载" },
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_OWNERDRAW as u32,
+                    control_x + CONTROL_WIDTH - 66,
+                    y + 7,
+                    66,
+                    25,
+                    DOWNLOAD_ID + index as i32,
+                    state.font,
+                );
+                if installed {
+                    let _ =
+                        windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(button, false);
+                }
+                y += 48;
             }
         }
-        y += MARGIN;
+        if let Some(title) = group {
+            if index != 0 {
+                groups.push((group_start, y + 3));
+                y += 25;
+            }
+            static_text(
+                parent,
+                instance,
+                title,
+                left,
+                y,
+                LABEL_WIDTH,
+                24,
+                state.title_font,
+            );
+            y += 32;
+            group_start = y;
+            y += 7;
+        }
+        let id = FIRST_CONTROL + state.controls.len() as i32;
+        let value = field.value(&state.config.borrow(), &page.section);
+        let (hwnd, kind) = match &field.kind {
+            FieldKind::Number { min, max, .. }
+                if page.section == crate::pet::ID && field.key == "custom-size" =>
+            {
+                static_text(
+                    parent,
+                    instance,
+                    "大小",
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let slider = control(
+                    parent,
+                    instance,
+                    w!("msctls_trackbar32"),
+                    "大小",
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | TBS_NOTICKS,
+                    control_x,
+                    y,
+                    CONTROL_WIDTH,
+                    26,
+                    id,
+                    state.font,
+                );
+                let size = crate::pet::configured_size(&state.config.borrow());
+                SendMessageW(slider, TBM_SETRANGEMIN, WPARAM(0), LPARAM(*min as isize));
+                SendMessageW(slider, TBM_SETRANGEMAX, WPARAM(0), LPARAM(*max as isize));
+                SendMessageW(slider, TBM_SETPOS, WPARAM(1), LPARAM(size as isize));
+                (slider, Kind::Slider)
+            }
+            FieldKind::Toggle { .. } => {
+                static_text(
+                    parent,
+                    instance,
+                    &field.label,
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let hwnd = control(
+                    parent,
+                    instance,
+                    w!("BUTTON"),
+                    &field.label,
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | BS_OWNERDRAW as u32,
+                    control_x + CONTROL_WIDTH - 26,
+                    y,
+                    26,
+                    24,
+                    id,
+                    state.font,
+                );
+                (hwnd, Kind::Check)
+            }
+            FieldKind::Choice { options, .. } => {
+                static_text(
+                    parent,
+                    instance,
+                    &field.label,
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let hwnd = control(
+                    parent,
+                    instance,
+                    w!("COMBOBOX"),
+                    "",
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | CBS_DROPDOWNLIST as u32,
+                    control_x,
+                    y,
+                    CONTROL_WIDTH,
+                    200,
+                    id,
+                    state.font,
+                );
+                let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
+                for (index, (stored, title)) in options.iter().enumerate() {
+                    let text = wide(title);
+                    SendMessageW(
+                        hwnd,
+                        CB_ADDSTRING,
+                        WPARAM(0),
+                        LPARAM(text.as_ptr() as isize),
+                    );
+                    if *stored == value {
+                        SendMessageW(hwnd, CB_SETCURSEL, WPARAM(index), LPARAM(0));
+                    }
+                }
+                (hwnd, Kind::Combo)
+            }
+            FieldKind::Number { min, max, .. } => {
+                static_text(
+                    parent,
+                    instance,
+                    &field.label,
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let edit = control(
+                    parent,
+                    instance,
+                    w!("EDIT"),
+                    &value,
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+                    control_x,
+                    y,
+                    80,
+                    22,
+                    id,
+                    state.font,
+                );
+                // 配一个上下箭头，省得用户手打数字
+                let spin = control(
+                    parent,
+                    instance,
+                    w!("msctls_updown32"),
+                    "",
+                    (WS_CHILD | WS_VISIBLE).0 | UDS_SETBUDDYINT as u32,
+                    control_x + 80,
+                    y,
+                    18,
+                    22,
+                    id + 1000,
+                    state.font,
+                );
+                SendMessageW(
+                    spin,
+                    UDM_SETRANGE32,
+                    WPARAM(*min as usize),
+                    LPARAM(*max as isize),
+                );
+                SendMessageW(
+                    spin,
+                    UDM_SETPOS32,
+                    WPARAM(0),
+                    LPARAM(value.parse::<i32>().unwrap_or(*min as i32) as isize),
+                );
+                (edit, Kind::Number)
+            }
+            FieldKind::Hotkey { .. } => {
+                static_text(
+                    parent,
+                    instance,
+                    &field.label,
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let hwnd = control_ex(
+                    parent,
+                    instance,
+                    WS_EX_CLIENTEDGE,
+                    w!("msctls_hotkey32"),
+                    "",
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0,
+                    control_x,
+                    y,
+                    CONTROL_WIDTH,
+                    22,
+                    id,
+                    state.font,
+                );
+                let (key, modifiers) = to_hotkey_control(&value);
+                SendMessageW(
+                    hwnd,
+                    HKM_SETHOTKEY,
+                    WPARAM((key as usize) | ((modifiers as usize) << 8)),
+                    LPARAM(0),
+                );
+                (hwnd, Kind::Hotkey)
+            }
+            FieldKind::Text { .. } => {
+                static_text(
+                    parent,
+                    instance,
+                    &field.label,
+                    left,
+                    y + 3,
+                    LABEL_WIDTH,
+                    24,
+                    state.font,
+                );
+                let hwnd = control_ex(
+                    parent,
+                    instance,
+                    WS_EX_CLIENTEDGE,
+                    w!("EDIT"),
+                    &value,
+                    (WS_CHILD | WS_VISIBLE | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+                    control_x,
+                    y,
+                    CONTROL_WIDTH,
+                    22,
+                    id,
+                    state.font,
+                );
+                (hwnd, Kind::Edit)
+            }
+        };
+
+        state.controls.push(Bound {
+            id,
+            field: field.clone(),
+            section: page.section.clone(),
+            hwnd,
+            kind,
+        });
+
+        y += ROW_HEIGHT;
+
+        if let Some(help) = field.help.as_ref().filter(|_| kind != Kind::Slider) {
+            static_text(
+                parent,
+                instance,
+                help,
+                left,
+                y - 6,
+                LABEL_WIDTH + CONTROL_WIDTH,
+                20,
+                state.font,
+            );
+            y += HELP_HEIGHT;
+        }
     }
+    if !page.fields.is_empty() {
+        groups.push((group_start, y + 3));
+    }
+    if page.section == "general" {
+        y += 28;
+        static_text(
+            parent,
+            instance,
+            "语言",
+            left,
+            y,
+            LABEL_WIDTH,
+            24,
+            state.title_font,
+        );
+        y += 33;
+        static_text(
+            parent,
+            instance,
+            "界面语言",
+            left,
+            y + 9,
+            LABEL_WIDTH,
+            24,
+            state.font,
+        );
+        static_text(
+            parent,
+            instance,
+            "简体中文",
+            control_x + CONTROL_WIDTH - 62,
+            y + 9,
+            62,
+            24,
+            state.font,
+        );
+        groups.push((y, y + 39));
+        y += 39;
+    }
+    (y + MARGIN, groups)
 }
 
 unsafe fn static_text(
@@ -352,32 +762,21 @@ unsafe fn static_text(
     font: HFONT,
 ) {
     control(
-        parent, instance, w!("STATIC"), text,
+        parent,
+        instance,
+        w!("STATIC"),
+        text,
         (WS_CHILD | WS_VISIBLE).0,
-        x, y, width, height, 0, font,
+        x,
+        y,
+        width,
+        height,
+        0,
+        font,
     );
 }
 
 /// `SS_ETCHEDHORZ` 的原始值 —— windows crate 没导出这个静态控件样式常量。
-const SS_ETCHEDHORZ: u32 = 0x0000_0010;
-
-/// 一条横向蚀刻线（页与页之间的分隔）。
-unsafe fn separator(
-    parent: HWND,
-    instance: HINSTANCE,
-    x: i32,
-    y: i32,
-    width: i32,
-    font: HFONT,
-) {
-    control(
-        parent, instance, w!("STATIC"), "",
-        (WS_CHILD | WS_VISIBLE).0 | SS_ETCHEDHORZ,
-        x, y, width, 4, 0, font,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
 unsafe fn control(
     parent: HWND,
     instance: HINSTANCE,
@@ -391,7 +790,20 @@ unsafe fn control(
     id: i32,
     font: HFONT,
 ) -> HWND {
-    control_ex(parent, instance, Default::default(), class, text, style, x, y, width, height, id, font)
+    control_ex(
+        parent,
+        instance,
+        Default::default(),
+        class,
+        text,
+        style,
+        x,
+        y,
+        width,
+        height,
+        id,
+        font,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -561,7 +973,10 @@ unsafe fn collect_children(parent: HWND) -> Vec<(HWND, i32, i32)> {
     found
 }
 
-unsafe extern "system" fn collect_one(child: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
+unsafe extern "system" fn collect_one(
+    child: HWND,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::BOOL {
     use windows::Win32::Foundation::{POINT, RECT, TRUE};
     use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::UI::WindowsAndMessaging::{GetParent, GetWindowRect};
@@ -618,7 +1033,10 @@ unsafe fn scroll_to(hwnd: HWND, state: &mut SettingsState, target: i32) {
         return;
     }
     state.scroll_y = clamped;
-    for (child, design_x, design_y) in &state.children {
+    let Some(page) = state.pages.get(state.selected) else {
+        return;
+    };
+    for (child, design_x, design_y) in &page.children {
         let _ = SetWindowPos(
             *child,
             None,
@@ -626,12 +1044,200 @@ unsafe fn scroll_to(hwnd: HWND, state: &mut SettingsState, target: i32) {
             design_y - state.scroll_y,
             0,
             0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
         );
     }
     configure_scrollbar(hwnd, state);
 }
 
+pub(crate) fn page_icon(section: &str) -> u16 {
+    match section {
+        "hotkey" => 0xe765,
+        "about" => 0xe946,
+        "claudecode" => 0xe756,
+        "aitools" => 0xe943,
+        "screenshot" => 0xe722,
+        "clipboard" => 0xe77f,
+        "caffeinate" => 0xec32,
+        "windowmanager" => 0xe737,
+        "keyboardnav" => 0xe765,
+        "desktop-pet" => 0xed54,
+        _ => 0xe713,
+    }
+}
+
+unsafe fn select_page(hwnd: HWND, state: &mut SettingsState, index: usize) {
+    if index == state.selected || index >= state.pages.len() {
+        return;
+    }
+    let old = &state.pages[state.selected];
+    for (child, _, _) in &old.children {
+        let _ = ShowWindow(*child, SW_HIDE);
+    }
+    let _ = InvalidateRect(old.nav, None, false);
+    state.selected = index;
+    state.scroll_y = 0;
+    let page = &state.pages[index];
+    state.content_height = page.height;
+    for (child, x, y) in &page.children {
+        let _ = SetWindowPos(
+            *child,
+            None,
+            *x,
+            *y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+    let _ = InvalidateRect(page.nav, None, false);
+    let _ = InvalidateRect(hwnd, None, false);
+    configure_scrollbar(hwnd, state);
+}
+
+fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+    RECT {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+unsafe fn fill(dc: HDC, rect: RECT, color: COLORREF) {
+    let brush = CreateSolidBrush(color);
+    FillRect(dc, &rect, brush);
+    let _ = DeleteObject(brush);
+}
+
+unsafe fn rounded(dc: HDC, rect: RECT, radius: i32, color: COLORREF, border: COLORREF) {
+    let brush = CreateSolidBrush(color);
+    let pen = CreatePen(PS_SOLID, 1, border);
+    let previous_brush = SelectObject(dc, brush);
+    let previous_pen = SelectObject(dc, pen);
+    let _ = RoundRect(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        radius,
+        radius,
+    );
+    SelectObject(dc, previous_brush);
+    SelectObject(dc, previous_pen);
+    let _ = DeleteObject(brush);
+    let _ = DeleteObject(pen);
+}
+
+unsafe fn paint_settings(hwnd: HWND, state: &SettingsState) {
+    let mut paint = PAINTSTRUCT::default();
+    let dc = BeginPaint(hwnd, &mut paint);
+    let mut client = RECT::default();
+    let _ = GetClientRect(hwnd, &mut client);
+    fill(dc, client, BACK);
+    fill(dc, rect(0, 0, SIDEBAR, client.bottom), SIDEBAR_BACK);
+    fill(
+        dc,
+        rect(SIDEBAR - 1, 0, SIDEBAR, client.bottom),
+        COLORREF(0x3f3f3e),
+    );
+    if let Some(page) = state.pages.get(state.selected) {
+        for &(top, bottom) in &page.groups {
+            rounded(
+                dc,
+                rect(
+                    SIDEBAR + MARGIN,
+                    top - state.scroll_y,
+                    client.right - MARGIN,
+                    bottom - state.scroll_y,
+                ),
+                10,
+                PANEL,
+                COLORREF(0x444443),
+            );
+        }
+    }
+    let _ = EndPaint(hwnd, &paint);
+}
+
+unsafe fn draw_nav(item: &DRAWITEMSTRUCT, state: &SettingsState) {
+    let index = (item.CtlID as i32 - NAV_ID) as usize;
+    let Some(page) = state.pages.get(index) else {
+        return;
+    };
+    let dc = item.hDC;
+    let bounds = item.rcItem;
+    let selected = state.selected == index;
+    let focused = item.itemState.0 & (ODS_FOCUS.0 | ODS_SELECTED.0) != 0;
+    fill(dc, bounds, SIDEBAR_BACK);
+    if selected || focused {
+        let color = if selected { BLUE } else { COLORREF(0x403c35) };
+        rounded(dc, bounds, 9, color, color);
+    }
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, if selected { TEXT } else { COLORREF(0xf89926) });
+    let old = SelectObject(dc, state.icon_font);
+    DrawTextW(
+        dc,
+        &mut [page.icon],
+        &mut rect(8, 0, 30, bounds.bottom),
+        DT_SINGLELINE | DT_VCENTER,
+    );
+    SelectObject(dc, state.font);
+    SetTextColor(dc, if selected { TEXT } else { COLORREF(0xd6d6d6) });
+    let mut text = [0u16; 128];
+    let len = GetWindowTextW(item.hwndItem, &mut text).max(0) as usize;
+    DrawTextW(
+        dc,
+        &mut text[..len],
+        &mut rect(33, 0, bounds.right - 8, bounds.bottom),
+        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+    );
+    SelectObject(dc, old);
+}
+
+unsafe fn draw_action(item: &DRAWITEMSTRUCT, font: HFONT) {
+    let dc = item.hDC;
+    let mut bounds = item.rcItem;
+    let pressed = item.itemState.0 & ODS_SELECTED.0 != 0;
+    let disabled = item.itemState.0 & windows::Win32::UI::Controls::ODS_DISABLED.0 != 0;
+    fill(dc, bounds, PANEL);
+    rounded(
+        dc,
+        bounds,
+        8,
+        COLORREF(if pressed { 0x5b5b59 } else { 0x414140 }),
+        COLORREF(0x575756),
+    );
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, if disabled { MUTED } else { TEXT });
+    let old = SelectObject(dc, font);
+    let mut label = [0u16; 48];
+    let len = GetWindowTextW(item.hwndItem, &mut label).max(0) as usize;
+    DrawTextW(
+        dc,
+        &mut label[..len],
+        &mut bounds,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+    );
+    SelectObject(dc, old);
+}
+unsafe fn draw_switch(item: &DRAWITEMSTRUCT, checked: bool) {
+    let dc = item.hDC;
+    fill(dc, item.rcItem, PANEL);
+    let color = if checked { BLUE } else { COLORREF(0x555554) };
+    let focused = item.itemState.0 & ODS_FOCUS.0 != 0;
+    rounded(
+        dc,
+        rect(0, 4, 26, 20),
+        16,
+        color,
+        if focused { MUTED } else { color },
+    );
+    let x = if checked { 12 } else { 2 };
+    rounded(dc, rect(x, 6, x + 12, 18), 12, TEXT, TEXT);
+}
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
     message: u32,
@@ -648,7 +1254,127 @@ unsafe extern "system" fn wndproc(
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            handle_command(state, id, code);
+            if id == OPEN_PETS_ID {
+                if let Some(directory) = crate::pet_pack::directory() {
+                    if std::fs::create_dir_all(&directory).is_ok() {
+                        let folder = wide(&directory.to_string_lossy());
+                        let _ = windows::Win32::UI::Shell::ShellExecuteW(
+                            hwnd,
+                            w!("open"),
+                            PCWSTR(folder.as_ptr()),
+                            None,
+                            None,
+                            SW_SHOWNORMAL,
+                        );
+                    }
+                }
+                return LRESULT(0);
+            }
+            if id >= DOWNLOAD_ID {
+                (state.on_download)((id - DOWNLOAD_ID) as usize);
+                return LRESULT(0);
+            }
+            if let Some(index) = id
+                .checked_sub(NAV_ID)
+                .filter(|id| (0..FIRST_CONTROL - NAV_ID).contains(id))
+            {
+                select_page(hwnd, state, index as usize);
+            } else {
+                handle_command(state, id, code);
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            paint_settings(hwnd, state);
+            LRESULT(0)
+        }
+        WM_DRAWITEM => {
+            let item = &*(lparam.0 as *const DRAWITEMSTRUCT);
+            if (NAV_ID..FIRST_CONTROL).contains(&(wparam.0 as i32)) {
+                draw_nav(item, state);
+            } else if item.CtlID >= OPEN_PETS_ID as u32 {
+                draw_action(item, state.font);
+            } else if let Some(bound) = state
+                .controls
+                .iter()
+                .find(|bound| bound.id == item.CtlID as i32 && bound.kind == Kind::Check)
+            {
+                let checked = bound.field.value(&state.config.borrow(), &bound.section) == "true";
+                draw_switch(item, checked);
+            }
+            LRESULT(1)
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+            let dc = HDC(wparam.0 as _);
+            SetTextColor(dc, TEXT);
+            if message == WM_CTLCOLORSTATIC
+                && SendMessageW(HWND(lparam.0 as _), WM_GETFONT, WPARAM(0), LPARAM(0)).0
+                    == state.title_font.0 as isize
+            {
+                SetBkColor(dc, BACK);
+                return LRESULT(state.background_brush.0 as isize);
+            }
+            SetBkColor(dc, PANEL);
+            LRESULT(state.panel_brush.0 as isize)
+        }
+        WM_NOTIFY => {
+            let header = &*(lparam.0 as *const windows::Win32::UI::Controls::NMHDR);
+            if header.code == NM_CUSTOMDRAW
+                && state
+                    .controls
+                    .iter()
+                    .any(|bound| bound.hwnd == header.hwndFrom && bound.kind == Kind::Slider)
+            {
+                let draw = &*(lparam.0 as *const NMCUSTOMDRAW);
+                if draw.dwDrawStage == CDDS_PREPAINT {
+                    let mut thumb = RECT::default();
+                    SendMessageW(
+                        header.hwndFrom,
+                        TBM_GETTHUMBRECT,
+                        WPARAM(0),
+                        LPARAM(&mut thumb as *mut RECT as isize),
+                    );
+                    let mut client = RECT::default();
+                    let _ = GetClientRect(header.hwndFrom, &mut client);
+                    let width = client.right;
+                    let y = client.bottom / 2;
+                    let x = (thumb.left + thumb.right) / 2;
+                    fill(draw.hdc, client, PANEL);
+                    rounded(
+                        draw.hdc,
+                        rect(8, y - 2, width - 8, y + 2),
+                        4,
+                        COLORREF(0x494948),
+                        COLORREF(0x494948),
+                    );
+                    if x > 8 {
+                        rounded(draw.hdc, rect(8, y - 2, x, y + 2), 4, BLUE, BLUE);
+                    }
+                    rounded(draw.hdc, rect(x - 9, y - 9, x + 9, y + 9), 18, TEXT, TEXT);
+                    return LRESULT(CDRF_SKIPDEFAULT as isize);
+                }
+            }
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_HSCROLL if lparam.0 != 0 => {
+            let slider = HWND(lparam.0 as _);
+            if let Some(bound) = state
+                .controls
+                .iter()
+                .find(|bound| bound.hwnd == slider && bound.kind == Kind::Slider)
+            {
+                let value = SendMessageW(slider, TBM_GETPOS, WPARAM(0), LPARAM(0))
+                    .0
+                    .to_string();
+                let mut config = state.config.borrow_mut();
+                if config.get(&bound.section, "size") != Some("custom")
+                    || config.get(&bound.section, "custom-size") != Some(value.as_str())
+                {
+                    config.set(&bound.section, "size", "custom");
+                    bound.field.store(&mut config, &bound.section, &value);
+                    (state.on_change)(&config);
+                }
+            }
             LRESULT(0)
         }
         WM_VSCROLL => {
@@ -695,6 +1421,9 @@ unsafe extern "system" fn wndproc(
                 let _ = DeleteObject(state.title_font);
             }
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            let _ = DeleteObject(state.panel_brush);
+            let _ = DeleteObject(state.background_brush);
+            let _ = DeleteObject(state.icon_font);
             drop(Box::from_raw(pointer));
             LRESULT(0)
         }
@@ -721,8 +1450,10 @@ unsafe fn handle_command(state: &mut SettingsState, id: i32, code: u32) {
             from_hotkey_control((packed & 0xFF) as u8, ((packed >> 8) & 0xFF) as u8)
         }
         Kind::Check => {
-            let checked = SendMessageW(hwnd, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as u32;
-            if checked == BST_CHECKED.0 { "true" } else { "false" }.to_string()
+            if code != BN_CLICKED {
+                return;
+            }
+            (bound.field.value(&state.config.borrow(), &bound.section) != "true").to_string()
         }
         Kind::Combo => {
             if code != CBN_SELCHANGE {
@@ -737,6 +1468,7 @@ unsafe fn handle_command(state: &mut SettingsState, id: i32, code: u32) {
                 _ => return,
             }
         }
+        Kind::Slider => return,
         Kind::Edit | Kind::Number => {
             if code != EN_CHANGE {
                 return;
@@ -746,10 +1478,28 @@ unsafe fn handle_command(state: &mut SettingsState, id: i32, code: u32) {
     };
 
     let bound = &state.controls[index];
+    if bound.section == "general" && bound.field.key == "autostart" {
+        if let Err(error) = set_starts_at_login(value == "true") {
+            let message = wide(&format!("无法修改开机启动：{error}"));
+            let _ = MessageBoxW(
+                GetParent(hwnd).unwrap_or_default(),
+                PCWSTR(message.as_ptr()),
+                w!("BaoBox"),
+                MB_OK | MB_ICONWARNING,
+            );
+            return;
+        }
+        bound
+            .field
+            .store(&mut state.config.borrow_mut(), &bound.section, &value);
+        let _ = InvalidateRect(hwnd, None, false);
+        return;
+    }
     {
         let mut config = state.config.borrow_mut();
         bound.field.store(&mut config, &bound.section, &value);
     }
+    let _ = InvalidateRect(hwnd, None, false);
     (state.on_change)(&state.config.borrow());
 }
 
@@ -772,6 +1522,125 @@ unsafe fn window_text(hwnd: HWND) -> String {
 }
 
 /// 关掉设置窗口。
+unsafe fn starts_at_login() -> bool {
+    let mut length = 0;
+    RegGetValueW(
+        HKEY_CURRENT_USER,
+        RUN_KEY,
+        RUN_VALUE,
+        RRF_RT_REG_SZ,
+        None,
+        None,
+        Some(&mut length),
+    )
+    .is_ok()
+}
+
+unsafe fn set_starts_at_login(enabled: bool) -> Result<(), String> {
+    if enabled {
+        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        let command = wide(&format!("\"{}\"", exe.display()));
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            RUN_VALUE,
+            REG_SZ.0,
+            Some(command.as_ptr().cast()),
+            (command.len() * 2) as u32,
+        )
+        .ok()
+        .map_err(|error| error.to_string())
+    } else {
+        let result = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE);
+        if result == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        result.ok().map_err(|error| error.to_string())
+    }
+}
+
+pub unsafe fn route_input(hwnd: HWND, message: &MSG) -> bool {
+    if message.message == WM_MOUSEWHEEL && GetAncestor(message.hwnd, GA_ROOT) == hwnd {
+        SendMessageW(hwnd, WM_MOUSEWHEEL, message.wParam, message.lParam);
+        return true;
+    }
+    IsDialogMessageW(hwnd, message).as_bool()
+}
+pub fn refresh_pet(hwnd: HWND, config: &Config) {
+    unsafe {
+        let mut class = [0u16; 32];
+        let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        if class[..len] != *CLASS_NAME.as_wide() {
+            return;
+        }
+        let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SettingsState;
+        let Some(state) = pointer.as_mut() else {
+            return;
+        };
+        let mut catalog_changed = false;
+        for (index, entry) in crate::pet_download::catalog().iter().enumerate() {
+            let Ok(button) = GetDlgItem(hwnd, DOWNLOAD_ID + index as i32) else {
+                continue;
+            };
+            let installed = crate::pet_download::installed(&entry.id);
+            let enabled =
+                windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(button).as_bool();
+            if installed == enabled {
+                catalog_changed = true;
+                let _ = SetWindowTextW(
+                    button,
+                    if installed {
+                        w!("已安装")
+                    } else {
+                        w!("下载")
+                    },
+                );
+                let _ =
+                    windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow(button, !installed);
+            }
+        }
+        let section = crate::pet::ID;
+        let old_character = state
+            .config
+            .borrow()
+            .string_or(section, "character", "plush-cat");
+        let character = config.string_or(section, "character", "plush-cat");
+        if catalog_changed || old_character != character {
+            if let Some(bound) = state
+                .controls
+                .iter_mut()
+                .find(|bound| bound.section == section && bound.field.key == "character")
+            {
+                if let FieldKind::Choice { options, .. } = &mut bound.field.kind {
+                    *options = std::iter::once((String::new(), "内置像素猫".into()))
+                        .chain(
+                            crate::pet_pack::list()
+                                .into_iter()
+                                .map(|entry| (entry.id, entry.name)),
+                        )
+                        .collect();
+                    SendMessageW(bound.hwnd, CB_RESETCONTENT, WPARAM(0), LPARAM(0));
+                    for (index, (id, label)) in options.iter().enumerate() {
+                        let label = wide(label);
+                        SendMessageW(
+                            bound.hwnd,
+                            CB_ADDSTRING,
+                            WPARAM(0),
+                            LPARAM(label.as_ptr() as isize),
+                        );
+                        if *id == character {
+                            SendMessageW(bound.hwnd, CB_SETCURSEL, WPARAM(index), LPARAM(0));
+                        }
+                    }
+                }
+            }
+        }
+        let mut config = config.clone();
+        config.set_bool("general", "autostart", starts_at_login());
+        state.config.replace(config);
+    }
+}
+
 pub fn close(hwnd: HWND) {
     unsafe {
         let _ = DestroyWindow(hwnd);
@@ -797,7 +1666,13 @@ mod tests {
 
     #[test]
     fn hotkeys_survive_a_round_trip_through_the_native_control() {
-        for text in ["Ctrl+Shift+S", "Alt+F4", "Ctrl+Alt+P", "Ctrl+Space", "PrintScreen"] {
+        for text in [
+            "Ctrl+Shift+S",
+            "Alt+F4",
+            "Ctrl+Alt+P",
+            "Ctrl+Space",
+            "PrintScreen",
+        ] {
             let (key, modifiers) = to_hotkey_control(text);
             let back = from_hotkey_control(key, modifiers);
             assert_eq!(
@@ -828,12 +1703,19 @@ mod tests {
     fn the_win_key_is_dropped_rather_than_silently_mismapped() {
         // 控件里没有 Win 位；转进去时丢掉，不能错当成别的修饰键
         let (_, modifiers) = to_hotkey_control("Super+S");
-        assert_eq!(modifiers, 0, "Win 键不该被映射成 Ctrl/Alt/Shift 里的任何一个");
+        assert_eq!(
+            modifiers, 0,
+            "Win 键不该被映射成 Ctrl/Alt/Shift 里的任何一个"
+        );
     }
 
     #[test]
     fn the_window_grows_with_the_number_of_settings() {
-        let one = window_height(&[SettingsPage::new("s", "一项", vec![Field::toggle("a", "开关", true)])]);
+        let one = window_height(&[SettingsPage::new(
+            "s",
+            "一项",
+            vec![Field::toggle("a", "开关", true)],
+        )]);
         let many = window_height(&[page()]);
         assert!(many > one, "多几项就该高一些，否则控件会被挤到窗口外");
         // 带说明的那一项要多留一行
