@@ -94,9 +94,9 @@ enum VRMMotion {
         return 2 * leg * sinf(Float(runSwing * .pi / 180)) / Float(runStance * runCycle)
     }
 
-    /// 不坐到地上：VRoid 的裙子没有布料模拟，大腿一往前抬（坐、跪、蹲）裙子不会搭在腿上，
-    /// 略俯视的相机会看到裙底（实测正座 + 双手放腿上也挡不住）。所以睡觉是站着打盹，喝水 / 吃东西站着捧杯。
-    /// 片段名沿用健康提醒与互动认的 sit_down / sit_hold_drink / stand_up（捧起 → 喝两口 → 放下）。
+    /// 喝水 / 吃东西站着捧杯（片段名沿用健康提醒与互动认的 sit_down / sit_hold_drink / stand_up：捧起 → 喝两口 → 放下）。
+    /// 睡觉（2026-11-08 起）：侧身坐到地上、双手抱膝、头歪着闭眼（`hugKnees`）；正对镜头会看到裙底，
+    /// 所以睡着时宠物视图把人固定侧过去（PetModelView.sleepYaw）。最早是站着打盹（`dozing`，现在不用了）。
     static func definitions(body: VRMBody) -> [Definition] {
         let both: [VRMSide] = [.left, .right]
         return [
@@ -104,16 +104,9 @@ enum VRMMotion {
             Definition(name: "walk", duration: walkCycle, pose: walk),
             Definition(name: "wave", duration: 2.6, plant: both, pose: wave),
             Definition(name: "bye", duration: 0.55, plant: both, pose: bye),
-            Definition(name: "sleep", duration: 1.8, plant: both) { t in
-                var p = blend(idle(t), dozing(body), ramp(t, 0, 1.6))
-                p.expressions["blink"] = Float(ramp(t, 0.8, 1.7))
-                return p
-            },
-            Definition(name: "get_up", duration: 1.4, plant: both) { t in
-                var p = blend(dozing(body), idle(t), ramp(t, 0.1, 1.2))
-                p.expressions["blink"] = Float(1 - ramp(t, 0, 0.35))
-                return p
-            },
+            // 腿由片段自己摆（先蹲、再坐到地上抱膝），不钉脚。起身是坐下倒着播（眼睛先睁开）。
+            Definition(name: "sleep", duration: sleepDownDuration) { t in sleepDown(t, body: body) },
+            Definition(name: "get_up", duration: 2.0) { t in sleepDown(sleepDownDuration * (1 - t / 2.0), body: body) },
             Definition(name: "sit_down", duration: 1.0, plant: both) { t in holdingCup(t, lift: ramp(t, 0, 1.0), sip: 0, chewing: false) },
             Definition(name: "sit_hold_drink", duration: 3.2, plant: both) { t in holdingCup(t, lift: 1, sip: sips(t), chewing: false) },
             Definition(name: "sit_hold_eat", duration: 3.2, plant: both) { t in holdingCup(t, lift: 1, sip: sips(t), chewing: true) },
@@ -422,7 +415,7 @@ enum VRMMotion {
         return out
     }
 
-    /// 站着打盹（睡觉的最后一帧，场景随后暂停）：低头、头歪向一边、肩膀和手臂松下来、膝盖微屈，闭眼。
+    /// 站着打盹（2026-11-08 前睡觉的最后一帧，现在睡觉改成坐地抱膝 `hugKnees`，保留备用）：低头、头歪向一边、肩膀和手臂松下来、膝盖微屈，闭眼。
     static func dozing(_ body: VRMBody) -> VRMPose {
         var p = stand()
         for side in [VRMSide.left, .right] {
@@ -436,6 +429,43 @@ enum VRMMotion {
         p.bend("head", pitch: 22, roll: 9)
         p.shrug(-2)
         p.expressions["blink"] = 1
+        return p
+    }
+
+    /// 睡觉的最后一帧（场景随后暂停）：侧身坐在地上抱膝打盹 —— 屁股着地、胯往后靠，两条大腿抬得很陡、膝盖并拢，
+    /// 小腿收回来脚掌踩地，两臂环住膝盖、手搭在膝头；上身只微微前倾，头歪向一边（往右肩靠、脸往右转 32°：侧过去时脸朝着镜头，不被头发挡住），闭眼。
+    /// 头发没有物理：上身 + 头加起来前倾太多（超过约 30°），双马尾会整片横着翘出去，所以不把头埋到膝盖上。
+    /// 角度是用 three.js + three-vrm 照这份代码移植后，对着两个模型逐个方向渲染调出来的（正面能看到裙底，靠侧身挡）。
+    static func hugKnees(body: VRMBody) -> VRMPose {
+        var p = stand()
+        p.hips.y = 0.095 * body.height - body.hipsHeight
+        let pelvis = qx(-14)
+        p.rotations["hips"] = pelvis
+        for side in [VRMSide.left, .right] {
+            // 大腿往前上抬到与竖直向下成 154°（胯往后靠了 14°，所以局部只转 140°），膝盖往里并拢 ——
+            // 并得不够时大腿下面露出一小条裙底（凍香，侧转 1 弧度时）。
+            let thigh = qy(-side.sign * 9) * qx(-140)
+            let knee = qx(128)
+            p.rotations[side.name + "UpperLeg"] = thigh
+            p.rotations[side.name + "LowerLeg"] = knee
+            p.rotations[side.name + "Foot"] = (pelvis * thigh * knee).inverse
+            p.arm(side, elevation: -38, forward: 72, elbow: 72, twist: 40)
+        }
+        p.bend("spine", pitch: 16)
+        p.bend("chest", pitch: 10)
+        p.bend("neck", pitch: 4)
+        p.bend("head", pitch: 6, yaw: -32, roll: 18)
+        p.shrug(-2)
+        p.expressions["blink"] = 1
+        return p
+    }
+
+    /// 睡下（sleepDownDuration 秒，播完停住）：先蹲下去，再坐到地上抱住膝盖，最后闭眼。
+    static let sleepDownDuration = 2.4
+    static func sleepDown(_ t: Double, body: VRMBody) -> VRMPose {
+        let crouch = squatting(0, body: body, depth: 0.8 * smooth(t / 0.9))
+        var p = blend(crouch, hugKnees(body: body), smooth((t - 0.7) / 1.4))
+        p.expressions["blink"] = Float(ramp(t, 1.4, 2.3))
         return p
     }
 
