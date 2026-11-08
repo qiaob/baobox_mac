@@ -49,6 +49,7 @@ const INTERACTIONS: [(&str, &str, &str); 7] = [
 const SIT: &str = "desktop-pet.sit";
 const PEEK: &str = "desktop-pet.peek";
 const UNPERCH: &str = "desktop-pet.unperch";
+pub const NEXT_CHARACTER: &str = "desktop-pet.next-character";
 const CLASS: PCWSTR = w!("BaoboxDesktopPet");
 const KEY: COLORREF = COLORREF(0xff00ff);
 thread_local! {
@@ -528,6 +529,16 @@ impl ToolModule for PetTool {
     }
 
     fn perform(&mut self, action: &str) -> Result<String, String> {
+        if action == NEXT_CHARACTER {
+            let entries = pet_pack::list();
+            let next = entries
+                .iter()
+                .position(|entry| entry.id == self.character)
+                .map_or(0, |index| (index + 1) % entries.len());
+            let entry = &entries[next];
+            self.select(&entry.id)?;
+            return Ok(format!("已换成{}", entry.name));
+        }
         if action == PICK_AREA {
             let screen = crate::gdi::virtual_screen();
             let selected = crate::overlay::run(screen, Vec::new())?;
@@ -667,6 +678,7 @@ struct State {
     frame_pending: Arc<AtomicBool>,
     last_window: Cell<Option<HWND>>,
     perched: Cell<Option<(HWND, &'static str)>>,
+    window_scan: RefCell<Option<(Instant, Vec<(HWND, baobox_core::geometry::Rect)>)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -795,6 +807,7 @@ impl PetWindow {
                     frame_pending: Arc::new(AtomicBool::new(false)),
                     last_window: Cell::new(None),
                     perched: Cell::new(None),
+                    window_scan: RefCell::new(None),
                 }),
             };
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*window.state as *const State as isize);
@@ -895,24 +908,24 @@ fn intersect_area(a: RECT, b: RECT) -> Option<RECT> {
     (area.left < area.right && area.top < area.bottom).then_some(area)
 }
 
-unsafe fn window_perch(monitor: RECT, size: i32) -> Option<RECT> {
-    let window = GetForegroundWindow();
-    let mut process = 0;
-    GetWindowThreadProcessId(window, Some(&mut process));
-    if process == 0 || process == std::process::id() || IsZoomed(window).as_bool() {
-        return None;
+fn ledge_segments(
+    frame: baobox_core::geometry::Rect,
+    in_front: &[(HWND, baobox_core::geometry::Rect)],
+) -> Vec<(i32, i32)> {
+    let top = frame.y as i32;
+    let mut segments = vec![(frame.x as i32, (frame.x + frame.w) as i32)];
+    for &(_, cover) in in_front {
+        if cover.y > f64::from(top + 2) || cover.y + cover.h < f64::from(top - 40) {
+            continue;
+        }
+        let cut = (cover.x as i32, (cover.x + cover.w) as i32);
+        segments = segments
+            .into_iter()
+            .flat_map(|(left, right)| [(left, right.min(cut.0)), (left.max(cut.1), right)])
+            .filter(|(left, right)| right - left >= 50)
+            .collect();
     }
-    let frame = crate::gdi::visible_frame(window)?;
-    let area = intersect_area(
-        monitor,
-        RECT {
-            left: frame.x as i32,
-            right: (frame.x + frame.w) as i32,
-            top: monitor.top,
-            bottom: frame.y as i32,
-        },
-    )?;
-    (area.right - area.left >= size && area.bottom - area.top >= size).then_some(area)
+    segments
 }
 
 unsafe fn place(hwnd: HWND, x: i32, y: i32, size: i32) {
@@ -920,6 +933,48 @@ unsafe fn place(hwnd: HWND, x: i32, y: i32, size: i32) {
 }
 
 impl State {
+    fn ledge(&self, monitor: RECT, origin: POINT, size: i32, target: Option<HWND>) -> Option<RECT> {
+        let mut cache = self.window_scan.borrow_mut();
+        if cache
+            .as_ref()
+            .is_none_or(|(time, _)| time.elapsed() >= Duration::from_millis(100))
+        {
+            *cache = Some((Instant::now(), crate::gdi::pet_windows()));
+        }
+        let windows = &cache.as_ref()?.1;
+        let half_body = (size / 5).max(25);
+        windows
+            .iter()
+            .enumerate()
+            .filter(|(_, (hwnd, frame))| {
+                target.map_or(
+                    frame.w >= 160.0
+                        && frame.h >= 100.0
+                        && frame.y >= f64::from(monitor.top + size * 3 / 4),
+                    |wanted| *hwnd == wanted,
+                )
+            })
+            .flat_map(|(index, (_, frame))| {
+                let bottom = frame.y as i32;
+                ledge_segments(*frame, &windows[..index])
+                    .into_iter()
+                    .filter_map(move |(left, right)| {
+                        let left = left.max(monitor.left) + half_body;
+                        let right = right.min(monitor.right) - half_body;
+                        (right >= left && bottom > monitor.top && bottom <= monitor.bottom)
+                            .then_some(RECT {
+                                left: left - size / 2,
+                                right: right - size / 2 + size,
+                                top: monitor.top - size / 4,
+                                bottom,
+                            })
+                    })
+            })
+            .min_by_key(|area| {
+                (origin.x - origin.x.clamp(area.left, area.right - size)).abs()
+                    + (origin.y - (area.bottom - size)).abs()
+            })
+    }
     fn size(&self) -> i32 {
         self.appearance.get().size(
             self.pack
@@ -1010,14 +1065,21 @@ impl State {
                 if let Some(frame) = crate::gdi::visible_frame(target) {
                     let area = work_area(target);
                     let size = self.size();
+                    let origin = POINT {
+                        x: frame.x as i32 + frame.w as i32 * 3 / 4 - size / 2,
+                        y: frame.y as i32 - size,
+                    };
+                    let Some(ledge) = self.ledge(area, origin, size, Some(target)) else {
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        return;
+                    };
                     let anchor = if pose == "peek" {
                         crate::pet_model::PEEK_LINE
                     } else {
                         crate::pet_model::SEAT_LINE
                     };
-                    let x = (frame.x as i32 + frame.w as i32 * 3 / 4 - size / 2)
-                        .clamp(area.left, (area.right - size).max(area.left));
-                    let y = frame.y as i32 - (size as f32 * anchor).round() as i32;
+                    let x = origin.x.clamp(ledge.left, ledge.right - size);
+                    let y = ledge.bottom - (size as f32 * anchor).round() as i32;
                     let _ = self.present(hwnd, Some(&POINT { x, y }));
                     if !IsWindowVisible(hwnd).as_bool() {
                         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -1075,9 +1137,17 @@ impl State {
                             monitor
                         }
                     }
-                    Range::Windows if self.walking() => {
-                        window_perch(monitor, size).unwrap_or(monitor)
-                    }
+                    Range::Windows if self.walking() => self
+                        .ledge(
+                            monitor,
+                            POINT {
+                                x: rect.left,
+                                y: rect.top,
+                            },
+                            size,
+                            None,
+                        )
+                        .unwrap_or(monitor),
                     _ => monitor,
                 };
                 let right = (area.right - size).max(area.left);
@@ -1376,6 +1446,17 @@ unsafe extern "system" fn wndproc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_ledges_exclude_occlusion_near_the_top_edge() {
+        use baobox_core::geometry::Rect;
+        let window = Rect::new(10.0, 200.0, 700.0, 450.0);
+        let fronts = [
+            (HWND::default(), Rect::new(190.0, 150.0, 150.0, 90.0)),
+            (HWND::default(), Rect::new(480.0, 250.0, 90.0, 60.0)),
+        ];
+        assert_eq!(ledge_segments(window, &fronts), vec![(10, 190), (340, 710)]);
+    }
 
     #[test]
     fn toggle_creates_and_destroys_the_native_pet_window() {

@@ -211,6 +211,35 @@ pub fn windows() -> Vec<WindowInfo> {
     found
 }
 
+/// 桌宠用前后层级和可见边界，不读取窗口标题。
+pub fn pet_windows() -> Vec<(HWND, Rect)> {
+    use windows::Win32::Graphics::Dwm::DWMWA_CLOAKED;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetDesktopWindow, GetShellWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+        GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    };
+    unsafe extern "system" fn collect(hwnd: HWND, data: LPARAM) -> BOOL {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 || pid == std::process::id() || hwnd == GetDesktopWindow()
+            || hwnd == GetShellWindow() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool()
+            || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
+            return TRUE;
+        }
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, (&mut cloaked as *mut u32).cast(), 4);
+        if cloaked == 0 {
+            if let Some(frame) = window_frame(hwnd).filter(|frame| frame.w >= 40.0 && frame.h >= 30.0) {
+                (*(data.0 as *mut Vec<(HWND, Rect)>)).push((hwnd, frame));
+            }
+        }
+        TRUE
+    }
+    let mut result = Vec::new();
+    unsafe { let _ = EnumWindows(Some(collect), LPARAM(&mut result as *mut _ as isize)); }
+    result
+}
+
 unsafe extern "system" fn enum_proc(hwnd: HWND, param: LPARAM) -> BOOL {
     let list = &mut *(param.0 as *mut Vec<WindowInfo>);
 

@@ -15,6 +15,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const WM_RING_ACTION: u32 = WM_APP + 5;
 pub const MORE: &str = "desktop-pet.more";
+pub const ADVANCED: &str = "desktop-pet.advanced";
+pub const BACK: &str = "desktop-pet.ring-back";
 pub const ITEMS: [(&str, &str); 8] = [
     (crate::screenshot_module::QUICK_CAPTURE, "截图"),
     (crate::screenshot_module::OCR, "屏幕取字"),
@@ -42,6 +44,7 @@ struct RingState {
     start: Instant,
     hovered: Cell<HWND>,
     settled: Cell<bool>,
+    icons: Vec<u16>,
 }
 
 impl Ring {
@@ -109,6 +112,23 @@ impl Ring {
                     start: Instant::now(),
                     hovered: Cell::new(HWND::default()),
                     settled: Cell::new(false),
+                    icons: items
+                        .iter()
+                        .map(|(action, _)| match *action {
+                            crate::caffeinate_module::TOGGLE | crate::caffeinate_module::STOP => {
+                                0xec32
+                            }
+                            crate::screenshot_module::RECORD => 0xe7c8,
+                            crate::keyboardnav_module::CLICK => 0xe765,
+                            "desktop-pet.next-character" => 0xe8ab,
+                            "app.settings" => 0xe713,
+                            BACK => 0xe72b,
+                            _ => ITEMS
+                                .iter()
+                                .position(|(id, _)| id == action)
+                                .map_or(0xe712, |i| ICONS[i]),
+                        })
+                        .collect(),
                 }),
             };
             SetWindowLongPtrW(
@@ -178,6 +198,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPAR
             draw_button(
                 item,
                 state.is_some_and(|state| state.hovered.get() == item.hwndItem),
+                state
+                    .and_then(|state| state.icons.get(item.CtlID.saturating_sub(1) as usize))
+                    .copied()
+                    .unwrap_or(0xe712),
             );
             return LRESULT(1);
         }
@@ -216,7 +240,7 @@ unsafe fn animate_ring(hwnd: HWND, state: &RingState) {
     if !state.settled.get() {
         let alpha = 100 + (130.0 * (elapsed / 0.22).min(1.0)) as u8;
         let _ = SetLayeredWindowAttributes(hwnd, KEY, alpha, LWA_COLORKEY | LWA_ALPHA);
-        for index in 0..ITEMS.len() {
+        for index in 0..state.icons.len() {
             let age = elapsed - index as f32 * 0.018;
             if age < 0.0 {
                 continue;
@@ -224,7 +248,7 @@ unsafe fn animate_ring(hwnd: HWND, state: &RingState) {
             let Ok(button) = GetDlgItem(hwnd, (index + 1) as i32) else {
                 continue;
             };
-            let angle = index as f32 * std::f32::consts::TAU / ITEMS.len() as f32
+            let angle = index as f32 * std::f32::consts::TAU / state.icons.len() as f32
                 - std::f32::consts::FRAC_PI_2;
             let progress = (age / 0.18).clamp(0.0, 1.0);
             let radius = 1.0 - 0.23 * (1.0 - progress).powi(3);
@@ -261,7 +285,7 @@ unsafe fn animate_ring(hwnd: HWND, state: &RingState) {
     }
 }
 
-unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool) {
+unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
     let dc = item.hDC;
     let bounds = item.rcItem;
     let clear = CreateSolidBrush(KEY);
@@ -317,10 +341,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool) {
         w!("Segoe MDL2 Assets"),
     );
     let old_font = SelectObject(dc, icon_font);
-    let mut icon = [ICONS
-        .get(item.CtlID.saturating_sub(1) as usize)
-        .copied()
-        .unwrap_or(0xe712)];
+    let mut icon = [icon];
     let mut icon_rect = RECT {
         left: center - 21,
         top: 1,
