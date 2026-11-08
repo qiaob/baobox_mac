@@ -86,7 +86,8 @@ const HELP_HEIGHT: i32 = 18;
 const MARGIN: i32 = 16;
 const LABEL_WIDTH: i32 = 220;
 const CONTROL_WIDTH: i32 = 264;
-const WINDOW_WIDTH: i32 = 520;
+// 控件右边要给外框、滚动条和客户区留白。
+const WINDOW_WIDTH: i32 = MARGIN * 2 + LABEL_WIDTH + CONTROL_WIDTH + 40;
 
 /// 配置被改动时的回调。
 pub type OnChange = Box<dyn Fn(&Config)>;

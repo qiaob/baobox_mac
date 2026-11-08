@@ -43,9 +43,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetWindowLongPtrW, ShowWindow,
     TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS, MSG,
-    SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    SW_SHOW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -355,9 +355,7 @@ unsafe extern "system" fn wndproc(
         }
         WM_RBUTTONDOWN => {
             state.editor.key_down(EditorKey::Escape, Modifiers::NONE);
-            if state.editor.outcome().is_some() {
-                PostQuitMessage(0);
-            }
+
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
@@ -366,9 +364,7 @@ unsafe extern "system" fn wndproc(
             let typing = state.editor.pending_text().is_some();
             if let Some(key) = translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
                 state.editor.key_down(key, modifiers);
-                if state.editor.outcome().is_some() {
-                    PostQuitMessage(0);
-                }
+
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
@@ -386,8 +382,8 @@ unsafe extern "system" fn wndproc(
             paint(hwnd, state);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
+        WM_CLOSE => {
+            state.editor.key_down(EditorKey::Escape, Modifiers::NONE);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),

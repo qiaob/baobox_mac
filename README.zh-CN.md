@@ -308,9 +308,9 @@ linux/     Linux（Rust + X11）—— 托盘常驻：与 Windows 相同的六�
 shared/    三平台共用的 Rust 核心（几何 / 选区 / 标注 / 拼接 / 文件名）
 ```
 
-macOS 版是当前唯一完整可用的版本。Windows 与 Linux 是托盘常驻 App，覆盖上面六个工具；
-较新的 Mac 专属工具（会议、听写、桌面宠物、专注与健康、实时与划词翻译）尚未移植，
-详见[多平台架构](docs/multiplatform/ARCHITECTURE.md)。
+Windows 与 Linux 版本均为托盘常驻 App。Windows 还提供桌面宠物，从托盘的「桌面宠物」菜单开启。
+可在同一菜单下载形象，或将自制的形象包放到 `%APPDATA%\Baobox\Pets`，再到设置里选择。
+会议、听写、专注与健康、实时与划词翻译目前由 macOS 版提供。详见[多平台架构](docs/multiplatform/ARCHITECTURE.md)。
 
 ## 从源码构建
 

@@ -43,6 +43,18 @@ mod paste;
 #[cfg(windows)]
 mod pin;
 #[cfg(windows)]
+mod pet;
+#[cfg(windows)]
+mod pet_notify;
+#[cfg(windows)]
+mod pet_pack;
+#[cfg(windows)]
+mod pet_model;
+#[cfg(windows)]
+mod pet_download;
+#[cfg(windows)]
+mod pet_ring;
+#[cfg(windows)]
 mod screenshot_module;
 #[cfg(windows)]
 mod settings_window;
@@ -89,12 +101,15 @@ fn main() {
 
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
-        Some("app") | None => run_app(),
+        #[cfg(windows)]
+        Some("pet-preview") => pet::preview(args.get(1).map(std::path::Path::new), args.get(2).map(String::as_str)),
+        Some("app") => run_app(args.get(1).is_some_and(|arg| arg == "--settings")),
+        None => run_app(false),
         Some("capture") => capture(&args[1..]),
         Some("ocr") => run_ocr(&args[1..]),
         Some("record") => run_record(&args[1..]),
         Some("history") => history(&args[1..]),
-        Some("daemon") => run_app(),
+        Some("daemon") => run_app(false),
         Some("scroll") => scroll(&args[1..]),
         Some("windows") => list_windows(),
         Some("info") => Ok(info()),
@@ -108,6 +123,7 @@ fn usage() -> String {
         "Baobox Windows —— 截图\n\n",
         "用法：\n",
         "  baobox-windows                                 常驻运行：托盘图标 + 全局快捷键 + 设置窗口\n",
+        "  baobox-windows app --settings                  启动并打开设置窗口\n",
         "  baobox-windows capture [-o 输出.png]            交互式（悬停选窗口 · 拖拽选区域 · ⏎ 全屏 · esc 取消）\n",
         "      截完自动进标注编辑器：画框 / 箭头 / 打码 / 写字，再按工具条上的按钮决定去向\n",
         "      --no-edit 跳过编辑，截完直接出图\n",
@@ -528,12 +544,12 @@ fn interactive_target() -> Result<Rect, String> {
 
 /// 常驻：托盘图标 + 全局快捷键 + 设置窗口。
 #[cfg(windows)]
-fn run_app() -> Result<String, String> {
-    app::run()
+fn run_app(show_settings: bool) -> Result<String, String> {
+    app::run(show_settings)
 }
 
 #[cfg(not(windows))]
-fn run_app() -> Result<String, String> {
+fn run_app(_show_settings: bool) -> Result<String, String> {
     Err("本程序只能在 Windows 上运行。".to_string())
 }
 

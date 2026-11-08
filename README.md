@@ -374,9 +374,10 @@ linux/     Linux (Rust + X11) — tray app: same six tools as Windows
 shared/    Rust core shared by all three (geometry, selection, annotation, stitching, filenames)
 ```
 
-macOS is the only complete implementation today. Windows and Linux are tray-resident apps
-covering the six tools above; the newer Mac-only tools (meeting, dictation, desktop pet,
-focus & health, live and selection translation) have not been ported. See
+Windows and Linux run in the system tray. Windows also offers a Desktop Pet menu
+to show the pet and download characters. Put custom packs in `%APPDATA%\Baobox\Pets`
+and select them in Settings. Meeting, dictation, focus & health, live and selection
+translation are available on macOS. See
 [multi-platform architecture](docs/multiplatform/ARCHITECTURE.md) (Chinese).
 
 ## Build from source

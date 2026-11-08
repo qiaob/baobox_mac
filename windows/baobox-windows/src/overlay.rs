@@ -4,14 +4,7 @@
 //! `baobox_core::selection::Selection` —— 悬停高亮窗口、拖拽拉选区、八向手柄、
 //! 方向键微调、⏎ 确认、Esc / 右键取消。
 //!
-//! # 压暗与「挖空」
-//!
-//! 用 `WS_EX_LAYERED` + `LWA_COLORKEY | LWA_ALPHA`：整窗统一半透明，
-//! 但涂成 color key 的像素**完全透明**。于是把选区内部填成 color key，
-//! 就得到「背景压暗、选区透亮」的效果，不需要逐像素 alpha（`UpdateLayeredWindow`）。
-//!
-//! color key 取一个几乎不会与 UI 撞色的值；万一撞了也只是那块跟着透明，
-//! 而覆盖层本身只画压暗层与边框，不存在误伤。
+//! 选区内重绘桌面快照，使其保持明亮，同时保留鼠标命中。
 
 #![cfg(windows)]
 
@@ -20,28 +13,25 @@ use baobox_core::selection::{Key, Outcome, Phase, Selection};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, FrameRect, InvalidateRect,
-    SetBkMode, SetTextColor, TextOutW, HBRUSH, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, FrameRect, GetDC, InvalidateRect, ReleaseDC, SelectObject,
+    SetBkMode, SetTextColor, StretchDIBits, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
-    LoadCursorW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS,
-    LWA_ALPHA, LWA_COLORKEY, MSG, SW_SHOW, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
+    IDC_CROSS, MSG, SW_SHOW, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// 覆盖层窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxCaptureOverlay");
-
-/// 「挖空」用的 color key —— 涂上它的像素完全透明。
-const TRANSPARENT_KEY: u32 = 0x00FF_00FF; // 洋红，BGR 顺序下同值
-
-/// 压暗层的不透明度（0-255）。
-const DIM_ALPHA: u8 = 0x66;
 
 /// 选区边框色（Baobox accent，GDI 是 BGR 顺序）。
 const ACCENT_BGR: u32 = 0x0098_A317;
@@ -63,6 +53,54 @@ struct OverlayState {
     /// 覆盖窗左上角在屏幕坐标里的位置 —— 窗口消息给的是**客户区坐标**，
     /// 而状态机用的是屏幕坐标，两者要来回换算
     origin: (f64, f64),
+    backdrop: crate::gdi::Capture,
+    dimmed: Vec<u8>,
+    surface: Option<Surface>,
+}
+
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+}
+
+impl Surface {
+    unsafe fn new(width: i32, height: i32) -> Option<Self> {
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, width, height);
+        ReleaseDC(None, screen);
+        if dc.is_invalid() || bitmap.is_invalid() {
+            if !dc.is_invalid() {
+                let _ = DeleteDC(dc);
+            }
+            if !bitmap.is_invalid() {
+                let _ = DeleteObject(bitmap);
+            }
+            return None;
+        }
+        let previous = SelectObject(dc, bitmap);
+        if previous.is_invalid() {
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(dc);
+            return None;
+        }
+        Some(Self {
+            dc,
+            bitmap,
+            previous,
+        })
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.previous);
+            let _ = DeleteObject(self.bitmap);
+            let _ = DeleteDC(self.dc);
+        }
+    }
 }
 
 impl OverlayState {
@@ -98,16 +136,29 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
         // 重复注册返回 0，这里不当错误：同一进程内可能多次开覆盖层
         RegisterClassW(&class);
 
+        let mut backdrop = crate::gdi::capture(screen)?;
+        for pixel in backdrop.rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        let mut dimmed = backdrop.rgba.clone();
+        for pixel in dimmed.chunks_exact_mut(4) {
+            for channel in &mut pixel[..3] {
+                *channel = (u16::from(*channel) * 153 / 255) as u8;
+            }
+        }
         let mut state = Box::new(OverlayState {
             selection: Selection::new(screen, windows.clone()),
             origin: (screen.x, screen.y),
+            backdrop,
+            dimmed,
+            surface: Surface::new(screen.w as i32, screen.h as i32),
         });
 
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             CLASS_NAME,
             w!("Baobox"),
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP,
             screen.x as i32,
             screen.y as i32,
             screen.w as i32,
@@ -119,18 +170,14 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
         )
         .map_err(|e| format!("创建覆盖窗失败：{e}"))?;
 
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut OverlayState as isize);
-
-        // 统一半透明 + color key 挖空
-        SetLayeredWindowAttributes(
+        SetWindowLongPtrW(
             hwnd,
-            COLORREF(TRANSPARENT_KEY),
-            DIM_ALPHA,
-            LWA_COLORKEY | LWA_ALPHA,
-        )
-        .map_err(|e| format!("设置分层属性失败：{e}"))?;
+            GWLP_USERDATA,
+            state.as_mut() as *mut OverlayState as isize,
+        );
 
         let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(hwnd);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -171,17 +218,32 @@ unsafe extern "system" fn wndproc(
     match message {
         WM_MOUSEMOVE => {
             let (x, y) = lparam_to_point(lparam);
+            let previous = state.selection.current_rect();
             state.selection.mouse_moved(state.to_screen(x, y));
-            let _ = InvalidateRect(hwnd, None, false);
+            let current = state.selection.current_rect();
+            if previous != current {
+                for rect in previous.into_iter().chain(current) {
+                    let client = state.to_client(&rect);
+                    let dirty = RECT {
+                        left: client.left - 8,
+                        top: client.top - 22,
+                        right: client.right.max(client.left + 140) + 8,
+                        bottom: client.bottom.max(client.top + 22) + 8,
+                    };
+                    let _ = InvalidateRect(hwnd, Some(&dirty), false);
+                }
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
+            SetCapture(hwnd);
             let (x, y) = lparam_to_point(lparam);
             state.selection.mouse_down(state.to_screen(x, y));
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let _ = ReleaseCapture();
             let (x, y) = lparam_to_point(lparam);
             state.selection.mouse_up(state.to_screen(x, y));
             let _ = InvalidateRect(hwnd, None, false);
@@ -190,16 +252,13 @@ unsafe extern "system" fn wndproc(
         WM_RBUTTONDOWN => {
             // 右键取消，与 Linux 版一致
             state.selection.key_down(Key::Escape, false);
-            PostQuitMessage(0);
+
             LRESULT(0)
         }
         WM_KEYDOWN => {
             let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
             if let Some(key) = translate_key(wparam.0 as u32) {
                 state.selection.key_down(key, shift);
-                if state.selection.outcome().is_some() {
-                    PostQuitMessage(0);
-                }
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
@@ -208,8 +267,8 @@ unsafe extern "system" fn wndproc(
             paint(hwnd, state);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
+        WM_CLOSE => {
+            state.selection.key_down(Key::Escape, false);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -246,20 +305,14 @@ fn lparam_to_point(lparam: LPARAM) -> (i32, i32) {
 
 unsafe fn paint(hwnd: HWND, state: &OverlayState) {
     let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
+    let target = BeginPaint(hwnd, &mut ps);
+    let hdc = state.surface.as_ref().map_or(target, |surface| surface.dc);
 
-    // 整窗铺一层黑（分层属性会把它变成半透明的压暗层）
-    let dim = CreateSolidBrush(COLORREF(0x0000_0000));
-    FillRect(hdc, &ps.rcPaint, dim);
-    let _ = DeleteObject(dim);
+    draw_snapshot(hdc, state, &ps.rcPaint, &state.dimmed);
 
     if let Some(rect) = state.selection.current_rect() {
         let client = state.to_client(&rect);
-
-        // 选区内部涂成 color key → 完全透明，用户看得清自己框的是什么
-        let hole = CreateSolidBrush(COLORREF(TRANSPARENT_KEY));
-        FillRect(hdc, &client, hole);
-        let _ = DeleteObject(hole);
+        draw_snapshot(hdc, state, &client, &state.backdrop.rgba);
 
         // 边框
         let accent: HBRUSH = CreateSolidBrush(COLORREF(ACCENT_BGR));
@@ -285,7 +338,59 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
         draw_size_label(hdc, &client, &rect);
     }
 
+    if state.surface.is_some() {
+        let rect = ps.rcPaint;
+        let _ = BitBlt(
+            target,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            hdc,
+            rect.left,
+            rect.top,
+            SRCCOPY,
+        );
+    }
     let _ = EndPaint(hwnd, &ps);
+}
+
+unsafe fn draw_snapshot(dc: HDC, state: &OverlayState, rect: &RECT, pixels: &[u8]) {
+    let image = &state.backdrop;
+    let left = rect.left.clamp(0, image.width as i32);
+    let top = rect.top.clamp(0, image.height as i32);
+    let width = rect.right.clamp(0, image.width as i32) - left;
+    let height = rect.bottom.clamp(0, image.height as i32) - top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: image.width as i32,
+            biHeight: -(image.height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    StretchDIBits(
+        dc,
+        left,
+        top,
+        width,
+        height,
+        left,
+        top,
+        width,
+        height,
+        Some(pixels.as_ptr().cast()),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY,
+    );
 }
 
 /// 在选区左上角上方标出尺寸。
@@ -307,6 +412,40 @@ unsafe fn draw_size_label(hdc: windows::Win32::Graphics::Gdi::HDC, client: &RECT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirming_overlay_does_not_quit_the_calling_message_loop() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetWindowThreadProcessId, KillTimer, PeekMessageW, SendMessageW, SetTimer,
+            PM_REMOVE, WM_QUIT,
+        };
+        unsafe extern "system" fn confirm(_: HWND, _: u32, timer: usize, _: u32) {
+            if let Ok(window) = FindWindowW(CLASS_NAME, w!("Baobox")) {
+                let mut process = 0;
+                GetWindowThreadProcessId(window, Some(&mut process));
+                if process == std::process::id() {
+                    let _ = KillTimer(None, timer);
+                    SendMessageW(window, WM_LBUTTONDOWN, WPARAM(0), LPARAM(12 | (14 << 16)));
+                    SendMessageW(window, WM_MOUSEMOVE, WPARAM(0), LPARAM(54 | (45 << 16)));
+                    SendMessageW(window, WM_LBUTTONUP, WPARAM(0), LPARAM(54 | (45 << 16)));
+                    SendMessageW(window, WM_KEYDOWN, WPARAM(0x0d), LPARAM(0));
+                }
+            }
+        }
+        unsafe {
+            let timer = SetTimer(None, 0, 25, Some(confirm));
+            assert_ne!(timer, 0);
+            let result = run(Rect::new(0.0, 0.0, 160.0, 120.0), Vec::new());
+            let _ = KillTimer(None, timer);
+            let Outcome::Region(region) = result.unwrap().outcome else {
+                panic!("drag did not produce a region");
+            };
+            let image = crate::gdi::capture(region).unwrap();
+            assert_eq!((image.width, image.height), (42, 31));
+            let mut message = MSG::default();
+            assert!(!PeekMessageW(&mut message, None, WM_QUIT, WM_QUIT, PM_REMOVE).as_bool());
+        }
+    }
 
     #[test]
     fn negative_coordinates_survive_lparam_unpacking() {
