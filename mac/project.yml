@@ -13,9 +13,15 @@ targets:
       - path: Sources
         excludes:
           - "Resources/Pets"
+          - "Resources/PhoneTransfer"
       # 内置宠物形象：整个文件夹原样拷进 Resources/Pets/<形象>/（每个形象都有自己的 pet.json，
       # 按普通资源平铺会同名冲突）。见 docs/desktop-pet/PACKS.md。
       - path: Sources/Resources/Pets
+        type: folder
+        buildPhase: resources
+      # 手机互传的网页（手机页 + 公网模式共享层 + Mac 宿主页）：整个文件夹拷进 Resources/PhoneTransfer/，
+      # 局域网服务直接读它，GitHub Pages 工作流也从这里发布。见 docs/phone-transfer/TECH_DESIGN.md。
+      - path: Sources/Resources/PhoneTransfer
         type: folder
         buildPhase: resources
     info:
@@ -34,7 +40,7 @@ targets:
         # 会议记录、实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
         NSSpeechRecognitionUsageDescription: "会议记录、实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Meeting recording, Live Translate and Dictation convert speech into text (on this Mac when possible)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
-        NSLocalNetworkUsageDescription: "网络抓包代理需要绑定局域网接口，供同网手机连接调试。The packet-capture proxy binds local-network interfaces so phones on the same network can connect for debugging."
+        NSLocalNetworkUsageDescription: "手机互传与网络抓包需要使用局域网，让同一 Wi-Fi 下的手机连接这台 Mac。Phone Transfer and the packet-capture proxy use the local network so phones on the same Wi-Fi can connect to this Mac."
         # 会议读本机日历（只读、数据不出本机）：下一场会议、会前提醒、一键入会、会议绑定日历事件。
         # 缺这条描述，申请日历权限时进程会被系统直接杀掉。
         NSCalendarsFullAccessUsageDescription: "会议需要读取你选中的日历，用来显示下一场会议、会前提醒、一键入会，并把会议记录与日历事件对应起来；只读，数据不出本机。Meeting reads the calendars you choose to show your next meeting, remind you before it starts, join it in one click and link recordings to calendar events. Read-only; nothing leaves this Mac."

@@ -14,6 +14,7 @@ For version **0.0.6**. This manual covers every tool and every feature currently
 | [Keyboard clicking](keyboard-nav.md) | Letter-label clicking, continuous mode, keyboard scrolling |
 | [Live Translate](live-translate.md) | Live captions from the mic or system audio, English ⇄ Chinese, on-screen caption bar |
 | [Keep awake](caffeinate.md) | Timed sleep prevention, optional display-on |
+| [Phone Transfer](phone-transfer.md) | Scan to connect; send files and text between Mac and phone over LAN or the internet (direct P2P) |
 | [Claude Code assistant](claude-code.md) | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](codex.md) | Session resume, quota and usage, visual config, turn notifications, maintenance |
 

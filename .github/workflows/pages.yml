@@ -1,0 +1,51 @@
+name: Deploy phone page
+
+# 手机互传「公网模式」的手机网页：把 mac/Sources/Resources/PhoneTransfer/ 发布到
+# https://<owner>.github.io/<repo>/transfer/。Mac 包里是同一份文件（局域网模式直接读包内副本）。
+# 首次使用前在仓库 Settings → Pages 把 Source 设为「GitHub Actions」。见 docs/phone-transfer/TECH_DESIGN.md。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "mac/Sources/Resources/PhoneTransfer/**"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -e
+          mkdir -p _site/transfer
+          # host.html 是 Mac 宿主页，不对外发布。
+          cp mac/Sources/Resources/PhoneTransfer/index.html \
+             mac/Sources/Resources/PhoneTransfer/phone.js \
+             mac/Sources/Resources/PhoneTransfer/rtc.js \
+             _site/transfer/
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -58,6 +58,7 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 | [Focus & health](docs/focus-health/REQUIREMENTS.md) | unbound | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
 | [Desktop pet](docs/desktop-pet/DESIGN.md) | unbound | A pet on your desktop that is also Baobox's unified notification center |
 | [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
+| [Phone Transfer](docs/manual/en/phone-transfer.md) | unbound | Scan a QR code, send files and text between Mac and phone — LAN, or direct P2P over the internet; no phone app |
 | [Claude Code assistant](docs/manual/en/claude-code.md) | ⌃⇧Space | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](docs/manual/en/codex.md) | unbound | Session resume, quota and usage, visual config, turn notifications, maintenance |
 
