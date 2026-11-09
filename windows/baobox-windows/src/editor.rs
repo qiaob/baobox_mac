@@ -29,8 +29,9 @@
 use baobox_core::annotation::Color;
 use baobox_core::editor::{Editor, EditorKey, EditorOutcome, Modifiers};
 use baobox_core::geometry::Rect;
-use baobox_render::chrome::{draw_toolbar, ToolbarState};
-use baobox_render::{Canvas, TextDraw};
+use baobox_render::chrome::{draw_icon, ToolbarState, ICON, ICON_DISABLED};
+use baobox_render::{fill_rect, stroke_rect_in, Canvas, TextDraw};
+use baobox_core::toolbar::{Item, Toolbar, BUTTON_GAP};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -43,9 +44,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetWindowLongPtrW, ShowWindow,
     TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS, MSG,
-    SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    SW_SHOW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -355,9 +356,7 @@ unsafe extern "system" fn wndproc(
         }
         WM_RBUTTONDOWN => {
             state.editor.key_down(EditorKey::Escape, Modifiers::NONE);
-            if state.editor.outcome().is_some() {
-                PostQuitMessage(0);
-            }
+
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
@@ -366,9 +365,7 @@ unsafe extern "system" fn wndproc(
             let typing = state.editor.pending_text().is_some();
             if let Some(key) = translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
                 state.editor.key_down(key, modifiers);
-                if state.editor.outcome().is_some() {
-                    PostQuitMessage(0);
-                }
+
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
@@ -386,8 +383,8 @@ unsafe extern "system" fn wndproc(
             paint(hwnd, state);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
+        WM_CLOSE => {
+            state.editor.key_down(EditorKey::Escape, Modifiers::NONE);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -472,12 +469,14 @@ fn draw_annotations(
     let texts = baobox_render::render(&shapes, &mut canvas);
 
     if with_toolbar {
+        let selection = editor.image().offset(-frame.x, -frame.y);
+        stroke_rect_in(&mut canvas, &selection, 1.0, Color::rgb(0xf3, 0xf3, 0xf2));
         let mut toolbar = editor.toolbar().clone();
         toolbar.frame = toolbar.frame.offset(-frame.x, -frame.y);
         for button in &mut toolbar.buttons {
             button.frame = button.frame.offset(-frame.x, -frame.y);
         }
-        draw_toolbar(
+        draw_windows_toolbar(
             &mut canvas,
             &toolbar,
             &ToolbarState {
@@ -490,6 +489,46 @@ fn draw_annotations(
         );
     }
     texts
+}
+
+fn round_panel(canvas: &mut Canvas<'_>, bounds: Rect, radius: f64, color: Color) {
+    let radius = radius.min(bounds.h / 2.0);
+    for row in 0..bounds.h.ceil() as i32 {
+        let distance = (radius - (row as f64 + 0.5).min(bounds.h - row as f64 - 0.5)).max(0.0);
+        let inset = radius - (radius * radius - distance * distance).max(0.0).sqrt();
+        fill_rect(canvas, &Rect::new(bounds.x + inset, bounds.y + row as f64,
+            bounds.w - inset * 2.0, 1.0), color);
+    }
+}
+
+fn draw_windows_toolbar(canvas: &mut Canvas<'_>, toolbar: &Toolbar, state: &ToolbarState) {
+    round_panel(canvas, toolbar.frame, 8.0, Color { r: 35, g: 34, b: 35, a: 246 });
+    for pair in toolbar.buttons.windows(2) {
+        let end = pair[0].frame.right();
+        let start = pair[1].frame.x;
+        if start - end > BUTTON_GAP + 1.0 {
+            let middle = (end + start) / 2.0;
+            fill_rect(canvas, &Rect::new(middle, toolbar.frame.y + 11.0, 1.0,
+                toolbar.frame.h - 22.0), Color::rgb(0x54, 0x55, 0x55));
+        }
+    }
+    for button in &toolbar.buttons {
+        let active = matches!(button.item, Item::Tool(tool) if tool == state.tool)
+            || matches!(button.item, Item::Color(index) if index == state.color_index);
+        let color = if active {
+            Color::rgb(0x2b, 0xc4, 0xb8)
+        } else if matches!(button.item, Item::Undo) && !state.can_undo
+            || matches!(button.item, Item::Redo) && !state.can_redo
+        {
+            ICON_DISABLED
+        } else {
+            ICON
+        };
+        if state.hovered == Some(button.item) {
+            round_panel(canvas, button.frame, 5.0, Color::rgb(0x3e, 0x3f, 0x3f));
+        }
+        draw_icon(canvas, &button.frame, button.item, color);
+    }
 }
 
 /// 读当前的修饰键状态。

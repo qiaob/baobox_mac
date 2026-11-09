@@ -19,13 +19,52 @@
 #![cfg(windows)]
 
 use std::time::Duration;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
     VIRTUAL_KEY, VK_CONTROL, VK_SHIFT, VK_V,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetGUIThreadInfo, IsWindow, SetForegroundWindow, GUITHREADINFO,
+};
 
 /// 关掉面板之后等焦点回位的时间。
 pub const FOCUS_SETTLE: Duration = Duration::from_millis(120);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PasteTarget {
+    window: HWND,
+    focused: HWND,
+}
+
+impl PasteTarget {
+    pub fn current() -> Option<Self> {
+        unsafe {
+            let window = GetForegroundWindow();
+            let mut info = GUITHREADINFO {
+                cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                ..Default::default()
+            };
+            GetGUIThreadInfo(0, &mut info).ok()?;
+            (!window.is_invalid() && !info.hwndFocus.is_invalid() && info.hwndActive == window)
+                .then_some(Self {
+                    window,
+                    focused: info.hwndFocus,
+                })
+        }
+    }
+
+    pub fn paste_image(self) -> bool {
+        unsafe {
+            if !IsWindow(self.window).as_bool() || !IsWindow(self.focused).as_bool() {
+                return false;
+            }
+            let _ = SetForegroundWindow(self.window);
+        }
+        std::thread::sleep(FOCUS_SETTLE);
+        Self::current() == Some(self) && send(Style::Normal).is_ok()
+    }
+}
 
 /// 粘贴时用哪种组合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

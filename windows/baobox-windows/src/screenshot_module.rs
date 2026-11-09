@@ -24,6 +24,7 @@ pub const ID: &str = "screenshot";
 
 /// 动作 id。
 pub const CAPTURE: &str = "screenshot.capture";
+pub const QUICK_CAPTURE: &str = "screenshot.quick";
 /// 动作 id。
 pub const CAPTURE_FULL: &str = "screenshot.full";
 /// 动作 id。
@@ -173,8 +174,9 @@ impl ToolModule for ScreenshotTool {
 
     fn perform(&mut self, action: &str) -> Result<String, String> {
         match action {
-            CAPTURE => self.capture(None),
-            CAPTURE_FULL => self.capture(Some(gdi::virtual_screen())),
+            CAPTURE => self.capture(None, self.settings.edit),
+            QUICK_CAPTURE => self.capture(None, false),
+            CAPTURE_FULL => self.capture(Some(gdi::virtual_screen()), self.settings.edit),
             OCR => self.ocr(),
             RECORD => self.record(),
             HISTORY => self.open_history(),
@@ -184,7 +186,7 @@ impl ToolModule for ScreenshotTool {
 }
 
 impl ScreenshotTool {
-    fn capture(&mut self, region: Option<Rect>) -> Result<String, String> {
+    fn capture(&mut self, region: Option<Rect>, edit: bool) -> Result<String, String> {
         gdi::prepare();
         let target = match region {
             Some(rect) => rect,
@@ -192,7 +194,7 @@ impl ScreenshotTool {
         };
         let shot = gdi::capture(target)?;
 
-        if !self.settings.edit {
+        if !edit {
             return self.deliver(&shot, self.settings.copy, self.settings.save);
         }
 
