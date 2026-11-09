@@ -328,6 +328,7 @@ private struct LiveTranslateBarView: View {
         switch controller.sessionEngine {
         case .offline: engine = L("livetranslate.status.engineOffline")
         case .system: engine = L("livetranslate.status.engineSystem")
+        case .cloud: engine = L("livetranslate.status.engineCloud")
         case nil: engine = L("livetranslate.status.engineOff")
         }
         var text = L("livetranslate.status.recognition \(recognition)") + "　" + L("livetranslate.status.translation \(engine)")

@@ -87,6 +87,8 @@ enum LiveTranslateSettings {
     static let translateKey = "livetranslate.translate"
     /// AI 纠正识别错字（中文；要先下载纠错模型）。
     static let aiCorrectionKey = "livetranslate.aiCorrection"
+    /// AI 纠错走本地模型还是云端服务（docs/ai-service/DESIGN.md §5.4）。
+    static let correctionEngineKey = "livetranslate.correctionEngine"
     static let displayKey = "livetranslate.display"
     static let fontSizeKey = "livetranslate.fontSize"
     static let opacityKey = "livetranslate.opacity"
@@ -170,6 +172,11 @@ enum LiveTranslateSettings {
     static var aiCorrection: Bool {
         get { UserDefaults.standard.object(forKey: aiCorrectionKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: aiCorrectionKey) }
+    }
+
+    /// 出厂本地；云端要用户在设置里手动选。
+    static var correctionRoute: AIService.Route {
+        UserDefaults.standard.string(forKey: correctionEngineKey).flatMap(AIService.Route.init(rawValue:)) ?? .local
     }
 
     static var translateEnabled: Bool {
@@ -334,15 +341,19 @@ final class LiveTranslateController: ObservableObject {
     private var audioSource: LiveTranslateAudioSource?
     private var bar: LiveTranslateBarController?
     private var translationErrorShown = false
+    private var cloudFallbackShown = false
 
     // 本次运行的语言配置（开始时定下，运行中改设置会重启）。
     private var sessionTarget: TranslationLanguage = .simplifiedChinese
     /// 单识别器时每句的语言；双识别器逐句报告（`lineLanguages`）。
     private var defaultLineLanguage: TranslationLanguage = .english
     private var lineLanguages: [Int: TranslationLanguage] = [:]
-    /// 离线模型翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
+    /// 离线模型 / 云端服务的翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
     private var offlineTask: Task<Void, Never>?
     private var keepsOfflineAlive = false
+    /// 本次 AI 纠错走哪边；走本地时纠错模型常驻。
+    private var correctionRoute: AIService.Route = .local
+    private var keepsCorrectorAlive = false
 
     /// 字幕条保留的句数：拉高字幕条可以往上翻（完整的在本地记录里）。
     private static let historyLines = 200
@@ -391,8 +402,8 @@ final class LiveTranslateController: ObservableObject {
         translator.onResult = { [weak self] job, source, target, text in
             self?.applyTranslation(job: job, source: source, target: target, text: text)
         }
-        corrector.onResult = { [weak self] key, source, corrected in
-            self?.applyCorrection(key: key, source: source, corrected: corrected)
+        corrector.onResult = { [weak self] key, source, corrected, translation in
+            self?.applyCorrection(key: key, source: source, corrected: corrected, translation: translation)
         }
         voice.onSpeakingChanged = { [weak self] speaking in
             guard let self, self.muteWhileSpeaking else { return }
@@ -408,6 +419,9 @@ final class LiveTranslateController: ObservableObject {
         }
         translator.onError = { [weak self] in
             self?.showTranslationErrorOnce()
+        }
+        translator.onFallback = { [weak self] in
+            self?.showCloudFallbackOnce()
         }
     }
 
@@ -501,13 +515,14 @@ final class LiveTranslateController: ObservableObject {
         offlineTask?.cancel()
         offlineTask = nil
         if keepsOfflineAlive {
-            OfflineTranslator.shared.endKeepAlive()
+            AIService.shared.endLocalKeepAlive(.translation)
             keepsOfflineAlive = false
         }
-        if correcting {
-            OfflineTranslator.corrector.endKeepAlive()
-            correcting = false
+        if keepsCorrectorAlive {
+            AIService.shared.endLocalKeepAlive(.generation)
+            keepsCorrectorAlive = false
         }
+        correcting = false
         voice.stop()
         router.setMonitor(nil)
         router.setMuted(false)
@@ -610,14 +625,14 @@ final class LiveTranslateController: ObservableObject {
         }
         // 翻译引擎与方向：每种可能出现的语言各一个方向（自动模式两个）；本来就是「译成」那种的不用翻。
         let directions = Self.directions(speech: speech, target: target)
-        var engine: TranslationEngineKind? = config.translate ? TranslationSettings.resolve() : nil
-        if engine == .system, TranslationSettings.canFallBackToOffline,
+        var engine: TranslationEngineKind? = config.translate ? TranslationSettings.resolve(.live) : nil
+        if engine == .system, TranslationSettings.canFallBackToOffline(.live),
            await !TranslationSettings.systemSupports(directions) {
             engine = .offline
         }
         // 系统翻译的会话挂在字幕条上：这次不显示字幕条（会议默认）就只能用离线模型翻，或者不翻。
         if engine == .system, !config.showsBar {
-            engine = TranslationSettings.canFallBackToOffline ? .offline : nil
+            engine = TranslationSettings.canFallBackToOffline(.live) ? .offline : nil
         }
 
         // 字幕历史：手动停止时已经清空；改设置重启时留着（见 stop）。新句子的 id 排在留下的后面。
@@ -625,20 +640,26 @@ final class LiveTranslateController: ObservableObject {
         lineLanguages = [:]
         notice = nil
         translationErrorShown = false
+        cloudFallbackShown = false
         translator.reset()
         resetLatency()
         sessionTarget = target
         sessionEngine = engine
         channelStates = []
         corrector.reset()
-        // 纠错：实时翻译跟着翻译走（按单元纠、纠完再翻）；会议只转录原文时也纠（与翻译解耦）。模型常驻，免得每句都等加载。
+        // 纠错：实时翻译跟着翻译走（按单元纠、纠完再翻）；会议只转录原文时也纠（与翻译解耦）。本地模型常驻，免得每句都等加载。
+        // 走哪边按设置；会议只转录、不翻译时（`.always`）一律本地 —— 会议文档定过「数据不出本机」，翻译之外不往外发。
+        correctionRoute = config.correction == .always ? .local : LiveTranslateSettings.correctionRoute
+        corrector.route = correctionRoute
+        let correctionReady = AIService.shared.isReady(correctionRoute, model: .generation)
         switch config.correction {
         case .off: correcting = false
-        case .always: correcting = OfflineTranslator.corrector.isReady
-        case .whenTranslating: correcting = engine != nil && OfflineTranslator.corrector.isReady
+        case .always: correcting = correctionReady
+        case .whenTranslating: correcting = engine != nil && correctionReady
         }
-        if correcting {
-            OfflineTranslator.corrector.beginKeepAlive()
+        if correcting, correctionRoute == .local {
+            AIService.shared.beginLocalKeepAlive(.generation)
+            keepsCorrectorAlive = true
         }
         virtualDevices = LiveTranslateAudioDevice.virtualDevices()
         if engine != nil, LiveTranslateVoiceSettings.enabled {
@@ -673,8 +694,8 @@ final class LiveTranslateController: ObservableObject {
             bar.show()
         }
         barVisible = config.showsBar
-        if engine == .offline {
-            startOfflineTranslation()
+        if engine == .offline || engine == .cloud {
+            startModelTranslation(engine)
         }
 
         // 识别引擎先就绪（新引擎可能要下载模型），再开音源。
@@ -750,12 +771,16 @@ final class LiveTranslateController: ObservableObject {
         muteWhileSpeaking = source.usesMicrophone && speakers && !LiveTranslateVoiceSettings.keepListening
     }
 
-    /// 离线模型翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
-    private func startOfflineTranslation() {
-        OfflineTranslator.shared.beginKeepAlive()
-        keepsOfflineAlive = true
+    /// 离线模型 / 云端服务的翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
+    /// 离线模型时常驻；云端时不让本地模型白占内存，真要退回本地时再加载（之后空闲 10 分钟才退）。
+    private func startModelTranslation(_ engine: TranslationEngineKind?) {
+        let route: AIService.Route = engine == .cloud ? .cloud : .local
+        if route == .local {
+            AIService.shared.beginLocalKeepAlive(.translation)
+            keepsOfflineAlive = true
+        }
         offlineTask = Task { [translator] in
-            await translator.serveOffline()
+            await translator.serveModel(route: route)
         }
     }
 
@@ -918,8 +943,8 @@ final class LiveTranslateController: ObservableObject {
         let directions = Self.directions(speech: config.speech, target: config.target)
         var engine: TranslationEngineKind?
         if config.translate {
-            engine = TranslationSettings.resolve()
-            if engine == .system, TranslationSettings.canFallBackToOffline,
+            engine = TranslationSettings.resolve(.live)
+            if engine == .system, TranslationSettings.canFallBackToOffline(.live),
                await !TranslationSettings.systemSupports(directions) {
                 engine = .offline
             }
@@ -929,8 +954,8 @@ final class LiveTranslateController: ObservableObject {
         if engine != sessionEngine {
             stopTranslation()
             sessionEngine = engine
-            if engine == .offline {
-                startOfflineTranslation()
+            if engine == .offline || engine == .cloud {
+                startModelTranslation(engine)
             }
             if engine != nil, LiveTranslateVoiceSettings.enabled {
                 startVoice(source: config.sources, target: config.target)
@@ -960,7 +985,7 @@ final class LiveTranslateController: ObservableObject {
         offlineTask?.cancel()
         offlineTask = nil
         if keepsOfflineAlive {
-            OfflineTranslator.shared.endKeepAlive()
+            AIService.shared.endLocalKeepAlive(.translation)
             keepsOfflineAlive = false
         }
         voice.stop()
@@ -1171,7 +1196,10 @@ final class LiveTranslateController: ObservableObject {
         let pieces = LiveTranslateUnits.split(line.raw, cjk: cjk)
         // 中文单元先纠错、纠完再翻（`applyCorrection`）；其余直接翻。纠错模型还在加载（第一次要 9 秒左右，比翻译模型还慢，
         // 实测 2026-11-05）时先不纠、直接翻，第一句不用陪着等它。
-        let corrects = correcting && language.isChinese && !OfflineTranslator.corrector.isStartingServer
+        let corrects = correcting && language.isChinese
+            && !(correctionRoute == .local && AIService.shared.isLocalStarting(.generation))
+        // 纠错和翻译都走云端：一条请求纠完顺便翻（`LiveTranslateCorrector`），少一次往返。
+        let combinedTarget = correctionRoute == .cloud && sessionEngine == .cloud ? target : nil
         let complete = Array((line.isFinal ? pieces : pieces.dropLast()).prefix(Self.tailUnit))
         let tail = line.isFinal ? "" : (pieces.last ?? "")
 
@@ -1207,7 +1235,8 @@ final class LiveTranslateController: ObservableObject {
             if target != nil { unitSubmittedAt[key] = Date() }
             if corrects {
                 // 不翻的中文句也纠错：纠正后的原文就是这句的字幕。
-                corrector.submit(key: key, text: text, context: correctionContext(line, before: unit))
+                corrector.submit(key: key, text: text, context: correctionContext(line, before: unit),
+                                 translateTo: combinedTarget)
             } else if let target {
                 translator.submit(id: key, text: text, isFinal: true, target: target.code)
             }
@@ -1305,7 +1334,8 @@ final class LiveTranslateController: ObservableObject {
     }
 
     /// AI 纠正结果回来了：这一单元没再变就记下、换掉显示的原文，再按纠正后的文字翻译。
-    private func applyCorrection(key: Int, source: String, corrected: String) {
+    private func applyCorrection(key: Int, source: String, corrected: String,
+                                 translation: LiveTranslateCorrector.Translation?) {
         let id = key / Self.unitsPerLine
         let unit = key % Self.unitsPerLine
         guard isRunning, let index = lines.firstIndex(where: { $0.id == id }) else { return }
@@ -1323,7 +1353,12 @@ final class LiveTranslateController: ObservableObject {
         // 没改字、草稿已经是这段原文的译文（也已经读过了）：不用再翻一遍。
         if corrected == source, line.draftUnits.contains(unit) { return }
         if let target = target(forLine: id) {
-            translator.submit(id: key, text: corrected, isFinal: true, target: target.code)
+            if let translation, translation.target.code == target.code {
+                // 合一请求顺带回来的译文：就是纠正后这段的译文，不用再排队翻。
+                applyTranslation(job: key, source: corrected, target: target.code, text: translation.text)
+            } else {
+                translator.submit(id: key, text: corrected, isFinal: true, target: target.code)
+            }
         }
     }
 
@@ -1405,6 +1440,13 @@ final class LiveTranslateController: ObservableObject {
         lines[index] = line
         refreshPendingTranslation()
         record(line)
+    }
+
+    /// 云端不可用、这一句改用了本地：提示一次（字幕照常出）。
+    private func showCloudFallbackOnce() {
+        guard isRunning, !cloudFallbackShown else { return }
+        cloudFallbackShown = true
+        notice = L("ai.notice.cloudFallback")
     }
 
     private func showTranslationErrorOnce() {

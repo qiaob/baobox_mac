@@ -18,8 +18,13 @@
 |---|---|---|---|
 | 系统翻译（`TranslationSession`） | 15+ | 本地 | 会话只能从视图的 `.translationTask` 拿，继续挂在浮层 / 字幕条上 |
 | 离线模型（Hy-MT2-1.8B） | 14+ | 本地 | 内置的 `llama-server` 子进程 + 单独下载的模型文件 |
+| 云端服务（Claude / OpenAI 兼容） | 14+ | **离开本机** | 经 `AIService`（`docs/ai-service/DESIGN.md`），只能手动选 |
 
-设置键 `translation.engine`：`auto`（默认）/ `system` / `offline`，两个模块共用。
+设置键每个模块一个（2026-11-09 起，issue #86）：划词助手 `selectiontranslate.engine`，字幕与同传 `livetranslate.engine`
+（会议的翻译也用它）。取值 `auto`（默认）/ `system` / `offline` / `cloud`。新键没值时读旧的共用键 `translation.engine`
+（保留不删、不再写），升级后行为不变。离线模型与云端的调用都从 `AIService` 进，系统翻译仍挂在视图上。
+
+- `cloud`：云端配置好就用云端，出错时自动退回离线模型（有的话）；没配置好按 `offline` 处理。「自动」不会切到云端。
 
 - `auto`：macOS 15+ 用系统翻译；系统不支持这对语言（`LanguageAvailability` 判为 unsupported）或翻译失败时，
   若离线模型已就绪则改用离线模型。macOS 14 直接用离线模型。
@@ -168,7 +173,10 @@
 
 | 键 | 取值 | 默认 |
 |---|---|---|
-| `translation.engine` | `auto` / `system` / `offline` | `auto` |
+| `selectiontranslate.engine` | `auto` / `system` / `offline` / `cloud` | 旧键 `translation.engine` 的值，没有则 `auto` |
+| `livetranslate.engine` | 同上 | 同上 |
+| `livetranslate.correctionEngine` | `local` / `cloud` | `local` |
+| `translation.engine` | 旧的共用键：只在新键没值时读一次，不再写 | — |
 | `selectiontranslate.target` | 语言代码（如 `zh-Hans`） | 系统首选语言 |
 | `selectiontranslate.secondaryTarget` | 语言代码 | `en`（目标是英文时为 `zh-Hans`） |
 | `livetranslate.language` | `auto` 或识别 locale（`en-US`、`zh-CN`…；旧值兼容） | `en-US` |
@@ -180,9 +188,10 @@
 ```
 mac/Sources/Core/Translation/
   TranslationLanguage.swift     语言表、文字系统、语言检测
-  TranslationSettings.swift     引擎选择与解析
+  TranslationSettings.swift     引擎选择与解析（每模块一个键：TranslationScope）
   OfflineTranslator.swift       离线模型：下载 / 校验 / 推理进程 / 请求
-  TranslationEngineSection.swift 设置页共用区块（引擎选择 + 模型状态 / 下载）
+  TranslationEngineSection.swift 设置页共用区块（本模块的引擎选择 + 模型状态 / 下载）
+mac/Sources/Core/AI/             AI 服务层：本地 / 云端路由、云端客户端、钥匙串（docs/ai-service/DESIGN.md）
 mac/Sources/Modules/LiveTranslate/LiveTranslateDualRecognizer.swift  双识别器
 mac/Vendor/llama/                构建时下载（gitignore）
 ```
