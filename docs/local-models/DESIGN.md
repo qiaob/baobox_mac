@@ -2,7 +2,9 @@
 
 > issue #86 的延伸。2026-11-09 用户在 Ollama 里测试 `deepseek-r1:14b`（约 9 GB，Mac 是 16 GB 内存）时整机卡死，
 > 提出把本地模型单独放一块：检测内存、建议装哪个、有下载和启动按钮、可以开机自启、用下拉框选模型。
-> 用户定：放进「AI」页（最上面一块），只提供 Qwen3 系列。
+> 用户定：放进「AI」页（最上面一块），只提供 Qwen3 系列。之后又改了两次：
+> - 「AI」页改成三栏（功能 / 本机模型 / 云端模型），本地模型是第二栏（docs/ai-service/DESIGN.md §6.1）；
+> - 模型清单扩到常见的十几个，加「自定义（粘贴 Hugging Face 链接）」（用户选 A）。
 
 ## 1. 需求
 
@@ -30,6 +32,22 @@
 | `qwen3-8b` | Qwen3-8B | 5.03 GB | 约 6 GB | 通用 + 翻译 |
 | `qwen3-14b` | Qwen3-14B | 9.00 GB | 约 10 GB | 通用 + 翻译（24 GB 起推荐） |
 | `qwen3-30b-a3b` | Qwen3-30B-A3B（混合专家，大但快） | 18.56 GB | 约 19.6 GB | 通用 + 翻译（48 GB 起推荐） |
+| `qwen3-0.6b` | Qwen3-0.6B（Q8_0） | 0.64 GB | 约 1.6 GB | 通用，最小，只适合内存很小的 Mac |
+| `qwen3-32b` | Qwen3-32B | 19.76 GB | 约 20.8 GB | 通用 + 翻译（48 GB 起推荐） |
+| `gemma3-4b` / `gemma3-12b` / `gemma3-27b` | Gemma 3（Google） | 2.49 / 7.30 / 16.55 GB | 文件 + 1 GB | 通用，英文和多语言好 |
+| `llama3.1-8b` | Llama 3.1 8B（Meta） | 4.92 GB | 约 5.9 GB | 通用，英文好、中文一般 |
+| `glm4-9b` | GLM-4-9B-0414（智谱） | 6.17 GB | 约 7.2 GB | 通用，中文好 |
+| `phi4-mini` | Phi-4-mini（微软） | 2.49 GB | 约 3.5 GB | 通用，小而聪明，英文好 |
+| `deepseek-r1-7b` / `deepseek-r1-14b` | DeepSeek-R1 蒸馏（Qwen 底座） | 4.68 / 8.99 GB | 文件 + 1.5 GB | 推理型：先思考再回答，慢；适合纪要，不适合字幕 |
+
+- Qwen3 用官方仓库（Hugging Face → ModelScope 两个地址）；Gemma 3 用 `ggml-org`，其余用 `bartowski` 的量化（只有 Hugging Face）。
+  大小和 SHA-256 都是 2026-11-09 从 Hugging Face API 取的。
+- **推理模型**（DeepSeek-R1 蒸馏）思考很长：上下文开到 8192（内存多估 0.5 GB），输出上限多给 3072；清理后还以 `<think>` 开头
+  （想到一半就到上限、没有答案）当失败，退回这一类的默认模型，不把思考过程当结果。
+- **推荐只在 Qwen3 里挑**（提示词按它调过、中英文都好）；其它家的模型照样按内存分「可以用 / 内存不够」。
+- **自定义**：粘贴 Hugging Face 上 GGUF 文件的链接（`/resolve/` 或 `/blob/` 都行）→ 用 Hugging Face API 列出所在目录，取这个文件的
+  大小和 LFS SHA-256 → 记进 `localmodel.custom`（JSON）→ 开始下载（同样做内存、磁盘检查和双重校验）。文件名前面加上 id，
+  免得两个仓库里同名的文件互相覆盖；删掉时连记录一起删。效果和速度不保证，界面上写明。
 
 - 文件都来自 Qwen 官方的 GGUF 仓库，按顺序试 Hugging Face → ModelScope。大小和 SHA-256 写死在代码里（2026-11-09 从 Hugging Face API 取的），
   下载完双重校验，同内置模型。
@@ -96,9 +114,9 @@
 
 | 文件 | 内容 |
 |---|---|
-| `Core/AI/LocalModels.swift` | 模型清单、推荐规则、开机自启、本机信息（内存、磁盘、芯片、进程占用） |
+| `Core/AI/LocalModels.swift` | 模型清单（家族、出品方、用途）、自定义模型与 Hugging Face 链接导入、推荐规则、开机自启、本机信息（内存、磁盘、芯片、进程占用） |
 | `Core/Translation/OfflineTranslator.swift` | 按模型取实例（`instance(for:)`）、`isServerRunning`、`serverPID`、`start()` / `stop()`；新增四个 Qwen3 的 `OfflineModel` |
-| `Settings/LocalModelsSection.swift` | 「AI」页最上面的本地模型区块 |
+| `Settings/LocalModelsPane.swift` | 「AI」页的本机模型栏（这台 Mac、怎么选、已装的模型、添加模型 + 自定义链接） |
 | `Settings/AISettingsView.swift` | 服务商区块改成表格布局；去掉底部旧的本地模型区块 |
 | `Core/AI/AIFeature.swift`、`AIService.swift`、`TranslationSettings.swift` | `localModel` 选择与路由 |
 | `Core/AI/AIModelCatalog.swift`、`AICloudClient.swift` | Ollama 模型大小、本机服务的报错措辞和测试超时 |

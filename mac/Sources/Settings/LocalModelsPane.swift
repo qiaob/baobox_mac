@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 「AI」页最上面的本地模型（docs/local-models/DESIGN.md §1）：这台 Mac 的内存和磁盘、按用途的推荐搭配、下拉框选模型下载；
-/// 下面列出装了的模型，六个一视同仁：都能启动 / 停止、开机自启、删除。
-struct LocalModelsSection: View {
+/// 「AI」页的「本机模型」栏（docs/local-models/DESIGN.md §1）：这台 Mac 的内存和磁盘、怎么选、已装的模型、添加模型。
+/// 所有本地模型一视同仁：都能下载、启动 / 停止、开机自启、删除。
+struct LocalModelsPane: View {
     @ObservedObject private var observer = LocalModelsObserver.shared
+    @ObservedObject private var navigation = AISettingsNavigation.shared
     @State private var selected = LocalModels.recommended(totalMemory: MachineInfo.totalMemory)?.id
         ?? LocalModels.defaultEntry(for: .generation).id
     @State private var available: Int64?
@@ -12,14 +13,40 @@ struct LocalModelsSection: View {
     @State private var pendingStart: LocalModelEntry?
     @State private var pendingDownload: LocalModelEntry?
     @State private var diskShort: LocalModelEntry?
+    /// 自定义：粘贴的链接、查询中、出错原因。
+    @State private var customLink = ""
+    @State private var resolving = false
+    @State private var customError: String?
 
     private let total = MachineInfo.totalMemory
     private let chip = MachineInfo.chipName
 
-    /// 下载前要留的余量：校验时还会写一份暂存文件的元数据，留 0.5 GB 免得把磁盘写满。
+    /// 下载前要留的余量。
     private static let diskMargin: Int64 = 512 << 20
+    /// 下拉框最后那一项「自定义…」的值。
+    private static let customTag = "custom:new"
+    /// 「添加模型」那一行（「去下载」滚到这里）。
+    private static let addRowID = "localmodel.add"
+    /// 推荐说明里「用途」那一列的宽度（放得下「纪要、周报、润色」）。
+    private static let guidePurposeWidth: CGFloat = 112
 
     var body: some View {
+        ScrollViewReader { proxy in
+            Form {
+                machineSection
+                guideSection
+                installedSection
+                addSection
+            }
+            .formStyle(.grouped)
+            .onAppear { applyFocus(proxy) }
+            .onChange(of: navigation.focusLocalModel) { _, _ in applyFocus(proxy) }
+        }
+    }
+
+    // MARK: - 这台 Mac
+
+    private var machineSection: some View {
         Section {
             LabeledContent("localmodel.mac") {
                 Text(verbatim: macLine)
@@ -46,35 +73,13 @@ struct LocalModelsSection: View {
             LabeledContent("localmodel.available") {
                 Text(verbatim: availableLine)
             }
-            recommendationGuide
-            Picker("localmodel.install", selection: $selected) {
-                ForEach(LocalModels.all) { entry in
-                    Text(verbatim: "\(entry.name)（\(fitText(entry))）").tag(entry.id)
-                }
-            }
-            if let entry = LocalModels.entry(selected) {
-                installRow(entry)
-            }
         } header: {
-            Text("localmodel.section")
-        }
-
-
-        Section {
-            if listedEntries.isEmpty {
-                caption(L("localmodel.listEmpty"))
-            }
-            ForEach(listedEntries) { entry in
-                LocalModelRow(entry: entry, translator: entry.translator, footprint: footprints[entry.id],
-                              onStart: { requestStart(entry) }, onDownload: { requestDownload(entry) })
-            }
-            caption(L("localmodel.autostartHelp"))
-        } header: {
-            Text("localmodel.listSection")
+            Text("localmodel.paneIntro")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
         }
     }
-
-    // MARK: - 文案
 
     private var macLine: String {
         let memory = L("localmodel.memory \(MachineInfo.text(total))")
@@ -88,33 +93,38 @@ struct LocalModelsSection: View {
         return parts.isEmpty ? "—" : parts.joined(separator: " · ")
     }
 
-    /// 推荐说明「怎么选」（docs/local-models/DESIGN.md §3）：按用途各推荐一个，写明为什么；按这台 Mac 的内存动态生成。
-    /// 翻译用翻译专用的小模型；实时纠错要快，用最小的通用模型；纪要、润色用跑得动的最大的通用模型；跑不动的列为不建议；最后提一句云端。
-    private var recommendationGuide: some View {
+    // MARK: - 怎么选
+
+    /// 推荐说明（docs/local-models/DESIGN.md §3）：按用途各推荐一个、写明为什么；按这台 Mac 的内存生成。
+    private var guideSection: some View {
         let translation = LocalModels.defaultEntry(for: .translation)
         let quick = LocalModels.defaultEntry(for: .generation)
         let best = LocalModels.recommended(totalMemory: total).flatMap { $0.id == quick.id ? nil : $0 }
-        let avoid = LocalModels.models(for: .generation).filter { LocalModels.fit($0, totalMemory: total) == .tooBig }
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: L("localmodel.guide.title \(MachineInfo.text(total))"))
-                .font(.callout.weight(.medium))
-            guideRow(L("localmodel.guide.translation"), translation.name,
-                     L("localmodel.guide.translationWhy \(MachineInfo.text(translation.memoryNeed))"))
-            guideRow(L("localmodel.guide.correction"), quick.name, L("localmodel.guide.correctionWhy"))
-            if let best {
-                guideRow(L("localmodel.guide.writing"), best.name,
-                         L("localmodel.guide.writingWhy \(quick.name) \(MachineInfo.text(best.memoryNeed))"))
-            } else {
-                guideRow(L("localmodel.guide.writing"), quick.name, L("localmodel.guide.writingSmall"))
-            }
-            if !avoid.isEmpty {
-                guideRow(L("localmodel.guide.avoid"), ListFormatter.localizedString(byJoining: avoid.map(\.name)),
-                         L("localmodel.guide.avoidWhy"), warning: true)
-            }
-            guideRow(L("localmodel.guide.cloud"), L("localmodel.guide.cloudModel"), L("localmodel.guide.cloudWhy"))
+        let avoid = LocalModels.catalog.filter {
+            $0.isRecommendable && LocalModels.fit($0, totalMemory: total) == .tooBig
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
+        return Section {
+            VStack(alignment: .leading, spacing: 8) {
+                guideRow(L("localmodel.guide.translation"), translation.name,
+                         L("localmodel.guide.translationWhy \(MachineInfo.text(translation.memoryNeed))"))
+                guideRow(L("localmodel.guide.correction"), quick.name, L("localmodel.guide.correctionWhy"))
+                if let best {
+                    guideRow(L("localmodel.guide.writing"), best.name,
+                             L("localmodel.guide.writingWhy \(quick.name) \(MachineInfo.text(best.memoryNeed))"))
+                } else {
+                    guideRow(L("localmodel.guide.writing"), quick.name, L("localmodel.guide.writingSmall"))
+                }
+                if !avoid.isEmpty {
+                    guideRow(L("localmodel.guide.avoid"), ListFormatter.localizedString(byJoining: avoid.map(\.name)),
+                             L("localmodel.guide.avoidWhy"), warning: true)
+                }
+                guideRow(L("localmodel.guide.cloud"), L("localmodel.guide.cloudModel"), L("localmodel.guide.cloudWhy"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } header: {
+            Text(verbatim: L("localmodel.guide.title \(MachineInfo.text(total))"))
+        }
     }
 
     /// 推荐说明的一行：用途（固定宽度，各行对齐）| 模型名 + 为什么。
@@ -135,19 +145,9 @@ struct LocalModelsSection: View {
         }
     }
 
-    /// 推荐说明里「用途」那一列的宽度（放得下「纪要、周报、润色」）。
-    private static let guidePurposeWidth: CGFloat = 112
+    // MARK: - 已装的模型
 
-    private func fitText(_ entry: LocalModelEntry) -> String {
-        switch LocalModels.fit(entry, totalMemory: total) {
-        case .recommended: return L("localmodel.fit.recommended")
-        case .ok: return L("localmodel.fit.ok")
-        case .heavy: return L("localmodel.fit.heavy")
-        case .tooBig: return L("localmodel.fit.tooBig")
-        }
-    }
-
-    /// 装了的，以及下载中 / 暂停 / 出错的（切了下拉框也看得到进度）。六个模型规则一样。
+    /// 装了的，以及下载中 / 暂停 / 出错的（切了下拉框也看得到进度）。所有模型规则一样。
     private var listedEntries: [LocalModelEntry] {
         LocalModels.all.filter { entry in
             let translator = entry.translator
@@ -158,23 +158,101 @@ struct LocalModelsSection: View {
         }
     }
 
+    private var installedSection: some View {
+        Section {
+            if listedEntries.isEmpty {
+                caption(L("localmodel.listEmpty"))
+            }
+            ForEach(listedEntries) { entry in
+                LocalModelRow(entry: entry, translator: entry.translator, footprint: footprints[entry.id],
+                              onStart: { requestStart(entry) }, onDownload: { requestDownload(entry) })
+            }
+            caption(L("localmodel.autostartHelp"))
+        } header: {
+            Text("localmodel.listSection")
+        }
+    }
+
+    // MARK: - 添加模型
+
+    private var addSection: some View {
+        Section {
+            Picker("localmodel.install", selection: $selected) {
+                installOptions
+            }
+            .id(Self.addRowID)
+            if selected == Self.customTag {
+                customRows
+            } else if let entry = LocalModels.entry(selected) {
+                installRow(entry)
+            }
+        } header: {
+            Text("localmodel.addSection")
+        }
+    }
+
+    /// 按这台 Mac 的内存分组：推荐 / 可以用 / 内存不够；最后一项「自定义…」。
+    @ViewBuilder
+    private var installOptions: some View {
+        let entries = LocalModels.all
+        let recommended = entries.filter { LocalModels.fit($0, totalMemory: total) == .recommended }
+        let usable = entries.filter {
+            let fit = LocalModels.fit($0, totalMemory: total)
+            return fit == .ok || fit == .heavy
+        }
+        let tooBig = entries.filter { LocalModels.fit($0, totalMemory: total) == .tooBig }
+        if !recommended.isEmpty {
+            Section(L("localmodel.group.recommended")) {
+                ForEach(recommended) { Text(verbatim: optionLabel($0)).tag($0.id) }
+            }
+        }
+        if !usable.isEmpty {
+            Section(L("localmodel.group.usable")) {
+                ForEach(usable) { Text(verbatim: optionLabel($0)).tag($0.id) }
+            }
+        }
+        if !tooBig.isEmpty {
+            Section(L("localmodel.group.tooBig")) {
+                ForEach(tooBig) { Text(verbatim: optionLabel($0)).tag($0.id) }
+            }
+        }
+        Divider()
+        Text("localmodel.customItem").tag(Self.customTag)
+    }
+
+    /// 「Qwen3-8B · 通义千问 · 4.68 GB」，装了的后面标「已装」。
+    private func optionLabel(_ entry: LocalModelEntry) -> String {
+        let label = "\(entry.name) · \(entry.vendor) · \(MachineInfo.text(entry.model.byteSize))"
+        return entry.translator.isReady ? L("localmodel.installedLabel \(label)") : label
+    }
+
     @ViewBuilder
     private func installRow(_ entry: LocalModelEntry) -> some View {
-        caption(L("localmodel.info \(MachineInfo.text(entry.model.byteSize)) \(MachineInfo.text(entry.memoryNeed)) \(entry.usage)"))
-        switch entry.translator.modelState {
-        case .installed:
-            caption(L("localmodel.alreadyInstalled"))
-        case .downloading, .verifying, .failed:
-            caption(L("localmodel.inProgress"))
-        case .notInstalled:
-            HStack {
-                if LocalModels.fit(entry, totalMemory: total) == .tooBig {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: entry.usage)
+                    .font(.caption)
+                Text(verbatim: L("localmodel.info \(MachineInfo.text(entry.model.byteSize)) \(MachineInfo.text(entry.memoryNeed))"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if LocalModels.fit(entry, totalMemory: total) == .tooBig, !entry.translator.isReady {
                     Text(verbatim: L("localmodel.tooBigNote"))
                         .font(.caption)
                         .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            switch entry.translator.modelState {
+            case .installed:
+                Text("localmodel.alreadyInstalled")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .downloading, .verifying, .failed:
+                Text("localmodel.inProgress")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .notInstalled:
                 Button(entry.translator.hasPartialDownload ? L("localmodel.resume") : L("localmodel.download")) {
                     requestDownload(entry)
                 }
@@ -182,12 +260,38 @@ struct LocalModelsSection: View {
         }
     }
 
-    private func caption(_ text: String) -> some View {
-        Text(verbatim: text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+    /// 自定义：粘贴 Hugging Face 上 GGUF 文件的链接 → 查大小和校验值 → 加进清单并开始下载。
+    @ViewBuilder
+    private var customRows: some View {
+        HStack(spacing: 8) {
+            TextField("", text: $customLink, prompt: Text(verbatim: "https://huggingface.co/…/resolve/main/….gguf"))
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { addCustom() }
+            Button(resolving ? L("localmodel.custom.resolving") : L("localmodel.custom.add")) {
+                addCustom()
+            }
+            .disabled(resolving || customLink.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        caption(customError ?? L("localmodel.custom.help"), warning: customError != nil)
+    }
+
+    private func addCustom() {
+        let link = customLink
+        resolving = true
+        customError = nil
+        Task {
+            do {
+                let model = try await CustomModelImport.resolve(link)
+                LocalModels.addCustom(model)
+                customLink = ""
+                selected = model.id
+                if let entry = LocalModels.entry(model.id) { requestDownload(entry) }
+            } catch {
+                customError = error.localizedDescription
+            }
+            resolving = false
+        }
     }
 
     // MARK: - 动作
@@ -217,6 +321,16 @@ struct LocalModelsSection: View {
         entry.translator.start()
     }
 
+    /// 功能栏的「去下载」：把那个模型选进「添加模型」，滚过去。
+    private func applyFocus(_ proxy: ScrollViewProxy) {
+        guard let id = navigation.focusLocalModel else { return }
+        navigation.focusLocalModel = nil
+        if LocalModels.entry(id) != nil { selected = id }
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(Self.addRowID, anchor: .center) }
+        }
+    }
+
     /// 页面开着时每 3 秒刷新可用内存、磁盘、各推理进程的实际占用。
     private func refreshLoop() async {
         while !Task.isCancelled {
@@ -231,6 +345,14 @@ struct LocalModelsSection: View {
             footprints = prints
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
+    }
+
+    private func caption(_ text: String, warning: Bool = false) -> some View {
+        Text(verbatim: text)
+            .font(.caption)
+            .foregroundStyle(warning ? Color.orange : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func presence(_ item: Binding<LocalModelEntry?>) -> Binding<Bool> {
@@ -294,6 +416,7 @@ struct LocalModelRow: View {
                 .controlSize(.small)
         case .failed:
             Button(L("localmodel.retry")) { onDownload() }
+            trashButton
         case .installed:
             Toggle(L("localmodel.autostart"), isOn: Binding(get: { autostart }, set: { on in
                 autostart = on
@@ -347,5 +470,6 @@ struct LocalModelRow: View {
         autostart = false
         LocalModels.setAutostart(false, for: entry)
         translator.deleteModel()
+        if entry.isCustom { LocalModels.removeCustom(entry.id) }
     }
 }

@@ -111,9 +111,9 @@ final class AIService {
         if case .localModel(let id) = route {
             let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
             // Qwen3 一次只收一条消息：规矩和原文拼在一起；关掉思考，低温度求稳。
-            return try await withLocalModel(id, fallback: isLocalReady(.translation) ? local : nil) { backend in
+            return try await withLocalModel(id, fallback: isLocalReady(.translation) ? local : nil) { backend, extra in
                 try await backend.respond(to: prompt.system + "\n\n" + prompt.user,
-                                          maxTokens: max(256, text.count * 3), sampling: .correction)
+                                          maxTokens: max(256, text.count * 3) + extra, sampling: .correction)
             }
         }
         guard let modelID = route.modelID else {
@@ -136,8 +136,8 @@ final class AIService {
                                                                               sampling: sampling))
         }
         if case .localModel(let id) = route {
-            return try await withLocalModel(id, fallback: isLocalReady(.generation) ? local : nil) { backend in
-                OfflinePrompt.clean(try await backend.respond(to: prompt, maxTokens: maxTokens, sampling: sampling))
+            return try await withLocalModel(id, fallback: isLocalReady(.generation) ? local : nil) { backend, extra in
+                OfflinePrompt.clean(try await backend.respond(to: prompt, maxTokens: maxTokens + extra, sampling: sampling))
             }
         }
         guard let modelID = route.modelID else {
@@ -197,18 +197,25 @@ final class AIService {
 
     // MARK: - 本机大模型
 
-    /// 本机大模型：没下载（被删了）或出错（进程起不来、超时…）时退回内置的本地模型（有的话）。
+    /// 推理模型（DeepSeek-R1 蒸馏）先思考再回答，思考很长：输出上限多给这么多，免得答案没写出来就截断。
+    private static let reasoningExtraTokens = 3072
+
+    /// 选定的本地模型：没下载（被删了）或出错（进程起不来、超时、推理模型没想完…）时退回这一类的默认本地模型（有的话）。
+    /// `request` 的第二个参数是推理模型要多给的输出上限（其余为 0）。
     private func withLocalModel(_ id: String, fallback: (() async throws -> String)?,
-                                request: (OfflineTranslator) async throws -> String) async throws -> Reply {
+                                request: (OfflineTranslator, Int) async throws -> String) async throws -> Reply {
         func fallBack(_ error: Error) async throws -> Reply {
             guard let fallback else { throw error }
             return Reply(text: try await fallback(), route: .local, usedFallback: true)
         }
-        guard let backend = LocalModels.entry(id)?.translator, backend.isReady else {
+        guard let entry = LocalModels.entry(id), entry.translator.isReady else {
             return try await fallBack(OfflineTranslationError.modelMissing)
         }
         do {
-            return Reply(text: try await request(backend), route: .localModel(id), usedFallback: false)
+            let text = try await request(entry.translator, entry.isReasoning ? Self.reasoningExtraTokens : 0)
+            // 推理模型想到一半就到上限：清理后还以 <think> 开头 = 没有答案，别把思考过程当结果。
+            if entry.isReasoning, text.hasPrefix("<think>") { throw AICloudError.truncated }
+            return Reply(text: text, route: .localModel(id), usedFallback: false)
         } catch is CancellationError {
             throw CancellationError()
         } catch {

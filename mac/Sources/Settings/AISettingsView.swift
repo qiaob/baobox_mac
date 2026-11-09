@@ -1,8 +1,8 @@
 import Combine
 import SwiftUI
 
-/// 设置页「AI」（docs/ai-service/DESIGN.md §6.1）：最上面是本地模型（docs/local-models/DESIGN.md），然后是服务商与模型、
-/// 各功能用哪个模型（按工具分组，同快捷键页）、用量上限。
+/// 设置页「AI」（docs/ai-service/DESIGN.md §6.1）：顶部切三栏 ——「功能」（每个功能用哪个模型、能不能用、去处理，默认这栏）、
+/// 「本机模型」（docs/local-models/DESIGN.md）、「云端模型」（服务商与模型）。设置本身就是引导：新手先看到功能和状态。
 /// Key 只进钥匙串，这里从不把已存的 Key 显示出来。文本框随输入保存（Key 除外，要点「保存」）。
 struct AISettingsView: View {
     static let tabID = "ai"
@@ -10,6 +10,7 @@ struct AISettingsView: View {
     @ObservedObject var registry: ToolRegistry
     @ObservedObject private var store = AIModelStore.shared
     @ObservedObject private var catalog = AIModelCatalog.shared
+    @ObservedObject private var navigation = AISettingsNavigation.shared
     @AppStorage(AICloudSettings.maxTokensKey) private var maxTokens = AICloudSettings.defaultMaxTokens
     @AppStorage(AICloudSettings.perMinuteKey) private var perMinute = AICloudSettings.defaultPerMinute
     /// 刚加的账号默认展开。
@@ -54,68 +55,24 @@ struct AISettingsView: View {
     }
 
     var body: some View {
-        let usage = modelUsage()
-        Form {
-            Section {
-                Text("ai.settings.intro")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            LocalModelsSection()
-
-            Section {
-                if store.accounts.isEmpty {
-                    caption(L("ai.settings.accountsEmpty"))
-                }
-                ForEach(store.accounts) { account in
-                    TappableDisclosure(initiallyExpanded: account.id == justAdded) {
-                        accountDetails(account, usage: usage)
-                    } label: {
-                        accountLabel(account)
-                    }
-                }
-                addAccountMenu
-            } header: {
-                Text("ai.settings.accountsSection")
-            }
-
-            Section {
-                caption(L("ai.settings.featuresHelp"))
-            } header: {
-                Text("ai.settings.featuresSection")
-            }
-            ForEach(groups) { group in
-                Section {
-                    ForEach(group.definitions, id: \.feature.id) { definition in
-                        AIFeatureRow(definition: definition)
-                    }
-                } header: {
-                    Text(verbatim: group.name)
+        VStack(spacing: 0) {
+            // 三栏：功能（默认，先看每个功能用什么、能不能用）/ 本机模型 / 云端模型。
+            Picker("", selection: $navigation.pane) {
+                ForEach(AISettingsPane.allCases) { pane in
+                    Text(verbatim: pane.title).tag(pane)
                 }
             }
-
-            Section {
-                Stepper(value: $maxTokens, in: AICloudSettings.maxTokensRange, step: 128) {
-                    Text(L("ai.settings.maxTokens \(maxTokens)"))
-                }
-                Stepper(value: $perMinute, in: AICloudSettings.perMinuteRange, step: 10) {
-                    Text(L("ai.settings.perMinute \(perMinute)"))
-                }
-                caption(L("ai.settings.limitsHelp"))
-            } header: {
-                Text("ai.settings.limitsSection")
-            }
-
-            Section {
-                caption(L("ai.settings.privacy"))
-            } header: {
-                Text("ai.settings.privacySection")
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, 14)
+            .padding(.bottom, 2)
+            switch navigation.pane {
+            case .features: featuresPane
+            case .local: LocalModelsPane()
+            case .cloud: cloudPane
             }
         }
-        .formStyle(.grouped)
         .onReceive(NotificationCenter.default.publisher(for: AIFeatureSettings.didChange)) { _ in
             choicesRevision += 1
         }
@@ -138,6 +95,71 @@ struct AISettingsView: View {
         } message: { model in
             Text(verbatim: bigModelWarning(model) ?? "")
         }
+    }
+
+    // MARK: - 功能栏
+
+    /// 每个功能用哪个模型、能不能用、不能用点哪里去处理；最下面收起「用量上限与隐私」。
+    private var featuresPane: some View {
+        Form {
+            Section {
+                caption(L("ai.settings.featuresIntro"))
+            }
+            ForEach(groups) { group in
+                Section {
+                    ForEach(group.definitions, id: \.feature.id) { definition in
+                        AIFeatureRow(definition: definition)
+                    }
+                } header: {
+                    Text(verbatim: group.name)
+                }
+            }
+            Section {
+                TappableDisclosure {
+                    Stepper(value: $maxTokens, in: AICloudSettings.maxTokensRange, step: 128) {
+                        Text(L("ai.settings.maxTokens \(maxTokens)"))
+                    }
+                    Stepper(value: $perMinute, in: AICloudSettings.perMinuteRange, step: 10) {
+                        Text(L("ai.settings.perMinute \(perMinute)"))
+                    }
+                    caption(L("ai.settings.limitsHelp"))
+                    caption(L("ai.settings.privacy"))
+                } label: {
+                    Text("ai.settings.advanced")
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - 云端模型栏
+
+    private var cloudPane: some View {
+        let usage = modelUsage()
+        return Form {
+            Section {
+                caption(L("ai.settings.cloudIntro"))
+            }
+            Section {
+                if store.accounts.isEmpty {
+                    caption(L("ai.settings.accountsEmpty"))
+                }
+                ForEach(store.accounts) { account in
+                    // 刚加的、或从功能栏「去填写」跳过来的那个服务商直接展开。
+                    TappableDisclosure(initiallyExpanded: account.id == justAdded
+                                       || account.id == navigation.focusAccount) {
+                        accountDetails(account, usage: usage)
+                    } label: {
+                        accountLabel(account)
+                    }
+                }
+                addAccountMenu
+            } header: {
+                Text("ai.settings.accountsSection")
+            }
+        }
+        .formStyle(.grouped)
+        .onDisappear { navigation.focusAccount = nil }
     }
 
     // MARK: - 服务商账号

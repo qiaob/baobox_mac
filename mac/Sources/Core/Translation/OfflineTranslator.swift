@@ -58,9 +58,47 @@ struct OfflineModel {
                                  sha256: "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0")
     static let qwen3_30b_a3b = qwen3("30B-A3B", byteSize: 18_556_685_824,
                                      sha256: "0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5")
+    static let qwen3_0_6b = qwen3("0.6B", quant: "Q8_0", byteSize: 639_446_688,
+                                  sha256: "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031")
+    static let qwen3_32b = qwen3("32B", byteSize: 19_762_149_024,
+                                 sha256: "efd971561896866f0e910cce52761ca77b1b138090c7f15fe284676d57d1f689")
 
-    private static func qwen3(_ size: String, byteSize: Int64, sha256: String) -> OfflineModel {
-        let file = "Qwen3-\(size)-Q4_K_M.gguf"
+    /// 其它家的常见模型（2026-11-09 扩充，用户选 A）：Hugging Face 上的 GGUF（Q4_K_M），大小和 SHA-256 同样取自 Hugging Face API。
+    /// 这些在 ModelScope 上没有同名镜像，只有一个下载地址。
+    static let gemma3_4b = huggingFace(id: "gemma3-4b", name: "Gemma 3 4B", repo: "ggml-org/gemma-3-4b-it-GGUF",
+                                       file: "gemma-3-4b-it-Q4_K_M.gguf", byteSize: 2_489_757_856,
+                                       sha256: "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863")
+    static let gemma3_12b = huggingFace(id: "gemma3-12b", name: "Gemma 3 12B", repo: "ggml-org/gemma-3-12b-it-GGUF",
+                                        file: "gemma-3-12b-it-Q4_K_M.gguf", byteSize: 7_300_574_976,
+                                        sha256: "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5")
+    static let gemma3_27b = huggingFace(id: "gemma3-27b", name: "Gemma 3 27B", repo: "ggml-org/gemma-3-27b-it-GGUF",
+                                        file: "gemma-3-27b-it-Q4_K_M.gguf", byteSize: 16_546_404_736,
+                                        sha256: "edc9aff4d811a285b9157618130b08688b0768d94ee5355b02dc0cb713012e15")
+    static let llama31_8b = huggingFace(id: "llama3.1-8b", name: "Llama 3.1 8B",
+                                        repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+                                        file: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", byteSize: 4_920_739_232,
+                                        sha256: "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c")
+    static let glm4_9b = huggingFace(id: "glm4-9b", name: "GLM-4-9B", repo: "bartowski/THUDM_GLM-4-9B-0414-GGUF",
+                                     file: "THUDM_GLM-4-9B-0414-Q4_K_M.gguf", byteSize: 6_166_574_464,
+                                     sha256: "2b95f0b88eca423bfb874c4f8e7b9574ec76acab2befd272076e8a8dce31216a")
+    static let phi4_mini = huggingFace(id: "phi4-mini", name: "Phi-4-mini",
+                                       repo: "bartowski/microsoft_Phi-4-mini-instruct-GGUF",
+                                       file: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf", byteSize: 2_491_874_688,
+                                       sha256: "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2")
+    /// 推理模型：先思考再回答，思考很长 —— 上下文开到 8192（docs/local-models/DESIGN.md §2）。
+    static let r1_distill_7b = huggingFace(id: "deepseek-r1-7b", name: "DeepSeek-R1 7B",
+                                           repo: "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+                                           file: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf", byteSize: 4_683_073_504,
+                                           sha256: "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+                                           contextSize: 8192)
+    static let r1_distill_14b = huggingFace(id: "deepseek-r1-14b", name: "DeepSeek-R1 14B",
+                                            repo: "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
+                                            file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf", byteSize: 8_988_110_240,
+                                            sha256: "0b319bd0572f2730bfe11cc751defe82045fad5085b4e60591ac2cd2d9633181",
+                                            contextSize: 8192)
+
+    private static func qwen3(_ size: String, quant: String = "Q4_K_M", byteSize: Int64, sha256: String) -> OfflineModel {
+        let file = "Qwen3-\(size)-\(quant).gguf"
         return OfflineModel(
             id: "qwen3-\(size.lowercased())",
             displayName: "Qwen3-\(size)",
@@ -72,6 +110,23 @@ struct OfflineModel {
                 "https://modelscope.cn/models/Qwen/Qwen3-\(size)-GGUF/resolve/master/\(file)",
             ].compactMap(URL.init(string:)),
             contextSize: 4096
+        )
+    }
+
+    /// Hugging Face 上的一个 GGUF 文件（自定义模型也走这个）。
+    static func huggingFace(id: String, name: String, repo: String, file: String, revision: String = "main",
+                            byteSize: Int64, sha256: String, contextSize: Int = 4096) -> OfflineModel {
+        let encodedPath = file.split(separator: "/")
+            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "/")
+        return OfflineModel(
+            id: id,
+            displayName: name,
+            fileName: (file as NSString).lastPathComponent,
+            byteSize: byteSize,
+            sha256: sha256,
+            mirrors: ["https://huggingface.co/\(repo)/resolve/\(revision)/\(encodedPath)"].compactMap(URL.init(string:)),
+            contextSize: contextSize
         )
     }
 }
