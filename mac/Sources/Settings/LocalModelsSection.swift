@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// 「AI」页最上面的本地模型（docs/local-models/DESIGN.md §1）：这台 Mac 的内存和磁盘、建议装哪个、下拉框选模型下载；
-/// 下面列出已装的模型（内置的两个一直在），每个能启动 / 停止、开机自启、删除。
+/// 「AI」页最上面的本地模型（docs/local-models/DESIGN.md §1）：这台 Mac 的内存和磁盘、按用途的推荐搭配、下拉框选模型下载；
+/// 下面列出装了的模型，六个一视同仁：都能启动 / 停止、开机自启、删除。
 struct LocalModelsSection: View {
     @ObservedObject private var observer = LocalModelsObserver.shared
     @State private var selected = LocalModels.recommended(totalMemory: MachineInfo.totalMemory)?.id
-        ?? LocalModels.optional[0].id
+        ?? LocalModels.defaultEntry(for: .generation).id
     @State private var available: Int64?
     @State private var freeDisk: Int64?
     @State private var footprints: [String: Int64] = [:]
@@ -48,7 +48,7 @@ struct LocalModelsSection: View {
             }
             caption(recommendationLine)
             Picker("localmodel.install", selection: $selected) {
-                ForEach(LocalModels.optional) { entry in
+                ForEach(LocalModels.all) { entry in
                     Text(verbatim: "\(entry.name)（\(fitText(entry))）").tag(entry.id)
                 }
             }
@@ -61,6 +61,9 @@ struct LocalModelsSection: View {
 
 
         Section {
+            if listedEntries.isEmpty {
+                caption(L("localmodel.listEmpty"))
+            }
             ForEach(listedEntries) { entry in
                 LocalModelRow(entry: entry, translator: entry.translator, footprint: footprints[entry.id],
                               onStart: { requestStart(entry) }, onDownload: { requestDownload(entry) })
@@ -85,9 +88,14 @@ struct LocalModelsSection: View {
         return parts.isEmpty ? "—" : parts.joined(separator: " · ")
     }
 
+    /// 按用途的推荐搭配：翻译用翻译专用的小模型；实时纠错要快，用最小的通用模型；纪要、润色用这台 Mac 跑得动的最大的通用模型。
     private var recommendationLine: String {
-        guard let best = LocalModels.recommended(totalMemory: total) else { return L("localmodel.recommendNone") }
-        return L("localmodel.recommend \(best.name)")
+        let translation = LocalModels.defaultEntry(for: .translation).name
+        let quick = LocalModels.defaultEntry(for: .generation).name
+        guard let best = LocalModels.recommended(totalMemory: total), best.name != quick else {
+            return L("localmodel.recommendSmall \(translation) \(quick)")
+        }
+        return L("localmodel.recommend \(translation) \(quick) \(best.name)")
     }
 
     private func fitText(_ entry: LocalModelEntry) -> String {
@@ -99,9 +107,9 @@ struct LocalModelsSection: View {
         }
     }
 
-    /// 已装的（内置的两个一直列出，没下载的在这里下），以及下载中 / 暂停 / 出错的大模型（切了下拉框也看得到进度）。
+    /// 装了的，以及下载中 / 暂停 / 出错的（切了下拉框也看得到进度）。六个模型规则一样。
     private var listedEntries: [LocalModelEntry] {
-        LocalModels.builtIn + LocalModels.optional.filter { entry in
+        LocalModels.all.filter { entry in
             let translator = entry.translator
             switch translator.modelState {
             case .installed, .downloading, .verifying, .failed: return true
@@ -214,14 +222,7 @@ struct LocalModelRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(verbatim: entry.name)
-                    if entry.builtIn {
-                        Text("localmodel.builtIn")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text(verbatim: entry.name)
                 Text(verbatim: "\(entry.usage) · \(status.text)")
                     .font(.caption)
                     .foregroundStyle(status.warning ? Color.orange : Color.secondary)

@@ -8,7 +8,7 @@ struct AIFeatureRow: View {
     let showsManage: Bool
 
     @ObservedObject private var store = AIModelStore.shared
-    /// 本机大模型下载好 / 删掉时刷新「本机」一组。
+    /// 本地模型下载好 / 删掉时刷新「本机」一组（「未下载」标记）。
     @ObservedObject private var localModels = LocalModelsObserver.shared
     /// 只用来跟着 UserDefaults 刷新（在别处改了这个功能也看得到）；读写都走 `AIFeatureSettings`。
     @AppStorage private var stored: String
@@ -22,18 +22,21 @@ struct AIFeatureRow: View {
 
     private var feature: AIFeature { definition.feature }
 
-    /// 实际生效的选择：指向已删掉的云端模型、或已删除的本机大模型时按默认显示。
+    /// 实际生效的选择：指向已删掉的云端模型时按默认显示。本地模型都在列表里（没下载的标「未下载」），选了照样显示。
     private var choice: AIEngineChoice {
         _ = stored
         let choice = AIFeatureSettings.choice(feature)
         if let id = choice.modelID, store.model(id) == nil { return AIFeatureSettings.defaultChoice(feature) }
-        if let id = choice.localModelID, !LocalModels.isInstalled(id) { return AIFeatureSettings.defaultChoice(feature) }
         return choice
     }
 
-    /// 已下载的本机大模型（下拉框的「本机」一组）。
-    private var installedLocalModels: [LocalModelEntry] {
-        LocalModels.optional.filter { LocalModels.isInstalled($0.id) }
+    /// 选的是哪个本地模型（`.local` = 这一类功能的默认本地模型）；不是本地时为 nil。
+    private var localEntry: LocalModelEntry? {
+        switch choice {
+        case .local: return LocalModels.defaultEntry(for: feature.kind)
+        case .localModel(let id): return LocalModels.entry(id)
+        case .auto, .system, .model: return nil
+        }
     }
 
     private var selection: Binding<String> {
@@ -47,19 +50,14 @@ struct AIFeatureRow: View {
 
     var body: some View {
         Picker(selection: selection) {
-            switch feature.kind {
-            case .translation:
+            if feature.kind == .translation {
                 Text("translation.engine.auto").tag(AIEngineChoice.auto.storageValue)
                 Text("translation.engine.system").tag(AIEngineChoice.system.storageValue)
-                Text("translation.engine.offline").tag(AIEngineChoice.local.storageValue)
-            case .generation:
-                Text("ai.engine.local").tag(AIEngineChoice.local.storageValue)
             }
-            if !installedLocalModels.isEmpty {
-                Section(L("ai.feature.localGroup")) {
-                    ForEach(installedLocalModels) { entry in
-                        Text(verbatim: entry.name).tag(AIEngineChoice.localModel(entry.id).storageValue)
-                    }
+            // 本地模型都在「本机」一组里，一视同仁；没下载的标「未下载」（同云端模型的「未配置」）。
+            Section(L("ai.feature.localGroup")) {
+                ForEach(LocalModels.models(for: feature.kind)) { entry in
+                    Text(verbatim: localLabel(entry)).tag(localTag(entry))
                 }
             }
             // 每个服务商账号一组，组名 = 账号名。
@@ -76,10 +74,12 @@ struct AIFeatureRow: View {
         } label: {
             Text(verbatim: definition.title)
         }
-        if let id = choice.localModelID, let entry = LocalModels.entry(id) {
-            Text(verbatim: L("ai.feature.localModelNote \(entry.name) \(MachineInfo.text(entry.memoryNeed))"))
+        if let entry = localEntry {
+            let ready = entry.translator.isReady
+            Text(verbatim: ready ? L("ai.feature.localModelNote \(entry.name) \(MachineInfo.text(entry.memoryNeed))")
+                                 : L("ai.feature.localNotDownloaded \(entry.name)"))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(ready ? Color.secondary : Color.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -104,6 +104,16 @@ struct AIFeatureRow: View {
             }
             .controlSize(.small)
         }
+    }
+
+    /// 本地模型在下拉框里的值：这一类功能的默认本地模型存成 `.local`，其余存 `localmodel:<id>`（`AIFeatureSettings` 也这样归一）。
+    private func localTag(_ entry: LocalModelEntry) -> String {
+        entry.id == LocalModels.defaultEntry(for: feature.kind).id
+            ? AIEngineChoice.local.storageValue : AIEngineChoice.localModel(entry.id).storageValue
+    }
+
+    private func localLabel(_ entry: LocalModelEntry) -> String {
+        entry.translator.isReady ? entry.name : L("ai.feature.notDownloadedLabel \(entry.name)")
     }
 
     private func label(for model: AICloudModel) -> String {

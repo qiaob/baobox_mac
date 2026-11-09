@@ -25,11 +25,11 @@ enum AIEngineChoice: Hashable {
     case auto
     /// 翻译类：系统翻译。
     case system
-    /// 本地模型：翻译类 = Hy-MT2，通用类 = Qwen3-1.7B。
+    /// 这一类功能的默认本地模型（`LocalModels.defaultEntry`）：翻译类 = Hy-MT2，通用类 = Qwen3-1.7B。
     case local
     /// 云端模型（`AICloudModel.id`）。
     case model(String)
-    /// 本机下载的 Qwen3 大模型（`LocalModelEntry.id`，docs/local-models/DESIGN.md §5）。
+    /// 某个本地模型（`LocalModelEntry.id`，docs/local-models/DESIGN.md §5）。这一类功能的默认本地模型存成 `.local`。
     case localModel(String)
 
     private static let modelPrefix = "model:"
@@ -131,10 +131,20 @@ enum AIFeatureSettings {
         }
     }
 
-    /// 通用类不认「自动」「系统翻译」（存坏了也不至于走错）。
+    /// 存的值归一：通用类不认「自动」「系统翻译」；选的是这一类功能的默认本地模型时就是 `.local`（同一个东西两种写法）；
+    /// 翻译专用的模型不能做通用生成（存坏了也不至于走错）。
     private static func valid(_ choice: AIEngineChoice?, for feature: AIFeature) -> AIEngineChoice? {
         guard let choice else { return nil }
-        if feature.kind == .generation, choice == .auto || choice == .system { return nil }
-        return choice
+        switch choice {
+        case .auto, .system:
+            return feature.kind == .generation ? nil : choice
+        case .localModel(let id):
+            if id == LocalModels.defaultEntry(for: feature.kind).id { return .local }
+            guard let entry = LocalModels.entry(id) else { return nil }
+            if feature.kind == .generation, entry.kind == .translation { return nil }
+            return choice
+        case .local, .model:
+            return choice
+        }
     }
 }

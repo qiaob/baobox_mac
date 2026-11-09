@@ -326,7 +326,7 @@ private struct LiveTranslateBarView: View {
         }.joined(separator: " · ")
         let engine: String
         switch controller.sessionEngine {
-        case .offline: engine = L("livetranslate.status.engineOffline")
+        case .offline: engine = L("livetranslate.status.engineLocalModel \(OfflineModel.translation.displayName)")
         case .system: engine = L("livetranslate.status.engineSystem")
         case .cloud(let modelID):
             engine = L("livetranslate.status.engineCloud \(AIModelStore.shared.displayName(modelID: modelID) ?? "")")

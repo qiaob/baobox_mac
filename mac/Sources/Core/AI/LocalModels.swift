@@ -2,12 +2,12 @@ import Combine
 import Darwin
 import Foundation
 
-/// 「AI」页里的一个本地模型（docs/local-models/DESIGN.md §2）：内置的两个 + 可选的 Qwen3 大模型。
+/// 一个本地模型（docs/local-models/DESIGN.md §2）。六个都一样：按需下载、启动 / 停止、开机自启、给功能用。
+/// 只分「翻译专用」（Hy-MT2）和「通用」（Qwen3，翻译也能做），以及「这一类功能默认用哪个」。
 struct LocalModelEntry: Identifiable {
     let model: OfflineModel
-    /// 内置的翻译模型只做翻译；其余是通用模型（翻译也能做）。
+    /// `.translation` = 翻译专用；`.generation` = 通用。
     let kind: AIFeatureKind
-    let builtIn: Bool
 
     var id: String { model.id }
     var name: String { model.displayName }
@@ -20,9 +20,12 @@ struct LocalModelEntry: Identifiable {
 
     /// 适合做什么（「AI」页的说明）。
     var usage: String {
-        if kind == .translation { return L("localmodel.usage.translation") }
-        if builtIn { return L("localmodel.usage.builtInGeneral") }
-        return model.id == OfflineModel.qwen3_30b_a3b.id ? L("localmodel.usage.moe") : L("localmodel.usage.general")
+        switch model.id {
+        case OfflineModel.translation.id: return L("localmodel.usage.translation")
+        case OfflineModel.corrector.id: return L("localmodel.usage.small")
+        case OfflineModel.qwen3_30b_a3b.id: return L("localmodel.usage.moe")
+        default: return L("localmodel.usage.general")
+        }
     }
 }
 
@@ -30,28 +33,34 @@ struct LocalModelEntry: Identifiable {
 enum LocalModels {
     static let runtimeOverhead: Int64 = 1 << 30
 
-    static let builtIn: [LocalModelEntry] = [
-        LocalModelEntry(model: .translation, kind: .translation, builtIn: true),
-        LocalModelEntry(model: .corrector, kind: .generation, builtIn: true),
+    /// 全部本地模型，从小到大。
+    static let all: [LocalModelEntry] = [
+        LocalModelEntry(model: .translation, kind: .translation),
+        LocalModelEntry(model: .corrector, kind: .generation),
+        LocalModelEntry(model: .qwen3_4b, kind: .generation),
+        LocalModelEntry(model: .qwen3_8b, kind: .generation),
+        LocalModelEntry(model: .qwen3_14b, kind: .generation),
+        LocalModelEntry(model: .qwen3_30b_a3b, kind: .generation),
     ]
-
-    /// 可选的 Qwen3 大模型（给功能下拉框的「本机」一组、安装下拉框用）。
-    static let optional: [LocalModelEntry] = [
-        LocalModelEntry(model: .qwen3_4b, kind: .generation, builtIn: false),
-        LocalModelEntry(model: .qwen3_8b, kind: .generation, builtIn: false),
-        LocalModelEntry(model: .qwen3_14b, kind: .generation, builtIn: false),
-        LocalModelEntry(model: .qwen3_30b_a3b, kind: .generation, builtIn: false),
-    ]
-
-    static var all: [LocalModelEntry] { builtIn + optional }
 
     static func entry(_ id: String) -> LocalModelEntry? { all.first { $0.id == id } }
 
-    /// 可选模型已下载（功能能用它）。
+    /// 能给这一类功能用的本地模型：翻译类 = 全部（Qwen3 用提示词翻译）；通用类 = 去掉翻译专用的。
+    static func models(for kind: AIFeatureKind) -> [LocalModelEntry] {
+        kind == .translation ? all : all.filter { $0.kind == .generation }
+    }
+
+    /// 这一类功能的默认本地模型：翻译 = Hy-MT2（「自动」翻译的离线后备）；通用 = Qwen3-1.7B。
+    /// `AIEngineChoice.local` 指的就是它（docs/local-models/DESIGN.md §5）。
+    static func defaultEntry(for kind: AIFeatureKind) -> LocalModelEntry {
+        let id = kind == .translation ? OfflineModel.translation.id : OfflineModel.corrector.id
+        return all.first { $0.id == id } ?? all[0]
+    }
+
+    /// 已下载（功能能用它）。
     @MainActor
     static func isInstalled(_ id: String) -> Bool {
-        guard let entry = optional.first(where: { $0.id == id }) else { return false }
-        return entry.translator.isReady
+        entry(id)?.translator.isReady ?? false
     }
 
     // MARK: - 推荐
@@ -80,9 +89,9 @@ enum LocalModels {
         return entry.id == recommended(totalMemory: totalMemory)?.id ? .recommended : .ok
     }
 
-    /// 这台 Mac 推荐装哪个：占用不超过总内存 45% 的可选模型里最大的。
+    /// 这台 Mac 推荐装哪个：占用不超过总内存 45% 的通用模型里最大的。
     static func recommended(totalMemory: Int64) -> LocalModelEntry? {
-        optional.filter { Double($0.memoryNeed) <= Double(totalMemory) * comfortableShare }
+        models(for: .generation).filter { Double($0.memoryNeed) <= Double(totalMemory) * comfortableShare }
             .max { $0.memoryNeed < $1.memoryNeed }
     }
 
