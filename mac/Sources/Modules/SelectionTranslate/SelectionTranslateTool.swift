@@ -1,6 +1,19 @@
 import AppKit
 import SwiftUI
 
+extension AIFeature {
+    /// 划词翻译用哪个引擎 / 模型（docs/ai-service/DESIGN.md §3.3）。新键没值时读旧的共用键 `translation.engine`。
+    static let selectionTranslate = AIFeature(id: "selectiontranslate.translate", kind: .translation,
+                                              legacyKey: TranslationSettings.legacyEngineKey)
+}
+
+extension AIFeatureDefinition {
+    static var selectionTranslate: AIFeatureDefinition {
+        AIFeatureDefinition(feature: .selectionTranslate, title: L("selectiontranslate.ai.translate"),
+                            sends: L("selectiontranslate.ai.translateSends"))
+    }
+}
+
 /// 划词翻译模块壳：全系统选中文字 → 就地浮层翻译 + 朗读。
 /// 设计见 docs/selection-translate/DESIGN.md。
 @MainActor
@@ -51,6 +64,10 @@ final class SelectionTranslateTool: ToolModule {
 
     func settingsTab() -> AnyView {
         AnyView(SelectionTranslateSettingsView())
+    }
+
+    func aiFeatures() -> [AIFeatureDefinition] {
+        [.selectionTranslate]
     }
 
     func activate() {

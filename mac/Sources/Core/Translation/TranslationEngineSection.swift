@@ -1,57 +1,18 @@
 import SwiftUI
 
-/// 设置页共用区块：本模块的翻译引擎选择 + 离线模型（下载 / 暂停 / 删除）。划词助手、字幕与同传的设置页各嵌一块，
-/// 各存各的键（`TranslationScope.engineKey`）。云端服务没配置时该项置灰，旁边给「去配置」（跳到设置的「AI」页）。
+/// 模块设置页的翻译区块（docs/ai-service/DESIGN.md §6.2）：这个翻译功能用哪个模型（与「AI」页的功能表是同一行、同一份设置）
+/// + 引擎说明 + 离线模型下载。划词助手、字幕与同传的设置页各嵌一块。字幕与同传运行中改了，按 `AIFeatureSettings.didChange` 重启。
 struct TranslationEngineSection: View {
-    let scope: TranslationScope
-    @AppStorage private var engine: String
-    @ObservedObject private var ai = AIService.shared
-    /// 引擎变了要做的事（如实时翻译运行中重启）。
-    var onEngineChange: (() -> Void)?
-
-    @MainActor
-    init(scope: TranslationScope, onEngineChange: (() -> Void)? = nil) {
-        self.scope = scope
-        self.onEngineChange = onEngineChange
-        // 新键没值时，默认值取旧的共用键（升级不变）。
-        _engine = AppStorage(wrappedValue: TranslationSettings.engineChoice(scope).rawValue, scope.engineKey)
-    }
+    let definition: AIFeatureDefinition
 
     var body: some View {
         Section {
-            Picker("translation.settings.engine", selection: $engine) {
-                ForEach(TranslationEngineChoice.allCases) { choice in
-                    if choice == .cloud && !ai.cloudConfigured {
-                        Text(L("translation.engine.cloudUnconfigured")).tag(choice.rawValue)
-                    } else {
-                        Text(choice.title).tag(choice.rawValue)
-                    }
-                }
-            }
-            .onChange(of: engine) { _, _ in onEngineChange?() }
+            AIFeatureRow(definition: definition, showsManage: true)
             Text(TranslationSettings.systemAvailable
                  ? L("translation.settings.engineHelp")
                  : L("translation.settings.engineHelpNoSystem"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if !ai.cloudConfigured {
-                HStack {
-                    Text("ai.settings.cloudNotConfigured")
-                        .font(.caption)
-                        .foregroundStyle(engine == TranslationEngineChoice.cloud.rawValue ? Color.orange : Color.secondary)
-                    Spacer()
-                    Button("ai.settings.goConfigure") {
-                        SettingsTabSelection.shared.selectedTab = AISettingsView.tabID
-                    }
-                    .controlSize(.small)
-                }
-            }
-            if engine == TranslationEngineChoice.cloud.rawValue {
-                Text(verbatim: scope.cloudDisclosure)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             OfflineModelRow()
         } header: {
             Text("translation.settings.section")

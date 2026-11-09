@@ -37,8 +37,6 @@ struct LiveTranslateSettingsSections: View {
     @AppStorage(LiveTranslateSettings.translateKey) private var translate = true
     @AppStorage(LiveTranslateSettings.onDeviceKey) private var onDevice = true
     @AppStorage(LiveTranslateSettings.aiCorrectionKey) private var aiCorrection = true
-    @AppStorage(LiveTranslateSettings.correctionEngineKey) private var correctionEngine = AIService.Route.local.rawValue
-    @ObservedObject private var ai = AIService.shared
     @AppStorage(LiveTranslateSettings.displayKey) private var display = LiveTranslateDisplay.both.rawValue
     @AppStorage(LiveTranslateSettings.fontSizeKey) private var fontSize = LiveTranslateSettings.defaultFontSize
     @AppStorage(LiveTranslateSettings.opacityKey) private var opacity = LiveTranslateSettings.defaultOpacity
@@ -140,9 +138,7 @@ struct LiveTranslateSettingsSections: View {
                 .foregroundStyle(.secondary)
         }
 
-        TranslationEngineSection(scope: .live) {
-            controller.restartIfRunning()
-        }
+        TranslationEngineSection(definition: .liveTranslate)
 
         Section("livetranslate.settings.correctionSection") {
             Toggle("livetranslate.settings.aiCorrection", isOn: $aiCorrection)
@@ -150,22 +146,7 @@ struct LiveTranslateSettingsSections: View {
             Text("livetranslate.settings.aiCorrectionHelp")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Picker("livetranslate.settings.correctionEngine", selection: $correctionEngine) {
-                ForEach(AIService.Route.allCases) { route in
-                    if route == .cloud && !ai.cloudConfigured {
-                        Text(L("translation.engine.cloudUnconfigured")).tag(route.rawValue)
-                    } else {
-                        Text(route.title).tag(route.rawValue)
-                    }
-                }
-            }
-            .onChange(of: correctionEngine) { _, _ in controller.restartIfRunning() }
-            if correctionEngine == AIService.Route.cloud.rawValue {
-                Text("livetranslate.settings.correctionCloudHelp")
-                    .font(.caption)
-                    .foregroundStyle(ai.cloudConfigured ? Color.secondary : Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            AIFeatureRow(definition: .liveCorrection, showsManage: true)
             OfflineModelRow(translator: .corrector,
                             title: "livetranslate.correction.modelTitle",
                             notInstalledHelp: "livetranslate.correction.notInstalledHelp",

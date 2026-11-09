@@ -95,6 +95,7 @@ struct DictationSettingsView: View {
                     DictationAppList(raw: $polishApps)
                 }
                 if polishMode != DictationPolishMode.off.rawValue {
+                    AIFeatureRow(definition: .dictationPolish, showsManage: true)
                     OfflineModelRow(translator: .corrector,
                                     title: "dictation.polish.modelTitle",
                                     notInstalledHelp: "dictation.polish.notInstalledHelp",

@@ -36,7 +36,7 @@ struct SelectionTranslateSettingsView: View {
                 Text("selectiontranslate.settings.languageSection")
             }
 
-            TranslationEngineSection(scope: .selection)
+            TranslationEngineSection(definition: .selectionTranslate)
 
             Section {
                 Toggle("selectiontranslate.settings.autoPopup", isOn: $autoPopup)

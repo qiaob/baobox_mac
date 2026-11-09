@@ -276,7 +276,7 @@ final class LiveTranslateTranscript {
             minutes = .off
         } else if terminating {
             minutes = .interrupted
-        } else if !AIService.shared.isLocalReady(.generation) {
+        } else if !AIService.shared.isReady(AIService.shared.route(for: .meetingMinutes), local: .generation) {
             minutes = .noModel
         } else if minutesInput.reduce(0, { $0 + $1.text.count }) + notes.count < 40 {
             minutes = .tooShort
@@ -319,7 +319,9 @@ final class LiveTranslateTranscript {
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let template = destination.template
         let notes = self.notes
-        AIService.shared.beginLocalKeepAlive(.generation)
+        // 走本地时通用模型常驻到写完；给纪要选了云端模型就不加载本地模型（出错退回时才现加载）。
+        let keepsLocal = AIService.shared.route(for: .meetingMinutes) == .local
+        if keepsLocal { AIService.shared.beginLocalKeepAlive(.generation) }
         minutesTask = Task {
             let result: Minutes
             do {
@@ -331,7 +333,7 @@ final class LiveTranslateTranscript {
                 LiveTranslateLog.transcript.error("minutes failed: \(error.localizedDescription, privacy: .public)")
                 result = .failed(error.localizedDescription)
             }
-            AIService.shared.endLocalKeepAlive(.generation)
+            if keepsLocal { AIService.shared.endLocalKeepAlive(.generation) }
             minutesTask = nil
             guard case .generating = minutes else { return }
             minutes = result
@@ -594,8 +596,9 @@ enum LiveTranslateMinutes {
 
     @MainActor
     private static func ask(_ prompt: String, maxTokens: Int) async throws -> String {
-        // 纪要只走本地（会议文档定过「数据不出本机」，docs/ai-service/DESIGN.md §5.5）。
-        try await AIService.shared.generate(prompt, maxTokens: maxTokens, sampling: .summary, route: .local).text
+        // 走哪个模型按「会议纪要」这个功能选的（默认本地，docs/ai-service/DESIGN.md §5.4）；云端每段最多等 120 秒。
+        try await AIService.shared.generate(prompt, maxTokens: maxTokens, sampling: .summary,
+                                            route: AIService.shared.route(for: .meetingMinutes), timeout: 120).text
     }
 
     /// 会议纪要：每行带说话人与【重点】；长了先逐段提要点（重点必留），再按会议类型整理成固定的四节。

@@ -62,7 +62,7 @@ struct SettingsView: View {
         case "hotkeys":
             HotkeySettingsView(registry: registry)
         case AISettingsView.tabID:
-            AISettingsView()
+            AISettingsView(registry: registry)
         case "about":
             AboutView()
         default:

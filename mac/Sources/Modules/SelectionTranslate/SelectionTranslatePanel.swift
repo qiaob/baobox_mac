@@ -367,7 +367,7 @@ private struct SelectionTranslationArea: View {
         self.source = source
         self.target = target
         self.onResult = onResult
-        _engine = State(initialValue: TranslationSettings.resolve(.selection))
+        _engine = State(initialValue: TranslationSettings.resolve(.selectionTranslate))
     }
 
     var body: some View {
@@ -411,7 +411,7 @@ private struct SelectionTranslationArea: View {
             case .success(let value):
                 finish(value)
             case .failure:
-                if TranslationSettings.canFallBackToOffline(.selection) {
+                if TranslationSettings.canFallBackToOffline(.selectionTranslate) {
                     engine = .offline
                 } else {
                     failure = L("selectiontranslate.panel.translateFailed")
@@ -421,20 +421,19 @@ private struct SelectionTranslationArea: View {
         .task(id: engine) {
             switch engine {
             case .offline: await runModel(.local)
-            case .cloud: await runModel(.cloud)
+            case .cloud(let modelID): await runModel(.cloud(modelID))
             case .system, nil: return
             }
         }
         .onChange(of: offline.isReady) { _, ready in
             // 在浮层里点了下载、下完了：直接开翻。
-            let choice = TranslationSettings.engineChoice(.selection)
-            if ready, engine == nil, choice != .system {
+            if ready, engine == nil, AIFeatureSettings.choice(.selectionTranslate) != .system {
                 engine = .offline
             }
         }
     }
 
-    private func runModel(_ route: AIService.Route) async {
+    private func runModel(_ route: AIRoute) async {
         do {
             let reply = try await AIService.shared.translate(text, to: target, from: source, route: route)
             guard !Task.isCancelled else { return }

@@ -1,44 +1,51 @@
+import Combine
 import SwiftUI
 
-/// 设置页「AI」（docs/ai-service/DESIGN.md §6）：云端服务配置 + 本地模型一览。
-/// 各模块自己的设置页只放「用哪个引擎」；Key 只进钥匙串，这里从不把已存的 Key 显示出来。
+/// 设置页「AI」（docs/ai-service/DESIGN.md §6.1）：服务商与模型 + 各功能用哪个模型（按工具分组，同快捷键页）+ 用量上限 + 本地模型。
+/// Key 只进钥匙串，这里从不把已存的 Key 显示出来。文本框随输入保存（Key 除外，要点「保存」）。
 struct AISettingsView: View {
     static let tabID = "ai"
 
-    @ObservedObject private var ai = AIService.shared
-    @AppStorage(AICloudSettings.providerKey) private var provider = AICloudProvider.anthropic.rawValue
+    @ObservedObject var registry: ToolRegistry
+    @ObservedObject private var store = AIModelStore.shared
     @AppStorage(AICloudSettings.maxTokensKey) private var maxTokens = AICloudSettings.defaultMaxTokens
     @AppStorage(AICloudSettings.perMinuteKey) private var perMinute = AICloudSettings.defaultPerMinute
-    @State private var model = ""
-    @State private var baseURL = ""
-    @State private var keyInput = ""
-    @State private var keyFailed = false
-    @State private var testing = false
-    @State private var testResult: String?
-    @State private var testOK = false
+    /// 刚加的账号默认展开。
+    @State private var justAdded: String?
+    /// 各账号 Key 输入框里正在输的（账号 id → 文字）；存完清空。
+    @State private var keyInputs: [String: String] = [:]
+    @State private var keyFailed: Set<String> = []
+    /// 模型 id → 测试结果。
+    @State private var testResults: [String: TestResult] = [:]
+    @State private var testing: Set<String> = []
+    @State private var pendingDelete: AICloudAccount?
+    /// 功能选择变了就加一，让模型下面的「用在：…」重算。
+    @State private var choicesRevision = 0
 
-    private var currentProvider: AICloudProvider {
-        AICloudProvider(rawValue: provider) ?? .anthropic
+    private struct TestResult {
+        let ok: Bool
+        let text: String
     }
 
-    /// 预填了地址的 OpenAI 兼容服务（菜单中间那一组）。
+    private struct FeatureGroup: Identifiable {
+        let id: String
+        let name: String
+        let definitions: [AIFeatureDefinition]
+    }
+
+    /// 预填了地址的 OpenAI 兼容服务（添加菜单中间那一组）。
     private static let presets: [AICloudProvider] = AICloudProvider.allCases.filter {
         $0 != .anthropic && $0 != .ollama && $0 != .openAICompatible
     }
 
-    private var baseURLHelp: String {
-        currentProvider.defaultBaseURL.isEmpty
-            ? L("ai.settings.baseURLHelpCustom")
-            : L("ai.settings.baseURLHelpDefault \(currentProvider.defaultBaseURL)")
-    }
-
-    private var modelHelp: String {
-        currentProvider.defaultModel.isEmpty
-            ? L("ai.settings.modelHelpOpenAI")
-            : L("ai.settings.modelHelpDefault \(currentProvider.defaultModel)")
+    private var groups: [FeatureGroup] {
+        registry.tools
+            .map { FeatureGroup(id: $0.id, name: $0.name, definitions: $0.aiFeatures()) }
+            .filter { !$0.definitions.isEmpty }
     }
 
     var body: some View {
+        let usage = modelUsage()
         Form {
             Section {
                 Text("ai.settings.intro")
@@ -48,56 +55,40 @@ struct AISettingsView: View {
             }
 
             Section {
-                Picker("ai.settings.provider", selection: $provider) {
-                    // Claude / 常用的 OpenAI 兼容服务（预填地址和默认模型）/ 本机与自定义。
-                    Text(verbatim: AICloudProvider.anthropic.title).tag(AICloudProvider.anthropic.rawValue)
-                    Divider()
-                    ForEach(Self.presets) { item in
-                        Text(verbatim: item.title).tag(item.rawValue)
-                    }
-                    Divider()
-                    Text(verbatim: AICloudProvider.ollama.title).tag(AICloudProvider.ollama.rawValue)
-                    Text(verbatim: AICloudProvider.openAICompatible.title)
-                        .tag(AICloudProvider.openAICompatible.rawValue)
+                if store.accounts.isEmpty {
+                    Text("ai.settings.accountsEmpty")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .onChange(of: provider) { _, _ in
-                    loadFields()
-                    ai.refreshCloudConfiguration()
-                    testResult = nil
-                }
-                TextField("ai.settings.baseURL", text: $baseURL,
-                          prompt: Text(verbatim: currentProvider.defaultBaseURL.isEmpty
-                                       ? "https://example.com/v1" : currentProvider.defaultBaseURL))
-                    .onSubmit { saveFields() }
-                Text(verbatim: baseURLHelp)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                TextField("ai.settings.model", text: $model, prompt: Text(verbatim: currentProvider.modelExample))
-                    .onSubmit { saveFields() }
-                Text(verbatim: modelHelp)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                keyRow
-                HStack {
-                    Button(testing ? L("ai.settings.testing") : L("ai.settings.test")) {
-                        runTest()
+                ForEach(store.accounts) { account in
+                    TappableDisclosure(initiallyExpanded: account.id == justAdded) {
+                        accountDetails(account, usage: usage)
+                    } label: {
+                        accountLabel(account)
                     }
-                    .disabled(testing)
-                    if let testResult {
-                        Text(verbatim: testResult)
-                            .font(.caption)
-                            .foregroundStyle(testOK ? Color.secondary : Color.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
                 }
-                Text(ai.cloudConfigured ? "ai.settings.statusReady" : "ai.settings.cloudNotConfigured")
-                    .font(.caption)
-                    .foregroundStyle(ai.cloudConfigured ? Color.secondary : Color.orange)
+                addAccountMenu
             } header: {
-                Text("ai.settings.cloudSection")
+                Text("ai.settings.accountsSection")
+            }
+
+            Section {
+                Text("ai.settings.featuresHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("ai.settings.featuresSection")
+            }
+            ForEach(groups) { group in
+                Section {
+                    ForEach(group.definitions, id: \.feature.id) { definition in
+                        AIFeatureRow(definition: definition)
+                    }
+                } header: {
+                    Text(verbatim: group.name)
+                }
             }
 
             Section {
@@ -135,81 +126,256 @@ struct AISettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { loadFields() }
-        .onDisappear { saveFields() }
+        .onReceive(NotificationCenter.default.publisher(for: AIFeatureSettings.didChange)) { _ in
+            choicesRevision += 1
+        }
+        .confirmationDialog(
+            Text(verbatim: L("ai.settings.deleteAccountTitle \(pendingDelete?.displayName ?? "")")),
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            presenting: pendingDelete
+        ) { account in
+            Button("ai.settings.deleteAccountConfirm", role: .destructive) {
+                deleteAccount(account)
+            }
+        } message: { _ in
+            Text("ai.settings.deleteAccountMessage")
+        }
+    }
+
+    // MARK: - 服务商账号
+
+    private func accountLabel(_ account: AICloudAccount) -> some View {
+        HStack(spacing: 8) {
+            Text(verbatim: account.displayName)
+            if account.displayName != account.kind.title {
+                Text(verbatim: account.kind.title)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            keyBadge(account)
+            Text(verbatim: L("ai.settings.modelCount \(store.models(of: account.id).count)"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
-    private var keyRow: some View {
+    private func keyBadge(_ account: AICloudAccount) -> some View {
+        if !store.needsKey(account) {
+            Text("ai.settings.keyStatusLocal")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if store.accountsWithKey.contains(account.id) {
+            Text("ai.settings.keyStatusSaved")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Text("ai.settings.keyStatusMissing")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private func accountDetails(_ account: AICloudAccount, usage: [String: [String]]) -> some View {
+        TextField("ai.settings.accountName", text: accountBinding(account.id, \.name),
+                  prompt: Text(verbatim: account.kind.title))
+        TextField("ai.settings.baseURL", text: accountBinding(account.id, \.baseURL),
+                  prompt: Text(verbatim: account.kind.defaultBaseURL.isEmpty
+                               ? "https://example.com/v1" : account.kind.defaultBaseURL))
+        Text(verbatim: baseURLHelp(account))
+            .font(.caption)
+            .foregroundStyle(store.baseURL(of: account) == nil ? Color.orange : Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        keyRow(account)
+        Text("ai.settings.modelsHelp")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        ForEach(store.models(of: account.id)) { model in
+            modelRow(model, account: account, usedBy: usage[model.id] ?? [])
+        }
         HStack {
-            SecureField("ai.settings.apiKey", text: $keyInput,
-                        prompt: Text(ai.hasAPIKey ? "ai.settings.keySaved" : "ai.settings.keyPlaceholder"))
-                .onSubmit { saveKey() }
-            Button("ai.settings.saveKey") { saveKey() }
-                .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if ai.hasAPIKey {
+            Button("ai.settings.addModel") {
+                store.addModel(to: account.id)
+            }
+            Spacer()
+            Button("ai.settings.deleteAccount", role: .destructive) {
+                pendingDelete = account
+            }
+        }
+    }
+
+    private func baseURLHelp(_ account: AICloudAccount) -> String {
+        if store.baseURL(of: account) == nil, !account.baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("ai.settings.baseURLInvalid")
+        }
+        return account.kind.defaultBaseURL.isEmpty
+            ? L("ai.settings.baseURLHelpCustom")
+            : L("ai.settings.baseURLHelpDefault \(account.kind.defaultBaseURL)")
+    }
+
+    @ViewBuilder
+    private func keyRow(_ account: AICloudAccount) -> some View {
+        let hasKey = store.accountsWithKey.contains(account.id)
+        let input = keyInputs[account.id] ?? ""
+        HStack {
+            SecureField("ai.settings.apiKey", text: keyBinding(account.id),
+                        prompt: Text(verbatim: hasKey ? L("ai.settings.keySaved") : L("ai.settings.keyPlaceholder")))
+                .onSubmit { saveKey(account.id) }
+            Button("ai.settings.saveKey") {
+                saveKey(account.id)
+            }
+            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if hasKey {
                 Button("ai.settings.deleteKey", role: .destructive) {
-                    ai.deleteAPIKey()
-                    testResult = nil
+                    store.deleteKey(accountID: account.id)
                 }
             }
         }
         HStack(alignment: .firstTextBaseline) {
-            Text(keyFailed ? "ai.settings.keySaveFailed" : keyHelp)
+            Text(verbatim: keyFailed.contains(account.id) ? L("ai.settings.keySaveFailed") : keyHelp(account))
                 .font(.caption)
-                .foregroundStyle(keyFailed ? Color.orange : Color.secondary)
+                .foregroundStyle(keyFailed.contains(account.id) ? Color.orange : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
-            if let url = currentProvider.keyPageURL {
+            if let url = account.kind.keyPageURL {
                 Link(L("ai.settings.getKey"), destination: url)
                     .font(.caption)
             }
         }
     }
 
-    private var keyHelp: LocalizedStringKey {
-        switch currentProvider {
-        case .ollama: return "ai.settings.keyHelpLocal"
-        case .openAICompatible: return "ai.settings.keyHelpOpenAI"
-        default: return "ai.settings.keyHelp"
+    private func keyHelp(_ account: AICloudAccount) -> String {
+        switch account.kind {
+        case .ollama: return L("ai.settings.keyHelpLocal")
+        case .openAICompatible: return L("ai.settings.keyHelpOpenAI")
+        default: return L("ai.settings.keyHelp")
         }
     }
 
-    private func loadFields() {
-        let defaults = UserDefaults.standard
-        model = defaults.string(forKey: AICloudSettings.modelKey(currentProvider)) ?? ""
-        baseURL = defaults.string(forKey: AICloudSettings.baseURLKey(currentProvider)) ?? ""
-        keyInput = ""
-        keyFailed = false
+    // MARK: - 模型
+
+    @ViewBuilder
+    private func modelRow(_ model: AICloudModel, account: AICloudAccount, usedBy: [String]) -> some View {
+        HStack(spacing: 8) {
+            TextField("ai.settings.modelName", text: modelBinding(model.id, \.name),
+                      prompt: Text("ai.settings.modelNamePrompt"))
+                .labelsHidden()
+            TextField("ai.settings.modelID", text: modelBinding(model.id, \.model),
+                      prompt: Text(verbatim: account.kind.modelExample.isEmpty ? "model" : account.kind.modelExample))
+                .labelsHidden()
+            Button(testing.contains(model.id) ? L("ai.settings.testing") : L("ai.settings.test")) {
+                runTest(model.id)
+            }
+            .disabled(testing.contains(model.id))
+            Button(role: .destructive) {
+                testResults[model.id] = nil
+                store.deleteModel(model.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help(L("ai.settings.deleteModel"))
+        }
+        if let result = testResults[model.id] {
+            Text(verbatim: result.text)
+                .font(.caption)
+                .foregroundStyle(result.ok ? Color.secondary : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if !usedBy.isEmpty {
+            Text(verbatim: L("ai.settings.usedBy \(ListFormatter.localizedString(byJoining: usedBy))"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
-    /// 模型和地址失焦 / 回车 / 离开页面 / 测试前存一次（不在每次敲键时写，免得半截地址触发配置变化）。
-    private func saveFields() {
-        let defaults = UserDefaults.standard
-        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        defaults.set(trimmedModel, forKey: AICloudSettings.modelKey(currentProvider))
-        defaults.set(trimmedURL, forKey: AICloudSettings.baseURLKey(currentProvider))
-        ai.refreshCloudConfiguration()
+    /// 模型 id → 选了它的功能名。
+    private func modelUsage() -> [String: [String]] {
+        _ = choicesRevision
+        var result: [String: [String]] = [:]
+        for group in groups {
+            for definition in group.definitions {
+                if let id = AIFeatureSettings.choice(definition.feature).modelID {
+                    result[id, default: []].append(definition.title)
+                }
+            }
+        }
+        return result
     }
 
-    private func saveKey() {
-        let key = keyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        keyFailed = !ai.saveAPIKey(key)
-        keyInput = ""
-        testResult = nil
+    // MARK: - 添加 / 删除
+
+    private var addAccountMenu: some View {
+        Menu {
+            Button(AICloudProvider.anthropic.title) { add(.anthropic) }
+            Divider()
+            ForEach(Self.presets) { provider in
+                Button(provider.title) { add(provider) }
+            }
+            Divider()
+            Button(AICloudProvider.ollama.title) { add(.ollama) }
+            Button(AICloudProvider.openAICompatible.title) { add(.openAICompatible) }
+        } label: {
+            Label(L("ai.settings.addAccount"), systemImage: "plus")
+        }
+        .fixedSize()
     }
 
-    private func runTest() {
-        saveFields()
-        testing = true
-        testResult = nil
+    private func add(_ provider: AICloudProvider) {
+        justAdded = store.addAccount(provider).id
+    }
+
+    private func deleteAccount(_ account: AICloudAccount) {
+        for model in store.models(of: account.id) {
+            testResults[model.id] = nil
+        }
+        keyInputs[account.id] = nil
+        keyFailed.remove(account.id)
+        store.deleteAccount(account.id)
+    }
+
+    // MARK: - Key 与测试
+
+    private func saveKey(_ accountID: String) {
+        let input = keyInputs[accountID] ?? ""
+        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if store.saveKey(input, accountID: accountID) {
+            keyFailed.remove(accountID)
+        } else {
+            keyFailed.insert(accountID)
+        }
+        keyInputs[accountID] = ""
+        for model in store.models(of: accountID) {
+            testResults[model.id] = nil
+        }
+    }
+
+    private func runTest(_ modelID: String) {
+        testing.insert(modelID)
+        testResults[modelID] = nil
         Task {
-            let error = await ai.testConnection()
-            testing = false
-            testOK = error == nil
-            testResult = error ?? L("ai.settings.testOK")
+            let error = await AIService.shared.testConnection(modelID: modelID)
+            testing.remove(modelID)
+            testResults[modelID] = TestResult(ok: error == nil, text: error ?? L("ai.settings.testOK"))
         }
+    }
+
+    // MARK: - 绑定（随输入保存）
+
+    private func accountBinding(_ id: String, _ field: WritableKeyPath<AICloudAccount, String>) -> Binding<String> {
+        Binding(get: { store.account(id)?[keyPath: field] ?? "" },
+                set: { value in store.updateAccount(id) { $0[keyPath: field] = value } })
+    }
+
+    private func modelBinding(_ id: String, _ field: WritableKeyPath<AICloudModel, String>) -> Binding<String> {
+        Binding(get: { store.model(id)?[keyPath: field] ?? "" },
+                set: { value in store.updateModel(id) { $0[keyPath: field] = value } })
+    }
+
+    private func keyBinding(_ id: String) -> Binding<String> {
+        Binding(get: { keyInputs[id] ?? "" }, set: { keyInputs[id] = $0 })
     }
 }

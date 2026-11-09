@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+extension AIFeature {
+    /// 听写润色用哪个模型；出厂本地（docs/ai-service/DESIGN.md §3.3、§5.4）。
+    static let dictationPolish = AIFeature(id: "dictation.polish", kind: .generation)
+}
+
+extension AIFeatureDefinition {
+    static var dictationPolish: AIFeatureDefinition {
+        AIFeatureDefinition(feature: .dictationPolish, title: L("dictation.ai.polish"), sends: L("dictation.ai.polishSends"))
+    }
+}
+
 /// 语音听写模块壳（issue #45，docs/dictation/）：菜单、快捷键、设置 Tab；逻辑都在 DictationController。
 @MainActor
 final class DictationTool: ToolModule {
@@ -81,6 +92,10 @@ final class DictationTool: ToolModule {
 
     func settingsTab() -> AnyView {
         AnyView(DictationSettingsView())
+    }
+
+    func aiFeatures() -> [AIFeatureDefinition] {
+        [.dictationPolish]
     }
 
     func activate() {
