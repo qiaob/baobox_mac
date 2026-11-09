@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 一个功能用哪个模型（docs/ai-service/DESIGN.md §6.2）：「功能名 | 下拉框（模型 · 来源）| 状态 | 去处理」。
+/// 一个功能用哪个模型（docs/ai-service/DESIGN.md §6.2）：一行三列「功能名 | 下拉框（模型 · 来源）| 一句话」，右边最多一个按钮。
+/// 第三列只说一件事：有问题就说问题（「去下载」「去填写」）；没问题时，用的就是建议的模型写「✓ 建议的模型」，
+/// 不是就写「建议 X：理由」加「改用」（建议跟着功能走，§6.3）。
 /// 「AI」页的功能栏和各工具自己的设置页用同一行、同一份设置（同快捷键的 `HotkeyRow` 嵌进 `ModuleHotkeyRows`）。
-/// 状态一眼看出能不能用；不能用时右边的按钮直接跳到「AI」页对应那一栏，把要下载的模型选好、要填 Key 的服务商展开。
 struct AIFeatureRow: View {
     let definition: AIFeatureDefinition
     /// 工具设置页里多一个「AI 设置…」（跳到「AI」页）；「AI」页里不用。
@@ -45,6 +46,7 @@ struct AIFeatureRow: View {
     }
 
     var body: some View {
+        let line = self.line
         HStack(spacing: 10) {
             Text(verbatim: definition.title)
                 .frame(width: Self.titleWidth, alignment: .leading)
@@ -54,21 +56,14 @@ struct AIFeatureRow: View {
                 Text(verbatim: definition.title)
             }
             .labelsHidden()
-            .fixedSize()
+            // 平时按标签本身的宽度靠左；名字太长就截断成「…」，不压到第三列。外层固定宽度让各行第三列对齐。
+            .frame(maxWidth: Self.pickerWidth, alignment: .leading)
             .frame(width: Self.pickerWidth, alignment: .leading)
-            statusLabel
-            Spacer(minLength: 0)
-            if let fix = status.fix {
-                Button(fix.title) { fix.run() }
-            }
-        }
-        if let note {
-            Text(verbatim: note)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, Self.titleWidth + 10)
+            message(line)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            if let action = action(for: line) {
+                Button(action.title) { action.run() }
+            }
         }
         if showsManage {
             Button("ai.feature.manage") {
@@ -128,71 +123,115 @@ struct AIFeatureRow: View {
         return store.isConfigured(model.id) ? label : L("ai.model.unconfiguredLabel \(label)")
     }
 
-    // MARK: - 状态
+    // MARK: - 第三列
 
-    private struct Fix {
+    /// 第三列说的那一件事。
+    private enum Line {
+        /// 选的这个现在用不了（橙色 ⚠），能处理的带按钮。
+        case problem(String, Action?)
+        /// 正在下载 / 校验（灰色），等着就行。
+        case busy(String)
+        /// 用的就是建议的模型。
+        case matched(AIRecommendation)
+        /// 用的不是建议的：建议哪个、为什么。
+        case suggested(AIRecommendation)
+    }
+
+    private struct Action {
         let title: String
         let run: () -> Void
     }
 
-    private struct Readiness {
-        let ok: Bool
-        let text: String
-        var fix: Fix?
+    /// 有问题先说问题；没问题再和建议比。
+    private var line: Line {
+        if let problem { return problem }
+        let recommendation = definition.recommendation
+        return recommendation.isUsed(by: choice) ? .matched(recommendation) : .suggested(recommendation)
     }
 
-    private var status: Readiness {
+    /// 选的这个现在为什么用不了；nil = 能用。
+    private var problem: Line? {
         switch choice {
         case .auto:
-            if TranslationSettings.systemAvailable { return Readiness(ok: true, text: L("ai.status.ok")) }
-            return localReadiness(LocalModels.defaultEntry(for: .translation))
+            if TranslationSettings.systemAvailable { return nil }
+            return localProblem(LocalModels.defaultEntry(for: .translation))
         case .system:
-            return TranslationSettings.systemAvailable
-                ? Readiness(ok: true, text: L("ai.status.ok"))
-                : Readiness(ok: false, text: L("ai.status.needsMacOS15"))
+            return TranslationSettings.systemAvailable ? nil : .problem(L("ai.status.needsMacOS15"), nil)
         case .local:
-            return localReadiness(LocalModels.defaultEntry(for: feature.kind))
+            return localProblem(LocalModels.defaultEntry(for: feature.kind))
         case .localModel(let id):
-            guard let entry = LocalModels.entry(id) else { return localReadiness(LocalModels.defaultEntry(for: feature.kind)) }
-            return localReadiness(entry)
+            return localProblem(LocalModels.entry(id) ?? LocalModels.defaultEntry(for: feature.kind))
         case .model(let id):
-            guard let problem = store.problem(modelID: id) else { return Readiness(ok: true, text: L("ai.status.ok")) }
+            guard let text = store.problem(modelID: id) else { return nil }
             let accountID = store.model(id)?.accountID
-            return Readiness(ok: false, text: problem,
-                             fix: Fix(title: L("ai.status.fixCloud")) { AISettingsNavigation.shared.showCloud(account: accountID) })
+            return .problem(text, Action(title: L("ai.status.fixCloud")) {
+                AISettingsNavigation.shared.showCloud(account: accountID)
+            })
         }
     }
 
-    private func localReadiness(_ entry: LocalModelEntry) -> Readiness {
+    private func localProblem(_ entry: LocalModelEntry) -> Line? {
         switch entry.translator.modelState {
         case .installed:
-            return Readiness(ok: true, text: L("ai.status.ok"))
+            return nil
         case .downloading(let progress):
-            return Readiness(ok: false, text: L("ai.status.downloading \(Int(progress * 100))"))
+            return .busy(L("ai.status.downloading \(Int(progress * 100))"))
         case .verifying:
-            return Readiness(ok: false, text: L("localmodel.status.verifying"))
+            return .busy(L("localmodel.status.verifying"))
         case .notInstalled, .failed:
-            return Readiness(ok: false, text: L("ai.status.notDownloaded"),
-                             fix: Fix(title: L("ai.status.fixLocal")) { AISettingsNavigation.shared.showLocal(model: entry.id) })
+            return .problem(L("ai.status.notDownloaded"), Action(title: L("ai.status.fixLocal")) {
+                AISettingsNavigation.shared.showLocal(model: entry.id)
+            })
         }
     }
 
-    private var statusLabel: some View {
-        let status = self.status
-        return Label {
-            Text(verbatim: status.text)
-                .lineLimit(1)
-        } icon: {
-            Image(systemName: status.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(status.ok ? Color.green : Color.orange)
+    private func action(for line: Line) -> Action? {
+        switch line {
+        case .problem(_, let action):
+            return action
+        case .suggested(let recommendation):
+            let feature = self.feature
+            return Action(title: L("ai.advice.switch")) {
+                AIFeatureSettings.setChoice(recommendation.choice, for: feature)
+            }
+        case .busy, .matched:
+            return nil
         }
-        .foregroundStyle(status.ok ? Color.secondary : Color.orange)
     }
 
-    /// 选了云端模型、能用时，说一句会把什么发给谁（只在这时才有这一行）。
-    private var note: String? {
-        guard let id = choice.modelID, store.problem(modelID: id) == nil,
-              let model = store.model(id), let account = store.account(model.accountID) else { return nil }
-        return L("ai.feature.sends \(definition.sends) \(account.displayName)")
+    @ViewBuilder
+    private func message(_ line: Line) -> some View {
+        switch line {
+        case .problem(let text, _):
+            Label {
+                Text(verbatim: text).lineLimit(1)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
+            .foregroundStyle(Color.orange)
+        case .busy(let text):
+            Label {
+                Text(verbatim: text).lineLimit(1)
+            } icon: {
+                Image(systemName: "arrow.down.circle")
+            }
+            .foregroundStyle(Color.secondary)
+        case .matched(let recommendation):
+            Label {
+                Text("ai.advice.matched").lineLimit(1)
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.green)
+            }
+            .foregroundStyle(Color.secondary)
+            .help(recommendation.detail)
+        case .suggested(let recommendation):
+            // 「建议 」灰、模型名正常色、「：理由」灰。
+            (Text(verbatim: L("ai.advice.prefix")).foregroundStyle(Color.secondary)
+                + Text(verbatim: recommendation.name)
+                + Text(verbatim: L("ai.advice.reason \(recommendation.reason)")).foregroundStyle(Color.secondary))
+                .fixedSize(horizontal: false, vertical: true)
+                .help(recommendation.detail)
+        }
     }
 }

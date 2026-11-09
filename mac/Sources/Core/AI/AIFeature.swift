@@ -80,8 +80,19 @@ enum AIEngineChoice: Hashable {
 struct AIFeatureDefinition {
     let feature: AIFeature
     let title: String
-    /// 选了云端模型时发出去的是什么（名词短语，如「选中的文字」），显示成「会把…发给…」。
+    /// 选了云端模型时发出去的是什么（名词短语，如「选中的文字」）：「用量上限与隐私」里列成「会把…发给…」。
     let sends: String
+    /// 建议用什么样的本地模型（`AIRecommendation`）；翻译类不看它，一律建议「自动」。
+    var advice: AIModelAdvice = .fastest
+}
+
+/// 一个功能要什么样的本地模型：功能栏第三列的「建议」按它和这台 Mac 的内存算（docs/ai-service/DESIGN.md §6.3）。
+/// 推荐跟着功能走，所以由声明功能的模块给出。
+enum AIModelAdvice {
+    /// 要快（边说边出，或有人等着结果）：通用模型里最快的（Qwen3-1.7B）。
+    case fastest
+    /// 会后才用、要写得好：这台 Mac 跑得动的最大的 Qwen3（`LocalModels.bestFitting`）。
+    case best
 }
 
 /// 功能 → 选择的读写（UserDefaults `ai.feature.<功能 id>`，docs/ai-service/DESIGN.md §3.2）。

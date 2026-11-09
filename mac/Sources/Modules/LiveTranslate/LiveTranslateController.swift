@@ -17,8 +17,9 @@ extension AIFeatureDefinition {
     }
 
     static var liveCorrection: AIFeatureDefinition {
+        // 边说边纠，每句要一秒内：建议最快的。
         AIFeatureDefinition(feature: .liveCorrection, title: L("livetranslate.ai.correct"),
-                            sends: L("livetranslate.ai.correctSends"))
+                            sends: L("livetranslate.ai.correctSends"), advice: .fastest)
     }
 }
 

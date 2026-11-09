@@ -99,7 +99,8 @@ struct AISettingsView: View {
 
     // MARK: - 功能栏
 
-    /// 每个功能用哪个模型、能不能用、不能用点哪里去处理；最下面收起「用量上限与隐私」。
+    /// 每个功能一行：用哪个模型、有问题点哪里去处理、建议用哪个（docs/ai-service/DESIGN.md §6.2）；
+    /// 最下面收起「用量上限与隐私」，里面列出现在会把什么发给谁。
     private var featuresPane: some View {
         Form {
             Section {
@@ -124,6 +125,7 @@ struct AISettingsView: View {
                     }
                     caption(L("ai.settings.limitsHelp"))
                     caption(L("ai.settings.privacy"))
+                    caption(cloudSends)
                 } label: {
                     Text("ai.settings.advanced")
                 }
@@ -354,6 +356,20 @@ struct AISettingsView: View {
         let total = MachineInfo.totalMemory
         guard LocalModels.isTooBig(memoryNeed: size + LocalModels.runtimeOverhead, totalMemory: total) else { return nil }
         return L("ai.settings.localModelTooBig \(MachineInfo.text(size)) \(MachineInfo.text(total))")
+    }
+
+    /// 现在会发到云端的：每个选了能用的云端模型的功能一行「字幕翻译：会把识别出来的每一句话发给「Anthropic Claude」。」。
+    private var cloudSends: String {
+        _ = choicesRevision
+        var lines: [String] = []
+        for group in groups {
+            for definition in group.definitions {
+                guard let id = AIFeatureSettings.choice(definition.feature).modelID, store.problem(modelID: id) == nil,
+                      let model = store.model(id), let account = store.account(model.accountID) else { continue }
+                lines.append(L("ai.settings.sendsLine \(definition.title) \(definition.sends) \(account.displayName)"))
+            }
+        }
+        return lines.isEmpty ? L("ai.settings.sendsNone") : lines.joined(separator: "\n")
     }
 
     /// 模型 id → 选了它的功能名。

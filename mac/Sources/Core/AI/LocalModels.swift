@@ -5,10 +5,10 @@ import Foundation
 /// 一个本地模型（docs/local-models/DESIGN.md §2）。都一样：按需下载、启动 / 停止、开机自启、给功能用。
 /// 只分「翻译专用」（Hy-MT2）和「通用」（其余，翻译也能做），以及「这一类功能默认用哪个」。
 struct LocalModelEntry: Identifiable {
-    /// 模型家族：决定用途说明，以及推荐时考不考虑它。
+    /// 模型家族：决定用途说明，以及给功能挑建议时考不考虑它。
     enum Family {
         case translation    // Hy-MT2：翻译专用
-        case qwen           // Qwen3：中英文都好，推荐只在这一家里挑（提示词按它调过）
+        case qwen           // Qwen3：中英文都好，功能的建议只在这一家里挑（提示词按它调过）
         case qwenMoE        // Qwen3-30B-A3B：混合专家，大但快
         case gemma
         case llama
@@ -29,7 +29,7 @@ struct LocalModelEntry: Identifiable {
     var kind: AIFeatureKind { family == .translation ? .translation : .generation }
     var isReasoning: Bool { family == .reasoning }
     var isCustom: Bool { family == .custom }
-    /// 推荐说明里能不能当「推荐」：只在 Qwen3 里挑（提示词按它调过，中英文都好）。
+    /// 能不能当功能的建议（`AIRecommendation`）：只在 Qwen3 里挑（提示词按它调过，中英文都好）。
     var isRecommendable: Bool { family == .qwen || family == .qwenMoE }
 
     /// 运行时大约占多少内存：文件大小 + KV 缓存和计算缓冲（4096 上下文约 1 GB，推理模型 8192 上下文约 1.5 GB），偏保守。
@@ -40,7 +40,7 @@ struct LocalModelEntry: Identifiable {
     @MainActor
     var translator: OfflineTranslator { OfflineTranslator.instance(for: model) }
 
-    /// 适合做什么（「AI」页的说明）。
+    /// 模型本身是什么样的（本机模型栏的说明）。只说模型，不说给哪个功能用 —— 建议跟着功能走，在功能栏里。
     var usage: String {
         switch family {
         case .translation: return L("localmodel.usage.translation")
@@ -79,7 +79,7 @@ struct CustomLocalModel: Codable, Equatable {
     }
 }
 
-/// 本地模型清单、推荐规则、开机自启（docs/local-models/DESIGN.md）。
+/// 本地模型清单、按内存分组、开机自启（docs/local-models/DESIGN.md）。
 enum LocalModels {
     static let runtimeOverhead: Int64 = 1 << 30
 
@@ -161,21 +161,20 @@ enum LocalModels {
         if let data = try? JSONEncoder().encode(items) { UserDefaults.standard.set(data, forKey: customKey) }
     }
 
-    // MARK: - 推荐
+    // MARK: - 按内存分组
 
+    /// 这个模型和这台 Mac 的内存合不合（docs/local-models/DESIGN.md §3）。只说内存，不是推荐。
     enum Fit {
-        /// 占用不超过总内存 45% 里最大的那个。
-        case recommended
-        /// 不超过 45%。
-        case ok
-        /// 45% 到 55% 之间：能跑，但占内存较多。
+        /// 不超过总内存 45%：这台 Mac 跑得动。
+        case fits
+        /// 45% 到 55% 之间：能跑，但很占内存。
         case heavy
         /// 超过 55%：会卡顿，不建议。16 GB 的 Mac 上 14B（约 10 GB，58%）就在这里 —— 2026-11-09 用户在 Ollama 里
         /// 加载 9 GB 的 14B 模型时整机卡死。
         case tooBig
     }
 
-    /// 推荐 / 可以用的上限、「内存不够」的下限（占总内存的比例）。
+    /// 「跑得动」的上限、「内存不够」的下限（占总内存的比例）。
     private static let comfortableShare = 0.45
     private static let tooBigShare = 0.55
 
@@ -184,11 +183,12 @@ enum LocalModels {
         let total = Double(totalMemory)
         if need > total * tooBigShare { return .tooBig }
         if need > total * comfortableShare { return .heavy }
-        return entry.id == recommended(totalMemory: totalMemory)?.id ? .recommended : .ok
+        return .fits
     }
 
-    /// 这台 Mac 推荐装哪个：占用不超过总内存 45% 的 Qwen3 里最大的（提示词按它调过，中英文都好）。
-    static func recommended(totalMemory: Int64) -> LocalModelEntry? {
+    /// 这台 Mac 跑得动的最大的 Qwen3（占用不超过总内存 45%）：纪要、周报的建议（`AIModelAdvice.best`），
+    /// 也是本机模型栏「添加模型」默认选中的那个。
+    static func bestFitting(totalMemory: Int64) -> LocalModelEntry? {
         catalog.filter { $0.isRecommendable && Double($0.memoryNeed) <= Double(totalMemory) * comfortableShare }
             .max { $0.memoryNeed < $1.memoryNeed }
     }

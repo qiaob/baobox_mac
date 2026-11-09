@@ -40,7 +40,8 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 
 | 文件 | 内容 |
 |---|---|
-| `Core/AI/AIFeature.swift` | `AIFeature`（id、类型、旧键）、`AIEngineChoice`、`AIFeatureDefinition`（界面文案）、`AIFeatureSettings`（读写选择） |
+| `Core/AI/AIFeature.swift` | `AIFeature`（id、类型、旧键）、`AIEngineChoice`、`AIFeatureDefinition`（界面文案 + `AIModelAdvice`）、`AIFeatureSettings`（读写选择） |
+| `Core/AI/AIRecommendation.swift` | 每个功能建议用的模型（§6.3）：按功能要什么、这台 Mac 的内存和系统版本算 |
 | `Core/AI/AIModelStore.swift` | `AICloudAccount`、`AICloudModel`、增删改、配置是否完整、Key 的内存缓存 |
 | `Core/AI/AIModelCatalog.swift` | 模型名下拉列表：内置常用名单 + 从服务商拉取的全部模型（§3.4） |
 | `Core/AI/AICloudSettings.swift` | 服务预设 `AICloudProvider`、用量上限、`AIKeychain` |
@@ -49,7 +50,7 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 | `Settings/AISettingsView.swift` | 「AI」页：三栏（功能 / 本机模型 / 云端模型），云端栏的服务商表单 |
 | `Settings/AISettingsNavigation.swift` | 三栏切换，以及「去下载」「去填写」的定位 |
 | `Settings/LocalModelsPane.swift` | 本机模型栏 |
-| `Settings/AIFeatureRow.swift` | 一个功能的模型下拉框（「AI」页和模块页共用，同 `HotkeyRow`） |
+| `Settings/AIFeatureRow.swift` | 一个功能一行：模型下拉框 + 第三列（问题，或和建议比）（「AI」页和模块页共用，同 `HotkeyRow`） |
 | `Settings/ModelComboBox.swift` | 模型名组合框（NSComboBox：下拉选，也能直接输入） |
 | `Core/Translation/TranslationSettings.swift` | `resolve(功能)`、`TranslationEngineKind`（`.cloud(模型 id)`） |
 | `Core/Translation/TranslationEngineSection.swift` | 模块设置页的翻译区块：功能行 + 说明 + 离线模型下载 |
@@ -86,14 +87,14 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 
 ### 3.3 功能清单
 
-| 功能 id | 模块（「AI」页分组） | 类型 | 用在 | 选云端时发出去的 |
-|---|---|---|---|---|
-| `selectiontranslate.translate` | 划词助手 | 翻译 | `SelectionTranslatePanel` | 选中的文字 |
-| `livetranslate.translate` | 会议 | 翻译 | `LiveTranslateTranslator`（字幕与同传、会议） | 识别出来的每一句话 |
-| `livetranslate.correct` | 会议 | 通用 | `LiveTranslateCorrector` | 识别出来的中文句子连同上文 |
-| `meeting.minutes` | 会议 | 通用 | `LiveTranslateMinutes`（会后纪要、重新生成） | 整场会议的转写和速记 |
-| `meeting.weekly` | 会议 | 通用 | `MeetingWeeklyReporter` | 一周各场会议的纪要摘要 |
-| `dictation.polish` | 听写 | 通用 | `DictationPolisher` | 听写出来的文字 |
+| 功能 id | 模块（「AI」页分组） | 类型 | 用在 | 选云端时发出去的 | 建议（§6.3） |
+|---|---|---|---|---|---|
+| `selectiontranslate.translate` | 划词助手 | 翻译 | `SelectionTranslatePanel` | 选中的文字 | 自动 |
+| `livetranslate.translate` | 会议 | 翻译 | `LiveTranslateTranslator`（字幕与同传、会议） | 识别出来的每一句话 | 自动 |
+| `livetranslate.correct` | 会议 | 通用 | `LiveTranslateCorrector` | 识别出来的中文句子连同上文 | `.fastest` |
+| `meeting.minutes` | 会议 | 通用 | `LiveTranslateMinutes`（会后纪要、重新生成） | 整场会议的转写和速记 | `.best` |
+| `meeting.weekly` | 会议 | 通用 | `MeetingWeeklyReporter` | 一周各场会议的纪要摘要 | `.best` |
+| `dictation.polish` | 听写 | 通用 | `DictationPolisher` | 听写出来的文字 | `.fastest` |
 
 字幕与同传的两个功能由会议模块声明：字幕与同传的设置区块嵌在会议页里，且下个版本这个入口就并进会议，不用再挪。
 功能 id 沿用 `livetranslate.*`，跟着引擎走，与哪个模块声明无关。
@@ -249,10 +250,13 @@ struct Reply { text; route; usedFallback }
 
 位置在侧边栏「通用 / 快捷键」之后（id `ai`）。顶部一个分段切换（`AISettingsNavigation.pane`），新手进来先看到第一栏：
 
-1. **功能**（默认）：一句说明（本机免费、内容不出这台 Mac；云端效果更好但按量付费）。然后按工具分组（同快捷键页），每个功能一行
-   `AIFeatureRow`（§6.2）。最下面「用量上限与隐私」默认收起：单次回复上限、每分钟次数上限（所有云端模型合计）、会发出去什么。
-2. **本机模型**（docs/local-models/DESIGN.md）：这台 Mac 的内存和磁盘、「怎么选」推荐说明、已装的模型（启动 / 停止、开机自启、删除）、
-   添加模型（下拉框按「推荐 / 可以用 / 内存不够」分组，最后一项「自定义（粘贴 Hugging Face 链接）…」）。
+1. **功能**（默认）：一句说明（本机免费、内容不出这台 Mac；云端效果更好，但按量付费、内容会发给服务商）。然后按工具分组（同快捷键页），
+   每个功能一行 `AIFeatureRow`（§6.2），每个功能建议用哪个模型也写在这一行（§6.3）。最下面「用量上限与隐私」默认收起：
+   单次回复上限、每分钟次数上限（所有云端模型合计）、隐私说明，以及现在会发出去什么——每个选了能用的云端模型的功能一行
+   「字幕翻译：会把识别出来的每一句话发给「Anthropic Claude」。」，没有就写「现在没有功能用云端模型」。
+2. **本机模型**（docs/local-models/DESIGN.md）：只管模型——这台 Mac 的内存和磁盘、已装的模型（启动 / 停止、开机自启、删除）、
+   添加模型（下拉框按内存分「这台 Mac 跑得动 / 能跑，但很占内存 / 内存不够」，最后一项「自定义（粘贴 Hugging Face 链接）…」）。
+   这里不推荐模型：2026-11-09 用户定「本地模型那里正经做模型管理就行，模型推荐是和功能绑定的」，原来的「怎么选」挪到了功能栏。
 3. **云端模型**：一句说明（效果更好、不占本机内存，但要 Key、按量付费、内容会发给服务商），然后「服务商」：
    每个账号一行可展开（`TappableDisclosure`，双击只算一下），收起时显示名字、服务名、Key 状态和模型数。
    展开后每行左边是固定宽度的标签（名字 / 地址 / API Key / 模型）、右边占满剩余宽度，说明文字都在右边左对齐：
@@ -269,17 +273,39 @@ struct Reply { text; route; usedFallback }
 
 ### 6.2 `AIFeatureRow`（「AI」页和工具设置页共用）
 
-一行：**功能名**（固定宽度）| **下拉框**（固定宽度、靠左，显示「模型 · 来源」）| **状态** | 有问题时右边一个**去处理**按钮。
+一行三列：**功能名**（固定宽度）| **下拉框**（固定宽度、靠左，显示「模型 · 来源」）| **一句话**；右边最多一个按钮，各行的按钮都靠右对齐。
+2026-11-09 用户看了「每行下面再加一行建议」的设计图说「有些乱」，改成现在这样：一行只说一件事，没事的行保持干净。
 
 - 下拉框选项：翻译类先列「自动（系统翻译）」或「自动（本机 Hy-MT2-1.8B）」（写清这台 Mac 上实际用什么）和「系统翻译」；
   然后「本机」一组（「Qwen3-8B · 本机」，没下载的标「未下载」，docs/local-models/DESIGN.md §5）；后面每个账号一组（「Haiku · Anthropic Claude」，
   配置不完整的标「未配置」）。
-- 状态：✓「可以用」（灰）；⚠ 橙色「还没下载」「下载中 42%」「缺 API Key」「地址不对」「没填模型名」「需要 macOS 15」。
-  能处理的带按钮：本地模型没下载 →「去下载」，云端模型配置不完整 →「去填写」。
-- 选了云端模型、能用时，下面多一行小字「会把<发出去的内容>发给<账号名>」；其余情况没有这一行，保持干净。
+- 第三列按顺序挑一件说：
+  1. **选的这个现在用不了**：橙色 ⚠「还没下载」「缺 API Key」「地址不对」「没填模型名」「需要 macOS 15」；能处理的带按钮——
+     本地模型没下载 →「去下载」，云端模型配置不完整 →「去填写」。下载中 / 校验中是灰色「下载中 42%」，没有按钮。
+  2. **用的就是建议的模型**（§6.3）：灰色「✓ 建议的模型」，没有按钮。
+  3. **用的不是建议的**：「建议 Qwen3-8B：本机写得最好」（模型名正常色，其余灰），右边「改用」，点了就换成建议的那个
+     （没下载的话这一行随即变成「还没下载」+「去下载」）。
+  能用时不再写「✓ 可以用」——没有警告就是能用。鼠标停在第 2、3 种上能看到完整理由（`AIRecommendation.detail`）。
+- 「会把<发出去的内容>发给<账号名>」不再挂在每一行下面，挪进「用量上限与隐私」（§6.1）。
 - 工具设置页的行多一个「AI 设置…」，跳到「AI」页的功能栏。
 - 嵌进工具设置页的位置：划词助手、字幕与同传的翻译区块（`TranslationEngineSection`，离线模型下载行仍留在工具页）；
   字幕与同传的纠错区块；会议的记录区块（纪要、周报）；听写的润色区块。
+
+### 6.3 每个功能建议用的模型（`AIRecommendation`）
+
+2026-11-09 用户定：模型推荐和功能绑定，写在功能栏，不写在本机模型栏。每个功能在声明时给出它要什么（`AIFeatureDefinition.advice`），
+建议按这个、这台 Mac 的内存（docs/local-models/DESIGN.md §3）和系统版本算，只在 Qwen3 里挑（提示词按它调过）：
+
+| 功能要什么 | 建议 | 理由（第三列） | 用在 |
+|---|---|---|---|
+| 翻译类（不看 `advice`） | 「自动」：macOS 15 起是系统翻译，否则就是本机 Hy-MT2-1.8B | 系统自带，免费 / 免费又快 | 划词翻译、字幕翻译 |
+| `.fastest` 要快 | Qwen3-1.7B（`.local`） | 最快 | AI 纠错（每句要一秒内）、AI 润色（等着字上屏，最多等 8 秒） |
+| `.best` 要写得好 | 跑得动的最大的 Qwen3（`LocalModels.bestFitting`，16 GB 上是 Qwen3-8B）；跑不动更大的就是 1.7B | 本机写得最好 / 内存只够它 | 会议纪要、周报概述 |
+
+- 理由只说建议的模型本身好在哪，**不跟现在用的比**：现在用的可能是云端模型，「写得更好」就不对了。
+- AI 润色以前（「怎么选」那一版）和纪要一起建议跑得动的最大的；分开以后改成最快的：润色最多等 8 秒就上原文，8B 比 1.7B 慢好几倍，
+  长一点的句子可能等不到。这是估算，没有实测。
+- 「用的就是它」按选择比：没有系统翻译的 Mac 上「自动」实际就是 Hy-MT2，所以选「自动」或「Hy-MT2-1.8B · 本机」都算。
 
 ## 7. 升级与兼容
 
