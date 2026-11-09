@@ -52,7 +52,7 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 | [Window manager](docs/manual/en/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
 | [Keyboard clicking](docs/manual/en/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
 | [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar, transcripts; offline model fallback on macOS 14 |
-| [Selection translate](docs/selection-translate/DESIGN.md) | unbound | Select text in any app → floating panel with English ⇄ Chinese translation and read-aloud |
+| [Selection assistant](docs/selection-translate/ASSISTANT.md) | unbound | Select text in any app → action bar: Translate, Learn, Polish, Rewrite, Natural English, Explain, Summarize |
 | [Meeting](docs/meeting/REQUIREMENTS.md) | unbound | Next-meeting countdown, one-click join, auto-detects meetings, local transcript and minutes, action items |
 | [Voice dictation](docs/dictation/REQUIREMENTS.md) | ⌥Space (start / stop) | Hold-to-talk, continuous (sentence by sentence) or long dictation; the text lands at your cursor in any app, with history |
 | [Focus & health](docs/focus-health/REQUIREMENTS.md) | unbound | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
@@ -160,15 +160,17 @@ there too. No third-party services. Sessions can be saved as **transcripts**, wi
 Live Translate is also the engine behind Meeting's free-listening sessions: start one from the
 Meeting menu and the same caption bar appears, with the transcript filed in the meeting library.
 
-### Selection translate
+### Selection assistant
 
-Select text in **any app** and a floating panel appears right at the selection with the
-**English ⇄ Chinese** translation, plus read-aloud. Translation direction is detected
-automatically. Three ways to grab the text, in order of reliability: the accessibility tree
-(auto-popup on mouse-up), a simulated ⌘C fallback (manual trigger only, clipboard
-snapshot-and-restore), and region OCR for text that can't be selected at all (drag a frozen
-frame, Vision reads it). Same translation engines as Live Translate — system translation on
-macOS 15+, offline model on macOS 14.
+Select text in **any app** and a small action bar appears above it: **Translate · Learn · Polish ·
+Rewrite · Natural English · Explain · Summarize**, plus your own actions (a name and a prompt).
+Nothing runs until you click; rewrites can **replace the original text** in editable fields.
+Hold ⌥ to pick by number, use the Show Action Bar hotkey and a letter for keyboard-only use, or bind
+a direct hotkey per action. **Learn** follows your native / learning language (Chinese and English
+for now): a dictionary card (phonetics, US/UK pronunciation, meanings, word forms, from the offline
+ECDICT dictionary) or a sentence view (tap words, word-by-word highlight while reading, repeat-after
+scoring). AI actions run on the local Qwen3 model or your configured cloud service. Text is grabbed
+via the accessibility tree, a clipboard fallback, or region OCR; translation shares Live Translate's engines.
 
 ### Meeting
 
@@ -335,7 +337,7 @@ Bound out of the box:
 
 OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files,
 both Codex panels, every shortcut of the Meeting, desktop pet, focus & health, and
-selection translate tools, and dictation's hold-to-talk and long dictation ship **unbound** — assign them under
+selection assistant tools, and dictation's hold-to-talk and long dictation ship **unbound** — assign them under
 Settings → Shortcuts. Full list in [Shortcuts](docs/manual/en/shortcuts.md).
 
 ## Data and privacy
