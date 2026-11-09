@@ -67,6 +67,8 @@ final class SelectionTranslateController {
     private var eventTap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var pendingSelectionCheck: DispatchWorkItem?
+    /// 自动弹出等待期间按了键（多半是 ⌘C）就不弹：全局 keyDown 监听，随事件 tap 装 / 拆。
+    private var keyMonitor: Any?
     /// 最近一次左键按下的位置（Quartz 坐标），抬起时据此判断是不是拖选。
     private var mouseDownPoint: CGPoint?
     /// 左键按下时剪贴板的 changeCount。抬起后它变了 = 前台 App 自己把选区拷进了剪贴板
@@ -85,6 +87,9 @@ final class SelectionTranslateController {
 
     /// 原文长度上限：超长段落截断，避免把整篇文章塞进翻译会话。
     private static let maxCharacters = 8000
+    /// 松开鼠标后等多久再弹（docs/selection-translate/ASSISTANT.md §1.2）：选中只是为了复制时，
+    /// 这段时间里按了 ⌘C（或任何键）、剪贴板变了，这次就不弹 —— 快速复制时动作条根本不出现。
+    private static let popupDelay: TimeInterval = 0.4
     /// 按下到抬起移动超过这个距离（点）才算拖选；双击选词 / 三击选行按点击次数认。
     private static let dragThreshold: CGFloat = 5
     /// 临时快捷键 id 前缀（docs/selection-translate/ASSISTANT.md §2.3）。
@@ -419,11 +424,29 @@ final class SelectionTranslateController {
             CFRunLoopAddSource(RunLoop.main.getCFRunLoop(), tapSource, .commonModes)
         }
         CGEvent.tapEnable(tap: tap, enable: true)
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { _ in
+            Task { @MainActor in
+                SelectionTranslateController.shared.keyPressedWhileWaiting()
+            }
+        }
+    }
+
+    /// 等着自动弹出时按了键：这次不弹了。借剪贴板取词时自己合成的 ⌘C 不算。
+    private func keyPressedWhileWaiting() {
+        guard !PasteboardBorrow.isActive else { return }
+        pendingSelectionCheck?.cancel()
+        pendingSelectionCheck = nil
+        // 正在借剪贴板 / 等 App 自己复制的那一路，回来时看到手势号变了就作废。
+        gestureGeneration += 1
     }
 
     private func removeEventTap() {
         pendingSelectionCheck?.cancel()
         pendingSelectionCheck = nil
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        keyMonitor = nil
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
         }
@@ -445,7 +468,7 @@ final class SelectionTranslateController {
         mouseDownChangeCount = NSPasteboard.general.changeCount
     }
 
-    /// 鼠标抬起后延迟一拍查选区：等 App 先把选区落定。
+    /// 鼠标抬起后等 `popupDelay` 再查选区：等 App 先把选区落定，也给「选中只是为了复制」留出按 ⌘C 的时间。
     /// `quartzPoint` 是 CGEvent 的坐标（主屏左上原点）。
     fileprivate func handleMouseUp(at quartzPoint: CGPoint, clickCount: Int) {
         let downPoint = mouseDownPoint
@@ -470,13 +493,16 @@ final class SelectionTranslateController {
         let pid = front.processIdentifier
         let generation = gestureGeneration
         let anchor = primaryHeight.map { CGRect(x: quartzPoint.x, y: $0 - quartzPoint.y, width: 1, height: 1) }
+        let upChangeCount = NSPasteboard.general.changeCount
 
         pendingSelectionCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in
             // asyncAfter 跑在主队列上，与类同为 MainActor 隔离域。
             MainActor.assumeIsolated {
-                guard let self, SelectionTranslateSettings.autoPopup else { return }
+                guard let self, SelectionTranslateSettings.autoPopup, generation == self.gestureGeneration else { return }
                 if let result = SelectionText.fetchViaAccessibility() {
+                    // 等待期间用菜单 / 右键「拷贝」复制了：选中只是为了复制，不弹。
+                    guard NSPasteboard.general.changeCount == upChangeCount else { return }
                     let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { return }
                     // 同一段文字 2 秒内不重复弹（比如用户在同一选区上又点了一下）。
@@ -498,7 +524,7 @@ final class SelectionTranslateController {
             }
         }
         pendingSelectionCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.popupDelay, execute: work)
     }
 
     /// 自动弹出、AX 读不到选区时（设计文档 §2.1）：
