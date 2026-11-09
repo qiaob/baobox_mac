@@ -42,11 +42,13 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 |---|---|
 | `Core/AI/AIFeature.swift` | `AIFeature`（id、类型、旧键）、`AIEngineChoice`、`AIFeatureDefinition`（界面文案）、`AIFeatureSettings`（读写选择） |
 | `Core/AI/AIModelStore.swift` | `AICloudAccount`、`AICloudModel`、增删改、配置是否完整、Key 的内存缓存 |
+| `Core/AI/AIModelCatalog.swift` | 模型名下拉列表：内置常用名单 + 从服务商拉取的全部模型（§3.4） |
 | `Core/AI/AICloudSettings.swift` | 服务预设 `AICloudProvider`、用量上限、`AIKeychain` |
 | `Core/AI/AIService.swift` | 路由、云端公共流程（配置 → 本机限额 → 冷却 → 请求 → 退回）、`AIPrompts` |
 | `Core/AI/AICloudClient.swift` | 两家的 HTTP 请求与错误归类 |
 | `Settings/AISettingsView.swift` | 「AI」页 |
 | `Settings/AIFeatureRow.swift` | 一个功能的模型下拉框（「AI」页和模块页共用，同 `HotkeyRow`） |
+| `Settings/ModelComboBox.swift` | 模型名组合框（NSComboBox：下拉选，也能直接输入） |
 | `Core/Translation/TranslationSettings.swift` | `resolve(功能)`、`TranslationEngineKind`（`.cloud(模型 id)`） |
 | `Core/Translation/TranslationEngineSection.swift` | 模块设置页的翻译区块：功能行 + 说明 + 离线模型下载 |
 
@@ -93,6 +95,22 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 
 字幕与同传的两个功能由会议模块声明：字幕与同传的设置区块嵌在会议页里，且下个版本这个入口就并进会议，不用再挪。
 功能 id 沿用 `livetranslate.*`，跟着引擎走，与哪个模块声明无关。
+
+### 3.4 模型列表（模型名的下拉框）
+
+2026-11-09 用户要求：各家支持的模型直接列在下拉框里，也能自己输入。
+
+- 模型名输入框是组合框（`ModelComboBox`，NSComboBox）：可以从下拉列表里选，也能直接输入列表里没有的；打字时按列表自动补全。
+- 列表来源：
+  1. **服务商返回的全部模型**：账号的 Key 存好（或地址指向本机）后自动拉取。Claude 用 `GET /v1/models?limit=1000`，
+     OpenAI 兼容用 `GET {base}/models`。**Ollama 返回的就是本机已安装的模型**。Gemini 的 OpenAI 兼容接口返回的 id 带 `models/` 前缀，去掉再用。
+  2. **内置的常用名单**（`AICloudProvider.suggestedModels`）：没填 Key、拉取失败或服务商返回空时用。它只是起步建议，可能过时，以服务商返回的为准。
+- 去掉明显不是对话模型的（名字里带 embed、tts、whisper、dall-e、moderation、audio、realtime、transcribe、image、rerank、speech 等），去重；
+  内置名单里有的排前面，其余按字母排。
+- 什么时候拉：展开账号时、存了 Key 后、改了地址（停手 0.5 秒后）。Key 和地址都没变、上次也拉成功了，就不重拉；「刷新列表」强制重拉。
+  结果只放内存（`AIModelCatalog`），按账号存。
+- 模型列表下面一行说明下拉列表的来源：服务商返回的 N 个模型 / 常用模型（保存 Key 后换成全部）/ 拉取失败的原因
+  （本机服务连不上时提示「Ollama 启动了吗？」）。
 
 ## 4. 接口与云端请求
 
@@ -232,7 +250,8 @@ struct Reply { text; route; usedFallback }
 1. 说明：默认都在本机运行；给某个功能选了云端模型才会把那个功能用到的文字发出去；各工具自己的设置页里也能改，是同一个设置。
 2. **服务商与模型**：每个账号一行可展开（`TappableDisclosure`），收起时显示名字、服务名、Key 状态和模型数。展开后依次是：
    - 名字、Base URL（留空用默认）、API Key（SecureField，加上保存和删除按钮，「获取 API Key」链接）；
-   - 模型列表，每个模型一行：名字（留空显示模型名）、模型名、「测试」、删除；行下面小字显示测试结果和「用在：划词翻译、字幕翻译」；
+   - 模型列表，标题行右边是「刷新列表」，下面一行说明下拉列表的来源（§3.4）。每个模型一行：名字（留空显示模型名）、
+     模型名（组合框，下拉选或直接输入）、「测试」、删除；行下面小字显示测试结果和「用在：划词翻译、字幕翻译」；
    - 「添加模型」「删除这个服务商」（删之前确认，提示用到它的功能会改回默认）。
 
    最下面是「添加服务商」菜单（三组，§4.4），新加的账号自动展开。文本框随输入保存，不用另外点保存（Key 除外）。
@@ -257,7 +276,7 @@ struct Reply { text; route; usedFallback }
 
 ## 8. 不做 / P1
 
-- **一键部署本地大模型**（2026-11-09 用户定：下一版单独做）：「AI」页给一个可选模型列表（如 Qwen3-4B / 8B），一键下载，
+- **一键部署本地大模型**（2026-11-09 用户定：下一版单独做）：「AI」页用下拉框选要装的模型（如 Qwen3-4B / 8B；用户要求本地安装也用下拉框），一键下载，
   用内置的 llama-server 起成本机的 OpenAI 兼容服务，自动成为一个服务商，各功能直接选；每个本地模型有「部署并启动」、运行状态、停止，
   以及「开机自启」开关（Baobox 一启动就拉起来并常驻，不再空闲 10 分钟退出；Baobox 自己在「通用」里设登录时启动）。
   内置的 Hy-MT2、Qwen3-1.7B 也加同样的启动和常驻开关。到时另写设计文档。

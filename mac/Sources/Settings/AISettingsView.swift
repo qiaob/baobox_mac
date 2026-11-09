@@ -8,6 +8,7 @@ struct AISettingsView: View {
 
     @ObservedObject var registry: ToolRegistry
     @ObservedObject private var store = AIModelStore.shared
+    @ObservedObject private var catalog = AIModelCatalog.shared
     @AppStorage(AICloudSettings.maxTokensKey) private var maxTokens = AICloudSettings.defaultMaxTokens
     @AppStorage(AICloudSettings.perMinuteKey) private var perMinute = AICloudSettings.defaultPerMinute
     /// 刚加的账号默认展开。
@@ -188,10 +189,30 @@ struct AISettingsView: View {
             .foregroundStyle(store.baseURL(of: account) == nil ? Color.orange : Color.secondary)
             .fixedSize(horizontal: false, vertical: true)
         keyRow(account)
-        Text("ai.settings.modelsHelp")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .firstTextBaseline) {
+            Text("ai.settings.modelsHelp")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button(L("ai.settings.refreshModels")) {
+                Task { await catalog.refresh(account.id) }
+            }
+            .controlSize(.small)
+            .disabled(store.accountConfig(account.id) == nil || catalog.status(for: account.id) == .loading)
+        }
+        // 展开账号、存了 Key、改了地址（停手半秒后）就去拉服务商的模型列表；没变就不重拉。
+        .task(id: listSignature(account)) {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            await catalog.refreshIfNeeded(account.id, signature: listSignature(account))
+        }
+        if let line = listStatus(account) {
+            Text(verbatim: line.text)
+                .font(.caption)
+                .foregroundStyle(line.warning ? Color.orange : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         ForEach(store.models(of: account.id)) { model in
             modelRow(model, account: account, usedBy: usage[model.id] ?? [])
         }
@@ -203,6 +224,28 @@ struct AISettingsView: View {
             Button("ai.settings.deleteAccount", role: .destructive) {
                 pendingDelete = account
             }
+        }
+    }
+
+    /// 拉模型列表要看的状态：Key 有没有、地址是什么。
+    private func listSignature(_ account: AICloudAccount) -> String {
+        "\(account.id)|\(store.accountsWithKey.contains(account.id))|\(account.baseURL)"
+    }
+
+    /// 模型下拉列表的来源说明。
+    private func listStatus(_ account: AICloudAccount) -> (text: String, warning: Bool)? {
+        switch catalog.status(for: account.id) {
+        case .loading:
+            return (L("ai.settings.modelsLoading"), false)
+        case .loaded(let count):
+            return (L("ai.settings.modelsLoaded \(count)"), false)
+        case .failed(let message):
+            if let url = store.baseURL(of: account), AICloudSettings.isLocalHost(url) {
+                return (L("ai.settings.modelsFailedLocal"), true)
+            }
+            return (L("ai.settings.modelsFailed \(message)"), true)
+        case .idle:
+            return store.accountConfig(account.id) == nil ? (L("ai.settings.modelsSuggested"), false) : nil
         }
     }
 
@@ -262,9 +305,11 @@ struct AISettingsView: View {
             TextField("ai.settings.modelName", text: modelBinding(model.id, \.name),
                       prompt: Text("ai.settings.modelNamePrompt"))
                 .labelsHidden()
-            TextField("ai.settings.modelID", text: modelBinding(model.id, \.model),
-                      prompt: Text(verbatim: account.kind.modelExample.isEmpty ? "model" : account.kind.modelExample))
-                .labelsHidden()
+            ModelComboBox(text: modelBinding(model.id, \.model),
+                          items: catalog.items(for: account),
+                          placeholder: account.kind.modelExample.isEmpty ? L("ai.settings.modelID")
+                                                                         : account.kind.modelExample)
+                .frame(minWidth: 200)
             Button(testing.contains(model.id) ? L("ai.settings.testing") : L("ai.settings.test")) {
                 runTest(model.id)
             }
@@ -334,6 +379,7 @@ struct AISettingsView: View {
         }
         keyInputs[account.id] = nil
         keyFailed.remove(account.id)
+        catalog.forget(account.id)
         store.deleteAccount(account.id)
     }
 

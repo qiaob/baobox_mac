@@ -94,6 +94,14 @@ final class AIModelStore: ObservableObject {
 
     func isConfigured(_ modelID: String) -> Bool { config(modelID: modelID) != nil }
 
+    /// 账号级的请求配置（拉模型列表用，不针对某个模型）；nil = 地址不对或缺 Key。
+    func accountConfig(_ accountID: String) -> AICloudConfig? {
+        guard let account = account(accountID), let url = baseURL(of: account) else { return nil }
+        let key = keys[account.id] ?? ""
+        if key.isEmpty, !AICloudSettings.keyOptional(account.kind, baseURL: url) { return nil }
+        return AICloudConfig(provider: account.kind, baseURL: url, model: "", apiKey: key, accountID: account.id)
+    }
+
     /// 配置哪里不完整（设置页提示用）；nil = 完整。
     func problem(modelID: String) -> String? {
         guard let model = model(modelID), let account = account(model.accountID) else {

@@ -53,6 +53,8 @@ struct AICloudConfig {
 struct AICloudClient {
     let config: AICloudConfig
 
+    private static let anthropicVersion = "2026-10-21"
+
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 120
@@ -93,7 +95,7 @@ struct AICloudClient {
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
+        request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
         var body: [String: Any] = [
             "model": config.model,
             "max_tokens": maxTokens,
@@ -181,6 +183,41 @@ struct AICloudClient {
         let cleaned = OfflinePrompt.clean(content)
         guard !cleaned.isEmpty else { throw AICloudError.badResponse }
         return cleaned
+    }
+
+    // MARK: - 模型列表
+
+    /// 服务商的模型 id（docs/ai-service/DESIGN.md §3.4）：Claude `GET /v1/models`，OpenAI 兼容 `GET {base}/models`
+    /// （Ollama 返回本机已安装的模型）。不过滤、不排序，交给 `AIModelCatalog`。
+    func listModels() async throws -> [String] {
+        var request: URLRequest
+        switch config.provider.api {
+        case .anthropic:
+            var components = URLComponents(url: config.baseURL.appendingPathComponent("v1/models"),
+                                           resolvingAgainstBaseURL: false)
+            components?.queryItems = [URLQueryItem(name: "limit", value: "1000")]
+            guard let url = components?.url else { throw AICloudError.badResponse }
+            request = URLRequest(url: url)
+            request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        case .openAI:
+            request = URLRequest(url: config.baseURL.appendingPathComponent("models"))
+            if !config.apiKey.isEmpty {
+                request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+            }
+        }
+        request.timeoutInterval = 15
+        let (data, status) = try await send(request)
+        try Self.check(status: status, data: data)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = object["data"] as? [[String: Any]] else {
+            throw AICloudError.badResponse
+        }
+        return list.compactMap { item in
+            guard let id = item["id"] as? String, !id.isEmpty else { return nil }
+            // Gemini 的 OpenAI 兼容接口返回「models/gemini-…」，对话接口要不带前缀的名字。
+            return id.hasPrefix("models/") ? String(id.dropFirst("models/".count)) : id
+        }
     }
 
     // MARK: - 公共

@@ -84,6 +84,24 @@ enum AICloudProvider: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 内置的常用模型（模型名下拉框在拉到服务商的列表之前显示，docs/ai-service/DESIGN.md §3.4）。只是起步建议、可能过时，
+    /// 以服务商返回的列表为准。Ollama 和自定义不内置：Ollama 的列表就是本机装了哪些。
+    var suggestedModels: [String] {
+        switch self {
+        case .anthropic: return ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-4-5"]
+        case .openai: return ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "gpt-5-mini", "gpt-5"]
+        case .gemini: return ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+        case .deepseek: return ["deepseek-chat", "deepseek-reasoner"]
+        case .qwen: return ["qwen-plus", "qwen-turbo", "qwen-max"]
+        case .moonshot: return ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"]
+        case .zhipu: return ["glm-4-flash", "glm-4-air", "glm-4-plus", "glm-4.5-air", "glm-4.5"]
+        case .openrouter: return ["openai/gpt-4o-mini", "google/gemini-2.5-flash", "deepseek/deepseek-chat"]
+        case .siliconflow: return ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3"]
+        case .groq: return ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+        case .ollama, .openAICompatible: return []
+        }
+    }
+
     /// 模型输入框的占位示例（没有默认模型时给个样子）。
     var modelExample: String {
         switch self {
