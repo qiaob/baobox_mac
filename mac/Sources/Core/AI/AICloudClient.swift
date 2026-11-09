@@ -57,11 +57,11 @@ struct AICloudClient {
 
     /// `system` 可为空；`maxTokens` 已由调用方按用户上限截好。
     func complete(system: String?, user: String, maxTokens: Int, timeout: TimeInterval) async throws -> String {
-        switch config.provider {
+        switch config.provider.api {
         case .anthropic:
             return try await anthropic(system: system, user: user, maxTokens: maxTokens, timeout: timeout,
                                        lightweight: true)
-        case .openAICompatible:
+        case .openAI:
             return try await openAI(system: system, user: user, maxTokens: maxTokens, timeout: timeout,
                                     tokenField: "max_tokens")
         }

@@ -21,6 +21,23 @@ struct AISettingsView: View {
         AICloudProvider(rawValue: provider) ?? .anthropic
     }
 
+    /// 预填了地址的 OpenAI 兼容服务（菜单中间那一组）。
+    private static let presets: [AICloudProvider] = AICloudProvider.allCases.filter {
+        $0 != .anthropic && $0 != .ollama && $0 != .openAICompatible
+    }
+
+    private var baseURLHelp: String {
+        currentProvider.defaultBaseURL.isEmpty
+            ? L("ai.settings.baseURLHelpCustom")
+            : L("ai.settings.baseURLHelpDefault \(currentProvider.defaultBaseURL)")
+    }
+
+    private var modelHelp: String {
+        currentProvider.defaultModel.isEmpty
+            ? L("ai.settings.modelHelpOpenAI")
+            : L("ai.settings.modelHelpDefault \(currentProvider.defaultModel)")
+    }
+
     var body: some View {
         Form {
             Section {
@@ -32,22 +49,33 @@ struct AISettingsView: View {
 
             Section {
                 Picker("ai.settings.provider", selection: $provider) {
-                    ForEach(AICloudProvider.allCases) { item in
-                        Text(item.title).tag(item.rawValue)
+                    // Claude / 常用的 OpenAI 兼容服务（预填地址和默认模型）/ 本机与自定义。
+                    Text(verbatim: AICloudProvider.anthropic.title).tag(AICloudProvider.anthropic.rawValue)
+                    Divider()
+                    ForEach(Self.presets) { item in
+                        Text(verbatim: item.title).tag(item.rawValue)
                     }
+                    Divider()
+                    Text(verbatim: AICloudProvider.ollama.title).tag(AICloudProvider.ollama.rawValue)
+                    Text(verbatim: AICloudProvider.openAICompatible.title)
+                        .tag(AICloudProvider.openAICompatible.rawValue)
                 }
                 .onChange(of: provider) { _, _ in
                     loadFields()
                     ai.refreshCloudConfiguration()
                     testResult = nil
                 }
-                TextField("ai.settings.baseURL", text: $baseURL, prompt: Text(verbatim: currentProvider.defaultBaseURL))
+                TextField("ai.settings.baseURL", text: $baseURL,
+                          prompt: Text(verbatim: currentProvider.defaultBaseURL.isEmpty
+                                       ? "https://example.com/v1" : currentProvider.defaultBaseURL))
                     .onSubmit { saveFields() }
-                TextField("ai.settings.model", text: $model,
-                          prompt: Text(verbatim: currentProvider.defaultModel.isEmpty
-                                       ? "gpt-4o-mini / qwen2.5:7b" : currentProvider.defaultModel))
+                Text(verbatim: baseURLHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("ai.settings.model", text: $model, prompt: Text(verbatim: currentProvider.modelExample))
                     .onSubmit { saveFields() }
-                Text(currentProvider == .anthropic ? "ai.settings.modelHelpAnthropic" : "ai.settings.modelHelpOpenAI")
+                Text(verbatim: modelHelp)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -126,11 +154,25 @@ struct AISettingsView: View {
                 }
             }
         }
-        Text(keyFailed ? "ai.settings.keySaveFailed"
-             : (currentProvider == .openAICompatible ? "ai.settings.keyHelpOpenAI" : "ai.settings.keyHelp"))
-            .font(.caption)
-            .foregroundStyle(keyFailed ? Color.orange : Color.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .firstTextBaseline) {
+            Text(keyFailed ? "ai.settings.keySaveFailed" : keyHelp)
+                .font(.caption)
+                .foregroundStyle(keyFailed ? Color.orange : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if let url = currentProvider.keyPageURL {
+                Link(L("ai.settings.getKey"), destination: url)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private var keyHelp: LocalizedStringKey {
+        switch currentProvider {
+        case .ollama: return "ai.settings.keyHelpLocal"
+        case .openAICompatible: return "ai.settings.keyHelpOpenAI"
+        default: return "ai.settings.keyHelp"
+        }
     }
 
     private func loadFields() {

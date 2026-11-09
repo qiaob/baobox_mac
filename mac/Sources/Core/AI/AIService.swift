@@ -87,7 +87,7 @@ final class AIService: ObservableObject {
         let model = AICloudSettings.model(provider)
         guard !model.isEmpty else { return nil }
         let key = cloudKey ?? ""
-        if key.isEmpty, !(provider == .openAICompatible && AICloudSettings.isLocalHost(baseURL)) { return nil }
+        if key.isEmpty, !AICloudSettings.keyOptional(provider, baseURL: baseURL) { return nil }
         return AICloudConfig(provider: provider, baseURL: baseURL, model: model, apiKey: key)
     }
 
