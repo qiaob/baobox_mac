@@ -46,7 +46,7 @@ struct LocalModelsSection: View {
             LabeledContent("localmodel.available") {
                 Text(verbatim: availableLine)
             }
-            caption(recommendationLine)
+            recommendationGuide
             Picker("localmodel.install", selection: $selected) {
                 ForEach(LocalModels.all) { entry in
                     Text(verbatim: "\(entry.name)（\(fitText(entry))）").tag(entry.id)
@@ -88,15 +88,55 @@ struct LocalModelsSection: View {
         return parts.isEmpty ? "—" : parts.joined(separator: " · ")
     }
 
-    /// 按用途的推荐搭配：翻译用翻译专用的小模型；实时纠错要快，用最小的通用模型；纪要、润色用这台 Mac 跑得动的最大的通用模型。
-    private var recommendationLine: String {
-        let translation = LocalModels.defaultEntry(for: .translation).name
-        let quick = LocalModels.defaultEntry(for: .generation).name
-        guard let best = LocalModels.recommended(totalMemory: total), best.name != quick else {
-            return L("localmodel.recommendSmall \(translation) \(quick)")
+    /// 推荐说明「怎么选」（docs/local-models/DESIGN.md §3）：按用途各推荐一个，写明为什么；按这台 Mac 的内存动态生成。
+    /// 翻译用翻译专用的小模型；实时纠错要快，用最小的通用模型；纪要、润色用跑得动的最大的通用模型；跑不动的列为不建议；最后提一句云端。
+    private var recommendationGuide: some View {
+        let translation = LocalModels.defaultEntry(for: .translation)
+        let quick = LocalModels.defaultEntry(for: .generation)
+        let best = LocalModels.recommended(totalMemory: total).flatMap { $0.id == quick.id ? nil : $0 }
+        let avoid = LocalModels.models(for: .generation).filter { LocalModels.fit($0, totalMemory: total) == .tooBig }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: L("localmodel.guide.title \(MachineInfo.text(total))"))
+                .font(.callout.weight(.medium))
+            guideRow(L("localmodel.guide.translation"), translation.name,
+                     L("localmodel.guide.translationWhy \(MachineInfo.text(translation.memoryNeed))"))
+            guideRow(L("localmodel.guide.correction"), quick.name, L("localmodel.guide.correctionWhy"))
+            if let best {
+                guideRow(L("localmodel.guide.writing"), best.name,
+                         L("localmodel.guide.writingWhy \(quick.name) \(MachineInfo.text(best.memoryNeed))"))
+            } else {
+                guideRow(L("localmodel.guide.writing"), quick.name, L("localmodel.guide.writingSmall"))
+            }
+            if !avoid.isEmpty {
+                guideRow(L("localmodel.guide.avoid"), ListFormatter.localizedString(byJoining: avoid.map(\.name)),
+                         L("localmodel.guide.avoidWhy"), warning: true)
+            }
+            guideRow(L("localmodel.guide.cloud"), L("localmodel.guide.cloudModel"), L("localmodel.guide.cloudWhy"))
         }
-        return L("localmodel.recommend \(translation) \(quick) \(best.name)")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
+
+    /// 推荐说明的一行：用途（固定宽度，各行对齐）| 模型名 + 为什么。
+    private func guideRow(_ purpose: String, _ model: String, _ why: String, warning: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(verbatim: purpose)
+                .foregroundStyle(.secondary)
+                .frame(width: Self.guidePurposeWidth, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: model)
+                    .foregroundStyle(warning ? Color.orange : Color.primary)
+                Text(verbatim: why)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 推荐说明里「用途」那一列的宽度（放得下「纪要、周报、润色」）。
+    private static let guidePurposeWidth: CGFloat = 112
 
     private func fitText(_ entry: LocalModelEntry) -> String {
         switch LocalModels.fit(entry, totalMemory: total) {
