@@ -22,7 +22,7 @@ final class MeetingMinutesRegenerator: ObservableObject {
     func regenerate(_ id: String) {
         let store = MeetingStore.shared
         guard let record = store.record(id), canRegenerate(record) else { return }
-        guard OfflineTranslator.corrector.isReady else {
+        guard AIService.shared.isLocalReady(.generation) else {
             MeetingLibraryModel.shared.flash(L("meeting.regenerate.noModel"))
             return
         }
@@ -51,8 +51,8 @@ final class MeetingMinutesRegenerator: ObservableObject {
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let notes = transcript.notes
         Task {
-            OfflineTranslator.corrector.beginKeepAlive()
-            defer { OfflineTranslator.corrector.endKeepAlive() }
+            AIService.shared.beginLocalKeepAlive(.generation)
+            defer { AIService.shared.endLocalKeepAlive(.generation) }
             do {
                 let minutes = try await LiveTranslateMinutes.generate(lines: lines, chinese: chinese, template: template,
                                                                       notes: notes)
@@ -132,7 +132,7 @@ final class MeetingWeeklyReporter {
         let labels = Self.labels(key: key, interval: interval)
         Task {
             var overview: String?
-            if OfflineTranslator.corrector.isReady {
+            if AIService.shared.isLocalReady(.generation) {
                 do {
                     overview = try await Self.overview(entries, labels: labels)
                 } catch {
@@ -195,10 +195,10 @@ final class MeetingWeeklyReporter {
             /no_think
             """
         }
-        OfflineTranslator.corrector.beginKeepAlive()
-        defer { OfflineTranslator.corrector.endKeepAlive() }
-        let answer = OfflinePrompt.clean(try await OfflineTranslator.corrector.respond(to: prompt, maxTokens: 400,
-                                                                                         sampling: .summary))
+        AIService.shared.beginLocalKeepAlive(.generation)
+        defer { AIService.shared.endLocalKeepAlive(.generation) }
+        // 周报只走本地（同会议纪要，docs/ai-service/DESIGN.md §5.5）。
+        let answer = try await AIService.shared.generate(prompt, maxTokens: 400, sampling: .summary, route: .local).text
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

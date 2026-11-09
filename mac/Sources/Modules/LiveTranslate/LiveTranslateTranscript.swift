@@ -276,7 +276,7 @@ final class LiveTranslateTranscript {
             minutes = .off
         } else if terminating {
             minutes = .interrupted
-        } else if !OfflineTranslator.corrector.isReady {
+        } else if !AIService.shared.isLocalReady(.generation) {
             minutes = .noModel
         } else if minutesInput.reduce(0, { $0 + $1.text.count }) + notes.count < 40 {
             minutes = .tooShort
@@ -319,7 +319,7 @@ final class LiveTranslateTranscript {
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let template = destination.template
         let notes = self.notes
-        OfflineTranslator.corrector.beginKeepAlive()
+        AIService.shared.beginLocalKeepAlive(.generation)
         minutesTask = Task {
             let result: Minutes
             do {
@@ -331,7 +331,7 @@ final class LiveTranslateTranscript {
                 LiveTranslateLog.transcript.error("minutes failed: \(error.localizedDescription, privacy: .public)")
                 result = .failed(error.localizedDescription)
             }
-            OfflineTranslator.corrector.endKeepAlive()
+            AIService.shared.endLocalKeepAlive(.generation)
             minutesTask = nil
             guard case .generating = minutes else { return }
             minutes = result
@@ -594,8 +594,8 @@ enum LiveTranslateMinutes {
 
     @MainActor
     private static func ask(_ prompt: String, maxTokens: Int) async throws -> String {
-        OfflinePrompt.clean(try await OfflineTranslator.corrector.respond(to: prompt, maxTokens: maxTokens,
-                                                                          sampling: .summary))
+        // 纪要只走本地（会议文档定过「数据不出本机」，docs/ai-service/DESIGN.md §5.5）。
+        try await AIService.shared.generate(prompt, maxTokens: maxTokens, sampling: .summary, route: .local).text
     }
 
     /// 会议纪要：每行带说话人与【重点】；长了先逐段提要点（重点必留），再按会议类型整理成固定的四节。

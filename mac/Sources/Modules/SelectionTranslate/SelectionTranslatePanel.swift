@@ -346,8 +346,8 @@ private struct SelectionTranslateView: View {
     }
 }
 
-/// 翻译区：按引擎解析选系统翻译 / 离线模型；系统翻译失败时（「自动」模式）回落离线模型；
-/// 都不可用（macOS 14 且没下载模型）时给下载入口，下完自动开翻。
+/// 翻译区：按本模块的引擎设置选系统翻译 / 离线模型 / 云端服务；系统翻译失败时（「自动」模式）回落离线模型；
+/// 云端出错时 `AIService` 自动改用离线模型（有的话），译文下面标一句。都不可用（macOS 14 且没下载模型）时给下载入口，下完自动开翻。
 private struct SelectionTranslationArea: View {
     let text: String
     let source: TranslationLanguage
@@ -358,6 +358,8 @@ private struct SelectionTranslationArea: View {
     @State private var engine: TranslationEngineKind?
     @State private var result: String?
     @State private var failure: String?
+    /// 要的是云端、实际用了本地。
+    @State private var fellBack = false
 
     init(text: String, source: TranslationLanguage, target: TranslationLanguage,
          onResult: @escaping (String) -> Void) {
@@ -365,13 +367,20 @@ private struct SelectionTranslationArea: View {
         self.source = source
         self.target = target
         self.onResult = onResult
-        _engine = State(initialValue: TranslationSettings.resolve())
+        _engine = State(initialValue: TranslationSettings.resolve(.selection))
     }
 
     var body: some View {
         Group {
             if let result {
-                AdaptiveText(text: result, size: 13, weight: .medium, maxHeight: PanelMetrics.translationMaxHeight)
+                VStack(alignment: .leading, spacing: 4) {
+                    AdaptiveText(text: result, size: 13, weight: .medium, maxHeight: PanelMetrics.translationMaxHeight)
+                    if fellBack {
+                        Text(L("ai.notice.cloudFallback"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } else if let failure {
                 Text(failure)
                     .font(.system(size: 12))
@@ -402,30 +411,35 @@ private struct SelectionTranslationArea: View {
             case .success(let value):
                 finish(value)
             case .failure:
-                if TranslationSettings.canFallBackToOffline {
+                if TranslationSettings.canFallBackToOffline(.selection) {
                     engine = .offline
                 } else {
                     failure = L("selectiontranslate.panel.translateFailed")
                 }
             }
         })
-        .task(id: engine == .offline) {
-            guard engine == .offline else { return }
-            await runOffline()
+        .task(id: engine) {
+            switch engine {
+            case .offline: await runModel(.local)
+            case .cloud: await runModel(.cloud)
+            case .system, nil: return
+            }
         }
         .onChange(of: offline.isReady) { _, ready in
             // 在浮层里点了下载、下完了：直接开翻。
-            if ready, engine == nil, TranslationSettings.engineChoice != .system {
+            let choice = TranslationSettings.engineChoice(.selection)
+            if ready, engine == nil, choice != .system {
                 engine = .offline
             }
         }
     }
 
-    private func runOffline() async {
+    private func runModel(_ route: AIService.Route) async {
         do {
-            let value = try await offline.translate(text, to: target, from: source)
+            let reply = try await AIService.shared.translate(text, to: target, from: source, route: route)
             guard !Task.isCancelled else { return }
-            finish(value)
+            fellBack = reply.usedFallback
+            finish(reply.text)
         } catch {
             guard !Task.isCancelled else { return }
             failure = error.localizedDescription

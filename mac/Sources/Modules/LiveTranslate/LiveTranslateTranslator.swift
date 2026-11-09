@@ -11,7 +11,8 @@ import Translation
 /// - `latest`：每个翻译方向（目标语言）只留最新的一条 partial。
 ///
 /// 每个「服务方」同一时刻只有一个翻译在飞，翻完再取下一条 —— 识别 partial 再密也不会堆积。
-/// 服务方：系统翻译每个方向一个会话（只取自己方向的活），离线模型一个循环（什么方向都接）。
+/// 服务方：系统翻译每个方向一个会话（只取自己方向的活），离线模型 / 云端服务一个循环（什么方向都接）。
+/// 云端时草稿（partial）降频：两次之间至少隔 `cloudPartialInterval`，定稿照常逐句翻（docs/ai-service/DESIGN.md §5.3）。
 @MainActor
 final class LiveTranslateTranslator {
     private struct Job {
@@ -25,6 +26,15 @@ final class LiveTranslateTranslator {
     /// （那一截原文后来又改了，或这句改判了语言）。
     var onResult: ((Int, String, String, String) -> Void)?
     var onError: (() -> Void)?
+    /// 要的是云端、这一句改用了本地（断网、超时、限流等）。
+    var onFallback: (() -> Void)?
+
+    /// 云端草稿的最小间隔：草稿更新很密，全走云端费钱、也容易撞限流。
+    private static let cloudPartialInterval: TimeInterval = 2
+    /// 云端请求超时：超时的那一句改用本地译文，不卡住后面的句子。
+    private static let cloudFinalTimeout: TimeInterval = 4
+    private static let cloudPartialTimeout: TimeInterval = 3
+    private var lastCloudPartial = Date.distantPast
 
     private var finals: [Job] = []
     private var latest: [String: Job] = [:]
@@ -53,6 +63,7 @@ final class LiveTranslateTranslator {
     func reset() {
         finals = []
         latest = [:]
+        lastCloudPartial = .distantPast
     }
 
     /// 取下一条活：先定稿再 partial。`target` 为 nil = 不挑方向。
@@ -84,20 +95,31 @@ final class LiveTranslateTranslator {
         wakes[id] = nil
     }
 
-    /// 离线模型服务循环：由控制器在开始时起一个 Task，停止时取消。
-    func serveOffline() async {
+    /// 离线模型 / 云端服务的翻译循环：由控制器在开始时起一个 Task，停止时取消。
+    func serveModel(route: AIService.Route) async {
         let wake = registerWake()
         defer { unregisterWake(wake.id) }
         for await _ in wake.stream {
-            while let job = next(for: nil) {
+            while !finals.isEmpty || !latest.isEmpty {
                 if Task.isCancelled { return }
+                let isFinal = !finals.isEmpty
+                if route == .cloud, !isFinal,
+                   Date().timeIntervalSince(lastCloudPartial) < Self.cloudPartialInterval {
+                    // 草稿还没到点：小睡一下再看（期间来了定稿就先翻定稿，草稿被更新的替换掉也正好）。
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    continue
+                }
+                guard let job = next(for: nil) else { break }
                 guard let target = TranslationLanguage.from(code: job.target) else { continue }
+                if route == .cloud, !isFinal { lastCloudPartial = Date() }
                 do {
                     // 专有名词表每句现读：设置里改完，下一句翻译就用上。
-                    let text = try await OfflineTranslator.shared.translate(job.text, to: target,
-                                                                            glossary: LiveTranslateSettings.glossary)
+                    let reply = try await AIService.shared.translate(
+                        job.text, to: target, glossary: LiveTranslateSettings.glossary, route: route,
+                        timeout: isFinal ? Self.cloudFinalTimeout : Self.cloudPartialTimeout)
                     if Task.isCancelled { return }
-                    onResult?(job.id, job.text, job.target, text)
+                    if reply.usedFallback { onFallback?() }
+                    onResult?(job.id, job.text, job.target, reply.text)
                 } catch {
                     if Task.isCancelled { return }
                     onError?()
