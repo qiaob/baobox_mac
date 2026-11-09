@@ -64,7 +64,31 @@ Haiku 5.5 在 high 档以下可以关思考）。模型不认这两项回 400（
 `POST {base}/chat/completions`，有 Key 才带 `Authorization: Bearer`（Base URL 指向 localhost / 127.0.0.1 时可不填 Key，
 Ollama 即 `http://localhost:11434/v1`）。新一些的 OpenAI 模型只认 `max_completion_tokens`：400 里提到 `max_tokens` 就换字段重发。
 
-### 3.3 错误与退回
+### 3.3 服务预设（2026-11-09 用户追加：地址除了自定义，也给常用服务的默认值）
+
+服务菜单分三组：Claude ／ 预填了地址和默认模型的 OpenAI 兼容服务 ／ 本机 Ollama 与自定义地址。预设都走 OpenAI 兼容这条协议
+（`AICloudProvider.api`），差别只是默认值；地址和模型都能改（国际站、代理、自建网关），留空用默认。
+
+| 服务 | 默认 Base URL | 默认模型 |
+|---|---|---|
+| Anthropic Claude | `https://api.anthropic.com` | `claude-haiku-5-5` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问（阿里云百炼） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Kimi（月之暗面） | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
+| 硅基流动 SiliconFlow | `https://api.siliconflow.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` |
+| Groq | `https://api.groq.com/openai/v1` | `llama-3.1-8b-instant` |
+| Ollama（本机） | `http://localhost:11434/v1` | 必填（如 `qwen2.5:7b`），不用 Key |
+| 自定义（OpenAI 兼容） | 必填 | 必填 |
+
+- 通义千问、Kimi 默认国内站；海外账号改成各自的国际站地址。
+- 默认模型选各家响应快、便宜的那档；哪天下线了，「测试连接」会报出来，填个新的即可。
+- 有官方申请页的服务，Key 输入框下给「获取 API Key」链接。
+
+### 3.4 错误与退回
 
 | 错误 | 来源 | 冷却 30 秒 |
 |---|---|---|
@@ -85,16 +109,18 @@ Ollama 即 `http://localhost:11434/v1`）。新一些的 OpenAI 模型只认 `ma
 
 | 键 | 取值 | 默认 |
 |---|---|---|
-| `ai.cloud.provider` | `anthropic` / `openAICompatible` | `anthropic` |
-| `ai.cloud.anthropic.model` / `ai.cloud.openai.model` | 模型名 | 空 = Claude 用 `claude-haiku-5-5`；OpenAI 兼容必须填 |
-| `ai.cloud.anthropic.baseURL` / `ai.cloud.openai.baseURL` | http(s) 地址 | 空 = `https://api.anthropic.com` / `https://api.openai.com/v1` |
+| `ai.cloud.provider` | `AICloudProvider` 的 rawValue（`anthropic` / `openai` / `gemini` / … / `ollama` / `openAICompatible`） | `anthropic` |
+| `ai.cloud.<前缀>.model` | 模型名 | 空 = 该服务的默认模型（§3.3） |
+| `ai.cloud.<前缀>.baseURL` | http(s) 地址 | 空 = 该服务的默认地址（§3.3） |
+
+前缀 = rawValue，例外两个沿用最初版本：自定义用 `ai.cloud.openai`，所以 OpenAI 官方这一项另起 `ai.cloud.openaiOfficial`。
 | `ai.cloud.maxTokens` | 128…8192 | 1024 |
 | `ai.cloud.perMinute` | 10…600 | 120（实时字幕每分钟几十次：定稿逐句 + 降频后的草稿） |
 
 - Key：钥匙串 generic password，service `com.baobox.app`、account `ai.cloud.<provider>.apiKey`，
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`（同 `ClipboardCrypto`）。不进 UserDefaults、不写日志；设置页从不回显已存的 Key，
-  只显示「已保存」，可替换 / 删除。两家各存各的 Key 和模型，切换不丢。
-- 「配置完整」= 地址像样 + 有模型 + 有 Key（或 OpenAI 兼容指向本机）。`AIService.cloudConfigured` 发布出去，设置页和引擎选择据此置灰。
+  只显示「已保存」，可替换 / 删除。每个服务各存各的 Key、地址和模型，切换不丢。
+- 「配置完整」= 地址像样 + 有模型 + 有 Key（或 OpenAI 兼容地址指向本机，如 Ollama）。`AIService.cloudConfigured` 发布出去，设置页和引擎选择据此置灰。
 - 「测试连接」：发一句「Reply with the single word: OK」，不计入每分钟次数、不触发退回。
 
 ## 5. 各调用方
