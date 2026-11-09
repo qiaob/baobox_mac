@@ -13,6 +13,11 @@ struct SelectionTextResult {
     let anchorRect: CGRect?
     /// 哪条路径取到的。
     let route: Route
+    /// 选区在一个可写的输入框里（AX 确认 `kAXSelectedText` 可设）：改写类结果可以替换回去。
+    /// 借剪贴板 / 框选取到的一律为 nil（docs/selection-translate/ASSISTANT.md §1.5）。
+    var editTarget: SelectionEditTarget? = nil
+    /// 选中的词所在的整句（AX 读得到全文时），学习的词典卡用。
+    var context: String? = nil
 
     enum Route {
         case accessibility
@@ -24,6 +29,13 @@ struct SelectionTextResult {
         case appCopied
         case ocr
     }
+}
+
+/// 可以把结果替换回去的那个输入框：取词时的元素和当时选中的文字。替换前据此再核对一次。
+struct SelectionEditTarget {
+    let pid: pid_t
+    let element: AXUIElement
+    let originalText: String
 }
 
 /// 取词：AX 读选中文字为主；读不到时借剪贴板 —— 按前台 App 自己的「拷贝」菜单项，
@@ -46,7 +58,34 @@ enum SelectionText {
 
         guard let text = selectedText(of: element),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return SelectionTextResult(text: text, anchorRect: selectionBounds(of: element), route: .accessibility)
+        var result = SelectionTextResult(text: text, anchorRect: selectionBounds(of: element), route: .accessibility)
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            result.editTarget = SelectionEditTarget(pid: app.processIdentifier, element: element, originalText: text)
+        }
+        result.context = sentence(around: element)
+        return result
+    }
+
+    /// 替换前再读一次那个输入框此刻选中的文字（docs/selection-translate/ASSISTANT.md §2.4）。
+    @MainActor
+    static func currentSelection(of target: SelectionEditTarget) -> String? {
+        selectedText(of: target.element)
+    }
+
+    /// 选区所在的整句：读全文 + 选区范围，按句末标点往两边找，最多 300 字。读不到 / 就是选区本身时返回 nil。
+    private static func sentence(around element: AXUIElement) -> String? {
+        var valueRef: CFTypeRef?
+        var rangeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
+              let value = valueRef as? String,
+              AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+              let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length > 0 else { return nil }
+        return SelectionSentence.extract(from: value as NSString,
+                                         selection: NSRange(location: range.location, length: range.length))
     }
 
     /// 先读 kAXSelectedText；没有就用「全文 + 选区范围」切（不少文本视图只给后者）。
@@ -259,5 +298,44 @@ enum SelectionText {
         up?.flags = .maskCommand
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
+    }
+}
+
+/// 从全文里切出选区所在的句子（纯逻辑）。
+enum SelectionSentence {
+    private static let terminators: Set<unichar> = Set("。！？!?\n".utf16)
+    private static let maxLength = 300
+
+    static func extract(from text: NSString, selection: NSRange) -> String? {
+        guard selection.location >= 0, selection.location + selection.length <= text.length else { return nil }
+        var start = selection.location
+        var steps = 0
+        while start > 0, steps < maxLength {
+            let previous = text.character(at: start - 1)
+            if terminators.contains(previous) || isPeriodEnd(text, at: start - 1) { break }
+            start -= 1
+            steps += 1
+        }
+        var end = selection.location + selection.length
+        steps = 0
+        while end < text.length, steps < maxLength {
+            let current = text.character(at: end)
+            end += 1
+            steps += 1
+            if terminators.contains(current) || isPeriodEnd(text, at: end - 1) { break }
+        }
+        let sentence = text.substring(with: NSRange(location: start, length: end - start))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = text.substring(with: selection).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sentence.count > selected.count, sentence.count <= maxLength else { return nil }
+        return sentence
+    }
+
+    /// 英文句点后面跟空白（或在末尾）才算句末，避免把 e.g. / 3.14 当句末。
+    private static func isPeriodEnd(_ text: NSString, at index: Int) -> Bool {
+        guard text.character(at: index) == 0x2E else { return false }
+        guard index + 1 < text.length else { return true }
+        let next = text.character(at: index + 1)
+        return next == 0x20 || next == 0x0A || next == 0x09
     }
 }
