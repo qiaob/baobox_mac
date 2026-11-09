@@ -90,6 +90,7 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 | 功能 id | 模块（「AI」页分组） | 类型 | 用在 | 选云端时发出去的 | 建议（§6.3） |
 |---|---|---|---|---|---|
 | `selectiontranslate.translate` | 划词助手 | 翻译 | `SelectionTranslatePanel` | 选中的文字 | 自动 |
+| `selectiontranslate.actions` | 划词助手 | 通用 | `SelectionAIActionArea`（润色、改写、地道英文、解释、总结、自定义动作，#85） | 点了动作的那段选中文字 | `.fastest` |
 | `livetranslate.translate` | 会议 | 翻译 | `LiveTranslateTranslator`（字幕与同传、会议） | 识别出来的每一句话 | 自动 |
 | `livetranslate.correct` | 会议 | 通用 | `LiveTranslateCorrector` | 识别出来的中文句子连同上文 | `.fastest` |
 | `meeting.minutes` | 会议 | 通用 | `LiveTranslateMinutes`（会后纪要、重新生成） | 整场会议的转写和速记 | `.best` |
