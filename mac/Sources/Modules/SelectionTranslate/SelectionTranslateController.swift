@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 
 /// 划词翻译的 UserDefaults 键（前缀 `selectiontranslate.`），见设计文档 §6。
 enum SelectionTranslateSettings {
@@ -52,7 +53,7 @@ enum SelectionTranslateSettings {
     }
 }
 
-/// 划词翻译状态机：触发（菜单 / 快捷键 / 自动弹出 / 框选）→ 取词 → 浮层。
+/// 划词助手状态机：触发（菜单 / 快捷键 / 自动弹出 / 框选）→ 取词 → 会话 → 浮层（动作条 / 结果面板）。
 @MainActor
 final class SelectionTranslateController {
     static let shared = SelectionTranslateController()
@@ -66,6 +67,8 @@ final class SelectionTranslateController {
     private var eventTap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var pendingSelectionCheck: DispatchWorkItem?
+    /// 自动弹出等待期间按了键（多半是 ⌘C）就不弹：全局 keyDown 监听，随事件 tap 装 / 拆。
+    private var keyMonitor: Any?
     /// 最近一次左键按下的位置（Quartz 坐标），抬起时据此判断是不是拖选。
     private var mouseDownPoint: CGPoint?
     /// 左键按下时剪贴板的 changeCount。抬起后它变了 = 前台 App 自己把选区拷进了剪贴板
@@ -84,24 +87,21 @@ final class SelectionTranslateController {
 
     /// 原文长度上限：超长段落截断，避免把整篇文章塞进翻译会话。
     private static let maxCharacters = 8000
+    /// 松开鼠标后等多久再弹（docs/selection-translate/ASSISTANT.md §1.2）：选中只是为了复制时，
+    /// 这段时间里按了 ⌘C（或任何键）、剪贴板变了，这次就不弹 —— 快速复制时动作条根本不出现。
+    private static let popupDelay: TimeInterval = 0.4
     /// 按下到抬起移动超过这个距离（点）才算拖选；双击选词 / 三击选行按点击次数认。
     private static let dragThreshold: CGFloat = 5
+    /// 临时快捷键 id 前缀（docs/selection-translate/ASSISTANT.md §2.3）。
+    private static let transientPrefix = "selectiontranslate.transient."
 
     func activate() {
-        panel.onSpeakOriginal = { [weak self] text, language in self?.speak(text, language: language) }
-        panel.onSpeakTranslation = { [weak self] text, language in self?.speak(text, language: language) }
-        panel.onCopyTranslation = { text in
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-        }
-        panel.onTranslationReady = { [weak self] text, language in
-            guard SelectionTranslateSettings.autoSpeak else { return }
-            self?.speak(text, language: language)
-        }
         panel.onHide = { [weak self] in
             self?.synthesizer.stopSpeaking(at: .immediate)
+            LearnSpeaker.shared.stop()
+            HotkeyCenter.shared.unregisterTransients(prefix: Self.transientPrefix)
         }
+        EnglishDictionary.shared.loadIfNeeded()
         refreshEventTap()
     }
 
@@ -113,17 +113,36 @@ final class SelectionTranslateController {
         OfflineTranslator.shared.shutdown()
     }
 
-    // MARK: - 手动触发：翻译选中文字
+    // MARK: - 手动触发
 
-    /// manual = 用户明确按键 / 点菜单：取不到词要给反馈（按设置借剪贴板兜底）；
-    /// manual 为 false 时只走 AX，取不到就安静地什么都不做（自动弹出另有一套判断，见 `handleMouseUp`）。
+    /// 菜单「翻译选中文字」/ 翻译直达快捷键。
     func translateSelection(manual: Bool) {
+        runOnSelection(SelectionBuiltinAction.translate.rawValue, manual: manual)
+    }
+
+    /// 直达快捷键：选中 → 按键 → 跳过动作条直接出这个动作的结果。
+    func runOnSelection(_ actionID: String, manual: Bool = true) {
+        acquireSelection(manual: manual) { [weak self] result in
+            self?.present(result, phase: .result(actionID), keyboardMode: false)
+        }
+    }
+
+    /// 「唤出动作条」快捷键：动作条以键盘模式出现（字母直达、← → 移动、⏎ 执行）。
+    func showActionsByKeyboard() {
+        acquireSelection(manual: true) { [weak self] result in
+            self?.present(result, phase: .bar, keyboardMode: true)
+        }
+    }
+
+    /// 取前台 App 的选中文字：AX 为主；manual 时读不到就按设置借剪贴板（找不到「拷贝」菜单项再合成 ⌘C）。
+    /// manual 为 false 时只走 AX，取不到就安静地什么都不做（自动弹出另有一套判断，见 `handleMouseUp`）。
+    private func acquireSelection(manual: Bool, then completion: @escaping (SelectionTextResult) -> Void) {
         guard Permissions.hasAccessibility else {
             if manual { Permissions.promptAccessibility() }
             return
         }
         if let result = SelectionText.fetchViaAccessibility() {
-            show(result)
+            completion(result)
             return
         }
         guard manual else { return }
@@ -146,7 +165,7 @@ final class SelectionTranslateController {
             guard let self else { return }
             if case .copied(let text, let method) = outcome {
                 let route: SelectionTextResult.Route = method == .menu ? .menuCopy : .keystrokeCopy
-                self.show(SelectionTextResult(text: text, anchorRect: anchor, route: route))
+                completion(SelectionTextResult(text: text, anchorRect: anchor, route: route))
             } else {
                 self.showNotice(L("selectiontranslate.panel.noSelection"))
             }
@@ -165,7 +184,7 @@ final class SelectionTranslateController {
         picker.pick { [weak self] text, anchor in
             guard let self else { return }
             if let text {
-                show(SelectionTextResult(text: text, anchorRect: anchor, route: .ocr))
+                present(SelectionTextResult(text: text, anchorRect: anchor, route: .ocr), phase: .bar, keyboardMode: false)
             } else if anchor != nil {
                 showNotice(L("selectiontranslate.panel.noTextRecognized"), anchor: anchor)
             }
@@ -175,7 +194,19 @@ final class SelectionTranslateController {
 
     // MARK: - 展示
 
+    /// 自动弹出：按设置弹动作条 / 直接翻译 / 直接学习。
     private func show(_ result: SelectionTextResult) {
+        switch SelectionAssistantSettings.popupAction {
+        case .bar:
+            present(result, phase: .bar, keyboardMode: false)
+        case .translate:
+            present(result, phase: .result(SelectionBuiltinAction.translate.rawValue), keyboardMode: false)
+        case .learn:
+            present(result, phase: .result(SelectionBuiltinAction.learn.rawValue), keyboardMode: false)
+        }
+    }
+
+    private func present(_ result: SelectionTextResult, phase: SelectionSession.Phase, keyboardMode: Bool) {
         let text = String(result.text.prefix(Self.maxCharacters))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -184,21 +215,168 @@ final class SelectionTranslateController {
         let preferred = [SelectionTranslateSettings.target, SelectionTranslateSettings.secondaryTarget]
         let source = LanguageDetector.detect(text, preferred: preferred)
         let target = SelectionTranslateSettings.target(for: source)
-        panel.show(content: .translation(text: text, source: source, target: target), anchor: result.anchorRect)
+        let session = SelectionSession(result: result, text: text, source: source, translateTarget: target,
+                                       phase: phase, keyboardMode: keyboardMode)
+        session.onStateChange = { [weak self, weak session] in
+            guard let self, let session, self.panel.session === session else { return }
+            self.refreshTransientKeys()
+        }
+        panel.show(session: session)
+        refreshTransientKeys()
     }
 
     private func showNotice(_ message: String, anchor: CGRect? = nil) {
-        panel.show(content: .notice(message: message), anchor: anchor)
+        panel.showNotice(message, anchor: anchor)
+    }
+
+    // MARK: - 动作
+
+    /// 跑当前会话里的一个动作：浮层展开成结果面板（已经展开就原地换结果）。
+    func run(_ actionID: String) {
+        guard let session = panel.session else { return }
+        session.ensureAction(actionID)
+        session.notice = nil
+        if let index = session.actions.firstIndex(where: { $0.id == actionID }) {
+            session.highlighted = index
+        }
+        if session.phase != .result(actionID) {
+            session.primaryText = nil
+            session.keyboardMode = false
+            session.phase = .result(actionID)
+            panel.phaseDidChange()
+        }
+    }
+
+    func hidePanel() {
+        panel.hide()
+    }
+
+    func openSettings(tab: String = "selectiontranslate") {
+        panel.hide()
+        guard let registry = AppDelegate.shared?.registry else { return }
+        SettingsWindowController.shared.show(registry: registry, tab: tab)
+    }
+
+    func copy(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// 翻译出来了：按设置自动朗读译文。
+    func translationReady(_ text: String, language: TranslationLanguage) {
+        guard SelectionTranslateSettings.autoSpeak else { return }
+        speak(text, language: language)
+    }
+
+    /// 把改写结果替换回原来的输入框（docs/selection-translate/ASSISTANT.md §2.4）：
+    /// 先核对选区没变，再收起浮层、经 `TextInserter` 写回；对不上 / 写不进去都改成复制并提示。
+    func replace(_ text: String, session: SelectionSession) {
+        guard let target = session.editTarget else {
+            copy(text)
+            session.notice = L("selectiontranslate.result.copiedNotReplaceable")
+            return
+        }
+        let current = SelectionText.currentSelection(of: target)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard current == target.originalText.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            copy(text)
+            session.notice = L("selectiontranslate.result.selectionChanged")
+            return
+        }
+        let app = NSRunningApplication(processIdentifier: target.pid)
+        let anchor = session.anchor
+        panel.hide()
+        Task { [weak self] in
+            let result = await TextInserter.insert(text, into: app)
+            guard !result.inserted else { return }
+            self?.showNotice(L("selectiontranslate.result.replaceFailed"), anchor: anchor)
+        }
+    }
+
+    /// ⏎：结果面板的主按钮（改写类且可写 = 替换，其余 = 复制并收起）。
+    private func performPrimary() {
+        guard let session = panel.session, let text = session.primaryText else { return }
+        if session.primaryReplaces {
+            replace(text, session: session)
+        } else {
+            copy(text)
+            panel.hide()
+        }
+    }
+
+    // MARK: - 临时快捷键（docs/selection-translate/ASSISTANT.md §2.3）
+
+    private static let digitKeys: [Int] = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
+                                          kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+
+    private static func letterKey(_ builtin: SelectionBuiltinAction) -> Int {
+        switch builtin {
+        case .translate: return kVK_ANSI_T
+        case .learn: return kVK_ANSI_L
+        case .polish: return kVK_ANSI_P
+        case .rewrite: return kVK_ANSI_R
+        case .english: return kVK_ANSI_E
+        case .explain: return kVK_ANSI_X
+        case .summarize: return kVK_ANSI_S
+        }
+    }
+
+    private func refreshTransientKeys() {
+        let center = HotkeyCenter.shared
+        center.unregisterTransients(prefix: Self.transientPrefix)
+        guard panel.isVisible, let session = panel.session else { return }
+        let prefix = Self.transientPrefix
+        func register(_ name: String, _ key: Int, _ modifiers: UInt32, _ action: @escaping @MainActor () -> Void) {
+            center.registerTransient(id: prefix + name, combo: KeyCombo(keyCode: UInt32(key), carbonModifiers: modifiers),
+                                     action: action)
+        }
+        let actions = Array(session.actions.prefix(9))
+        if SelectionAssistantSettings.optionDigits {
+            for (index, action) in actions.enumerated() {
+                register("option\(index)", Self.digitKeys[index], KeyCombo.option) { [weak self] in self?.run(action.id) }
+            }
+        }
+        if session.isBar && session.keyboardMode {
+            for (index, action) in actions.enumerated() {
+                register("digit\(index)", Self.digitKeys[index], 0) { [weak self] in self?.run(action.id) }
+            }
+            for action in session.actions {
+                guard let builtin = action.builtin else { continue }
+                register("letter.\(builtin.rawValue)", Self.letterKey(builtin), 0) { [weak self] in self?.run(action.id) }
+            }
+            register("left", kVK_LeftArrow, 0) { [weak self] in self?.moveHighlight(-1) }
+            register("right", kVK_RightArrow, 0) { [weak self] in self?.moveHighlight(1) }
+            register("return", kVK_Return, 0) { [weak self] in
+                guard let self, let session = self.panel.session, session.actions.indices.contains(session.highlighted) else { return }
+                self.run(session.actions[session.highlighted].id)
+            }
+            register("escape", kVK_Escape, 0) { [weak self] in self?.panel.hide() }
+        }
+        if !session.isBar, session.primaryText != nil {
+            register("return", kVK_Return, 0) { [weak self] in self?.performPrimary() }
+        }
+    }
+
+    private func moveHighlight(_ delta: Int) {
+        guard let session = panel.session, !session.actions.isEmpty else { return }
+        let count = session.actions.count
+        session.highlighted = (session.highlighted + delta + count) % count
     }
 
     // MARK: - 朗读
 
     func speak(_ text: String, language: TranslationLanguage) {
+        LearnSpeaker.shared.stop()
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: text)
         // 没装这种语言的嗓音时为 nil，交给系统默认嗓音。
         utterance.voice = AVSpeechSynthesisVoice(language: language.voiceLanguage)
         synthesizer.speak(utterance)
+    }
+
+    /// 学习的朗读开始前停掉普通朗读（两个合成器别叠在一起）。
+    func stopGeneralSpeech() {
+        synthesizer.stopSpeaking(at: .immediate)
     }
 
     // MARK: - 自动弹出（CGEventTap，只听左键按下 / 抬起）
@@ -246,11 +424,29 @@ final class SelectionTranslateController {
             CFRunLoopAddSource(RunLoop.main.getCFRunLoop(), tapSource, .commonModes)
         }
         CGEvent.tapEnable(tap: tap, enable: true)
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { _ in
+            Task { @MainActor in
+                SelectionTranslateController.shared.keyPressedWhileWaiting()
+            }
+        }
+    }
+
+    /// 等着自动弹出时按了键：这次不弹了。借剪贴板取词时自己合成的 ⌘C 不算。
+    private func keyPressedWhileWaiting() {
+        guard !PasteboardBorrow.isActive else { return }
+        pendingSelectionCheck?.cancel()
+        pendingSelectionCheck = nil
+        // 正在借剪贴板 / 等 App 自己复制的那一路，回来时看到手势号变了就作废。
+        gestureGeneration += 1
     }
 
     private func removeEventTap() {
         pendingSelectionCheck?.cancel()
         pendingSelectionCheck = nil
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        keyMonitor = nil
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
         }
@@ -272,7 +468,7 @@ final class SelectionTranslateController {
         mouseDownChangeCount = NSPasteboard.general.changeCount
     }
 
-    /// 鼠标抬起后延迟一拍查选区：等 App 先把选区落定。
+    /// 鼠标抬起后等 `popupDelay` 再查选区：等 App 先把选区落定，也给「选中只是为了复制」留出按 ⌘C 的时间。
     /// `quartzPoint` 是 CGEvent 的坐标（主屏左上原点）。
     fileprivate func handleMouseUp(at quartzPoint: CGPoint, clickCount: Int) {
         let downPoint = mouseDownPoint
@@ -297,13 +493,16 @@ final class SelectionTranslateController {
         let pid = front.processIdentifier
         let generation = gestureGeneration
         let anchor = primaryHeight.map { CGRect(x: quartzPoint.x, y: $0 - quartzPoint.y, width: 1, height: 1) }
+        let upChangeCount = NSPasteboard.general.changeCount
 
         pendingSelectionCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in
             // asyncAfter 跑在主队列上，与类同为 MainActor 隔离域。
             MainActor.assumeIsolated {
-                guard let self, SelectionTranslateSettings.autoPopup else { return }
+                guard let self, SelectionTranslateSettings.autoPopup, generation == self.gestureGeneration else { return }
                 if let result = SelectionText.fetchViaAccessibility() {
+                    // 等待期间用菜单 / 右键「拷贝」复制了：选中只是为了复制，不弹。
+                    guard NSPasteboard.general.changeCount == upChangeCount else { return }
                     let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { return }
                     // 同一段文字 2 秒内不重复弹（比如用户在同一选区上又点了一下）。
@@ -325,7 +524,7 @@ final class SelectionTranslateController {
             }
         }
         pendingSelectionCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.popupDelay, execute: work)
     }
 
     /// 自动弹出、AX 读不到选区时（设计文档 §2.1）：

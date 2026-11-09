@@ -242,6 +242,50 @@ final class HotkeyCenter: ObservableObject {
         }
     }
 
+    // MARK: - 临时快捷键
+
+    /// 临时占用的组合（划词助手的浮层在屏上时：⌥ + 数字、键盘模式的字母 / 方向键 / 回车，
+    /// docs/selection-translate/ASSISTANT.md §2.3）。走同一个 Carbon 处理器，不持久化、不进设置页；
+    /// 被别的 App 占了就注册失败、返回 false，调用方当没有这个键。
+    private var transientIDs: Set<String> = []
+
+    @discardableResult
+    func registerTransient(id: String, combo: KeyCombo, action: @escaping @MainActor () -> Void) -> Bool {
+        installHandlerIfNeeded()
+        unregisterTransient(id: id)
+        guard !suspended, registrations[id] == nil else { return false }
+        let carbonID = nextCarbonID
+        nextCarbonID += 1
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: signature, id: carbonID)
+        let status = RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, hotKeyID,
+                                         GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr, let ref else { return false }
+        let def = HotkeyDefinition(id: id, title: id, subtitle: nil, defaultCombo: combo, action: action)
+        registrations[id] = Registration(def: def, hotKeyRef: ref, carbonID: carbonID, combo: combo)
+        idByCarbonID[carbonID] = id
+        transientIDs.insert(id)
+        return true
+    }
+
+    func unregisterTransient(id: String) {
+        guard transientIDs.contains(id) else { return }
+        transientIDs.remove(id)
+        guard let reg = registrations[id] else { return }
+        if let ref = reg.hotKeyRef {
+            UnregisterEventHotKey(ref)
+        }
+        idByCarbonID[reg.carbonID] = nil
+        registrations[id] = nil
+    }
+
+    /// 注销 id 以 `prefix` 开头的全部临时快捷键。
+    func unregisterTransients(prefix: String) {
+        for id in transientIDs where id.hasPrefix(prefix) {
+            unregisterTransient(id: id)
+        }
+    }
+
     // MARK: - 录制期间挂起
 
     /// 录制新键位前调用：临时注销全部热键。
