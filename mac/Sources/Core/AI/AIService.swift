@@ -1,11 +1,13 @@
 import Foundation
 import os
 
-/// 一次请求走哪：本地模型，或某个云端模型（`AICloudModel.id`）。
+/// 一次请求走哪：内置的本地模型、本机下载的 Qwen3 大模型（`LocalModelEntry.id`），或某个云端模型（`AICloudModel.id`）。
 enum AIRoute: Hashable {
     case local
+    case localModel(String)
     case cloud(String)
 
+    /// 云端模型 id（不是云端时为 nil）。
     var modelID: String? {
         if case .cloud(let id) = self { return id }
         return nil
@@ -64,28 +66,34 @@ final class AIService {
 
     func isLocalReady(_ model: LocalModel) -> Bool { model.backend.isReady }
 
-    /// 本地模型的推理进程正在启动（首次加载要几秒）。
-    func isLocalStarting(_ model: LocalModel) -> Bool { model.backend.isStartingServer }
-
     /// 这条路现在能不能用：云端 = 模型配置完整；本地 = 模型已下载。
     func isReady(_ route: AIRoute, local model: LocalModel) -> Bool {
         switch route {
         case .local: return isLocalReady(model)
+        case .localModel(let id): return LocalModels.isInstalled(id)
         case .cloud(let id): return AIModelStore.shared.isConfigured(id)
         }
     }
 
-    /// 通用类功能这次走哪：选了云端模型且配置完整 → 云端；否则本地（docs/ai-service/DESIGN.md §3.2）。
+    /// 通用类功能这次走哪：选了云端模型且配置完整 → 云端；选了本机大模型且已下载 → 它；否则内置本地模型
+    /// （docs/ai-service/DESIGN.md §3.2，docs/local-models/DESIGN.md §5）。
     func route(for feature: AIFeature) -> AIRoute {
-        if let id = AIFeatureSettings.choice(feature).modelID, AIModelStore.shared.isConfigured(id) {
-            return .cloud(id)
+        switch AIFeatureSettings.choice(feature) {
+        case .model(let id) where AIModelStore.shared.isConfigured(id): return .cloud(id)
+        case .localModel(let id) where LocalModels.isInstalled(id): return .localModel(id)
+        default: return .local
         }
-        return .local
     }
 
-    /// 本地模型常驻（实时翻译、听写期间）；与 `endLocalKeepAlive` 配对。会顺带把模型加载起来，所以只在走本地时调用。
-    func beginLocalKeepAlive(_ model: LocalModel) { model.backend.beginKeepAlive() }
-    func endLocalKeepAlive(_ model: LocalModel) { model.backend.endKeepAlive() }
+    /// 这条路要用到的本地推理进程；云端为 nil。调用方据此常驻（`beginKeepAlive` / `endKeepAlive` 配对，会顺带把模型加载起来，
+    /// 所以只对实际要用的那个调用）和判断「还在加载」。
+    func localBackend(for route: AIRoute, local model: LocalModel) -> OfflineTranslator? {
+        switch route {
+        case .local: return model.backend
+        case .localModel(let id): return LocalModels.entry(id)?.translator
+        case .cloud: return nil
+        }
+    }
 
     /// 改了账号的地址、Key 或它下面的模型：清掉冷却，下一句就重新试云端。
     func resetCooldown(accountID: String) {
@@ -99,6 +107,14 @@ final class AIService {
                    glossary: [GlossaryEntry] = [], route: AIRoute, timeout: TimeInterval = 30) async throws -> Reply {
         let local: () async throws -> String = {
             try await OfflineTranslator.shared.translate(text, to: target, from: source, glossary: glossary)
+        }
+        if case .localModel(let id) = route {
+            let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
+            // Qwen3 一次只收一条消息：规矩和原文拼在一起；关掉思考，低温度求稳。
+            return try await withLocalModel(id, fallback: isLocalReady(.translation) ? local : nil) { backend in
+                try await backend.respond(to: prompt.system + "\n\n" + prompt.user,
+                                          maxTokens: max(256, text.count * 3), sampling: .correction)
+            }
         }
         guard let modelID = route.modelID else {
             return Reply(text: try await local(), route: .local, usedFallback: false)
@@ -118,6 +134,11 @@ final class AIService {
         let local: () async throws -> String = {
             OfflinePrompt.clean(try await OfflineTranslator.corrector.respond(to: prompt, maxTokens: maxTokens,
                                                                               sampling: sampling))
+        }
+        if case .localModel(let id) = route {
+            return try await withLocalModel(id, fallback: isLocalReady(.generation) ? local : nil) { backend in
+                OfflinePrompt.clean(try await backend.respond(to: prompt, maxTokens: maxTokens, sampling: sampling))
+            }
         }
         guard let modelID = route.modelID else {
             return Reply(text: try await local(), route: .local, usedFallback: false)
@@ -156,16 +177,44 @@ final class AIService {
         guard let config = store.config(modelID: modelID) else {
             return store.problem(modelID: modelID) ?? AICloudError.notConfigured.localizedDescription
         }
+        // 本机服务（Ollama）第一次要把整个模型读进内存，等久一点；报错也别说「云端」。
+        let local = AICloudSettings.isLocalHost(config.baseURL)
         do {
             _ = try await AICloudClient(config: config).complete(system: nil, user: "Reply with the single word: OK",
-                                                                 maxTokens: 64, timeout: 20)
+                                                                 maxTokens: 64, timeout: local ? 120 : 20)
         } catch AICloudError.truncated {
             // 回复被截断也说明连接、Key、模型名都没问题。
+        } catch AICloudError.timeout where local {
+            return L("ai.error.localTimeout")
+        } catch AICloudError.offline where local {
+            return L("ai.error.localOffline")
         } catch {
             return error.localizedDescription
         }
         resetCooldown(accountID: config.accountID)
         return nil
+    }
+
+    // MARK: - 本机大模型
+
+    /// 本机大模型：没下载（被删了）或出错（进程起不来、超时…）时退回内置的本地模型（有的话）。
+    private func withLocalModel(_ id: String, fallback: (() async throws -> String)?,
+                                request: (OfflineTranslator) async throws -> String) async throws -> Reply {
+        func fallBack(_ error: Error) async throws -> Reply {
+            guard let fallback else { throw error }
+            return Reply(text: try await fallback(), route: .local, usedFallback: true)
+        }
+        guard let backend = LocalModels.entry(id)?.translator, backend.isReady else {
+            return try await fallBack(OfflineTranslationError.modelMissing)
+        }
+        do {
+            return Reply(text: try await request(backend), route: .localModel(id), usedFallback: false)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Self.log.error("local model \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return try await fallBack(error)
+        }
     }
 
     // MARK: - 云端公共流程

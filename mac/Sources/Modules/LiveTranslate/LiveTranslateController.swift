@@ -363,10 +363,11 @@ final class LiveTranslateController: ObservableObject {
     private var lineLanguages: [Int: TranslationLanguage] = [:]
     /// 离线模型 / 云端服务的翻译循环（系统翻译时由字幕条上的翻译会话驱动，不用它）。
     private var offlineTask: Task<Void, Never>?
-    private var keepsOfflineAlive = false
-    /// 本次 AI 纠错走哪边；走本地时纠错模型常驻。
+    /// 本次翻译让哪个本地推理进程常驻（内置离线模型或本机大模型；云端为 nil）。
+    private var translationKeepAlive: OfflineTranslator?
+    /// 本次 AI 纠错走哪边；走本地（内置或本机大模型）时那个模型常驻。
     private var correctionRoute: AIRoute = .local
-    private var keepsCorrectorAlive = false
+    private var correctionKeepAlive: OfflineTranslator?
     /// 在「AI」页或模块页改了这两个功能用的模型：运行中就重启，按新设置跑。
     private var featureObserver: NSObjectProtocol?
 
@@ -541,14 +542,10 @@ final class LiveTranslateController: ObservableObject {
         corrector.reset()
         offlineTask?.cancel()
         offlineTask = nil
-        if keepsOfflineAlive {
-            AIService.shared.endLocalKeepAlive(.translation)
-            keepsOfflineAlive = false
-        }
-        if keepsCorrectorAlive {
-            AIService.shared.endLocalKeepAlive(.generation)
-            keepsCorrectorAlive = false
-        }
+        translationKeepAlive?.endKeepAlive()
+        translationKeepAlive = nil
+        correctionKeepAlive?.endKeepAlive()
+        correctionKeepAlive = nil
         correcting = false
         voice.stop()
         router.setMonitor(nil)
@@ -684,9 +681,9 @@ final class LiveTranslateController: ObservableObject {
         case .always: correcting = correctionReady
         case .whenTranslating: correcting = engine != nil && correctionReady
         }
-        if correcting, correctionRoute == .local {
-            AIService.shared.beginLocalKeepAlive(.generation)
-            keepsCorrectorAlive = true
+        if correcting, let backend = AIService.shared.localBackend(for: correctionRoute, local: .generation) {
+            backend.beginKeepAlive()
+            correctionKeepAlive = backend
         }
         virtualDevices = LiveTranslateAudioDevice.virtualDevices()
         if engine != nil, LiveTranslateVoiceSettings.enabled {
@@ -802,14 +799,14 @@ final class LiveTranslateController: ObservableObject {
     /// 离线模型时常驻；云端时不让本地模型白占内存，真要退回本地时再加载（之后空闲 10 分钟才退）。
     private func startModelTranslation(_ engine: TranslationEngineKind) {
         let route: AIRoute
-        if case .cloud(let modelID) = engine {
-            route = .cloud(modelID)
-        } else {
-            route = .local
+        switch engine {
+        case .cloud(let modelID): route = .cloud(modelID)
+        case .localModel(let id): route = .localModel(id)
+        case .offline, .system: route = .local
         }
-        if route == .local {
-            AIService.shared.beginLocalKeepAlive(.translation)
-            keepsOfflineAlive = true
+        if let backend = AIService.shared.localBackend(for: route, local: .translation) {
+            backend.beginKeepAlive()
+            translationKeepAlive = backend
         }
         offlineTask = Task { [translator] in
             await translator.serveModel(route: route)
@@ -1016,10 +1013,8 @@ final class LiveTranslateController: ObservableObject {
         translator.reset()
         offlineTask?.cancel()
         offlineTask = nil
-        if keepsOfflineAlive {
-            AIService.shared.endLocalKeepAlive(.translation)
-            keepsOfflineAlive = false
-        }
+        translationKeepAlive?.endKeepAlive()
+        translationKeepAlive = nil
         voice.stop()
         router.setMonitor(nil)
         router.setMuted(false)
@@ -1229,7 +1224,7 @@ final class LiveTranslateController: ObservableObject {
         // 中文单元先纠错、纠完再翻（`applyCorrection`）；其余直接翻。纠错模型还在加载（第一次要 9 秒左右，比翻译模型还慢，
         // 实测 2026-11-05）时先不纠、直接翻，第一句不用陪着等它。
         let corrects = correcting && language.isChinese
-            && !(correctionRoute == .local && AIService.shared.isLocalStarting(.generation))
+            && !(AIService.shared.localBackend(for: correctionRoute, local: .generation)?.isStartingServer ?? false)
         // 纠错和翻译选的是同一个云端模型：一条请求纠完顺便翻（`LiveTranslateCorrector`），少一次往返。
         var combinedTarget: TranslationLanguage?
         if case .cloud(let modelID) = correctionRoute, sessionEngine == .cloud(modelID) {

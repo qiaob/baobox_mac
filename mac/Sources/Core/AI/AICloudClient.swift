@@ -220,6 +220,35 @@ struct AICloudClient {
         }
     }
 
+    /// Ollama 各模型的文件大小（字节），用它的原生接口 `GET {根地址}/api/tags`（`/v1` 去掉就是根地址）。
+    /// 只对指向本机的服务调用（docs/local-models/DESIGN.md §6）。
+    func ollamaSizes() async throws -> [String: Int64] {
+        guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false) else {
+            throw AICloudError.badResponse
+        }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        if path.hasSuffix("/v1") { path.removeLast(3) }
+        components.path = path + "/api/tags"
+        components.query = nil
+        guard let url = components.url else { throw AICloudError.badResponse }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        let (data, status) = try await send(request)
+        try Self.check(status: status, data: data)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = object["models"] as? [[String: Any]] else {
+            throw AICloudError.badResponse
+        }
+        var sizes: [String: Int64] = [:]
+        for model in models {
+            guard let name = model["name"] as? String ?? model["model"] as? String,
+                  let size = (model["size"] as? NSNumber)?.int64Value else { continue }
+            sizes[name] = size
+        }
+        return sizes
+    }
+
     // MARK: - 公共
 
     private func send(_ request: URLRequest) async throws -> (Data, Int) {

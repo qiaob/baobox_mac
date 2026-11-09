@@ -51,11 +51,11 @@ final class MeetingMinutesRegenerator: ObservableObject {
         let template = LiveTranslateMinutesTemplate(storageValue: record.meta.template)
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let notes = transcript.notes
-        // 走本地时通用模型常驻到写完；选了云端模型就不加载本地模型。
-        let keepsLocal = AIService.shared.route(for: .meetingMinutes) == .local
+        // 走本地（内置或本机大模型）时那个模型常驻到写完；选了云端模型就不加载本地模型。
+        let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
         Task {
-            if keepsLocal { AIService.shared.beginLocalKeepAlive(.generation) }
-            defer { if keepsLocal { AIService.shared.endLocalKeepAlive(.generation) } }
+            kept?.beginKeepAlive()
+            defer { kept?.endKeepAlive() }
             do {
                 let minutes = try await LiveTranslateMinutes.generate(lines: lines, chinese: chinese, template: template,
                                                                       notes: notes)
@@ -200,9 +200,9 @@ final class MeetingWeeklyReporter {
             """
         }
         // 走哪个模型按「周报概述」这个功能选的（默认本地，docs/ai-service/DESIGN.md §5.4）；走本地时模型常驻到写完。
-        let keepsLocal = route == .local
-        if keepsLocal { AIService.shared.beginLocalKeepAlive(.generation) }
-        defer { if keepsLocal { AIService.shared.endLocalKeepAlive(.generation) } }
+        let kept = AIService.shared.localBackend(for: route, local: .generation)
+        kept?.beginKeepAlive()
+        defer { kept?.endKeepAlive() }
         let answer = try await AIService.shared.generate(prompt, maxTokens: 400, sampling: .summary, route: route,
                                                          timeout: 60).text
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)

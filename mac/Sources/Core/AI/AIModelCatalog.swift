@@ -16,6 +16,8 @@ final class AIModelCatalog: ObservableObject {
     /// 账号 id → 服务商返回的对话模型（已过滤、常用的排前面）。
     @Published private(set) var fetched: [String: [String]] = [:]
     @Published private(set) var statuses: [String: Status] = [:]
+    /// 指向本机的服务（Ollama）：账号 id → 模型名 → 文件大小。加载太大的模型会把内存占满，设置页据此提醒。
+    @Published private(set) var localSizes: [String: [String: Int64]] = [:]
 
     /// 上次自动拉取时的「Key 有没有、地址是什么」：没变就不重拉（展开账号时不至于每次都请求）。
     private var signatures: [String: String] = [:]
@@ -42,10 +44,15 @@ final class AIModelCatalog: ObservableObject {
         guard let config = AIModelStore.shared.accountConfig(accountID) else { return }
         statuses[accountID] = .loading
         do {
-            let ids = try await AICloudClient(config: config).listModels()
+            let client = AICloudClient(config: config)
+            let ids = try await client.listModels()
             let ordered = Self.order(ids, suggested: config.provider.suggestedModels)
             fetched[accountID] = ordered
             statuses[accountID] = .loaded(ordered.count)
+            // 本机服务顺带读每个模型多大（不是 Ollama、读不到就算了）。
+            if AICloudSettings.isLocalHost(config.baseURL) {
+                localSizes[accountID] = (try? await client.ollamaSizes()) ?? [:]
+            }
         } catch is CancellationError {
             statuses[accountID] = .idle
         } catch {
@@ -58,6 +65,12 @@ final class AIModelCatalog: ObservableObject {
         fetched[accountID] = nil
         statuses[accountID] = nil
         signatures[accountID] = nil
+        localSizes[accountID] = nil
+    }
+
+    /// 本机服务上这个模型的文件大小；不知道时为 nil。
+    func localSize(accountID: String, model: String) -> Int64? {
+        localSizes[accountID]?[model.trimmingCharacters(in: .whitespacesAndNewlines)]
     }
 
     /// 去掉明显不是对话模型的（向量、语音、图片、审核…）并去重；内置名单里有的排前面（按名单顺序），其余按字母排。

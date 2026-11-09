@@ -422,6 +422,7 @@ private struct SelectionTranslationArea: View {
             switch engine {
             case .offline: await runModel(.local)
             case .cloud(let modelID): await runModel(.cloud(modelID))
+            case .localModel(let id): await runModel(.localModel(id))
             case .system, nil: return
             }
         }

@@ -8,6 +8,8 @@ struct AIFeatureRow: View {
     let showsManage: Bool
 
     @ObservedObject private var store = AIModelStore.shared
+    /// 本机大模型下载好 / 删掉时刷新「本机」一组。
+    @ObservedObject private var localModels = LocalModelsObserver.shared
     /// 只用来跟着 UserDefaults 刷新（在别处改了这个功能也看得到）；读写都走 `AIFeatureSettings`。
     @AppStorage private var stored: String
 
@@ -20,12 +22,18 @@ struct AIFeatureRow: View {
 
     private var feature: AIFeature { definition.feature }
 
-    /// 实际生效的选择：指向已删掉的模型时按默认显示（删模型时已经清掉，这里是兜底）。
+    /// 实际生效的选择：指向已删掉的云端模型、或已删除的本机大模型时按默认显示。
     private var choice: AIEngineChoice {
         _ = stored
         let choice = AIFeatureSettings.choice(feature)
         if let id = choice.modelID, store.model(id) == nil { return AIFeatureSettings.defaultChoice(feature) }
+        if let id = choice.localModelID, !LocalModels.isInstalled(id) { return AIFeatureSettings.defaultChoice(feature) }
         return choice
+    }
+
+    /// 已下载的本机大模型（下拉框的「本机」一组）。
+    private var installedLocalModels: [LocalModelEntry] {
+        LocalModels.optional.filter { LocalModels.isInstalled($0.id) }
     }
 
     private var selection: Binding<String> {
@@ -47,6 +55,13 @@ struct AIFeatureRow: View {
             case .generation:
                 Text("ai.engine.local").tag(AIEngineChoice.local.storageValue)
             }
+            if !installedLocalModels.isEmpty {
+                Section(L("ai.feature.localGroup")) {
+                    ForEach(installedLocalModels) { entry in
+                        Text(verbatim: entry.name).tag(AIEngineChoice.localModel(entry.id).storageValue)
+                    }
+                }
+            }
             // 每个服务商账号一组，组名 = 账号名。
             ForEach(store.accounts) { account in
                 let models = store.models(of: account.id)
@@ -61,16 +76,25 @@ struct AIFeatureRow: View {
         } label: {
             Text(verbatim: definition.title)
         }
+        if let id = choice.localModelID, let entry = LocalModels.entry(id) {
+            Text(verbatim: L("ai.feature.localModelNote \(entry.name) \(MachineInfo.text(entry.memoryNeed))"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         if let id = choice.modelID {
             if let problem = store.problem(modelID: id) {
                 Text(verbatim: L("ai.feature.notReady \(problem)"))
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let model = store.model(id), let account = store.account(model.accountID) {
                 Text(verbatim: L("ai.feature.sends \(definition.sends) \(account.displayName)"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

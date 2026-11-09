@@ -330,6 +330,8 @@ private struct LiveTranslateBarView: View {
         case .system: engine = L("livetranslate.status.engineSystem")
         case .cloud(let modelID):
             engine = L("livetranslate.status.engineCloud \(AIModelStore.shared.displayName(modelID: modelID) ?? "")")
+        case .localModel(let id):
+            engine = L("livetranslate.status.engineLocalModel \(LocalModels.entry(id)?.name ?? id)")
         case nil: engine = L("livetranslate.status.engineOff")
         }
         var text = L("livetranslate.status.recognition \(recognition)") + "　" + L("livetranslate.status.translation \(engine)")

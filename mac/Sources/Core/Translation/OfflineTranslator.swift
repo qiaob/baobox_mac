@@ -48,6 +48,32 @@ struct OfflineModel {
         // 纠错的请求很短；4096 是给实时翻译停止后整理纪要的（每段记录约 2200 token + 输出），KV 缓存约 0.5 GB。
         contextSize: 4096
     )
+
+    /// 可选的本地大模型（docs/local-models/DESIGN.md §2）：Qwen 官方 GGUF（Q4_K_M），大小和 SHA-256 取自 Hugging Face API（2026-11-09）。
+    static let qwen3_4b = qwen3("4B", byteSize: 2_497_280_256,
+                                sha256: "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5")
+    static let qwen3_8b = qwen3("8B", byteSize: 5_027_783_488,
+                                sha256: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785")
+    static let qwen3_14b = qwen3("14B", byteSize: 9_001_752_960,
+                                 sha256: "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0")
+    static let qwen3_30b_a3b = qwen3("30B-A3B", byteSize: 18_556_685_824,
+                                     sha256: "0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5")
+
+    private static func qwen3(_ size: String, byteSize: Int64, sha256: String) -> OfflineModel {
+        let file = "Qwen3-\(size)-Q4_K_M.gguf"
+        return OfflineModel(
+            id: "qwen3-\(size.lowercased())",
+            displayName: "Qwen3-\(size)",
+            fileName: file,
+            byteSize: byteSize,
+            sha256: sha256,
+            mirrors: [
+                "https://huggingface.co/Qwen/Qwen3-\(size)-GGUF/resolve/main/\(file)",
+                "https://modelscope.cn/models/Qwen/Qwen3-\(size)-GGUF/resolve/master/\(file)",
+            ].compactMap(URL.init(string:)),
+            contextSize: 4096
+        )
+    }
 }
 
 /// 离线翻译的路径约定：`~/Library/Application Support/Baobox/Translation/`。
@@ -115,6 +141,18 @@ final class OfflineTranslator: ObservableObject {
     static let shared = OfflineTranslator(model: .translation)
     static let corrector = OfflineTranslator(model: .corrector)
 
+    /// 可选的本地模型各一个实例，第一次用到时建（docs/local-models/DESIGN.md）。内置的两个直接返回 `shared` / `corrector`。
+    private static var instances: [String: OfflineTranslator] = [:]
+
+    static func instance(for model: OfflineModel) -> OfflineTranslator {
+        if model.id == OfflineModel.translation.id { return shared }
+        if model.id == OfflineModel.corrector.id { return corrector }
+        if let existing = instances[model.id] { return existing }
+        let created = OfflineTranslator(model: model)
+        instances[model.id] = created
+        return created
+    }
+
     /// 采样参数。
     struct Sampling {
         var temperature: Double
@@ -149,6 +187,10 @@ final class OfflineTranslator: ObservableObject {
     /// 有上次没下完的进度可以接着下。
     @Published private(set) var hasPartialDownload = false
     @Published private(set) var isStartingServer = false
+    /// 推理进程在跑、能接请求了（「AI」页的状态显示用）。
+    @Published private(set) var isServerRunning = false
+    /// 用户在「AI」页点了启动或开了开机自启：常驻，直到点停止（`pinned` 占一份 keep-alive）。
+    @Published private(set) var isPinned = false
 
     /// 构建时有没有把推理进程打进 App 包。
     let isHelperBundled: Bool
@@ -163,7 +205,9 @@ final class OfflineTranslator: ObservableObject {
 
     // 推理进程
     private var process: Process?
-    private var serverBase: URL?
+    private var serverBase: URL? {
+        didSet { isServerRunning = serverBase != nil }
+    }
     private var apiKey = ""
     private var launchTask: Task<URL, Error>?
     private var idleTimer: Timer?
@@ -237,6 +281,7 @@ final class OfflineTranslator: ObservableObject {
 
     func deleteModel() {
         cancelDownload()
+        unpin()
         stopServer()
         let fm = FileManager.default
         try? fm.removeItem(at: modelURL)
@@ -454,6 +499,44 @@ final class OfflineTranslator: ObservableObject {
 
     /// App 退出时调用。
     func shutdown() {
+        stopServer()
+    }
+
+    /// 退出 App 时：内置的两个和已经建过的大模型实例，推理进程都结束（没建过的不新建）。
+    static func shutdownAll() {
+        shared.shutdown()
+        corrector.shutdown()
+        for instance in instances.values {
+            instance.shutdown()
+        }
+    }
+
+    /// 推理进程的 PID（读内存占用用）；没在跑时为 nil。
+    var serverPID: Int32? {
+        guard let process, process.isRunning else { return nil }
+        return process.processIdentifier
+    }
+
+    /// 「AI」页的启动 / 开机自启：拉起来并常驻，直到 `stop()`（docs/local-models/DESIGN.md §4）。
+    func start() {
+        guard isReady else { return }
+        if !isPinned {
+            isPinned = true
+            keepAliveCount += 1
+        }
+        prewarm()
+    }
+
+    /// 只解除常驻、不立刻停（关掉开机自启时用）：没人用了就按空闲规则退出。
+    func unpin() {
+        guard isPinned else { return }
+        isPinned = false
+        endKeepAlive()
+    }
+
+    /// 「AI」页的停止：解除常驻并结束进程。之后哪个功能再用到，会按需重新拉起。
+    func stop() {
+        unpin()
         stopServer()
     }
 

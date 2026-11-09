@@ -9,6 +9,8 @@ enum TranslationEngineKind: Equatable {
     case offline
     /// 云端模型（`AICloudModel.id`）。
     case cloud(String)
+    /// 本机下载的 Qwen3 大模型（`LocalModelEntry.id`）。
+    case localModel(String)
 }
 
 /// 翻译功能的引擎解析（docs/ai-service/DESIGN.md §5.1）。每个翻译功能选什么存在 `AIFeatureSettings` 里。
@@ -36,6 +38,9 @@ enum TranslationSettings {
             return offlineReady ? .offline : nil
         case .model(let id):
             if AIModelStore.shared.isConfigured(id) { return .cloud(id) }
+            return offlineReady ? .offline : nil
+        case .localModel(let id):
+            if LocalModels.isInstalled(id) { return .localModel(id) }
             return offlineReady ? .offline : nil
         case .auto:
             if systemAvailable { return .system }

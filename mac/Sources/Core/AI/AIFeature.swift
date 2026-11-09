@@ -29,8 +29,11 @@ enum AIEngineChoice: Hashable {
     case local
     /// 云端模型（`AICloudModel.id`）。
     case model(String)
+    /// 本机下载的 Qwen3 大模型（`LocalModelEntry.id`，docs/local-models/DESIGN.md §5）。
+    case localModel(String)
 
     private static let modelPrefix = "model:"
+    private static let localModelPrefix = "localmodel:"
 
     init?(storageValue: String) {
         switch storageValue {
@@ -39,6 +42,12 @@ enum AIEngineChoice: Hashable {
         // 「offline」是旧键 translation.engine 里离线模型的写法。
         case "local", "offline": self = .local
         default:
+            if storageValue.hasPrefix(Self.localModelPrefix) {
+                let id = String(storageValue.dropFirst(Self.localModelPrefix.count))
+                guard !id.isEmpty else { return nil }
+                self = .localModel(id)
+                return
+            }
             guard storageValue.hasPrefix(Self.modelPrefix) else { return nil }
             let id = String(storageValue.dropFirst(Self.modelPrefix.count))
             guard !id.isEmpty else { return nil }
@@ -52,7 +61,13 @@ enum AIEngineChoice: Hashable {
         case .system: return "system"
         case .local: return "local"
         case .model(let id): return Self.modelPrefix + id
+        case .localModel(let id): return Self.localModelPrefix + id
         }
+    }
+
+    var localModelID: String? {
+        if case .localModel(let id) = self { return id }
+        return nil
     }
 
     var modelID: String? {

@@ -1,7 +1,8 @@
 import Combine
 import SwiftUI
 
-/// 设置页「AI」（docs/ai-service/DESIGN.md §6.1）：服务商与模型 + 各功能用哪个模型（按工具分组，同快捷键页）+ 用量上限 + 本地模型。
+/// 设置页「AI」（docs/ai-service/DESIGN.md §6.1）：最上面是本地模型（docs/local-models/DESIGN.md），然后是服务商与模型、
+/// 各功能用哪个模型（按工具分组，同快捷键页）、用量上限。
 /// Key 只进钥匙串，这里从不把已存的 Key 显示出来。文本框随输入保存（Key 除外，要点「保存」）。
 struct AISettingsView: View {
     static let tabID = "ai"
@@ -20,6 +21,8 @@ struct AISettingsView: View {
     @State private var testResults: [String: TestResult] = [:]
     @State private var testing: Set<String> = []
     @State private var pendingDelete: AICloudAccount?
+    /// 本机服务上很大的模型：测试前先确认（加载会把内存占满）。
+    @State private var pendingBigTest: AICloudModel?
     /// 功能选择变了就加一，让模型下面的「用在：…」重算。
     @State private var choicesRevision = 0
 
@@ -39,6 +42,11 @@ struct AISettingsView: View {
         $0 != .anthropic && $0 != .ollama && $0 != .openAICompatible
     }
 
+    /// 服务商详情表格左列（标签）的宽度：几个标签都放得下，右列各行左边对齐。
+    private static let labelWidth: CGFloat = 64
+    /// 模型行里「显示名称」输入框的宽度。
+    private static let nameWidth: CGFloat = 130
+
     private var groups: [FeatureGroup] {
         registry.tools
             .map { FeatureGroup(id: $0.id, name: $0.name, definitions: $0.aiFeatures()) }
@@ -52,15 +60,15 @@ struct AISettingsView: View {
                 Text("ai.settings.intro")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            LocalModelsSection()
+
             Section {
                 if store.accounts.isEmpty {
-                    Text("ai.settings.accountsEmpty")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    caption(L("ai.settings.accountsEmpty"))
                 }
                 ForEach(store.accounts) { account in
                     TappableDisclosure(initiallyExpanded: account.id == justAdded) {
@@ -75,10 +83,7 @@ struct AISettingsView: View {
             }
 
             Section {
-                Text("ai.settings.featuresHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                caption(L("ai.settings.featuresHelp"))
             } header: {
                 Text("ai.settings.featuresSection")
             }
@@ -99,31 +104,15 @@ struct AISettingsView: View {
                 Stepper(value: $perMinute, in: AICloudSettings.perMinuteRange, step: 10) {
                     Text(L("ai.settings.perMinute \(perMinute)"))
                 }
-                Text("ai.settings.limitsHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                caption(L("ai.settings.limitsHelp"))
             } header: {
                 Text("ai.settings.limitsSection")
             }
 
             Section {
-                Text("ai.settings.privacy")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                caption(L("ai.settings.privacy"))
             } header: {
                 Text("ai.settings.privacySection")
-            }
-
-            Section {
-                OfflineModelRow()
-                OfflineModelRow(translator: .corrector,
-                                title: "ai.settings.generationModel",
-                                notInstalledHelp: "ai.settings.generationModelHelp",
-                                installedHelp: "ai.settings.generationModelInstalled")
-            } header: {
-                Text("ai.settings.localSection")
             }
         }
         .formStyle(.grouped)
@@ -140,6 +129,14 @@ struct AISettingsView: View {
             }
         } message: { _ in
             Text("ai.settings.deleteAccountMessage")
+        }
+        .alert(Text("ai.settings.bigModelTitle"),
+               isPresented: Binding(get: { pendingBigTest != nil }, set: { if !$0 { pendingBigTest = nil } }),
+               presenting: pendingBigTest) { model in
+            Button("ai.settings.testAnyway") { runTest(model.id) }
+            Button("localmodel.cancel", role: .cancel) {}
+        } message: { model in
+            Text(verbatim: bigModelWarning(model) ?? "")
         }
     }
 
@@ -177,54 +174,178 @@ struct AISettingsView: View {
         }
     }
 
-    @ViewBuilder
+    /// 展开后的内容：每行左边是固定宽度的标签、右边是占满剩余宽度的控件，说明文字都在右边、左对齐
+    /// （docs/local-models/DESIGN.md §7）。没用 `Grid`：它按理想宽度定列宽，右列撑不满一行。
     private func accountDetails(_ account: AICloudAccount, usage: [String: [String]]) -> some View {
-        TextField("ai.settings.accountName", text: accountBinding(account.id, \.name),
-                  prompt: Text(verbatim: account.kind.title))
-        TextField("ai.settings.baseURL", text: accountBinding(account.id, \.baseURL),
-                  prompt: Text(verbatim: account.kind.defaultBaseURL.isEmpty
-                               ? "https://example.com/v1" : account.kind.defaultBaseURL))
-        Text(verbatim: baseURLHelp(account))
-            .font(.caption)
-            .foregroundStyle(store.baseURL(of: account) == nil ? Color.orange : Color.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        keyRow(account)
-        HStack(alignment: .firstTextBaseline) {
-            Text("ai.settings.modelsHelp")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Button(L("ai.settings.refreshModels")) {
-                Task { await catalog.refresh(account.id) }
+        VStack(alignment: .leading, spacing: 10) {
+            fieldRow("ai.settings.accountName") {
+                TextField("", text: accountBinding(account.id, \.name), prompt: Text(verbatim: account.kind.title))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
             }
-            .controlSize(.small)
-            .disabled(store.accountConfig(account.id) == nil || catalog.status(for: account.id) == .loading)
+            fieldRow("ai.settings.baseURL") {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("", text: accountBinding(account.id, \.baseURL),
+                              prompt: Text(verbatim: account.kind.defaultBaseURL.isEmpty
+                                           ? "https://example.com/v1" : account.kind.defaultBaseURL))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                    caption(baseURLHelp(account), warning: store.baseURL(of: account) == nil)
+                }
+            }
+            fieldRow("ai.settings.apiKey") {
+                keyCell(account)
+            }
+            fieldRow("ai.settings.models") {
+                modelsCell(account, usage: usage)
+            }
+            HStack {
+                Spacer()
+                Button("ai.settings.deleteAccount", role: .destructive) {
+                    pendingDelete = account
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
         // 展开账号、存了 Key、改了地址（停手半秒后）就去拉服务商的模型列表；没变就不重拉。
         .task(id: listSignature(account)) {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
             await catalog.refreshIfNeeded(account.id, signature: listSignature(account))
         }
-        if let line = listStatus(account) {
-            Text(verbatim: line.text)
-                .font(.caption)
-                .foregroundStyle(line.warning ? Color.orange : Color.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 一行：左边固定宽度的标签（各行对齐），右边占满剩余宽度。
+    private func fieldRow<Content: View>(_ key: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(key)
+                .frame(width: Self.labelWidth, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        ForEach(store.models(of: account.id)) { model in
-            modelRow(model, account: account, usedBy: usage[model.id] ?? [])
-        }
-        HStack {
-            Button("ai.settings.addModel") {
-                store.addModel(to: account.id)
+    }
+
+    private func keyCell(_ account: AICloudAccount) -> some View {
+        let hasKey = store.accountsWithKey.contains(account.id)
+        let input = keyInputs[account.id] ?? ""
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                SecureField("", text: keyBinding(account.id),
+                            prompt: Text(verbatim: hasKey ? L("ai.settings.keySaved") : L("ai.settings.keyPlaceholder")))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { saveKey(account.id) }
+                Button("ai.settings.saveKey") {
+                    saveKey(account.id)
+                }
+                .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if hasKey {
+                    Button("ai.settings.deleteKey", role: .destructive) {
+                        store.deleteKey(accountID: account.id)
+                    }
+                }
             }
-            Spacer()
-            Button("ai.settings.deleteAccount", role: .destructive) {
-                pendingDelete = account
+            HStack(alignment: .firstTextBaseline) {
+                caption(keyFailed.contains(account.id) ? L("ai.settings.keySaveFailed") : keyHelp(account),
+                        warning: keyFailed.contains(account.id))
+                if let url = account.kind.keyPageURL {
+                    Link(L("ai.settings.getKey"), destination: url)
+                        .font(.caption)
+                        .fixedSize()
+                }
             }
         }
+    }
+
+    private func modelsCell(_ account: AICloudAccount, usage: [String: [String]]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // 列标题：和下面每一行的两个输入框对齐。
+            HStack(spacing: 8) {
+                Text("ai.settings.modelNameColumn")
+                    .frame(width: Self.nameWidth, alignment: .leading)
+                Text("ai.settings.modelIDColumn")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            ForEach(store.models(of: account.id)) { model in
+                modelRow(model, account: account, usedBy: usage[model.id] ?? [])
+            }
+            HStack(spacing: 8) {
+                Button("ai.settings.addModel") {
+                    store.addModel(to: account.id)
+                }
+                Button(L("ai.settings.refreshModels")) {
+                    Task { await catalog.refresh(account.id) }
+                }
+                .disabled(store.accountConfig(account.id) == nil || catalog.status(for: account.id) == .loading)
+            }
+            if let line = listStatus(account) {
+                caption(line.text, warning: line.warning)
+            }
+        }
+    }
+
+    // MARK: - 模型
+
+    private func modelRow(_ model: AICloudModel, account: AICloudAccount, usedBy: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                TextField("", text: modelBinding(model.id, \.name), prompt: Text("ai.settings.modelNamePrompt"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: Self.nameWidth)
+                ModelComboBox(text: modelBinding(model.id, \.model),
+                              items: catalog.items(for: account),
+                              placeholder: account.kind.modelExample.isEmpty ? L("ai.settings.modelID")
+                                                                             : account.kind.modelExample)
+                    .frame(minWidth: 160)
+                Button(testing.contains(model.id) ? L("ai.settings.testing") : L("ai.settings.test")) {
+                    requestTest(model, account: account)
+                }
+                .disabled(testing.contains(model.id))
+                Button(role: .destructive) {
+                    testResults[model.id] = nil
+                    store.deleteModel(model.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help(L("ai.settings.deleteModel"))
+            }
+            if let size = catalog.localSize(accountID: account.id, model: model.model) {
+                let warning = bigModelWarning(model)
+                caption(warning ?? L("ai.settings.localModelSize \(MachineInfo.text(size))"), warning: warning != nil)
+            }
+            if let result = testResults[model.id] {
+                caption(result.text, warning: !result.ok)
+            }
+            if !usedBy.isEmpty {
+                caption(L("ai.settings.usedBy \(ListFormatter.localizedString(byJoining: usedBy))"))
+            }
+        }
+    }
+
+    /// 本机服务上的模型太大（加载会把内存占满）时的提醒；不大或不知道多大时为 nil（docs/local-models/DESIGN.md §6）。
+    private func bigModelWarning(_ model: AICloudModel) -> String? {
+        guard let size = catalog.localSize(accountID: model.accountID, model: model.model) else { return nil }
+        let total = MachineInfo.totalMemory
+        guard LocalModels.isTooBig(memoryNeed: size + LocalModels.runtimeOverhead, totalMemory: total) else { return nil }
+        return L("ai.settings.localModelTooBig \(MachineInfo.text(size)) \(MachineInfo.text(total))")
+    }
+
+    /// 模型 id → 选了它的功能名。
+    private func modelUsage() -> [String: [String]] {
+        _ = choicesRevision
+        var result: [String: [String]] = [:]
+        for group in groups {
+            for definition in group.definitions {
+                if let id = AIFeatureSettings.choice(definition.feature).modelID {
+                    result[id, default: []].append(definition.title)
+                }
+            }
+        }
+        return result
     }
 
     /// 拉模型列表要看的状态：Key 有没有、地址是什么。
@@ -258,37 +379,6 @@ struct AISettingsView: View {
             : L("ai.settings.baseURLHelpDefault \(account.kind.defaultBaseURL)")
     }
 
-    @ViewBuilder
-    private func keyRow(_ account: AICloudAccount) -> some View {
-        let hasKey = store.accountsWithKey.contains(account.id)
-        let input = keyInputs[account.id] ?? ""
-        HStack {
-            SecureField("ai.settings.apiKey", text: keyBinding(account.id),
-                        prompt: Text(verbatim: hasKey ? L("ai.settings.keySaved") : L("ai.settings.keyPlaceholder")))
-                .onSubmit { saveKey(account.id) }
-            Button("ai.settings.saveKey") {
-                saveKey(account.id)
-            }
-            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if hasKey {
-                Button("ai.settings.deleteKey", role: .destructive) {
-                    store.deleteKey(accountID: account.id)
-                }
-            }
-        }
-        HStack(alignment: .firstTextBaseline) {
-            Text(verbatim: keyFailed.contains(account.id) ? L("ai.settings.keySaveFailed") : keyHelp(account))
-                .font(.caption)
-                .foregroundStyle(keyFailed.contains(account.id) ? Color.orange : Color.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            if let url = account.kind.keyPageURL {
-                Link(L("ai.settings.getKey"), destination: url)
-                    .font(.caption)
-            }
-        }
-    }
-
     private func keyHelp(_ account: AICloudAccount) -> String {
         switch account.kind {
         case .ollama: return L("ai.settings.keyHelpLocal")
@@ -297,58 +387,13 @@ struct AISettingsView: View {
         }
     }
 
-    // MARK: - 模型
-
-    @ViewBuilder
-    private func modelRow(_ model: AICloudModel, account: AICloudAccount, usedBy: [String]) -> some View {
-        HStack(spacing: 8) {
-            TextField("ai.settings.modelName", text: modelBinding(model.id, \.name),
-                      prompt: Text("ai.settings.modelNamePrompt"))
-                .labelsHidden()
-            ModelComboBox(text: modelBinding(model.id, \.model),
-                          items: catalog.items(for: account),
-                          placeholder: account.kind.modelExample.isEmpty ? L("ai.settings.modelID")
-                                                                         : account.kind.modelExample)
-                .frame(minWidth: 200)
-            Button(testing.contains(model.id) ? L("ai.settings.testing") : L("ai.settings.test")) {
-                runTest(model.id)
-            }
-            .disabled(testing.contains(model.id))
-            Button(role: .destructive) {
-                testResults[model.id] = nil
-                store.deleteModel(model.id)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help(L("ai.settings.deleteModel"))
-        }
-        if let result = testResults[model.id] {
-            Text(verbatim: result.text)
-                .font(.caption)
-                .foregroundStyle(result.ok ? Color.secondary : Color.orange)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        if !usedBy.isEmpty {
-            Text(verbatim: L("ai.settings.usedBy \(ListFormatter.localizedString(byJoining: usedBy))"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// 模型 id → 选了它的功能名。
-    private func modelUsage() -> [String: [String]] {
-        _ = choicesRevision
-        var result: [String: [String]] = [:]
-        for group in groups {
-            for definition in group.definitions {
-                if let id = AIFeatureSettings.choice(definition.feature).modelID {
-                    result[id, default: []].append(definition.title)
-                }
-            }
-        }
-        return result
+    /// 说明文字：小字、左对齐、可换行。
+    private func caption(_ text: String, warning: Bool = false) -> some View {
+        Text(verbatim: text)
+            .font(.caption)
+            .foregroundStyle(warning ? Color.orange : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - 添加 / 删除
@@ -396,6 +441,15 @@ struct AISettingsView: View {
         keyInputs[accountID] = ""
         for model in store.models(of: accountID) {
             testResults[model.id] = nil
+        }
+    }
+
+    /// 本机服务上的大模型先确认再测（测试会把整个模型读进内存）。
+    private func requestTest(_ model: AICloudModel, account: AICloudAccount) {
+        if bigModelWarning(model) != nil {
+            pendingBigTest = model
+        } else {
+            runTest(model.id)
         }
     }
 

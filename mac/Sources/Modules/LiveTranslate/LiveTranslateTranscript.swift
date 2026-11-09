@@ -319,9 +319,9 @@ final class LiveTranslateTranscript {
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let template = destination.template
         let notes = self.notes
-        // 走本地时通用模型常驻到写完；给纪要选了云端模型就不加载本地模型（出错退回时才现加载）。
-        let keepsLocal = AIService.shared.route(for: .meetingMinutes) == .local
-        if keepsLocal { AIService.shared.beginLocalKeepAlive(.generation) }
+        // 走本地（内置或本机大模型）时那个模型常驻到写完；给纪要选了云端模型就不加载本地模型（出错退回时才现加载）。
+        let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
+        kept?.beginKeepAlive()
         minutesTask = Task {
             let result: Minutes
             do {
@@ -333,7 +333,7 @@ final class LiveTranslateTranscript {
                 LiveTranslateLog.transcript.error("minutes failed: \(error.localizedDescription, privacy: .public)")
                 result = .failed(error.localizedDescription)
             }
-            if keepsLocal { AIService.shared.endLocalKeepAlive(.generation) }
+            kept?.endKeepAlive()
             minutesTask = nil
             guard case .generating = minutes else { return }
             minutes = result

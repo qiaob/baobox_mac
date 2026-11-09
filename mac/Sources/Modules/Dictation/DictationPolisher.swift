@@ -7,23 +7,22 @@ enum DictationPolisher {
     /// 这次走哪个模型。
     private static var route: AIRoute { AIService.shared.route(for: .dictationPolish) }
 
-    /// 预热时有没有让本地模型常驻（`coolDown` 只放自己占的那一份，中途改了设置也配得上对）。
-    private static var keepsLocalWarm = false
+    /// 预热时让哪个本地模型常驻（`coolDown` 只放自己占的那一份，中途改了设置也配得上对）。
+    private static var warmBackend: OfflineTranslator?
 
     /// 能润色：走本地 = 模型已下载、推理进程已打包；走云端 = 模型配置完整。
     static var isReady: Bool { AIService.shared.isReady(route, local: .generation) }
 
     /// 开始听写就预热（加载模型要几秒），结束时 `coolDown` 配对。走云端时不加载本地模型。
     static func warmUp() {
-        guard route == .local, !keepsLocalWarm else { return }
-        keepsLocalWarm = true
-        AIService.shared.beginLocalKeepAlive(.generation)
+        guard warmBackend == nil, let backend = AIService.shared.localBackend(for: route, local: .generation) else { return }
+        warmBackend = backend
+        backend.beginKeepAlive()
     }
 
     static func coolDown() {
-        guard keepsLocalWarm else { return }
-        keepsLocalWarm = false
-        AIService.shared.endLocalKeepAlive(.generation)
+        warmBackend?.endKeepAlive()
+        warmBackend = nil
     }
 
     /// 润色结果；nil = 用原文（太短、模型不可用、超时、结果不可信）。
