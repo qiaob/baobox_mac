@@ -39,6 +39,11 @@ pub const MAX_SIDE: u32 = 10_000;
 /// 识别一块 RGBA 图像里的文字。
 #[cfg(windows)]
 pub fn recognize(rgba: &[u8], width: u32, height: u32) -> Result<String, String> {
+    recognize_language(rgba, width, height, "")
+}
+
+#[cfg(windows)]
+pub fn recognize_language(rgba: &[u8], width: u32, height: u32, language: &str) -> Result<String, String> {
     check_size(width, height)?;
 
     let bgra = to_bgra(rgba);
@@ -59,7 +64,12 @@ pub fn recognize(rgba: &[u8], width: u32, height: u32) -> Result<String, String>
     .map_err(|e| format!("构造位图失败：{e}"))?;
 
     // 跟随系统首选语言。没有任何可用语言包时这里会失败
-    let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| {
+    let engine = if language.is_empty() {
+        OcrEngine::TryCreateFromUserProfileLanguages()
+    } else {
+        windows::Globalization::Language::CreateLanguage(&windows::core::HSTRING::from(language))
+            .and_then(|language| OcrEngine::TryCreateFromLanguage(&language))
+    }.map_err(|e| {
         format!(
             "系统里没有可用的 OCR 语言包（{e}）。\
              在「设置 → 时间和语言 → 语言和区域」里给中文或英文加上「文本识别」可选功能。"

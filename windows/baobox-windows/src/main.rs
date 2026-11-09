@@ -32,6 +32,10 @@ mod clipboard_panel;
 mod clipboard_read;
 mod clipboard_store;
 #[cfg(windows)]
+mod clipboard_text_tools;
+#[cfg(windows)]
+mod clipboard_text_window;
+#[cfg(windows)]
 mod editor;
 #[cfg(windows)]
 mod hotkeys;
@@ -56,6 +60,8 @@ mod pet_download;
 mod pet_ring;
 #[cfg(windows)]
 mod screenshot_module;
+#[cfg(windows)]
+mod screenshot_preview;
 #[cfg(windows)]
 mod settings_window;
 #[cfg(windows)]
@@ -226,6 +232,19 @@ fn finish(
     }
 
     let result = editor::run(gdi::virtual_screen(), at, shot.rgba)?;
+    if let Some(action) = result.extra {
+        return match action {
+            editor::ExtraAction::Scroll => {
+                let shot = screenshot_module::capture_long(at)?;
+                deliver(&shot, output, copy, save)
+            }
+            editor::ExtraAction::Ocr => {
+                let text = ocr::recognize(&result.rgba, result.width, result.height)?;
+                clipboard::copy_text(&text)?;
+                Ok(text)
+            }
+        };
+    }
     let edited = gdi::Capture {
         width: result.width,
         height: result.height,
@@ -412,7 +431,6 @@ fn history(args: &[String]) -> Result<String, String> {
 /// 与 Linux / macOS 同一套算法（`baobox_core::stitch`），三边拼出来的结果一致。
 #[cfg(windows)]
 fn scroll(args: &[String]) -> Result<String, String> {
-    use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
 
     let mut region: Option<Rect> = None;
     let mut frames = 20usize;
@@ -457,59 +475,51 @@ fn scroll(args: &[String]) -> Result<String, String> {
     }
 
     gdi::prepare();
-    let mut stitcher = Stitcher::new();
-    let mut kept: Vec<Vec<u8>> = Vec::new();
-    let mut frame_height = 0usize;
-
     eprintln!("开始长截屏：现在滚动页面，将抓取 {frames} 帧（间隔 {interval_ms}ms）…");
-    for _ in 0..frames {
-        let shot = gdi::capture(region)?;
-        frame_height = shot.height as usize;
-        let gray = baobox_image::to_gray(&shot.rgba);
-        let Some(frame) = Frame::from_gray(shot.width as usize, shot.height as usize, &gray) else {
-            continue;
-        };
-        if stitcher.push(frame) {
-            kept.push(shot.rgba);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
-    }
-
-    if kept.len() < 2 {
-        return Err(
-            "没有拼接到任何内容。请确认框选的是可滚动区域，并在命令运行期间滚动页面。".to_string(),
-        );
-    }
-
-    let refs: Vec<&[u8]> = kept.iter().map(|f| f.as_slice()).collect();
-    let canvas = compose_rgba(
-        &refs,
-        frame_height,
-        stitcher.placements(),
-        stitcher.width(),
-        stitcher.total_height(),
-    )
-    .ok_or("拼接失败：帧尺寸不一致")?;
-
+    let (shot, count) = capture_scroll(region, frames, std::time::Duration::from_millis(interval_ms), |_, _| Ok(false))?;
     let path = match output {
         Some(path) => path,
         None => default_path("")?,
     };
-    baobox_image::write_rgba(
-        &path,
-        stitcher.width() as u32,
-        stitcher.total_height() as u32,
-        &canvas,
-    )?;
-    Ok(format!(
-        "已保存 {}（{}×{}，由 {} 帧拼成）",
-        path.display(),
-        stitcher.width(),
-        stitcher.total_height(),
-        kept.len()
-    ))
+    baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
+    Ok(format!("已保存 {}（{}×{}，由 {count} 帧拼成）", path.display(), shot.width, shot.height))
 }
 
+#[cfg(windows)]
+fn capture_scroll(
+    region: Rect,
+    frames: usize,
+    interval: std::time::Duration,
+    mut finished: impl FnMut(usize, usize) -> Result<bool, String>,
+) -> Result<(gdi::Capture, usize), String> {
+    use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
+    let mut stitcher = Stitcher::bidirectional();
+    let mut kept = Vec::new();
+    let mut frame_height = 0;
+    let mut stored_bytes = 0usize;
+    for _ in 0..frames {
+        if finished(kept.len(), stitcher.total_height())? { break; }
+        let shot = gdi::capture(region)?;
+        frame_height = shot.height as usize;
+        let gray = baobox_image::to_gray(&shot.rgba);
+        if let Some(frame) = Frame::from_gray(shot.width as usize, frame_height, &gray) {
+            if stored_bytes.saturating_add(shot.rgba.len()) > 192 * 1024 * 1024 { break; }
+            if stitcher.push(frame) {
+                stored_bytes += shot.rgba.len();
+                kept.push(shot.rgba);
+            }
+        }
+        std::thread::sleep(interval);
+    }
+
+    if kept.len() < 2 {
+        return Err("没有拼接到新内容。请框选可滚动的内容区，每次少滚一点，让前后画面保留重叠。".into());
+    }
+    let refs: Vec<&[u8]> = kept.iter().map(Vec::as_slice).collect();
+    let rgba = compose_rgba(&refs, frame_height, stitcher.placements(), stitcher.width(), stitcher.total_height())
+        .ok_or("拼接失败：帧尺寸不一致")?;
+    Ok((gdi::Capture { width: stitcher.width() as u32, height: stitcher.total_height() as u32, rgba }, kept.len()))
+}
 #[cfg(not(windows))]
 fn scroll(_args: &[String]) -> Result<String, String> {
     Err("本程序只能在 Windows 上运行。".to_string())
@@ -633,6 +643,10 @@ fn parse_window_id(value: &str) -> Result<isize, String> {
 ///
 /// `save_dir` 非空时改存到那里 —— 设置里的「保存到」就是靠它生效的。
 pub fn default_path(save_dir: &str) -> Result<PathBuf, String> {
+    configured_capture_path(save_dir, DEFAULT_TEMPLATE, "png")
+}
+
+fn configured_capture_path(save_dir: &str, template: &str, extension: &str) -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "%USERPROFILE% 未设置".to_string())?;
@@ -640,13 +654,18 @@ pub fn default_path(save_dir: &str) -> Result<PathBuf, String> {
         "" => Path::new(&home).join("Pictures").join("Baobox"),
         custom => PathBuf::from(custom),
     };
-    let stem = format_template(DEFAULT_TEMPLATE, now_parts());
+    Ok(capture_path(&dir, template, extension))
+}
+
+fn capture_path(dir: &Path, template: &str, extension: &str) -> PathBuf {
+    let template = if template.trim().is_empty() { DEFAULT_TEMPLATE } else { template };
+    let stem = format_template(template, now_parts());
     // 走 Windows 规则：非法字符更多，另有 CON/PRN/NUL 等保留名
     let safe = sanitize(&stem, Platform::Windows, "screenshot");
-    let name = unique(&format!("{safe}.png"), &|candidate: &str| {
+    let name = unique(&format!("{safe}.{extension}"), &|candidate: &str| {
         dir.join(candidate).exists()
     });
-    Ok(dir.join(name))
+    dir.join(name)
 }
 
 fn now_parts() -> DateParts {

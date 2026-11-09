@@ -8,33 +8,38 @@
 
 #![cfg(windows)]
 
-use baobox_core::geometry::{Handle, Rect};
-use baobox_core::selection::{Key, Outcome, Phase, Selection};
+use crate::editor::{self, EditorResult, ExtraAction};
+use baobox_core::editor::Editor;
+use baobox_core::geometry::{handle_at, Handle, Rect};
+use baobox_core::selection::{Key, Outcome, Phase, Selection, HANDLE_TOLERANCE};
+use baobox_core::toolbar::Item;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-    DeleteObject, EndPaint, FillRect, FrameRect, GetDC, InvalidateRect, ReleaseDC, SelectObject,
-    SetBkMode, SetTextColor, StretchDIBits, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    DeleteObject, EndPaint, FillRect, FrameRect, GetDC, IntersectClipRect, InvalidateRect,
+    ReleaseDC, RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, StretchDIBits, TextOutW,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ,
+    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
     ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
-    IDC_CROSS, MSG, SW_SHOW, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    IDC_CROSS, MSG, SW_SHOW, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_SETCURSOR, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// 覆盖层窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxCaptureOverlay");
 
-/// 选区边框色（Baobox accent，GDI 是 BGR 顺序）。
-const ACCENT_BGR: u32 = 0x0098_A317;
+/// 选区边框色（GDI 是 BGR 顺序）。
+const ACCENT_BGR: u32 = 0x00F4_F4F4;
 
 /// 手柄边长。
 const HANDLE_SIZE: i32 = 8;
@@ -45,11 +50,22 @@ pub struct OverlayResult {
     pub outcome: Outcome,
     /// 窗口列表（`Outcome::Window(i)` 的下标指向它）
     pub windows: Vec<Rect>,
+    pub captured: Option<(Rect, crate::gdi::Capture)>,
+    pub edited: Option<(Rect, EditorResult)>,
 }
 
 /// 挂在窗口上的可变状态。窗口过程通过 `GWLP_USERDATA` 拿到它。
 struct OverlayState {
     selection: Selection,
+    confirm_pressed: bool,
+    move_grab: Option<(f64, f64)>,
+    inline: bool,
+    screen: Rect,
+    editor: Option<Editor>,
+    extra: Option<ExtraAction>,
+    tool_active: bool,
+    drawing: bool,
+    toolbar_press: Option<(f64, f64)>,
     /// 覆盖窗左上角在屏幕坐标里的位置 —— 窗口消息给的是**客户区坐标**，
     /// 而状态机用的是屏幕坐标，两者要来回换算
     origin: (f64, f64),
@@ -104,6 +120,92 @@ impl Drop for Surface {
 }
 
 impl OverlayState {
+    fn sync_editor(&mut self) {
+        let Phase::Adjusting { rect, .. } = *self.selection.phase() else {
+            return;
+        };
+        if !self.inline || rect.w < 1.0 || rect.h < 1.0 {
+            return;
+        }
+        if let Some(editor) = &mut self.editor {
+            let toolbar = editor::inline_toolbar(rect, self.screen, self.tool_active);
+            if editor.image() != rect || editor.toolbar().frame != toolbar.frame {
+                editor.set_layout(rect, toolbar);
+            }
+        } else {
+            let mut editor =
+                Editor::with_toolbar(rect, editor::inline_toolbar(rect, self.screen, false));
+            editor.set_palette(&editor::WINDOWS_PALETTE);
+            editor.set_width(3.0);
+            self.editor = Some(editor);
+        }
+    }
+
+    fn drag_to(&mut self, point: (f64, f64)) {
+        if let Some((offset_x, offset_y)) = self.move_grab {
+            self.selection
+                .move_region_to(point.0 - offset_x, point.1 - offset_y);
+        } else if !self.confirm_pressed {
+            self.selection.mouse_moved(point);
+        }
+    }
+
+    fn crop_snapshot(&self, area: Rect) -> Result<(Rect, crate::gdi::Capture), String> {
+        let bounds = self.to_client(&area);
+        let width = (bounds.right - bounds.left).max(0) as usize;
+        let height = (bounds.bottom - bounds.top).max(0) as usize;
+        if width == 0 || height == 0 {
+            return Err("选区太小，请重新框选".into());
+        }
+        let mut rgba = Vec::with_capacity(width * height * 4);
+        let stride = self.backdrop.width as usize * 4;
+        for y in bounds.top as usize..bounds.bottom as usize {
+            let start = y * stride + bounds.left as usize * 4;
+            rgba.extend_from_slice(&self.backdrop.rgba[start..start + width * 4]);
+        }
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        Ok((
+            area,
+            crate::gdi::Capture {
+                width: width as u32,
+                height: height as u32,
+                rgba,
+            },
+        ))
+    }
+
+    fn confirm_button(&self) -> Option<RECT> {
+        if self.inline || !matches!(self.selection.phase(), Phase::Adjusting { .. }) {
+            return None;
+        }
+        let area = self.to_client(&self.selection.current_rect()?);
+        let width = self.backdrop.width as i32;
+        let height = self.backdrop.height as i32;
+        const GAP: i32 = 8;
+        const BUTTON_HEIGHT: i32 = 36;
+        let button_width = 124.min(width - 2 * GAP).max(1);
+        let right = area.right.clamp(button_width + GAP, width - GAP);
+        let top = if area.bottom + GAP + BUTTON_HEIGHT <= height - GAP {
+            area.bottom + GAP
+        } else {
+            (area.top - GAP - BUTTON_HEIGHT).max(GAP)
+        };
+        Some(RECT {
+            left: right - button_width,
+            right,
+            top,
+            bottom: top + BUTTON_HEIGHT,
+        })
+    }
+
+    fn is_confirm(&self, x: i32, y: i32) -> bool {
+        self.confirm_button().is_some_and(|rect| {
+            x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+        })
+    }
+
     fn to_screen(&self, x: i32, y: i32) -> (f64, f64) {
         (self.origin.0 + x as f64, self.origin.1 + y as f64)
     }
@@ -120,6 +222,23 @@ impl OverlayState {
 
 /// 铺覆盖层并跑消息循环，直到用户确认或取消。
 pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
+    run_overlay(screen, windows, false, false)
+}
+
+pub fn run_capture(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
+    run_overlay(screen, windows, true, false)
+}
+
+pub fn run_editor(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
+    run_overlay(screen, windows, true, true)
+}
+
+fn run_overlay(
+    screen: Rect,
+    windows: Vec<Rect>,
+    return_pixels: bool,
+    inline: bool,
+) -> Result<OverlayResult, String> {
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None)
             .map_err(|e| format!("GetModuleHandle 失败：{e}"))?
@@ -148,6 +267,15 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
         }
         let mut state = Box::new(OverlayState {
             selection: Selection::new(screen, windows.clone()),
+            confirm_pressed: false,
+            move_grab: None,
+            inline,
+            screen,
+            editor: None,
+            extra: None,
+            tool_active: false,
+            drawing: false,
+            toolbar_press: None,
             origin: (screen.x, screen.y),
             backdrop,
             dimmed,
@@ -184,7 +312,13 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
             // 状态机出结果就收摊
-            if state.selection.outcome().is_some() {
+            if state.selection.outcome().is_some()
+                || state.extra.is_some()
+                || state
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.outcome().is_some())
+            {
                 break;
             }
         }
@@ -199,7 +333,33 @@ pub fn run(screen: Rect, windows: Vec<Rect>) -> Result<OverlayResult, String> {
             .outcome()
             .cloned()
             .unwrap_or(Outcome::Cancelled);
-        Ok(OverlayResult { outcome, windows })
+        let edited = state
+            .editor
+            .as_ref()
+            .map(|editor| {
+                let (rect, shot) = state.crop_snapshot(editor.image())?;
+                Ok::<_, String>((rect, editor::finish_inline(editor, state.extra, shot.rgba)?))
+            })
+            .transpose()?;
+        let captured = if return_pixels && edited.is_none() {
+            let target = match outcome {
+                Outcome::Region(rect) => Some(rect),
+                Outcome::Window(index) => windows.get(index).copied(),
+                Outcome::FullScreen => Some(screen),
+                Outcome::Cancelled => None,
+            };
+            target
+                .map(|rect| state.crop_snapshot(rect.clamped_to(&screen)))
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(OverlayResult {
+            outcome,
+            windows,
+            captured,
+            edited,
+        })
     }
 }
 
@@ -216,12 +376,45 @@ unsafe extern "system" fn wndproc(
     let state = &mut *pointer;
 
     match message {
+        WM_SETCURSOR => {
+            if let Some(editor) = &state.editor {
+                if editor::set_toolbar_cursor(editor.toolbar()) {
+                    return LRESULT(1);
+                }
+            } else if state.confirm_button().is_some() {
+                let mut cursor = POINT::default();
+                if GetCursorPos(&mut cursor).is_ok()
+                    && state.is_confirm(
+                        cursor.x - state.origin.0 as i32,
+                        cursor.y - state.origin.1 as i32,
+                    )
+                    && editor::set_hand_cursor()
+                {
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
         WM_MOUSEMOVE => {
             let (x, y) = lparam_to_point(lparam);
+            let point = state.to_screen(x, y);
+            if let Some(editor) = &mut state.editor {
+                editor.mouse_moved(point);
+                if !state.drawing {
+                    state.drag_to(point);
+                    state.sync_editor();
+                }
+                let _ = InvalidateRect(hwnd, None, false);
+                return LRESULT(0);
+            }
             let previous = state.selection.current_rect();
-            state.selection.mouse_moved(state.to_screen(x, y));
+            let previous_button = state.confirm_button();
+            state.drag_to(state.to_screen(x, y));
             let current = state.selection.current_rect();
             if previous != current {
+                for button in previous_button.into_iter().chain(state.confirm_button()) {
+                    let _ = InvalidateRect(hwnd, Some(&button), false);
+                }
                 for rect in previous.into_iter().chain(current) {
                     let client = state.to_client(&rect);
                     let dirty = RECT {
@@ -238,15 +431,106 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             SetCapture(hwnd);
             let (x, y) = lparam_to_point(lparam);
-            state.selection.mouse_down(state.to_screen(x, y));
+            state.confirm_pressed = state.is_confirm(x, y);
+            if !state.confirm_pressed {
+                let point = state.to_screen(x, y);
+                if let Some(editor) = &mut state.editor {
+                    let toolbar = editor.toolbar();
+                    if toolbar.contains(point) {
+                        state.toolbar_press = Some(point);
+                        return LRESULT(0);
+                    }
+                    let image = editor.image();
+                    if state.tool_active
+                        && image.contains(point.0, point.1)
+                        && handle_at(point, &image, HANDLE_TOLERANCE).is_none()
+                    {
+                        state.drawing = true;
+                        editor.mouse_down(point);
+                        let _ = InvalidateRect(hwnd, None, false);
+                        return LRESULT(0);
+                    }
+                    if !image.contains(point.0, point.1)
+                        && handle_at(point, &image, HANDLE_TOLERANCE).is_none()
+                    {
+                        state.editor = None;
+                        state.tool_active = false;
+                    }
+                }
+                state.move_grab = match *state.selection.phase() {
+                    Phase::Adjusting { rect, .. }
+                        if rect.contains(point.0, point.1)
+                            && handle_at(point, &rect, HANDLE_TOLERANCE).is_none() =>
+                    {
+                        Some((point.0 - rect.x, point.1 - rect.y))
+                    }
+                    _ => None,
+                };
+                if state.move_grab.is_none() {
+                    state.selection.mouse_down(point);
+                }
+            }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let _ = ReleaseCapture();
             let (x, y) = lparam_to_point(lparam);
-            state.selection.mouse_up(state.to_screen(x, y));
+            let point = state.to_screen(x, y);
+            if let Some(start) = state.toolbar_press.take() {
+                if let Some(editor) = &mut state.editor {
+                    let toolbar = editor.toolbar();
+                    state.extra = editor::extra_buttons(toolbar.frame)
+                        .into_iter()
+                        .find(|(_, bounds)| {
+                            bounds.contains(start.0, start.1) && bounds.contains(point.0, point.1)
+                        })
+                        .map(|(action, _)| action);
+                    let width = editor::width_at(toolbar.frame, point)
+                        .filter(|width| Some(*width) == editor::width_at(toolbar.frame, start));
+                    if let Some(item) = toolbar
+                        .hit(point)
+                        .filter(|item| Some(*item) == toolbar.hit(start))
+                    {
+                        state.tool_active |= matches!(item, Item::Tool(_));
+                        editor.activate(item);
+                    }
+                    if let Some(width) = width {
+                        editor.set_width(width);
+                    }
+                }
+                state.sync_editor();
+                let _ = InvalidateRect(hwnd, None, false);
+                let _ = ReleaseCapture();
+                return LRESULT(0);
+            }
+            if std::mem::take(&mut state.drawing) {
+                if let Some(editor) = &mut state.editor {
+                    editor.mouse_up(point);
+                }
+                let _ = InvalidateRect(hwnd, None, false);
+                let _ = ReleaseCapture();
+                return LRESULT(0);
+            }
+            if std::mem::take(&mut state.confirm_pressed) {
+                if state.is_confirm(x, y) {
+                    state.selection.key_down(Key::Enter, false);
+                }
+            } else {
+                state.drag_to(point);
+                if state.move_grab.take().is_none() {
+                    state.selection.mouse_up(point);
+                }
+            }
+            state.sync_editor();
             let _ = InvalidateRect(hwnd, None, false);
+            let _ = ReleaseCapture();
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            state.move_grab = None;
+            state.confirm_pressed = false;
+            state.drawing = false;
+            state.toolbar_press = None;
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
@@ -256,11 +540,30 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_KEYDOWN => {
+            if let Some(editor) = &mut state.editor {
+                let modifiers = editor::current_modifiers();
+                let typing = editor.pending_text().is_some();
+                if let Some(key) = editor::translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
+                    editor.key_down(key, modifiers);
+                    let _ = InvalidateRect(hwnd, None, false);
+                    return LRESULT(0);
+                }
+            }
             let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
             if let Some(key) = translate_key(wparam.0 as u32) {
                 state.selection.key_down(key, shift);
+                state.sync_editor();
             }
             let _ = InvalidateRect(hwnd, None, false);
+            LRESULT(0)
+        }
+        WM_CHAR => {
+            if let (Some(editor), Some(character)) =
+                (&mut state.editor, char::from_u32(wparam.0 as u32))
+            {
+                editor.type_char(character);
+                let _ = InvalidateRect(hwnd, None, false);
+            }
             LRESULT(0)
         }
         WM_PAINT => {
@@ -313,6 +616,13 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
     if let Some(rect) = state.selection.current_rect() {
         let client = state.to_client(&rect);
         draw_snapshot(hdc, state, &client, &state.backdrop.rgba);
+        if let Some(editor) = &state.editor {
+            if !editor.visible_shapes().is_empty() {
+                if let Ok((_, shot)) = state.crop_snapshot(editor.image()) {
+                    editor::paint_inline_image(hdc, editor, state.origin, shot.rgba);
+                }
+            }
+        }
 
         // 边框
         let accent: HBRUSH = CreateSolidBrush(COLORREF(ACCENT_BGR));
@@ -338,6 +648,20 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
         draw_size_label(hdc, &client, &rect);
     }
 
+    if let Some(button) = state.confirm_button() {
+        draw_confirm_button(hdc, button, state.confirm_pressed);
+    }
+    if let Some(editor) = &state.editor {
+        if let Ok((_, mut shot)) = state.crop_snapshot(editor.toolbar().frame) {
+            for pixel in shot.rgba.chunks_exact_mut(4) {
+                for channel in &mut pixel[..3] {
+                    *channel = (u16::from(*channel) * 153 / 255) as u8;
+                }
+            }
+            editor::paint_inline_toolbar(hdc, editor, state.origin, state.tool_active, shot.rgba);
+        }
+    }
+
     if state.surface.is_some() {
         let rect = ps.rcPaint;
         let _ = BitBlt(
@@ -355,20 +679,56 @@ unsafe fn paint(hwnd: HWND, state: &OverlayState) {
     let _ = EndPaint(hwnd, &ps);
 }
 
+unsafe fn draw_confirm_button(dc: HDC, mut bounds: RECT, pressed: bool) {
+    use windows::Win32::Graphics::Gdi::{
+        CreatePen, DrawTextW, RoundRect, DT_CENTER, DT_SINGLELINE, DT_VCENTER, PS_SOLID,
+    };
+    let brush = CreateSolidBrush(COLORREF(if pressed { 0x474442 } else { 0x252222 }));
+    let pen = CreatePen(PS_SOLID, 1, COLORREF(0x565350));
+    let font = crate::settings_window::settings_font(-15, 600);
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, pen);
+    let old_font = SelectObject(dc, font);
+    let _ = RoundRect(
+        dc,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        12,
+        12,
+    );
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, COLORREF(0xf4f2ef));
+    let mut label: Vec<u16> = "✓  确认选区".encode_utf16().collect();
+    DrawTextW(
+        dc,
+        &mut label,
+        &mut bounds,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER,
+    );
+    SelectObject(dc, old_font);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    let _ = DeleteObject(font);
+    let _ = DeleteObject(pen);
+    let _ = DeleteObject(brush);
+}
+
 unsafe fn draw_snapshot(dc: HDC, state: &OverlayState, rect: &RECT, pixels: &[u8]) {
     let image = &state.backdrop;
-    let left = rect.left.clamp(0, image.width as i32);
-    let top = rect.top.clamp(0, image.height as i32);
-    let width = rect.right.clamp(0, image.width as i32) - left;
-    let height = rect.bottom.clamp(0, image.height as i32) - top;
-    if width <= 0 || height <= 0 {
+    let saved = SaveDC(dc);
+    if saved == 0 {
         return;
     }
+    IntersectClipRect(dc, rect.left, rect.top, rect.right, rect.bottom);
+    let width = image.width as i32;
+    let height = image.height as i32;
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: image.width as i32,
-            biHeight: -(image.height as i32),
+            biWidth: width,
+            biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB.0,
@@ -376,14 +736,16 @@ unsafe fn draw_snapshot(dc: HDC, state: &OverlayState, rect: &RECT, pixels: &[u8
         },
         ..Default::default()
     };
+    // Keep both layers anchored to the same desktop origin. GDI clips the
+    // destination; a partial source rectangle can use a different Y origin.
     StretchDIBits(
         dc,
-        left,
-        top,
+        0,
+        0,
         width,
         height,
-        left,
-        top,
+        0,
+        0,
         width,
         height,
         Some(pixels.as_ptr().cast()),
@@ -391,6 +753,7 @@ unsafe fn draw_snapshot(dc: HDC, state: &OverlayState, rect: &RECT, pixels: &[u8
         DIB_RGB_COLORS,
         SRCCOPY,
     );
+    let _ = RestoreDC(dc, saved);
 }
 
 /// 在选区左上角上方标出尺寸。

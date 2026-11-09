@@ -124,6 +124,18 @@ impl HotkeyCenter {
     pub fn action_for(&self, id: i32) -> Option<&str> {
         self.actions.get(&id).map(String::as_str)
     }
+
+    /// Release a single binding while a tool needs to send the same keys.
+    pub fn unregister_action(&mut self, action: &str) -> bool {
+        let Some(id) = self.actions.iter().find_map(|(&id, name)| (name == action).then_some(id)) else {
+            return false;
+        };
+        if unsafe { UnregisterHotKey(self.hwnd, id) }.is_err() {
+            return false;
+        }
+        self.actions.remove(&id);
+        true
+    }
 }
 
 impl Drop for HotkeyCenter {

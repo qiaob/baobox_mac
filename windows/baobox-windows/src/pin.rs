@@ -25,10 +25,10 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, UnregisterClassW, GWLP_USERDATA, HTCAPTION, IDC_SIZEALL, MSG, SW_SHOW,
-    WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW,
-    CS_DBLCLKS, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, IsWindow, LoadCursorW, RegisterClassW, SetWindowLongPtrW, ShowWindow,
+    TranslateMessage, CS_DBLCLKS, GWLP_USERDATA, HTCAPTION, IDC_SIZEALL, MSG, SW_SHOWNOACTIVATE,
+    WM_CLOSE, WM_KEYDOWN, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCRBUTTONUP, WM_PAINT,
+    WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// 贴图窗口类名。
@@ -57,6 +57,18 @@ impl Drop for PinState {
 ///
 /// `at` 是初始位置（一般就是截图原来的位置，视觉上「留在原地」）。
 pub fn show(at: (i32, i32), rgba: &[u8], width: u32, height: u32) -> Result<(), String> {
+    let hwnd = open(at, rgba, width, height)?;
+    unsafe {
+        let mut message = MSG::default();
+        while IsWindow(hwnd).as_bool() && GetMessageW(&mut message, None, 0, 0).0 > 0 {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    Ok(())
+}
+
+pub fn open(at: (i32, i32), rgba: &[u8], width: u32, height: u32) -> Result<HWND, String> {
     if width == 0 || height == 0 {
         return Err("贴图尺寸为零".to_string());
     }
@@ -75,13 +87,13 @@ pub fn show(at: (i32, i32), rgba: &[u8], width: u32, height: u32) -> Result<(), 
         };
         RegisterClassW(&class);
 
-        let mut state = Box::new(create_bitmap(rgba, width, height)?);
+        let state = Box::new(create_bitmap(rgba, width, height)?);
 
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             CLASS_NAME,
             w!("Baobox"),
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP,
             at.0,
             at.1,
             width as i32,
@@ -93,22 +105,33 @@ pub fn show(at: (i32, i32), rgba: &[u8], width: u32, height: u32) -> Result<(), 
         )
         .map_err(|e| format!("创建贴图窗口失败：{e}"))?;
 
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut PinState as isize);
-        let _ = ShowWindow(hwnd, SW_SHOW);
-
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        let _ = DestroyWindow(hwnd);
-        let _ = UnregisterClassW(CLASS_NAME, instance);
-        Ok(())
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        Ok(hwnd)
     }
 }
 
+pub fn close_all() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW,
+    };
+    unsafe extern "system" fn close(hwnd: HWND, _: LPARAM) -> windows::Win32::Foundation::BOOL {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid != std::process::id() {
+            return true.into();
+        }
+        let mut class = [0u16; 32];
+        let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        if class[..len] == *CLASS_NAME.as_wide() {
+            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        true.into()
+    }
+    unsafe {
+        let _ = EnumWindows(Some(close), LPARAM(0));
+    }
+}
 /// 把 RGBA 灌进一块自上而下的 DIB，留着给 `WM_PAINT` 用。
 unsafe fn create_bitmap(rgba: &[u8], width: u32, height: u32) -> Result<PinState, String> {
     let screen = GetDC(None);
@@ -178,18 +201,29 @@ unsafe extern "system" fn wndproc(
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let _ = BitBlt(hdc, 0, 0, state.width, state.height, state.dc, 0, 0, SRCCOPY);
+            let _ = BitBlt(
+                hdc,
+                0,
+                0,
+                state.width,
+                state.height,
+                state.dc,
+                0,
+                0,
+                SRCCOPY,
+            );
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         // 三条关掉的路：双击、右键、任意按键
-        WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_KEYDOWN => {
-            PostQuitMessage(0);
+        WM_NCLBUTTONDBLCLK | WM_NCRBUTTONUP | WM_KEYDOWN | WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
-            LRESULT(0)
+        WM_NCDESTROY => {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            drop(Box::from_raw(pointer));
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
     }
