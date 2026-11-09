@@ -229,6 +229,11 @@ impl App {
                     hwnd, WM_PET_DOWNLOAD, WPARAM(index), LPARAM(0),
                 );
             }),
+            Box::new(move || unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                    hwnd, WM_PET_PICK_AREA, WPARAM(0), LPARAM(0),
+                );
+            }),
             Box::new(move |updated: &Config| {
                 if let Err(why) = store::save_config(updated) {
                     eprintln!("配置存不下来：{why}");
@@ -266,6 +271,7 @@ impl App {
 
 /// 配置变更的自定义消息。
 const WM_PET_DOWNLOAD: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
+const WM_PET_PICK_AREA: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 7;
 pub(crate) const WM_RELOAD_CONFIG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
 
 /// 定时器 id：给工具喂 `tick`。
@@ -425,6 +431,14 @@ unsafe extern "system" fn wndproc(
         WM_PET_DOWNLOAD => {
             if let Some(entry) = crate::pet_download::catalog().get(wparam.0) {
                 app.dispatch(&format!("{}{}", crate::pet::DOWNLOAD, entry.id));
+            }
+            LRESULT(0)
+        }
+        WM_PET_PICK_AREA => {
+            app.dispatch(crate::pet::PICK_AREA);
+            if let Some(settings) = app.settings {
+                settings_window::finish_area_pick(settings, &store::load_config());
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(settings);
             }
             LRESULT(0)
         }

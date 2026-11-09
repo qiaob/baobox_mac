@@ -34,7 +34,7 @@ const TOGGLE: &str = "desktop-pet.toggle";
 pub(crate) const DOWNLOAD: &str = "desktop-pet.download.";
 const REMOVE: &str = "desktop-pet.remove.";
 const SELECT: &str = "desktop-pet.select.";
-const PICK_AREA: &str = "desktop-pet.pick-area";
+pub(crate) const PICK_AREA: &str = "desktop-pet.pick-area";
 pub const WM_PET_MENU: u32 = WM_APP + 3;
 const WM_PET_REACT: u32 = WM_APP + 4;
 const INTERACTIONS: [(&str, &str, &str); 7] = [
@@ -506,13 +506,12 @@ impl ToolModule for PetTool {
                 "活动范围",
                 &[
                     ("bottom", "屏幕底边"),
-                    ("free", "自由放置"),
+                    ("windows", "窗口上"),
                     ("custom", "自定义区域"),
-                    ("windows", "窗口顶部"),
+                    ("free", "随意放"),
                 ],
                 "bottom",
-            ),
-            Field::text("area", "自定义区域", "", "X,Y,宽,高"),
+            ).with_help("自定义区域：拖动框选，按 Enter 确认，按 Esc 取消。"),
             Field::choice(
                 "size",
                 "大小",
