@@ -265,7 +265,7 @@ fn stroke_arrow(canvas: &mut Canvas<'_>, shape: &Shape) {
         return;
     }
     // 箭头大小随线宽走，细线配小箭头才好看
-    let head = (shape.width * 4.0).clamp(8.0, length * 0.5);
+    let head = (shape.width * 4.0).max(8.0).min(length * 0.5);
     let angle = dy.atan2(dx);
     for offset in [0.5, -0.5] {
         let wing = angle + std::f64::consts::PI + offset;
@@ -429,6 +429,14 @@ mod tests {
         let above = (5..14).any(|y| canvas.get(44, y).map(|p| p[1] == 0).unwrap_or(false));
         let below = (16..25).any(|y| canvas.get(44, y).map(|p| p[1] == 0).unwrap_or(false));
         assert!(above && below, "箭头两条回勾都应画上");
+    }
+
+    #[test]
+    fn short_arrow_renders_during_drag() {
+        let mut pixels = blank(20, 20);
+        let mut canvas = Canvas::new(20, 20, &mut pixels).unwrap();
+        render(&[shape(Tool::Arrow, vec![(5.0, 5.0), (10.0, 8.0)], 3.0)], &mut canvas);
+        assert_eq!(canvas.get(10, 8).unwrap()[1], 0);
     }
 
     #[test]

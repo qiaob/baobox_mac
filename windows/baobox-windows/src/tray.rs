@@ -245,6 +245,34 @@ impl Drop for MenuPaint {
     }
 }
 
+pub unsafe fn popup_text_actions(
+    owner: HWND,
+    x: i32,
+    y: i32,
+    items: &[(String, Option<String>)],
+) -> Option<usize> {
+    let menu = CreatePopupMenu().ok()?;
+    let brush = CreateSolidBrush(MENU_BACKGROUND);
+    let mut paint = MenuPaint::new();
+    for (index, (label, shortcut)) in items.iter().enumerate() {
+        let row = paint.row(label, shortcut.as_deref(), None);
+        let _ = AppendMenuW(menu, MF_OWNERDRAW, index + 1, row);
+    }
+    let _ = SetMenuInfo(
+        menu,
+        &MENUINFO {
+            cbSize: std::mem::size_of::<MENUINFO>() as u32,
+            fMask: MIM_BACKGROUND,
+            hbrBack: brush,
+            ..Default::default()
+        },
+    );
+    let selected = TrackPopupMenu(menu, TPM_RETURNCMD, x, y, 0, owner, None).0;
+    let _ = DestroyMenu(menu);
+    let _ = DeleteObject(brush);
+    (selected > 0).then_some(selected.saturating_sub(1) as usize)
+}
+
 // TrackPopupMenu sends these synchronously while App already holds its mutable borrow.
 pub unsafe fn paint_menu(message: u32, lp: LPARAM) -> Option<LRESULT> {
     match message {

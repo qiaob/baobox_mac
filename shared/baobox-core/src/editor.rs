@@ -114,6 +114,7 @@ pub struct Editor {
     /// 图像在屏幕坐标里的位置与尺寸；落笔点会被夹进这个范围
     image: Rect,
     tool: Tool,
+    palette: &'static [Color],
     color_index: usize,
     width: f64,
     /// 正在拖的那一笔（还没进文档）
@@ -128,11 +129,17 @@ pub struct Editor {
 impl Editor {
     /// 新建。`image` 是图像在屏幕坐标里的矩形，`screen` 用来给工具条找位置。
     pub fn new(image: Rect, screen: Rect) -> Self {
+        Self::with_toolbar(image, Toolbar::layout(&image, &screen))
+    }
+
+    /// 用平台提供的工具条布局创建编辑器。
+    pub fn with_toolbar(image: Rect, toolbar: Toolbar) -> Self {
         Self {
             document: Document::new(),
-            toolbar: Toolbar::layout(&image, &screen),
+            toolbar,
             image,
             tool: Tool::Rect,
+            palette: &PALETTE,
             color_index: DEFAULT_COLOR,
             width: DEFAULT_WIDTH,
             pending: None,
@@ -147,6 +154,12 @@ impl Editor {
         &self.toolbar
     }
 
+    /// Update the selection and toolbar bounds while keeping existing annotations.
+    pub fn set_layout(&mut self, image: Rect, toolbar: Toolbar) {
+        self.image = image;
+        self.toolbar = toolbar;
+    }
+
     /// 图像矩形。
     pub fn image(&self) -> Rect {
         self.image
@@ -159,7 +172,15 @@ impl Editor {
 
     /// 当前颜色。
     pub fn color(&self) -> Color {
-        PALETTE[self.color_index.min(PALETTE.len() - 1)]
+        self.palette[self.color_index]
+    }
+
+    /// Set a platform palette, preserving a valid selected color.
+    pub fn set_palette(&mut self, palette: &'static [Color]) {
+        if !palette.is_empty() {
+            self.palette = palette;
+            self.color_index = self.color_index.min(palette.len() - 1);
+        }
     }
 
     /// 当前颜色在调色板里的下标（平台层据此高亮那个色块）。
@@ -372,7 +393,7 @@ impl Editor {
                 self.tool = tool;
             }
             Item::Color(index) => {
-                self.color_index = index.min(PALETTE.len() - 1);
+                self.color_index = index.min(self.palette.len() - 1);
                 // 正在输入的文字跟着变色，所见即所得
                 if let Some(text) = self.pending_text.clone() {
                     self.pending_text = Some(text);

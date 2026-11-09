@@ -22,43 +22,95 @@ const CF_DIB: u32 = 8;
 /// 不用 `CF_TEXT`：那是 ANSI 代码页，中文在非中文系统上会变成问号。
 const CF_UNICODETEXT: u32 = 13;
 
-/// 把一段文字放进剪贴板（屏幕取字用）。
-pub fn copy_text(text: &str) -> Result<(), String> {
-    // Windows 要求以 NUL 结尾的 UTF-16
-    let mut encoded: Vec<u16> = text.encode_utf16().collect();
-    encoded.push(0);
-    let bytes = encoded.len() * 2;
+/// 写入数据时必须给剪贴板一个本进程的窗口作为所有者。
+unsafe fn publish(format: u32, handle: HGLOBAL) -> Result<(), String> {
+    use windows::core::w;
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE};
+    let result = (|| {
+        let owner = CreateWindowExW(
+            Default::default(),
+            w!("STATIC"),
+            None,
+            Default::default(),
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            None,
+            None,
+            None,
+        )
+        .map_err(|e| format!("创建剪贴板所有者失败：{e}"))?;
+        let result = (|| {
+            for attempt in 0..8 {
+                match OpenClipboard(owner) {
+                    Ok(()) => {
+                        let result = EmptyClipboard()
+                            .and_then(|()| SetClipboardData(format, HANDLE(handle.0)));
+                        let _ = CloseClipboard();
+                        return result
+                            .map(|_| ())
+                            .map_err(|e| format!("写入剪贴板失败：{e}"));
+                    }
+                    Err(e) if attempt == 7 => return Err(format!("无法打开剪贴板：{e}")),
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            }
+            unreachable!()
+        })();
+        let _ = DestroyWindow(owner);
+        result
+    })();
+    if result.is_err() {
+        let _ = GlobalFree(handle);
+    }
+    result
+}
 
+fn copy_bytes(format: u32, bytes: &[u8]) -> Result<(), String> {
     unsafe {
-        let handle: HGLOBAL =
-            GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| format!("分配剪贴板内存失败：{e}"))?;
+        let handle = GlobalAlloc(GMEM_MOVEABLE, bytes.len())
+            .map_err(|e| format!("分配剪贴板内存失败：{e}"))?;
         let pointer = GlobalLock(handle);
         if pointer.is_null() {
             let _ = GlobalFree(handle);
-            return Err("锁定剪贴板内存失败".to_string());
+            return Err("锁定剪贴板内存失败".into());
         }
-        std::ptr::copy_nonoverlapping(encoded.as_ptr(), pointer as *mut u16, encoded.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.cast(), bytes.len());
         let _ = GlobalUnlock(handle);
-
-        if OpenClipboard(None).is_err() {
-            let _ = GlobalFree(handle);
-            return Err("无法打开剪贴板（可能被其他程序占用）".to_string());
-        }
-        let _ = EmptyClipboard();
-        let result = SetClipboardData(CF_UNICODETEXT, HANDLE(handle.0));
-        let _ = CloseClipboard();
-
-        match result {
-            // 成功即交出所有权，绝不能再 GlobalFree
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let _ = GlobalFree(handle);
-                Err(format!("写入剪贴板失败：{e}"))
-            }
-        }
+        publish(format, handle)
     }
 }
 
+pub fn copy_text(text: &str) -> Result<(), String> {
+    let bytes: Vec<u8> = text
+        .encode_utf16()
+        .chain(Some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    copy_bytes(CF_UNICODETEXT, &bytes)
+}
+
+pub fn copy_files(paths: &str) -> Result<(), String> {
+    // DROPFILES: offset, POINT, fNC, fWide. Paths end with a double NUL.
+    let mut bytes = [20u32, 0, 0, 0, 1]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    for path in paths.lines().filter(|path| !path.is_empty()) {
+        bytes.extend(
+            path.encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_le_bytes),
+        );
+    }
+    if bytes.len() == 20 {
+        return Err("文件列表为空".into());
+    }
+    bytes.extend([0, 0]);
+    copy_bytes(15, &bytes)
+}
 /// 把 RGBA 图像放进剪贴板。
 pub fn copy_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let expected = width as usize * height as usize * 4;
@@ -108,22 +160,6 @@ pub fn copy_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
         }
         let _ = GlobalUnlock(handle);
 
-        if OpenClipboard(None).is_err() {
-            let _ = GlobalFree(handle);
-            return Err("无法打开剪贴板（可能被其他程序占用）".to_string());
-        }
-        let _ = EmptyClipboard();
-        // 交给系统之后**不能再 free** —— 所有权已经转移，free 会导致其他程序读到野指针
-        let result = SetClipboardData(CF_DIB, HANDLE(handle.0));
-        let _ = CloseClipboard();
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // 设置失败时所有权仍在我们手上，要还回去
-                let _ = GlobalFree(handle);
-                Err(format!("写入剪贴板失败：{e}"))
-            }
-        }
+        publish(CF_DIB, handle)
     }
 }

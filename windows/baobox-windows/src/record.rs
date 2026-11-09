@@ -72,12 +72,13 @@ pub fn start(region: Rect, fps: u32, output: &Path) -> Result<Recording, String>
 /// 与 Linux 版共享同样的两条硬约束：宽高必须是偶数（H.264 的 4:2:0），
 /// 像素格式必须显式给 `yuv420p`（否则默认的 yuv444p 很多播放器不认）。
 pub fn build_args(region: Rect, fps: u32, output: &Path) -> Vec<String> {
-    vec![
+    let gif = output.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    let mut args = vec![
         "-y".to_string(),
         "-f".to_string(),
         "gdigrab".to_string(),
         "-framerate".to_string(),
-        fps.max(1).to_string(),
+        fps.clamp(1, if gif { 10 } else { u32::MAX }).to_string(),
         "-offset_x".to_string(),
         (region.x.round() as i64).to_string(),
         "-offset_y".to_string(),
@@ -86,16 +87,16 @@ pub fn build_args(region: Rect, fps: u32, output: &Path) -> Vec<String> {
         format!("{}x{}", even(region.w), even(region.h)),
         "-i".to_string(),
         "desktop".to_string(),
-        "-c:v".to_string(),
-        "libx264".to_string(),
-        "-preset".to_string(),
-        "veryfast".to_string(),
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        output.to_string_lossy().to_string(),
-    ]
+    ];
+    let encoding: &[&str] = if gif {
+        &["-vf", r"scale=min(720\,iw):-1:flags=lanczos", "-loop", "0"]
+    } else {
+        &["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
+    };
+    args.extend(encoding.iter().map(|value| (*value).to_owned()));
+    args.push(output.to_string_lossy().into_owned());
+    args
 }
-
 /// 向下取到偶数，且至少为 2。
 fn even(value: f64) -> i64 {
     let rounded = value.round() as i64;

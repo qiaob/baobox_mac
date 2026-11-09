@@ -45,6 +45,15 @@ pub const ID: &str = "clipboard";
 
 /// 动作 id。
 pub const PANEL: &str = "clipboard.panel";
+
+pub(crate) fn copy_preview_text(text: &str) -> Result<(), String> {
+    SUPPRESS_NEXT.store(true, Ordering::SeqCst);
+    let result = clipboard::copy_text(text);
+    if result.is_err() {
+        SUPPRESS_NEXT.store(false, Ordering::SeqCst);
+    }
+    result
+}
 /// 动作 id。
 pub const CLEAR: &str = "clipboard.clear";
 /// 动作 id。
@@ -80,6 +89,7 @@ struct Settings {
     record_concealed: bool,
     expire_days: i64,
     paste_style: paste::Style,
+    text_tools: bool,
 }
 
 impl Settings {
@@ -88,6 +98,7 @@ impl Settings {
             limit: config.usize_or(ID, "history_limit", Store::DEFAULT_LIMIT),
             record_concealed: config.bool_or(ID, "record_concealed", false),
             expire_days: config.usize_or(ID, "expire_days", 0) as i64,
+            text_tools: config.bool_or(ID, "text_tools", true),
             paste_style: paste::Style::from_str(&config.string_or(ID, "paste_style", "normal")),
         }
     }
@@ -209,7 +220,8 @@ impl ClipboardTool {
     /// 打开面板，按用户的选择收尾。
     fn open_panel(&mut self) -> Result<String, String> {
         let _ = self.drain();
-        match clipboard_panel::open(&self.store) {
+        let target = paste::PasteTarget::current();
+        match clipboard_panel::open(&self.store, self.settings.text_tools) {
             clipboard_panel::Outcome::Cancelled => Ok(String::new()),
             clipboard_panel::Outcome::TogglePin(id) => {
                 self.store.toggle_pin(&id);
@@ -223,13 +235,13 @@ impl ClipboardTool {
                 self.persist();
                 Ok("已删除".to_string())
             }
-            clipboard_panel::Outcome::Paste(id) => self.paste(&id),
-            clipboard_panel::Outcome::Transform(id, action) => self.transform(&id, &action),
+            clipboard_panel::Outcome::Paste(id) => self.paste(&id, target),
+            clipboard_panel::Outcome::PasteText(text) => self.deliver(target, &mut || clipboard::copy_text(&text)),
         }
     }
 
     /// 把一条内容放进剪贴板并替用户粘出去。
-    fn paste(&mut self, id: &str) -> Result<String, String> {
+    fn paste(&mut self, id: &str, target: Option<paste::PasteTarget>) -> Result<String, String> {
         let Some(item) = self.store.items().iter().find(|e| e.id == id).cloned() else {
             return Err("这一条已经不在了".to_string());
         };
@@ -240,30 +252,18 @@ impl ClipboardTool {
                     .map_err(|e| format!("读不到这张图：{e}"))?;
                 let (width, height, rgba) =
                     baobox_image::decode_rgba(&png).map_err(|e| format!("这张图打不开：{e}"))?;
-                self.deliver(&mut || clipboard::copy_rgba(width, height, &rgba))
+                self.deliver(target, &mut || clipboard::copy_rgba(width, height, &rgba))
             }
-            _ => self.deliver(&mut || clipboard::copy_text(&item.text)),
+            Kind::File => self.deliver(target, &mut || clipboard::copy_files(&item.text)),
+            _ => self.deliver(target, &mut || clipboard::copy_text(&item.text)),
         }
-    }
-
-    /// 转换之后再粘出去（文本工具那一层的出口）。
-    ///
-    /// **转换结果不入历史** —— 用户要的是把它粘到别处，不是在历史里
-    /// 多出一条自己没复制过的东西。真想留着的话，粘完再复制一次即可。
-    fn transform(&mut self, id: &str, action: &str) -> Result<String, String> {
-        let Some(item) = self.store.items().iter().find(|e| e.id == id).cloned() else {
-            return Err("这一条已经不在了".to_string());
-        };
-        let output = baobox_core::textformat::apply(action, &item.text)
-            .ok_or("这个动作对这段内容不适用")?;
-        self.deliver(&mut || clipboard::copy_text(&output))
     }
 
     /// 放进剪贴板，然后替用户按一下 Ctrl+V。
     ///
     /// 顺序不能错：面板已经在 `open_panel` 里关掉了，这里先等焦点回位，
     /// 再放剪贴板，最后合成按键。
-    fn deliver(&mut self, write: &mut dyn FnMut() -> Result<(), String>) -> Result<String, String> {
+    fn deliver(&mut self, target: Option<paste::PasteTarget>, write: &mut dyn FnMut() -> Result<(), String>) -> Result<String, String> {
         // 我们自己写进去的这一次不该再被记一遍
         SUPPRESS_NEXT.store(true, Ordering::SeqCst);
         if let Err(why) = write() {
@@ -274,9 +274,11 @@ impl ClipboardTool {
         }
 
         // 等焦点从面板回到原来那个窗口，否则按键会打到空处
-        std::thread::sleep(paste::FOCUS_SETTLE);
-        paste::send(self.settings.paste_style)?;
-        Ok(String::new())
+        if target.is_some_and(|target| target.paste(self.settings.paste_style)) {
+            Ok(String::new())
+        } else {
+            Ok("已复制到剪贴板".into())
+        }
     }
 
     /// 起监听：一个只收消息的窗口 + 一次 `AddClipboardFormatListener`。
@@ -389,11 +391,13 @@ impl ToolModule for ClipboardTool {
         // 只读内存，零磁盘 IO
         let count = self.store.items().len();
         vec![
-            MenuItem::action(PANEL, "剪贴板历史…"),
+            MenuItem::action(PANEL, "打开剪贴板历史"),
             MenuItem::action(NEW_SNIPPET, "新建文本片段…"),
             MenuItem::Separator,
             MenuItem::disabled(&format!("共 {count} 条 · {}", self.protection.describe())),
             MenuItem::action(CLEAR, "清空历史（保留收藏）"),
+            MenuItem::Separator,
+            MenuItem::action("clipboard.settings", "剪贴板设置…"),
         ]
     }
 
@@ -401,7 +405,7 @@ impl ToolModule for ClipboardTool {
         vec![HotkeySpec::new(
             PANEL,
             "剪贴板历史",
-            KeyCombo::parse("Ctrl+Alt+V").ok(),
+            KeyCombo::parse("Ctrl+Shift+V").ok(),
         )]
     }
 
@@ -416,6 +420,7 @@ impl ToolModule for ClipboardTool {
                     .with_help("0 = 不自动清理"),
                 Field::toggle("record_concealed", "记录敏感内容", false)
                     .with_help("密码、私钥、银行卡号默认根本不入库；打开之后会记录，但在面板里打码显示"),
+                Field::toggle("text_tools", "启用文本工具", true).with_help("选中文本后，在预览下方显示格式转换、编码解码和二维码等操作。"),
                 Field::choice(
                     "paste_style",
                     "粘贴方式",
@@ -510,7 +515,7 @@ impl ToolModule for ClipboardTool {
                 self.store
                     .add_snippet(&id, &title, &latest, "", crate::now_seconds());
                 self.persist();
-                Ok(format!("已创建片段「{title}」，可在设置里给它加关键字"))
+                Ok(format!("已创建片段「{title}」，可在剪贴板「收藏」中使用"))
             }
             other => Err(format!("剪贴板工具不认识动作 {other}")),
         }
