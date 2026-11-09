@@ -83,7 +83,7 @@ final class SelectionSession: ObservableObject {
 /// 一次 AI 动作的结果。
 struct SelectionAIOutcome {
     let text: String
-    let route: AIService.Route
+    let route: AIRoute
     let usedFallback: Bool
     let seconds: Double
 }
@@ -460,46 +460,59 @@ struct SelectionAIActionArea: View {
     let action: SelectionAction
 
     @ObservedObject private var local = OfflineTranslator.corrector
-    @ObservedObject private var ai = AIService.shared
+    @ObservedObject private var store = AIModelStore.shared
+    /// 本机大模型下载好 / 删掉时刷新。
+    @ObservedObject private var localModels = LocalModelsObserver.shared
     @State private var outcome: SelectionAIOutcome?
     @State private var failure: String?
     /// 「这次用云端」。
-    @State private var routeOverride: AIService.Route?
+    @State private var routeOverride: AIRoute?
     /// 「重新生成」+1，强制重跑。
     @State private var runCount = 0
     @State private var copied = false
+    /// 出现时常驻的本地推理进程（消失时配对结束）。
+    @State private var keptBackend: OfflineTranslator?
 
     private var controller: SelectionTranslateController { .shared }
 
     private enum Blocker {
         case needsModel
         case tooLong
-        case cloudUnconfigured
     }
 
     private var cacheKey: String {
         action.builtin == .rewrite ? "\(action.id).\(session.tone.rawValue)" : action.id
     }
 
-    /// 实际走哪边：选了云端但没配置好 → 本地（有的话）。
-    private var effectiveRoute: AIService.Route {
-        let wanted = routeOverride ?? SelectionAssistantSettings.aiRoute
-        if wanted == .cloud && !ai.cloudConfigured { return .local }
-        return wanted
+    /// 这次走哪：「AI」页给这个功能选的模型（云端没配好 / 本机大模型没下载时服务层已退回内置本地模型）。
+    private var effectiveRoute: AIRoute {
+        routeOverride ?? AIService.shared.route(for: .selectionActions)
+    }
+
+    private var isLocal: Bool { effectiveRoute.modelID == nil }
+
+    /// 第一个配置完整的云端模型（「这次用云端」用）。
+    private var firstCloudModelID: String? {
+        store.models.first { store.isConfigured($0.id) }?.id
     }
 
     private var blocker: Blocker? {
-        let wanted = routeOverride ?? SelectionAssistantSettings.aiRoute
-        guard effectiveRoute == .local else { return nil }
-        if !local.isReady {
-            return wanted == .cloud ? .cloudUnconfigured : .needsModel
-        }
+        guard isLocal else { return nil }
+        if !AIService.shared.isReady(effectiveRoute, local: .generation) { return .needsModel }
         if !SelectionTextBudget.fitsLocal(session.text, rewrite: action.isRewrite) { return .tooLong }
         return nil
     }
 
+    private var routeKey: String {
+        switch effectiveRoute {
+        case .local: return "local"
+        case .localModel(let id): return "localmodel:" + id
+        case .cloud(let id): return "cloud:" + id
+        }
+    }
+
     private var taskKey: String {
-        "\(cacheKey)#\(runCount)#\(effectiveRoute.rawValue)#\(blocker == nil)"
+        "\(cacheKey)#\(runCount)#\(routeKey)#\(blocker == nil)"
     }
 
     var body: some View {
@@ -532,10 +545,15 @@ struct SelectionAIActionArea: View {
             await run()
         }
         .onAppear {
-            if effectiveRoute == .local { AIService.shared.beginLocalKeepAlive(.generation) }
+            // 只对实际要用、已下载的那个本地进程常驻（常驻会顺带把模型加载起来）。
+            if blocker == nil, let backend = AIService.shared.localBackend(for: effectiveRoute, local: .generation) {
+                backend.beginKeepAlive()
+                keptBackend = backend
+            }
         }
         .onDisappear {
-            AIService.shared.endLocalKeepAlive(.generation)
+            keptBackend?.endKeepAlive()
+            keptBackend = nil
         }
     }
 
@@ -568,7 +586,7 @@ struct SelectionAIActionArea: View {
         } else {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text(effectiveRoute == .local && local.isStartingServer
+                Text(AIService.shared.localBackend(for: effectiveRoute, local: .generation)?.isStartingServer == true
                      ? L("selectiontranslate.panel.startingModel")
                      : L("selectiontranslate.result.generating"))
                     .font(.system(size: 12))
@@ -586,43 +604,38 @@ struct SelectionAIActionArea: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                OfflineModelRow(translator: .corrector, compact: true)
-                    .controlSize(.small)
-                if ai.cloudConfigured {
-                    Button(L("selectiontranslate.result.useCloudOnce")) {
-                        routeOverride = .cloud
-                    }
-                    .controlSize(.small)
+                if effectiveRoute == .local {
+                    OfflineModelRow(translator: .corrector, compact: true)
+                        .controlSize(.small)
                 }
+                HStack(spacing: 8) {
+                    if let id = firstCloudModelID {
+                        Button(L("selectiontranslate.result.useCloudOnce")) {
+                            routeOverride = .cloud(id)
+                        }
+                    }
+                    Button(L("selectiontranslate.result.aiSettings")) {
+                        controller.openSettings(tab: AISettingsView.tabID)
+                    }
+                }
+                .controlSize(.small)
             case .tooLong:
                 Text(L("selectiontranslate.result.tooLong \(session.text.count) \(SelectionTextBudget.localCharacterLimit(for: session.text, rewrite: action.isRewrite))"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if ai.cloudConfigured {
+                if let id = firstCloudModelID {
                     Button(L("selectiontranslate.result.useCloudOnce")) {
-                        routeOverride = .cloud
+                        routeOverride = .cloud(id)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 } else {
-                    Button(L("ai.settings.goConfigure")) {
+                    Button(L("selectiontranslate.result.aiSettings")) {
                         controller.openSettings(tab: AISettingsView.tabID)
                     }
                     .controlSize(.small)
                 }
-            case .cloudUnconfigured:
-                Text(L("selectiontranslate.result.cloudUnconfigured"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button(L("ai.settings.goConfigure")) {
-                        controller.openSettings(tab: AISettingsView.tabID)
-                    }
-                    OfflineModelRow(translator: .corrector, compact: true)
-                }
-                .controlSize(.small)
             }
         }
     }
@@ -630,9 +643,7 @@ struct SelectionAIActionArea: View {
     private var footer: some View {
         HStack(spacing: 6) {
             if let outcome {
-                Text(outcome.route == .local
-                     ? L("selectiontranslate.result.metaLocal \(Self.format(outcome.seconds))")
-                     : L("selectiontranslate.result.metaCloud \(Self.format(outcome.seconds))"))
+                Text(L("selectiontranslate.result.meta \(Self.modelName(outcome.route)) \(Self.format(outcome.seconds))"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -679,6 +690,18 @@ struct SelectionAIActionArea: View {
             }
         }
         .controlSize(.small)
+    }
+
+    /// 页脚的模型名：内置本地 = Qwen3-1.7B，本机大模型 / 云端用各自的名字。
+    private static func modelName(_ route: AIRoute) -> String {
+        switch route {
+        case .local:
+            return OfflineTranslator.corrector.model.displayName
+        case .localModel(let id):
+            return LocalModels.entry(id)?.name ?? id
+        case .cloud(let id):
+            return AIModelStore.shared.model(id)?.displayName ?? L("selectiontranslate.result.cloud")
+        }
     }
 
     private static func format(_ seconds: Double) -> String {

@@ -119,17 +119,19 @@ impl App {
     /// 执行一个动作。
     fn dispatch(&mut self, action: &str) {
         use crate::screenshot_module::{CAPTURE, CAPTURE_FULL, QUICK_CAPTURE, OCR};
-        let capture = matches!(action, CAPTURE | CAPTURE_FULL | QUICK_CAPTURE);
+        let capture = matches!(action, CAPTURE | CAPTURE_FULL | QUICK_CAPTURE | screenshot_module::LONG);
         let paste_target = if action == QUICK_CAPTURE { self.screenshot_target.take() } else { None };
         let _visibility = (capture || action == OCR).then(crate::pet::CaptureVisibility::hide);
         match action {
             ACTION_QUIT => unsafe { PostQuitMessage(0) },
-            ACTION_SETTINGS => self.open_settings(),
+            ACTION_SETTINGS => self.open_settings(None),
+            "screenshot.settings" => self.open_settings(Some(screenshot_module::ID)),
+            "clipboard.settings" => self.open_settings(Some(clipboard_module::ID)),
             ACTION_ABOUT => about(self.hwnd),
             crate::pet_ring::ADVANCED => self.pet_menu(),
             "app.open-screenshot-folder" => {
-                let history = store::load(1);
-                if let Some(folder) = history.entries().first().and_then(|entry| std::path::Path::new(&entry.path).parent()) {
+                let path = crate::default_path(&self.config.string_or(screenshot_module::ID, "save_dir", ""));
+                if let Some(folder) = path.as_ref().ok().and_then(|path| path.parent()) {
                     let _ = std::process::Command::new("explorer.exe").arg(folder).spawn();
                 }
             }
@@ -166,11 +168,11 @@ impl App {
                 }
                 self.notices.post(notice);
             }
-            other => match self.registry.perform(other) {
+            other => match self.perform_tool(other) {
                 Ok(mut message) if !message.is_empty() => {
                     let source = other.split_once('.').map_or(other, |(source, _)| source);
                     if capture {
-                        if message.contains("已复制到剪贴板") && paste_target.is_some_and(|target| target.paste_image()) {
+                        if message.contains("已复制到剪贴板") && paste_target.is_some_and(|target| target.paste(crate::paste::Style::Normal)) {
                             message.push_str("，已向原输入框发出粘贴");
                         }
                         let mut notice = Notice::ambient("capture-result", "截图完成");
@@ -178,6 +180,8 @@ impl App {
                         notice.dedupe = None;
                         if message.starts_with("已保存 ") {
                             notice.actions.push(("app.open-screenshot-folder", "打开截图文件夹"));
+                        } else {
+                            notice.actions.push((screenshot_module::HISTORY, "打开截图历史"));
                         }
                         notice.body = message;
                         self.notices.post(notice);
@@ -189,10 +193,10 @@ impl App {
                 }
                 Ok(_) => {}
                 // 用户主动取消也走这条路，不该一律当成故障弹窗
-                Err(why) if capture && why != "已取消" => {
+                Err(why) if (capture || matches!(other, OCR | screenshot_module::RECORD)) && why != "已取消" => {
                     let wide: Vec<u16> = why.encode_utf16().chain(Some(0)).collect();
                     unsafe {
-                        MessageBoxW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()), w!("BaoBox 截图未完成"), MB_OK);
+                        MessageBoxW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()), w!("BaoBox 截图操作未完成"), MB_OK);
                     }
                 }
                 Err(why) => eprintln!("{why}"),
@@ -200,12 +204,38 @@ impl App {
         }
     }
 
-    fn open_settings(&mut self) {
+    fn perform_tool(&mut self, action: &str) -> Result<String, String> {
+        let terminal_binding = if action == clipboard_module::PANEL
+            && crate::paste::Style::from_str(&self.config.string_or(clipboard_module::ID, "paste_style", "normal"))
+                == crate::paste::Style::Terminal
+        {
+            resolve_hotkeys(&self.registry, &self.config)
+                .into_iter()
+                .find_map(|(spec, combo)| (spec.id == action).then_some(combo).flatten())
+                .filter(|combo| combo.to_string() == "Ctrl+Shift+V")
+        } else {
+            None
+        };
+        let suspended = terminal_binding.filter(|_| self.hotkeys.unregister_action(action));
+        let result = self.registry.perform(action);
+        if let Some(combo) = suspended {
+            // Give the input queue time to deliver the terminal paste before
+            // this key combination starts opening the panel again.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Err(error) = self.hotkeys.register(action, &combo) {
+                eprintln!("无法恢复剪贴板快捷键：{error}");
+            }
+        }
+        result
+    }
+
+    fn open_settings(&mut self, section: Option<&str>) {
         // 已经开着就不要再开一个
         if let Some(existing) = self.settings.filter(|&window| unsafe {
             windows::Win32::UI::WindowsAndMessaging::IsWindow(window).as_bool()
         }) {
             unsafe {
+                if let Some(section) = section { settings_window::show_section(existing, section); }
                 let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(existing);
             }
             return;
@@ -250,7 +280,10 @@ impl App {
             }),
         );
         match opened {
-            Ok(window) => self.settings = Some(window),
+            Ok(window) => {
+                if let Some(section) = section { settings_window::show_section(window, section); }
+                self.settings = Some(window);
+            },
             Err(why) => eprintln!("打不开设置窗口：{why}"),
         }
     }
@@ -334,7 +367,7 @@ pub fn run(show_settings: bool) -> Result<String, String> {
         // 有后台数据源的工具（剪贴板监听）靠这个定时器把队列并进自己的状态
         windows::Win32::UI::WindowsAndMessaging::SetTimer(hwnd, TIMER_TICK, TICK_MS, None);
         if show_settings {
-            app.open_settings();
+            app.open_settings(None);
         }
 
         let mut message = MSG::default();

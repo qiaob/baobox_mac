@@ -1,6 +1,26 @@
 import AppKit
 import SwiftUI
 
+extension AIFeature {
+    /// 会议纪要（会后自动生成、会议库里重新生成）用哪个模型；出厂本地（docs/ai-service/DESIGN.md §3.3、§5.4）。
+    static let meetingMinutes = AIFeature(id: "meeting.minutes", kind: .generation)
+    /// 周报概述用哪个模型；出厂本地。
+    static let meetingWeekly = AIFeature(id: "meeting.weekly", kind: .generation)
+}
+
+extension AIFeatureDefinition {
+    static var meetingMinutes: AIFeatureDefinition {
+        // 会后才写，慢几秒没关系：建议跑得动的最大的。
+        AIFeatureDefinition(feature: .meetingMinutes, title: L("meeting.ai.minutes"), sends: L("meeting.ai.minutesSends"),
+                            advice: .best)
+    }
+
+    static var meetingWeekly: AIFeatureDefinition {
+        AIFeatureDefinition(feature: .meetingWeekly, title: L("meeting.ai.weekly"), sends: L("meeting.ai.weeklySends"),
+                            advice: .best)
+    }
+}
+
 /// 会议模块壳（docs/meeting/）：菜单、快捷键、设置 Tab；会话在 MeetingSessionController，会议库在 MeetingStore，
 /// 日历 / 提醒 / 检测在 MeetingCalendar / MeetingReminder / MeetingDetector，窗口在 MeetingWindowController。
 /// 注册在实时翻译前面（菜单顺序 = 注册顺序），启动时先装好会议库，自由听译的新记录才写得进去。
@@ -49,6 +69,11 @@ final class MeetingTool: ToolModule {
 
     func settingsTab() -> AnyView {
         AnyView(MeetingSettingsView())
+    }
+
+    /// 字幕与同传的翻译和纠错也由会议声明：字幕与同传的设置区块嵌在会议页里，下个版本那个入口就并进会议（docs/ai-service/DESIGN.md §3.3）。
+    func aiFeatures() -> [AIFeatureDefinition] {
+        [.liveTranslate, .liveCorrection, .meetingMinutes, .meetingWeekly]
     }
 
     func activate() {

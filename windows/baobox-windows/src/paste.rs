@@ -54,7 +54,7 @@ impl PasteTarget {
         }
     }
 
-    pub fn paste_image(self) -> bool {
+    pub fn paste(self, style: Style) -> bool {
         unsafe {
             if !IsWindow(self.window).as_bool() || !IsWindow(self.focused).as_bool() {
                 return false;
@@ -62,7 +62,7 @@ impl PasteTarget {
             let _ = SetForegroundWindow(self.window);
         }
         std::thread::sleep(FOCUS_SETTLE);
-        Self::current() == Some(self) && send(Style::Normal).is_ok()
+        Self::current() == Some(self) && send(style).is_ok()
     }
 }
 

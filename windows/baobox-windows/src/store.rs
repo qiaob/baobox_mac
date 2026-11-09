@@ -101,7 +101,7 @@ pub fn remember(path: &Path, width: u32, height: u32, created_at: i64, limit: Op
     let Some(dir) = dir() else { return };
     let mut history = load(limit.unwrap_or(History::DEFAULT_LIMIT));
     let entry = Entry {
-        id: format!("{created_at}-{width}x{height}"),
+        id: path.to_string_lossy().into_owned(),
         path: path.to_string_lossy().to_string(),
         width,
         height,

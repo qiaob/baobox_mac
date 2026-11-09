@@ -110,6 +110,8 @@ pub fn align(previous: &Frame, next: &Frame) -> Option<Alignment> {
 #[derive(Debug, Default)]
 pub struct Stitcher {
     previous: Option<Frame>,
+    previous_start: usize,
+    bidirectional: bool,
     /// 每帧在最终长图里的起始行
     placements: Vec<usize>,
     total_height: usize,
@@ -120,6 +122,14 @@ impl Stitcher {
     /// 新建。
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Allow new content to extend either edge of the capture.
+    pub fn bidirectional() -> Self {
+        Self {
+            bidirectional: true,
+            ..Self::default()
+        }
     }
 
     /// 已接受的帧数。
@@ -155,25 +165,48 @@ impl Stitcher {
             return true;
         };
 
-        let Some(alignment) = align(&previous, &frame) else {
+        let forward = align(&previous, &frame);
+        let backward = if self.bidirectional && !forward.is_some_and(|a| a.score == 0.0) {
+            align(&frame, &previous)
+        } else {
+            None
+        };
+        let delta = match (forward, backward) {
+            (Some(a), Some(b)) if b.score < a.score => Some(-(b.offset as isize)),
+            (Some(a), _) => Some(a.offset as isize),
+            (None, Some(b)) => Some(-(b.offset as isize)),
+            (None, None) => None,
+        };
+        let Some(delta) = delta else {
             self.previous = Some(previous);
             return false;
         };
-        if alignment.offset == 0 {
+        if delta == 0 {
             // 画面没动，丢弃这一帧但保留上一帧作为基准
             self.previous = Some(previous);
             return false;
         }
 
-        let start = self.placements.last().copied().unwrap_or(0) + alignment.offset;
+        let start = self.previous_start as isize + delta;
+        let prepend = start.saturating_neg().max(0) as usize;
+        if prepend > 0 {
+            for placement in &mut self.placements {
+                *placement += prepend;
+            }
+            self.total_height += prepend;
+        }
+        let start = start.max(0) as usize;
         let end = start + frame.height;
+        self.previous_start = start;
+        self.previous = Some(frame);
+        if prepend == 0 && end <= self.total_height {
+            return false;
+        }
         self.total_height = self.total_height.max(end);
         self.placements.push(start);
-        self.previous = Some(frame);
         true
     }
 }
-
 
 /// 把多帧 RGBA 按各自的起始行合成为一张长图。
 ///
@@ -228,7 +261,10 @@ mod tests {
     #[test]
     fn rejects_malformed_input() {
         assert!(Frame::from_gray(0, 10, &[]).is_none());
-        assert!(Frame::from_gray(4, 4, &[0u8; 8]).is_none(), "像素数不匹配应当拒绝");
+        assert!(
+            Frame::from_gray(4, 4, &[0u8; 8]).is_none(),
+            "像素数不匹配应当拒绝"
+        );
     }
 
     #[test]
@@ -259,10 +295,7 @@ mod tests {
         let a = scroll_frame(64, 100, 0);
         // 全黑，与渐变图毫无关系
         let b = Frame::from_gray(64, 100, &[0u8; 6400]).unwrap();
-        assert!(
-            align(&a, &b).is_none(),
-            "不相关的两帧不应硬拼出一个偏移"
-        );
+        assert!(align(&a, &b).is_none(), "不相关的两帧不应硬拼出一个偏移");
     }
 
     #[test]
@@ -304,6 +337,19 @@ mod tests {
     }
 
     #[test]
+    fn bidirectional_stitching_preserves_page_order_when_scrolling_back() {
+        let mut s = Stitcher::bidirectional();
+        assert!(s.push(scroll_frame(64, 100, 40)));
+        assert!(s.push(scroll_frame(64, 100, 65)));
+        assert!(!s.push(scroll_frame(64, 100, 40)));
+        assert!(s.push(scroll_frame(64, 100, 20)));
+        assert!(!s.push(scroll_frame(64, 100, 65)));
+        assert!(s.push(scroll_frame(64, 100, 90)));
+        assert_eq!(s.placements(), &[20, 45, 0, 70]);
+        assert_eq!(s.total_height(), 170);
+    }
+
+    #[test]
     fn compose_places_frames_at_their_offsets() {
         let width = 2;
         let height = 2;
@@ -324,7 +370,10 @@ mod tests {
     #[test]
     fn compose_rejects_mismatched_input() {
         let a = vec![0u8; 16];
-        assert!(compose_rgba(&[&a], 2, &[0, 1], 2, 4).is_none(), "帧数与位置数不符");
+        assert!(
+            compose_rgba(&[&a], 2, &[0, 1], 2, 4).is_none(),
+            "帧数与位置数不符"
+        );
         assert!(compose_rgba(&[&a], 3, &[0], 2, 4).is_none(), "帧尺寸不符");
         assert!(compose_rgba(&[&a], 2, &[0], 0, 4).is_none(), "零宽");
     }

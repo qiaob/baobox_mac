@@ -13,7 +13,6 @@ struct SelectionTranslateSettingsView: View {
     @AppStorage(SelectionAssistantSettings.popupActionKey)
     private var popupAction = SelectionAssistantSettings.PopupAction.bar.rawValue
     @AppStorage(SelectionAssistantSettings.optionDigitsKey) private var optionDigits = true
-    @AppStorage(SelectionAssistantSettings.aiEngineKey) private var aiEngine = AIService.Route.local.rawValue
     @AppStorage(SelectionAssistantSettings.learnNativeKey)
     private var learnNative = SelectionAssistantSettings.learnNative.code
     @AppStorage(SelectionAssistantSettings.learnTargetKey)
@@ -21,7 +20,6 @@ struct SelectionTranslateSettingsView: View {
     @AppStorage(SelectionAssistantSettings.learnAccentKey) private var accent = "us"
     @AppStorage(SelectionAssistantSettings.learnAutoSpeakKey) private var learnAutoSpeak = false
 
-    @ObservedObject private var ai = AIService.shared
     @State private var actions: [SelectionAction] = SelectionActionStore.all
     /// 正在展开编辑的自定义动作。
     @State private var editingID: String?
@@ -260,36 +258,16 @@ struct SelectionTranslateSettingsView: View {
 
     private var aiSection: some View {
         Section {
-            Picker("selectiontranslate.settings.aiEngine", selection: $aiEngine) {
-                Text("selectiontranslate.settings.aiLocal").tag(AIService.Route.local.rawValue)
-                if ai.cloudConfigured {
-                    Text(AIService.Route.cloud.title).tag(AIService.Route.cloud.rawValue)
-                } else {
-                    Text(L("translation.engine.cloudUnconfigured")).tag(AIService.Route.cloud.rawValue)
-                }
-            }
+            // 和「AI」页功能表里的「划词助手 · AI 动作」是同一行、同一份设置。
+            AIFeatureRow(definition: .selectionActions, showsManage: true)
             Text("selectiontranslate.settings.aiEngineHelp")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if aiEngine == AIService.Route.cloud.rawValue {
-                Text("selectiontranslate.settings.aiCloudDisclosure")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !ai.cloudConfigured {
-                HStack {
-                    Text("ai.settings.cloudNotConfigured")
-                        .font(.caption)
-                        .foregroundStyle(aiEngine == AIService.Route.cloud.rawValue ? Color.orange : Color.secondary)
-                    Spacer()
-                    Button("ai.settings.goConfigure") {
-                        SettingsTabSelection.shared.selectedTab = AISettingsView.tabID
-                    }
-                    .controlSize(.small)
-                }
-            }
+            Text("selectiontranslate.settings.aiCloudDisclosure")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             OfflineModelRow(translator: .corrector,
                             title: "selectiontranslate.settings.aiModelTitle",
                             notInstalledHelp: "selectiontranslate.settings.aiModelNotInstalled",
@@ -322,7 +300,7 @@ struct SelectionTranslateSettingsView: View {
             Text("selectiontranslate.settings.languageSection")
         }
 
-        TranslationEngineSection(scope: .selection)
+        TranslationEngineSection(definition: .selectionTranslate)
     }
 
     // MARK: - 学习

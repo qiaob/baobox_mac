@@ -1,6 +1,28 @@
 import AppKit
 import SwiftUI
 
+extension AIFeature {
+    /// 划词翻译用哪个引擎 / 模型（docs/ai-service/DESIGN.md §3.3）。新键没值时读旧的共用键 `translation.engine`。
+    static let selectionTranslate = AIFeature(id: "selectiontranslate.translate", kind: .translation,
+                                              legacyKey: TranslationSettings.legacyEngineKey)
+    /// 划词助手的 AI 动作（润色、改写、地道英文、解释、总结、自定义）用哪个模型；出厂本地
+    /// （docs/selection-translate/ASSISTANT.md §1.6）。
+    static let selectionActions = AIFeature(id: "selectiontranslate.actions", kind: .generation)
+}
+
+extension AIFeatureDefinition {
+    static var selectionTranslate: AIFeatureDefinition {
+        AIFeatureDefinition(feature: .selectionTranslate, title: L("selectiontranslate.ai.translate"),
+                            sends: L("selectiontranslate.ai.translateSends"))
+    }
+
+    static var selectionActions: AIFeatureDefinition {
+        // 有人等着结果：建议最快的。
+        AIFeatureDefinition(feature: .selectionActions, title: L("selectiontranslate.ai.actions"),
+                            sends: L("selectiontranslate.ai.actionsSends"), advice: .fastest)
+    }
+}
+
 /// 划词助手模块壳：全系统选中文字 → 动作条（翻译 · 学习 · 润色 · 改写 · 地道英文 · 解释 · 总结 · 自定义）。
 /// 设计见 docs/selection-translate/DESIGN.md（取词、翻译、浮层）与 ASSISTANT.md（动作条、AI 动作、学习）。
 /// 模块 id、快捷键 id、设置键沿用 `selectiontranslate.*`（改名前的设置和快捷键不受影响）。
@@ -87,6 +109,10 @@ final class SelectionTranslateTool: ToolModule {
 
     func settingsTab() -> AnyView {
         AnyView(SelectionTranslateSettingsView())
+    }
+
+    func aiFeatures() -> [AIFeatureDefinition] {
+        [.selectionTranslate, .selectionActions]
     }
 
     func activate() {

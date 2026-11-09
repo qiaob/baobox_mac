@@ -22,7 +22,8 @@ final class MeetingMinutesRegenerator: ObservableObject {
     func regenerate(_ id: String) {
         let store = MeetingStore.shared
         guard let record = store.record(id), canRegenerate(record) else { return }
-        guard AIService.shared.isLocalReady(.generation) else {
+        let route = AIService.shared.route(for: .meetingMinutes)
+        guard AIService.shared.isReady(route, local: .generation) else {
             MeetingLibraryModel.shared.flash(L("meeting.regenerate.noModel"))
             return
         }
@@ -50,9 +51,11 @@ final class MeetingMinutesRegenerator: ObservableObject {
         let template = LiveTranslateMinutesTemplate(storageValue: record.meta.template)
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let notes = transcript.notes
+        // 走本地（内置或本机大模型）时那个模型常驻到写完；选了云端模型就不加载本地模型。
+        let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
         Task {
-            AIService.shared.beginLocalKeepAlive(.generation)
-            defer { AIService.shared.endLocalKeepAlive(.generation) }
+            kept?.beginKeepAlive()
+            defer { kept?.endKeepAlive() }
             do {
                 let minutes = try await LiveTranslateMinutes.generate(lines: lines, chinese: chinese, template: template,
                                                                       notes: notes)
@@ -132,9 +135,10 @@ final class MeetingWeeklyReporter {
         let labels = Self.labels(key: key, interval: interval)
         Task {
             var overview: String?
-            if AIService.shared.isLocalReady(.generation) {
+            let route = AIService.shared.route(for: .meetingWeekly)
+            if AIService.shared.isReady(route, local: .generation) {
                 do {
-                    overview = try await Self.overview(entries, labels: labels)
+                    overview = try await Self.overview(entries, labels: labels, route: route)
                 } catch {
                     reportsLog.error("weekly overview failed: \(error.localizedDescription, privacy: .public)")
                 }
@@ -169,7 +173,7 @@ final class MeetingWeeklyReporter {
 
     /// 让本地模型（Qwen3-1.7B）写一段 2–4 句的本周概述。材料超出上下文就截断。
     private static func overview(_ entries: [MeetingWeeklyReport.Entry],
-                                 labels: MeetingWeeklyReport.Labels) async throws -> String? {
+                                 labels: MeetingWeeklyReport.Labels, route: AIRoute) async throws -> String? {
         let material = LiveTranslateMinutes.clip(MeetingWeeklyReport.overviewInput(entries, labels: labels), budget: 2400)
         guard !material.isEmpty else { return nil }
         let chinese = L10n.locale.identifier.hasPrefix("zh")
@@ -195,10 +199,12 @@ final class MeetingWeeklyReporter {
             /no_think
             """
         }
-        AIService.shared.beginLocalKeepAlive(.generation)
-        defer { AIService.shared.endLocalKeepAlive(.generation) }
-        // 周报只走本地（同会议纪要，docs/ai-service/DESIGN.md §5.5）。
-        let answer = try await AIService.shared.generate(prompt, maxTokens: 400, sampling: .summary, route: .local).text
+        // 走哪个模型按「周报概述」这个功能选的（默认本地，docs/ai-service/DESIGN.md §5.4）；走本地时模型常驻到写完。
+        let kept = AIService.shared.localBackend(for: route, local: .generation)
+        kept?.beginKeepAlive()
+        defer { kept?.endKeepAlive() }
+        let answer = try await AIService.shared.generate(prompt, maxTokens: 400, sampling: .summary, route: route,
+                                                         timeout: 60).text
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

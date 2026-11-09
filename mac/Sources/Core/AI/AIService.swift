@@ -1,32 +1,31 @@
 import Foundation
 import os
 
-/// AI 服务层（docs/ai-service/DESIGN.md）：用到模型的地方都从这里进，按「本地 / 云端」路由。
+/// 一次请求走哪：内置的本地模型、本机下载的 Qwen3 大模型（`LocalModelEntry.id`），或某个云端模型（`AICloudModel.id`）。
+enum AIRoute: Hashable {
+    case local
+    case localModel(String)
+    case cloud(String)
+
+    /// 云端模型 id（不是云端时为 nil）。
+    var modelID: String? {
+        if case .cloud(let id) = self { return id }
+        return nil
+    }
+}
+
+/// AI 服务层（docs/ai-service/DESIGN.md）：用到模型的地方都从这里进，按 `AIRoute` 走本地或某个云端模型。
 ///
 /// - 两类调用：翻译（原文 + 语言 + 术语表 → 译文）、通用生成（提示词 → 回复）；
 /// - 本地后端：Hy-MT2 管翻译、Qwen3-1.7B 管通用生成 —— 进程和下载仍由 `OfflineTranslator` 负责，这里只转调；
-/// - 云端后端：一个服务同时管翻译和生成（翻译用提示词实现），Key 在钥匙串；
-/// - 云端出错（断网、超时、401、429、本机限额）时自动退回本地（有的话），结果里标 `usedFallback`；
-///   出错后 30 秒内直接走本地，不让每句字幕都先等一次超时。
+/// - 云端后端：`AIModelStore` 里的账号 + 模型（翻译用提示词实现），Key 在钥匙串；
+/// - 云端出错（断网、超时、401、429、本机限额、回复被截断）时自动退回本地（有的话），结果里标 `usedFallback`；
+///   服务级错误后 30 秒内这个账号的请求直接走本地，不让每句字幕都先等一次超时。
 ///
 /// 系统翻译（`TranslationSession`）不进服务层：框架只认挂在视图上的 `.translationTask`，会话继续挂在浮层和字幕条上。
 @MainActor
-final class AIService: ObservableObject {
+final class AIService {
     static let shared = AIService()
-
-    enum Route: String, CaseIterable, Identifiable {
-        case local
-        case cloud
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .local: return L("ai.route.local")
-            case .cloud: return L("ai.route.cloud")
-            }
-        }
-    }
 
     /// 本地的两个模型。
     enum LocalModel {
@@ -48,106 +47,103 @@ final class AIService: ObservableObject {
     struct Reply {
         let text: String
         /// 实际走的是哪边。
-        let route: Route
+        let route: AIRoute
         /// 要的是云端、云端出错改用了本地。
         let usedFallback: Bool
     }
 
-    /// 云端服务配置完整（有 Key 或指向本机、有模型、地址像样）。设置页和各模块的引擎选择据此置灰。
-    @Published private(set) var cloudConfigured = false
-    /// 当前这家存了 Key（设置页显示「已保存」用；不暴露 Key 本身）。
-    @Published private(set) var hasAPIKey = false
-
     private static let log = Logger(subsystem: "com.baobox.app", category: "ai")
-    /// 云端出错后多久内直接走本地。
+    /// 云端出服务级错误后，这个账号多久内直接走本地。
     private static let cooldown: TimeInterval = 30
 
-    private var cloudKey: String?
     private var recentRequests: [Date] = []
-    private var cloudUnavailableUntil: Date?
+    /// 账号 id → 这之前直接走本地。
+    private var unavailableUntil: [String: Date] = [:]
 
-    private init() {
-        refreshCloudConfiguration()
-    }
+    private init() {}
 
     // MARK: - 状态
 
-    /// 设置改了（服务商、地址、模型、Key）后调用。
-    func refreshCloudConfiguration() {
-        let provider = AICloudSettings.provider
-        cloudKey = AIKeychain.load(provider)
-        hasAPIKey = cloudKey != nil
-        cloudConfigured = cloudConfig() != nil
-        cloudUnavailableUntil = nil
-    }
-
-    private func cloudConfig() -> AICloudConfig? {
-        let provider = AICloudSettings.provider
-        guard let baseURL = AICloudSettings.baseURL(provider) else { return nil }
-        let model = AICloudSettings.model(provider)
-        guard !model.isEmpty else { return nil }
-        let key = cloudKey ?? ""
-        if key.isEmpty, !AICloudSettings.keyOptional(provider, baseURL: baseURL) { return nil }
-        return AICloudConfig(provider: provider, baseURL: baseURL, model: model, apiKey: key)
-    }
-
     func isLocalReady(_ model: LocalModel) -> Bool { model.backend.isReady }
 
-    /// 本地模型的推理进程正在启动（首次加载要几秒）。
-    func isLocalStarting(_ model: LocalModel) -> Bool { model.backend.isStartingServer }
-
-    /// 这条路现在能不能用：云端 = 配置完整；本地 = 模型已下载。
-    func isReady(_ route: Route, model: LocalModel) -> Bool {
+    /// 这条路现在能不能用：云端 = 模型配置完整；本地 = 模型已下载。
+    func isReady(_ route: AIRoute, local model: LocalModel) -> Bool {
         switch route {
-        case .cloud: return cloudConfigured
         case .local: return isLocalReady(model)
+        case .localModel(let id): return LocalModels.isInstalled(id)
+        case .cloud(let id): return AIModelStore.shared.isConfigured(id)
         }
     }
 
-    /// 本地模型常驻（实时翻译、听写期间）；与 `endLocalKeepAlive` 配对。
-    func beginLocalKeepAlive(_ model: LocalModel) { model.backend.beginKeepAlive() }
-    func endLocalKeepAlive(_ model: LocalModel) { model.backend.endKeepAlive() }
-
-    // MARK: - Key
-
-    func saveAPIKey(_ key: String) -> Bool {
-        let saved = AIKeychain.save(key, for: AICloudSettings.provider)
-        refreshCloudConfiguration()
-        return saved
+    /// 通用类功能这次走哪：选了云端模型且配置完整 → 云端；选了本机大模型且已下载 → 它；否则内置本地模型
+    /// （docs/ai-service/DESIGN.md §3.2，docs/local-models/DESIGN.md §5）。
+    func route(for feature: AIFeature) -> AIRoute {
+        switch AIFeatureSettings.choice(feature) {
+        case .model(let id) where AIModelStore.shared.isConfigured(id): return .cloud(id)
+        case .localModel(let id) where LocalModels.isInstalled(id): return .localModel(id)
+        default: return .local
+        }
     }
 
-    func deleteAPIKey() {
-        AIKeychain.delete(AICloudSettings.provider)
-        refreshCloudConfiguration()
+    /// 这条路要用到的本地推理进程；云端为 nil。调用方据此常驻（`beginKeepAlive` / `endKeepAlive` 配对，会顺带把模型加载起来，
+    /// 所以只对实际要用的那个调用）和判断「还在加载」。
+    func localBackend(for route: AIRoute, local model: LocalModel) -> OfflineTranslator? {
+        switch route {
+        case .local: return model.backend
+        case .localModel(let id): return LocalModels.entry(id)?.translator
+        case .cloud: return nil
+        }
+    }
+
+    /// 改了账号的地址、Key 或它下面的模型：清掉冷却，下一句就重新试云端。
+    func resetCooldown(accountID: String) {
+        unavailableUntil[accountID] = nil
     }
 
     // MARK: - 翻译
 
     /// 把 `text` 译成 `target`。`timeout` 只管云端（实时字幕给几秒，超时这句改用本地）。
     func translate(_ text: String, to target: TranslationLanguage, from source: TranslationLanguage? = nil,
-                   glossary: [GlossaryEntry] = [], route: Route, timeout: TimeInterval = 30) async throws -> Reply {
+                   glossary: [GlossaryEntry] = [], route: AIRoute, timeout: TimeInterval = 30) async throws -> Reply {
         let local: () async throws -> String = {
             try await OfflineTranslator.shared.translate(text, to: target, from: source, glossary: glossary)
         }
-        guard route == .cloud else { return Reply(text: try await local(), route: .local, usedFallback: false) }
-        return try await withCloud(fallback: isLocalReady(.translation) ? local : nil) { client, maxTokens in
+        if case .localModel(let id) = route {
+            let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
+            // Qwen3 一次只收一条消息：规矩和原文拼在一起；关掉思考，低温度求稳。
+            return try await withLocalModel(id, fallback: isLocalReady(.translation) ? local : nil) { backend, extra in
+                try await backend.respond(to: prompt.system + "\n\n" + prompt.user,
+                                          maxTokens: max(256, text.count * 3) + extra, sampling: .correction)
+            }
+        }
+        guard let modelID = route.modelID else {
+            return Reply(text: try await local(), route: .local, usedFallback: false)
+        }
+        return try await withCloud(modelID: modelID, fallback: isLocalReady(.translation) ? local : nil) { client, cap in
             let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
             return try await client.complete(system: prompt.system, user: prompt.user,
-                                             maxTokens: min(maxTokens, max(256, text.count * 3)), timeout: timeout)
+                                             maxTokens: min(cap, max(256, text.count * 3)), timeout: timeout)
         }
     }
 
     // MARK: - 通用生成
 
     /// 一问一答。本地走 Qwen3（`sampling` 只对本地有效；云端新版 API 不收采样参数）。
-    func generate(_ prompt: String, maxTokens: Int, sampling: OfflineTranslator.Sampling, route: Route,
+    func generate(_ prompt: String, maxTokens: Int, sampling: OfflineTranslator.Sampling, route: AIRoute,
                   timeout: TimeInterval = 60) async throws -> Reply {
         let local: () async throws -> String = {
             OfflinePrompt.clean(try await OfflineTranslator.corrector.respond(to: prompt, maxTokens: maxTokens,
                                                                               sampling: sampling))
         }
-        guard route == .cloud else { return Reply(text: try await local(), route: .local, usedFallback: false) }
-        return try await withCloud(fallback: isLocalReady(.generation) ? local : nil) { client, cap in
+        if case .localModel(let id) = route {
+            return try await withLocalModel(id, fallback: isLocalReady(.generation) ? local : nil) { backend, extra in
+                OfflinePrompt.clean(try await backend.respond(to: prompt, maxTokens: maxTokens + extra, sampling: sampling))
+            }
+        }
+        guard let modelID = route.modelID else {
+            return Reply(text: try await local(), route: .local, usedFallback: false)
+        }
+        return try await withCloud(modelID: modelID, fallback: isLocalReady(.generation) ? local : nil) { client, cap in
             // Qwen3 的「/no_think」软开关对云端模型没意义，去掉免得被当成内容。
             let user = prompt.replacingOccurrences(of: "/no_think", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -157,13 +153,13 @@ final class AIService: ObservableObject {
         }
     }
 
-    // MARK: - 纠错 + 翻译合一（实时字幕两项都选云端时）
+    // MARK: - 纠错 + 翻译合一（实时字幕的纠错和翻译选了同一个云端模型时）
 
-    /// 一条请求「先改识别错字再翻译」，少一次往返。只走云端、不自动退回：调用方失败时按原流程分别走本地。
+    /// 一条请求「先改识别错字再翻译」，少一次往返。只走云端、不自动退回：调用方失败时按原流程分别处理。
     func correctAndTranslate(_ text: String, context: String, to target: TranslationLanguage,
-                             glossary: [GlossaryEntry], timeout: TimeInterval) async throws
+                             glossary: [GlossaryEntry], modelID: String, timeout: TimeInterval) async throws
         -> (corrected: String, translation: String) {
-        let reply = try await withCloud(fallback: nil) { client, cap in
+        let reply = try await withCloud(modelID: modelID, fallback: nil) { client, cap in
             let prompt = AIPrompts.correctAndTranslate(text: text, context: context, target: target,
                                                        glossary: glossary)
             return try await client.complete(system: prompt.system, user: prompt.user,
@@ -176,59 +172,101 @@ final class AIService: ObservableObject {
     // MARK: - 测试连接
 
     /// 发一条很短的请求；nil = 通了，否则是出错原因。不算进每分钟次数，也不触发退回本地。
-    func testConnection() async -> String? {
-        refreshCloudConfiguration()
-        guard let config = cloudConfig() else { return AICloudError.notConfigured.localizedDescription }
+    func testConnection(modelID: String) async -> String? {
+        let store = AIModelStore.shared
+        guard let config = store.config(modelID: modelID) else {
+            return store.problem(modelID: modelID) ?? AICloudError.notConfigured.localizedDescription
+        }
+        // 本机服务（Ollama）第一次要把整个模型读进内存，等久一点；报错也别说「云端」。
+        let local = AICloudSettings.isLocalHost(config.baseURL)
         do {
             _ = try await AICloudClient(config: config).complete(system: nil, user: "Reply with the single word: OK",
-                                                                 maxTokens: 64, timeout: 20)
-            return nil
+                                                                 maxTokens: 64, timeout: local ? 120 : 20)
+        } catch AICloudError.truncated {
+            // 回复被截断也说明连接、Key、模型名都没问题。
+        } catch AICloudError.timeout where local {
+            return L("ai.error.localTimeout")
+        } catch AICloudError.offline where local {
+            return L("ai.error.localOffline")
         } catch {
             return error.localizedDescription
+        }
+        resetCooldown(accountID: config.accountID)
+        return nil
+    }
+
+    // MARK: - 本机大模型
+
+    /// 推理模型（DeepSeek-R1 蒸馏）先思考再回答，思考很长：输出上限多给这么多，免得答案没写出来就截断。
+    private static let reasoningExtraTokens = 3072
+
+    /// 选定的本地模型：没下载（被删了）或出错（进程起不来、超时、推理模型没想完…）时退回这一类的默认本地模型（有的话）。
+    /// `request` 的第二个参数是推理模型要多给的输出上限（其余为 0）。
+    private func withLocalModel(_ id: String, fallback: (() async throws -> String)?,
+                                request: (OfflineTranslator, Int) async throws -> String) async throws -> Reply {
+        func fallBack(_ error: Error) async throws -> Reply {
+            guard let fallback else { throw error }
+            return Reply(text: try await fallback(), route: .local, usedFallback: true)
+        }
+        guard let entry = LocalModels.entry(id), entry.translator.isReady else {
+            return try await fallBack(OfflineTranslationError.modelMissing)
+        }
+        do {
+            let text = try await request(entry.translator, entry.isReasoning ? Self.reasoningExtraTokens : 0)
+            // 推理模型想到一半就到上限：清理后还以 <think> 开头 = 没有答案，别把思考过程当结果。
+            if entry.isReasoning, text.hasPrefix("<think>") { throw AICloudError.truncated }
+            return Reply(text: text, route: .localModel(id), usedFallback: false)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Self.log.error("local model \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return try await fallBack(error)
         }
     }
 
     // MARK: - 云端公共流程
 
     /// 配置 → 本机限额 → 冷却期 → 请求；出错时有本地就退回本地。
-    private func withCloud(fallback: (() async throws -> String)?,
+    private func withCloud(modelID: String, fallback: (() async throws -> String)?,
                            request: (AICloudClient, Int) async throws -> String) async throws -> Reply {
         func fallBack(_ error: Error) async throws -> Reply {
             guard let fallback else { throw error }
             return Reply(text: try await fallback(), route: .local, usedFallback: true)
         }
-        guard let config = cloudConfig() else { return try await fallBack(AICloudError.notConfigured) }
-        if let until = cloudUnavailableUntil, until > Date() {
+        guard let config = AIModelStore.shared.config(modelID: modelID) else {
+            return try await fallBack(AICloudError.notConfigured)
+        }
+        if let until = unavailableUntil[config.accountID], until > Date() {
             return try await fallBack(AICloudError.offline(""))
         }
         guard acquireRequestSlot() else { return try await fallBack(AICloudError.rateLimited) }
         do {
             let text = try await request(AICloudClient(config: config), AICloudSettings.maxTokens)
-            cloudUnavailableUntil = nil
-            return Reply(text: text, route: .cloud, usedFallback: false)
+            unavailableUntil[config.accountID] = nil
+            return Reply(text: text, route: .cloud(modelID), usedFallback: false)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             Self.log.error("cloud request failed: \(error.localizedDescription, privacy: .public)")
             if Self.isServiceDown(error) {
-                cloudUnavailableUntil = Date().addingTimeInterval(Self.cooldown)
+                unavailableUntil[config.accountID] = Date().addingTimeInterval(Self.cooldown)
             }
             return try await fallBack(error)
         }
     }
 
     /// 断网、超时、Key 不对、被限流、服务端 5xx：这段时间里接着请求也多半失败，先走本地。
-    /// 回复格式不对、被拒答只是这一句的事，不冷却。
+    /// 回复格式不对、被拒答、被截断只是这一句的事，不冷却。
     private static func isServiceDown(_ error: Error) -> Bool {
         guard let error = error as? AICloudError else { return false }
         switch error {
         case .timeout, .offline, .unauthorized, .throttled: return true
         case .http(let status, _): return status >= 500
-        case .notConfigured, .rateLimited, .refused, .badResponse: return false
+        case .notConfigured, .rateLimited, .refused, .badResponse, .truncated: return false
         }
     }
 
-    /// 每分钟次数上限（滑动窗口）：到了就不发，免得误刷费用。
+    /// 每分钟次数上限（滑动窗口，所有云端模型合计）：到了就不发，免得误刷费用。
     private func acquireRequestSlot() -> Bool {
         let now = Date()
         recentRequests.removeAll { now.timeIntervalSince($0) > 60 }

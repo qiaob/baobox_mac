@@ -305,7 +305,6 @@ enum SelectionTextBudget {
 
 enum SelectionAssistantSettings {
     static let popupActionKey = "selectiontranslate.popupAction"
-    static let aiEngineKey = "selectiontranslate.aiEngine"
     static let optionDigitsKey = "selectiontranslate.optionDigits"
     static let learnNativeKey = "selectiontranslate.learn.native"
     static let learnTargetKey = "selectiontranslate.learn.target"
@@ -331,10 +330,6 @@ enum SelectionAssistantSettings {
 
     static var popupAction: PopupAction {
         PopupAction(rawValue: UserDefaults.standard.string(forKey: popupActionKey) ?? "") ?? .bar
-    }
-
-    static var aiRoute: AIService.Route {
-        AIService.Route(rawValue: UserDefaults.standard.string(forKey: aiEngineKey) ?? "") ?? .local
     }
 
     static var optionDigits: Bool {

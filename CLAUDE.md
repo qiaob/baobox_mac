@@ -39,9 +39,9 @@ BaoboxApp(@main, Settings scene)
    └─ OnboardingController          # 首启权限引导（屏幕录制 / 辅助功能）
 ```
 
-核心协议 **`ToolModule`**（`mac/Sources/Core/ToolModule.swift`）：每个工具实现 `id / name / symbolName / submenuItems() / hotkeys() / settingsTab() / activate() / willTerminate()`，向 `ToolRegistry` 注册即接入菜单栏、二级菜单、设置 Tab、全局快捷键。**框架不认识具体工具**。
+核心协议 **`ToolModule`**（`mac/Sources/Core/ToolModule.swift`）：每个工具实现 `id / name / symbolName / submenuItems() / hotkeys() / settingsTab() / activate() / willTerminate()`（可选 `aiFeatures()`：用到模型的功能，进「AI」页的功能表），向 `ToolRegistry` 注册即接入菜单栏、二级菜单、设置 Tab、全局快捷键。**框架不认识具体工具**。
 
-共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`、`PasteboardBorrow`（借剪贴板取一次文字再还原，剪贴板历史据此跳过；`paste(_:)` 借剪贴板 ⌘V 插入文字）、`TextInserter`（把文字插入前台 App 的焦点：AX → 粘贴 → 复制，听写用）、`AudioCaptureCoordinator`（录音类功能互斥登记：会议 / 实时翻译 / 听写同一时刻只有一个在用语音识别）、`Translation/`（两个翻译模块共用：语言表 + 语种检测、每模块一个引擎选择、离线模型下载与 `llama-server` 进程管理、设置区块）、`AI/`（**AI 服务层**：用到模型的地方都从 `AIService` 进，按本地 / 云端路由；本地转调 `OfflineTranslator`，云端 = Claude / OpenAI 兼容，Key 在钥匙串，出错自动退回本地，见 `docs/ai-service/DESIGN.md`）。设置窗口在 `mac/Sources/Settings/`（含「AI」页）。
+共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`、`PasteboardBorrow`（借剪贴板取一次文字再还原，剪贴板历史据此跳过；`paste(_:)` 借剪贴板 ⌘V 插入文字）、`TextInserter`（把文字插入前台 App 的焦点：AX → 粘贴 → 复制，听写用）、`AudioCaptureCoordinator`（录音类功能互斥登记：会议 / 实时翻译 / 听写同一时刻只有一个在用语音识别）、`Translation/`（两个翻译模块共用：语言表 + 语种检测、引擎解析、离线模型下载与 `llama-server` 进程管理、设置区块）、`AI/`（**AI 服务层**：用到模型的地方都从 `AIService` 进；「AI」页接入多个服务商、每个服务商挂多个起了名字的模型（`AIModelStore`），每个功能单独选模型（模块用 `aiFeatures()` 声明，同 `hotkeys()` 之于快捷键页）；本地转调 `OfflineTranslator`，云端 = Claude / OpenAI 兼容，Key 在钥匙串，出错自动退回本地，见 `docs/ai-service/DESIGN.md`）。设置窗口在 `mac/Sources/Settings/`（含「AI」页）。
 
 ## 模块清单（`mac/Sources/Modules/<名>/`，菜单顺序 = 注册顺序）
 
@@ -91,7 +91,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/meeting/` —— 会议 REQUIREMENTS + TECH_DESIGN（§9 第一段落地记录：引擎配置、混音与说话人、结束冲刷、会议库；§10 第二段：日历、提醒、检测状态机、会议库窗口、周报、自检、菜单迁移）。
 - `docs/dictation/` —— 语音听写 REQUIREMENTS + TECH_DESIGN：三种唤起、快捷键松开事件、识别与换段、文本后处理顺序、插入降级与「只粘贴」名单、Esc 拦截。
 - `docs/live-translate/DESIGN.md` —— 实时翻译：分段识别（停顿 / 45s 切段）、翻译节流（finals 全翻 + 最新 partial）、字幕条窗口。
-- `docs/ai-service/DESIGN.md` —— AI 服务层（#86）：本地 / 云端路由、Claude 与 OpenAI 兼容客户端、钥匙串、退回与冷却、实时字幕走云端的节奏、纠错 + 翻译合一、设置页「AI」。
+- `docs/ai-service/DESIGN.md` —— AI 服务层（#86）：服务商与模型（两层）、功能表（模块声明、每个功能选一个模型）、Claude 与 OpenAI 兼容客户端、钥匙串、退回与冷却、实时字幕走云端的节奏、纠错 + 翻译合一、设置页「AI」；§8 记着下一版的「一键部署本地大模型」。
 - `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
 - `docs/phone-transfer/` —— 手机互传 REQUIREMENTS + TECH_DESIGN：局域网 HTTP 接口、加密信令格式、三个公共信令后端、WebRTC 建连与 NAT 诊断、DataChannel 分块协议、WKWebView 宿主桥。
 - `docs/packet-capture/` —— REQUIREMENTS + TECH_DESIGN（含实现顺序 §15）。

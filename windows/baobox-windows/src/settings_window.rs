@@ -156,6 +156,7 @@ struct SettingsState {
 }
 
 struct PageView {
+    section: String,
     nav: HWND,
     icon: u16,
     children: Vec<(HWND, i32, i32)>,
@@ -278,6 +279,7 @@ pub fn open(
                 state.content_height = height;
             }
             state.pages.push(PageView {
+                section: page.section.clone(),
                 nav,
                 icon: page_icon(&page.section),
                 children,
@@ -382,6 +384,15 @@ unsafe fn build(
         let group = match (page.section.as_str(), field.key.as_str(), index) {
             ("desktop-pet", "startup", _) => Some("宠物"),
             ("general", "autostart", _) => Some("启动"),
+            ("screenshot", "annotate_before_saving", _) => Some("保存"),
+            ("screenshot", "filename_template", _) => Some("文件名"),
+            ("screenshot", "record_format", _) => Some("录屏"),
+            ("screenshot", "ocr_language", _) => Some("屏幕取字"),
+            ("screenshot", "history_limit", _) => Some("历史"),
+            ("clipboard", "history_limit", _) => Some("历史"),
+            ("clipboard", "record_concealed", _) => Some("隐私"),
+            ("clipboard", "text_tools", _) => Some("文本工具"),
+            ("clipboard", "paste_style", _) => Some("粘贴"),
             ("desktop-pet", "coat", _) => Some("形象"),
             ("desktop-pet", "alert-sound", _) => Some("通知"),
             (_, _, 0) => Some(page.title.as_str()),
@@ -903,28 +914,6 @@ unsafe fn control_ex(
     hwnd
 }
 
-/// 系统的界面字体。
-///
-/// 剪贴板面板也用它 —— 两个窗口该长得像同一个程序里出来的。
-pub unsafe fn message_font() -> HFONT {
-    let mut metrics = NONCLIENTMETRICSW {
-        cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-        ..Default::default()
-    };
-    let ok = SystemParametersInfoW(
-        SPI_GETNONCLIENTMETRICS,
-        metrics.cbSize,
-        Some(&mut metrics as *mut _ as *mut _),
-        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-    )
-    .is_ok();
-    if ok {
-        CreateFontIndirectW(&metrics.lfMessageFont)
-    } else {
-        HFONT::default()
-    }
-}
-
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -1105,6 +1094,16 @@ pub(crate) fn page_icon(section: &str) -> u16 {
     }
 }
 
+pub fn show_section(hwnd: HWND, section: &str) {
+    unsafe {
+        let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SettingsState;
+        if let Some(state) = pointer.as_mut() {
+            if let Some(index) = state.pages.iter().position(|page| page.section == section) {
+                select_page(hwnd, state, index);
+            }
+        }
+    }
+}
 unsafe fn select_page(hwnd: HWND, state: &mut SettingsState, index: usize) {
     if index == state.selected || index >= state.pages.len() {
         return;
@@ -1182,7 +1181,7 @@ unsafe fn smooth_fill(graphics: *mut GpGraphics, rect: RECT, diameter: i32, colo
     }
     GdipDeletePath(path);
 }
-unsafe fn rounded(dc: HDC, bounds: RECT, radius: i32, color: COLORREF, border: COLORREF) {
+pub(crate) unsafe fn rounded(dc: HDC, bounds: RECT, radius: i32, color: COLORREF, border: COLORREF) {
     static GDI_PLUS: OnceLock<usize> = OnceLock::new();
     let token = GDI_PLUS.get_or_init(|| {
         let mut token = 0;
@@ -1325,7 +1324,7 @@ unsafe fn style_input(hwnd: HWND) {
     );
 }
 
-unsafe fn settings_font(height: i32, weight: i32) -> HFONT {
+pub(crate) unsafe fn settings_font(height: i32, weight: i32) -> HFONT {
     CreateFontW(
         height,
         0,

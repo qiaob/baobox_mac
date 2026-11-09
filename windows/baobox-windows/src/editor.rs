@@ -26,29 +26,31 @@
 
 #![cfg(windows)]
 
-use baobox_core::annotation::Color;
+use baobox_core::annotation::{Color, Tool};
 use baobox_core::editor::{Editor, EditorKey, EditorOutcome, Modifiers};
 use baobox_core::geometry::Rect;
-use baobox_render::chrome::{draw_icon, ToolbarState, ICON, ICON_DISABLED};
+use baobox_core::toolbar::{Button, Item, Toolbar};
+use baobox_render::chrome::{ToolbarState, ICON, ICON_DISABLED};
 use baobox_render::{fill_rect, stroke_rect_in, Canvas, TextDraw};
-use baobox_core::toolbar::{Item, Toolbar, BUTTON_GAP};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, EndPaint,
-    BeginPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS,
+    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+    EndPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS,
     FF_DONTCARE, FW_SEMIBOLD, HBITMAP, HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_CROSS, MSG,
-    SW_SHOW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, LoadCursorW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
+    IDC_CROSS, MSG, SW_SHOW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursor, IDC_HAND, WM_SETCURSOR};
 
 /// 编辑器窗口类名。
 const CLASS_NAME: PCWSTR = w!("BaoboxAnnotationEditor");
@@ -57,7 +59,14 @@ const CLASS_NAME: PCWSTR = w!("BaoboxAnnotationEditor");
 const BACKDROP: [u8; 4] = [0x16, 0x18, 0x1B, 0xFF];
 
 /// 编辑器的最终产物。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ExtraAction {
+    Scroll,
+    Ocr,
+}
+
 pub struct EditorResult {
+    pub extra: Option<ExtraAction>,
     /// 用户选了哪个出口
     pub outcome: EditorOutcome,
     /// 带标注的最终图像（RGBA8）
@@ -213,6 +222,7 @@ fn to_colorref(color: Color) -> COLORREF {
 /// 挂在窗口上的可变状态。
 struct EditorState {
     editor: Editor,
+    extra: Option<ExtraAction>,
     /// 窗口左上角在屏幕坐标里的位置
     origin: (f64, f64),
     /// 原图像素
@@ -244,12 +254,14 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
         };
         RegisterClassW(&class);
 
-        let editor = Editor::new(image, screen);
+        let mut editor = Editor::with_toolbar(image, windows_toolbar(image, screen));
+        editor.set_palette(&WINDOWS_PALETTE);
         let frame = image.union(&editor.toolbar().frame).clamped_to(&screen);
         let (fw, fh) = (frame.w.round() as usize, frame.h.round() as usize);
 
         let mut state = Box::new(EditorState {
             editor,
+            extra: None,
             origin: (frame.x, frame.y),
             base: rgba,
             image,
@@ -272,14 +284,19 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
         )
         .map_err(|e| format!("创建编辑器窗口失败：{e}"))?;
 
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut EditorState as isize);
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            state.as_mut() as *mut EditorState as isize,
+        );
         let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(hwnd);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
-            if state.editor.outcome().is_some() {
+            if state.editor.outcome().is_some() || state.extra.is_some() {
                 break;
             }
         }
@@ -290,9 +307,10 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
         let _ = UnregisterClassW(CLASS_NAME, instance);
 
         let outcome = state.editor.outcome().unwrap_or(EditorOutcome::Cancel);
-        if outcome == EditorOutcome::Cancel {
+        if outcome == EditorOutcome::Cancel && state.extra != Some(ExtraAction::Ocr) {
             // 取消不必再合成一遍
             return Ok(EditorResult {
+                extra: state.extra,
                 outcome,
                 width: state.image.w.round() as u32,
                 height: state.image.h.round() as u32,
@@ -301,6 +319,7 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
         }
         let (rgba, width, height) = export(&state)?;
         Ok(EditorResult {
+            extra: state.extra,
             outcome,
             rgba,
             width,
@@ -311,16 +330,102 @@ pub fn run(screen: Rect, image: Rect, rgba: Vec<u8>) -> Result<EditorResult, Str
 
 /// 导出最终图像：只有图像本身，没有工具条也没有底衬。
 unsafe fn export(state: &EditorState) -> Result<(Vec<u8>, u32, u32), String> {
-    let (iw, ih) = (
-        state.image.w.round() as usize,
-        state.image.h.round() as usize,
-    );
+    let result = finish_inline(&state.editor, state.extra, state.base.clone())?;
+    Ok((result.rgba, result.width, result.height))
+}
+
+pub fn finish_inline(
+    editor: &Editor,
+    extra: Option<ExtraAction>,
+    mut rgba: Vec<u8>,
+) -> Result<EditorResult, String> {
+    let image = editor.image();
+    let (iw, ih) = (image.w as usize, image.h as usize);
+    let outcome = editor.outcome().unwrap_or(EditorOutcome::Cancel);
+    if outcome != EditorOutcome::Cancel || extra == Some(ExtraAction::Ocr) {
+        rgba = unsafe { render_inline_image(editor, rgba)?.read_rgba() };
+    }
+    Ok(EditorResult {
+        extra,
+        outcome,
+        rgba,
+        width: iw as u32,
+        height: ih as u32,
+    })
+}
+
+unsafe fn render_inline_image(editor: &Editor, mut rgba: Vec<u8>) -> Result<Surface, String> {
+    let image = editor.image();
+    let (iw, ih) = (image.w as usize, image.h as usize);
     let mut surface = Surface::new(iw, ih)?;
-    let mut pixels = compose(&state.image, &state.base, state.image);
-    let texts = draw_annotations(&mut pixels, iw, ih, &state.editor, &state.image, false);
-    surface.write_rgba(&pixels);
+    let texts = draw_annotations(&mut rgba, iw, ih, editor, &image, false);
+    surface.write_rgba(&rgba);
     surface.draw_texts(&texts);
-    Ok((surface.read_rgba(), iw as u32, ih as u32))
+    Ok(surface)
+}
+
+pub unsafe fn paint_inline_image(dc: HDC, editor: &Editor, origin: (f64, f64), rgba: Vec<u8>) {
+    if let Ok(surface) = render_inline_image(editor, rgba) {
+        let at = editor.image();
+        let _ = BitBlt(
+            dc,
+            (at.x - origin.0) as i32,
+            (at.y - origin.1) as i32,
+            surface.width as i32,
+            surface.height as i32,
+            surface.dc,
+            0,
+            0,
+            SRCCOPY,
+        );
+    }
+}
+
+pub unsafe fn paint_inline_toolbar(
+    dc: HDC,
+    editor: &Editor,
+    origin: (f64, f64),
+    tool_active: bool,
+    mut rgba: Vec<u8>,
+) {
+    let mut toolbar = editor.toolbar().clone();
+    let at = toolbar.frame;
+    let (width, height) = (at.w as usize, at.h as usize);
+    let Ok(mut surface) = Surface::new(width, height) else {
+        return;
+    };
+    let Some(mut canvas) = Canvas::new(width, height, &mut rgba) else {
+        return;
+    };
+    toolbar.frame = at.offset(-at.x, -at.y);
+    for button in &mut toolbar.buttons {
+        button.frame = button.frame.offset(-at.x, -at.y);
+    }
+    draw_windows_toolbar(
+        &mut canvas,
+        &toolbar,
+        &ToolbarState {
+            tool: editor.tool(),
+            color_index: editor.color_index(),
+            can_undo: editor.can_undo(),
+            can_redo: editor.can_redo(),
+            hovered: editor.toolbar().hit(editor.cursor()),
+        },
+        tool_active,
+        editor.width(),
+    );
+    surface.write_rgba(&rgba);
+    let _ = BitBlt(
+        dc,
+        (at.x - origin.0) as i32,
+        (at.y - origin.1) as i32,
+        width as i32,
+        height as i32,
+        surface.dc,
+        0,
+        0,
+        SRCCOPY,
+    );
 }
 
 unsafe extern "system" fn wndproc(
@@ -336,6 +441,7 @@ unsafe extern "system" fn wndproc(
     let state = &mut *pointer;
 
     match message {
+        WM_SETCURSOR if set_toolbar_cursor(state.editor.toolbar()) => LRESULT(1),
         WM_MOUSEMOVE => {
             let (x, y) = lparam_to_point(lparam);
             state.editor.mouse_moved(state.to_screen(x, y));
@@ -344,11 +450,24 @@ unsafe extern "system" fn wndproc(
         }
         WM_LBUTTONDOWN => {
             let (x, y) = lparam_to_point(lparam);
-            state.editor.mouse_down(state.to_screen(x, y));
+            let point = state.to_screen(x, y);
+            state.extra = extra_buttons(state.editor.toolbar().frame)
+                .into_iter()
+                .find(|(_, bounds)| bounds.contains(point.0, point.1))
+                .map(|(action, _)| action);
+            if state.extra.is_none() {
+                windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd);
+                if let Some(width) = width_at(state.editor.toolbar().frame, point) {
+                    state.editor.set_width(width);
+                } else {
+                    state.editor.mouse_down(point);
+                }
+            }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
             let (x, y) = lparam_to_point(lparam);
             state.editor.mouse_up(state.to_screen(x, y));
             let _ = InvalidateRect(hwnd, None, false);
@@ -365,7 +484,6 @@ unsafe extern "system" fn wndproc(
             let typing = state.editor.pending_text().is_some();
             if let Some(key) = translate_key(wparam.0 as u32, modifiers.ctrl, typing) {
                 state.editor.key_down(key, modifiers);
-
             }
             let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
@@ -407,7 +525,17 @@ unsafe fn paint(hwnd: HWND, state: &mut EditorState) {
     state.surface.write_rgba(&pixels);
     state.surface.draw_texts(&texts);
 
-    let _ = BitBlt(hdc, 0, 0, fw as i32, fh as i32, state.surface.dc, 0, 0, SRCCOPY);
+    let _ = BitBlt(
+        hdc,
+        0,
+        0,
+        fw as i32,
+        fh as i32,
+        state.surface.dc,
+        0,
+        0,
+        SRCCOPY,
+    );
     let _ = EndPaint(hwnd, &ps);
 }
 
@@ -486,6 +614,8 @@ fn draw_annotations(
                 can_redo: editor.can_redo(),
                 hovered: editor.toolbar().hit(editor.cursor()),
             },
+            true,
+            editor.width(),
         );
     }
     texts
@@ -496,24 +626,240 @@ fn round_panel(canvas: &mut Canvas<'_>, bounds: Rect, radius: f64, color: Color)
     for row in 0..bounds.h.ceil() as i32 {
         let distance = (radius - (row as f64 + 0.5).min(bounds.h - row as f64 - 0.5)).max(0.0);
         let inset = radius - (radius * radius - distance * distance).max(0.0).sqrt();
-        fill_rect(canvas, &Rect::new(bounds.x + inset, bounds.y + row as f64,
-            bounds.w - inset * 2.0, 1.0), color);
+        fill_rect(
+            canvas,
+            &Rect::new(
+                bounds.x + inset,
+                bounds.y + row as f64,
+                bounds.w - inset * 2.0,
+                1.0,
+            ),
+            color,
+        );
     }
 }
 
-fn draw_windows_toolbar(canvas: &mut Canvas<'_>, toolbar: &Toolbar, state: &ToolbarState) {
-    round_panel(canvas, toolbar.frame, 8.0, Color { r: 35, g: 34, b: 35, a: 246 });
-    for pair in toolbar.buttons.windows(2) {
-        let end = pair[0].frame.right();
-        let start = pair[1].frame.x;
-        if start - end > BUTTON_GAP + 1.0 {
-            let middle = (end + start) / 2.0;
-            fill_rect(canvas, &Rect::new(middle, toolbar.frame.y + 11.0, 1.0,
-                toolbar.frame.h - 22.0), Color::rgb(0x54, 0x55, 0x55));
+const SLOT: f64 = 28.0;
+const FIRST_OUTPUT: f64 = 294.0;
+const WIDTHS: [f64; 3] = [2.0, 3.0, 5.0];
+pub const WINDOWS_PALETTE: [Color; 7] = [
+    Color::rgb(255, 69, 58),
+    Color::rgb(255, 159, 10),
+    Color::rgb(255, 214, 10),
+    Color::rgb(48, 209, 88),
+    Color::rgb(10, 132, 255),
+    Color::rgb(0, 0, 0),
+    Color::rgb(255, 255, 255),
+];
+
+fn width_bounds(frame: Rect, index: usize) -> Rect {
+    Rect::new(
+        frame.x + 8.0 + index as f64 * 25.0,
+        frame.y + 32.0,
+        23.0,
+        23.0,
+    )
+}
+
+fn center(rect: Rect) -> (f64, f64) {
+    (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+}
+
+pub fn width_at(frame: Rect, point: (f64, f64)) -> Option<f64> {
+    if frame.h < 55.0 {
+        return None;
+    }
+    WIDTHS
+        .into_iter()
+        .enumerate()
+        .find(|(index, _)| width_bounds(frame, *index).contains(point.0, point.1))
+        .map(|(_, width)| width)
+}
+
+pub fn set_toolbar_cursor(toolbar: &Toolbar) -> bool {
+    let mut cursor = POINT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor).is_err() {
+            return false;
+        }
+        let point = (f64::from(cursor.x), f64::from(cursor.y));
+        let over_button = toolbar.hit(point).is_some()
+            || width_at(toolbar.frame, point).is_some()
+            || extra_buttons(toolbar.frame)
+                .iter()
+                .any(|(_, bounds)| bounds.contains(point.0, point.1));
+        over_button && set_hand_cursor()
+    }
+}
+
+pub fn set_hand_cursor() -> bool {
+    unsafe {
+        let Ok(hand) = LoadCursorW(None, IDC_HAND) else {
+            return false;
+        };
+        SetCursor(hand);
+        true
+    }
+}
+
+fn windows_toolbar(image: Rect, screen: Rect) -> Toolbar {
+    inline_toolbar(image, screen, true)
+}
+
+pub fn inline_toolbar(image: Rect, screen: Rect, show_palette: bool) -> Toolbar {
+    let width = 468.0_f64.min(screen.w);
+    let height = if show_palette { 57.0 } else { 34.0 };
+    let x = (image.right() - width).clamp(screen.x, screen.right() - width);
+    let y = if image.bottom() + 6.0 + height <= screen.bottom() {
+        image.bottom() + 6.0
+    } else {
+        (image.y - height - 6.0).max(screen.y)
+    };
+    let frame = Rect::new(x, y, width, height);
+    let mut buttons = Vec::new();
+    let tools = [
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Arrow,
+        Tool::Pen,
+        Tool::Highlighter,
+        Tool::Mosaic,
+        Tool::Text,
+        Tool::Eraser,
+    ];
+    for (index, tool) in tools.into_iter().enumerate() {
+        buttons.push(Button {
+            item: Item::Tool(tool),
+            frame: Rect::new(x + 7.0 + index as f64 * SLOT, y + 4.0, 26.0, 26.0),
+        });
+    }
+    for (item, offset) in [
+        (Item::Undo, 237.0),
+        (Item::Redo, 265.0),
+        (Item::Cancel, FIRST_OUTPUT),
+        (Item::Pin, FIRST_OUTPUT + SLOT),
+        (Item::Save, FIRST_OUTPUT + SLOT * 4.0),
+        (Item::Copy, FIRST_OUTPUT + SLOT * 5.0),
+    ] {
+        buttons.push(Button {
+            item,
+            frame: Rect::new(x + offset, y + 4.0, 26.0, 26.0),
+        });
+    }
+    if show_palette {
+        for index in 0..WINDOWS_PALETTE.len() {
+            buttons.push(Button {
+                item: Item::Color(index),
+                frame: Rect::new(x + 92.0 + index as f64 * 25.0, y + 32.0, 23.0, 23.0),
+            });
+        }
+    }
+    Toolbar { frame, buttons }
+}
+
+pub fn extra_buttons(frame: Rect) -> [(ExtraAction, Rect); 2] {
+    [
+        (
+            ExtraAction::Scroll,
+            Rect::new(
+                frame.x + FIRST_OUTPUT + SLOT * 2.0,
+                frame.y + 4.0,
+                26.0,
+                26.0,
+            ),
+        ),
+        (
+            ExtraAction::Ocr,
+            Rect::new(
+                frame.x + FIRST_OUTPUT + SLOT * 3.0,
+                frame.y + 4.0,
+                26.0,
+                26.0,
+            ),
+        ),
+    ]
+}
+fn draw_windows_toolbar(
+    canvas: &mut Canvas<'_>,
+    toolbar: &Toolbar,
+    state: &ToolbarState,
+    tool_active: bool,
+    width: f64,
+) {
+    round_panel(
+        canvas,
+        toolbar.frame,
+        8.0,
+        Color {
+            r: 35,
+            g: 34,
+            b: 35,
+            a: 246,
+        },
+    );
+    for offset in [231.0, 291.0] {
+        fill_rect(
+            canvas,
+            &Rect::new(toolbar.frame.x + offset, toolbar.frame.y + 10.0, 1.0, 15.0),
+            Color::rgb(0x54, 0x55, 0x55),
+        );
+    }
+    if toolbar.frame.h >= 55.0 {
+        fill_rect(
+            canvas,
+            &Rect::new(toolbar.frame.x + 85.0, toolbar.frame.y + 36.0, 1.0, 15.0),
+            Color::rgb(84, 84, 84),
+        );
+        for (index, preset) in WIDTHS.into_iter().enumerate() {
+            let (x, y) = center(width_bounds(toolbar.frame, index));
+            let color = if preset == width {
+                Color::rgb(43, 196, 184)
+            } else {
+                ICON
+            };
+            glyph_circle(canvas, (x, y), [2.25, 3.25, 4.5][index], 0.0, color);
+        }
+    }
+    for (action, bounds) in extra_buttons(toolbar.frame) {
+        let x = bounds.x + 13.0;
+        let y = bounds.y + 13.0;
+        match action {
+            ExtraAction::Scroll => {
+                glyph_path(canvas, (x, y), &[(0., -6.), (0., 6.)], ICON);
+                for side in [-1.0, 1.0] {
+                    for direction in [-1.0, 1.0] {
+                        glyph_path(
+                            canvas,
+                            (x, y),
+                            &[(0., side * 6.), (direction * 3.5, side * 2.5)],
+                            ICON,
+                        );
+                    }
+                }
+            }
+            ExtraAction::Ocr => {
+                for dx in [-1.0, 1.0] {
+                    for dy in [-1.0, 1.0] {
+                        glyph_path(
+                            canvas,
+                            (x, y),
+                            &[
+                                (dx * 3.5, dy * 6.),
+                                (dx * 6.5, dy * 6.),
+                                (dx * 6.5, dy * 3.),
+                            ],
+                            ICON,
+                        );
+                    }
+                }
+                for offset in [-2., 2.] {
+                    glyph_path(canvas, (x, y), &[(-3., offset), (3., offset)], ICON);
+                }
+            }
         }
     }
     for button in &toolbar.buttons {
-        let active = matches!(button.item, Item::Tool(tool) if tool == state.tool)
+        let active = matches!(button.item, Item::Tool(tool) if tool_active && tool == state.tool)
             || matches!(button.item, Item::Color(index) if index == state.color_index);
         let color = if active {
             Color::rgb(0x2b, 0xc4, 0xb8)
@@ -527,14 +873,178 @@ fn draw_windows_toolbar(canvas: &mut Canvas<'_>, toolbar: &Toolbar, state: &Tool
         if state.hovered == Some(button.item) {
             round_panel(canvas, button.frame, 5.0, Color::rgb(0x3e, 0x3f, 0x3f));
         }
-        draw_icon(canvas, &button.frame, button.item, color);
+        if let Item::Color(index) = button.item {
+            let center = center(button.frame);
+            if index == state.color_index {
+                glyph_circle(canvas, center, 8.2, 1.25, ICON);
+            }
+            glyph_circle(canvas, center, 5.8, 0.0, WINDOWS_PALETTE[index]);
+            glyph_circle(canvas, center, 5.8, 0.8, Color { a: 110, ..ICON });
+        } else {
+            draw_thin_icon(canvas, center(button.frame), button.item, color);
+        }
+    }
+}
+
+fn glyph_path(canvas: &mut Canvas<'_>, center: (f64, f64), points: &[(f64, f64)], color: Color) {
+    for pair in points.windows(2) {
+        let (ax, ay) = pair[0];
+        let (bx, by) = pair[1];
+        let (dx, dy) = (bx - ax, by - ay);
+        let length = dx * dx + dy * dy;
+        for y in (ay.min(by) - 2.).floor() as i64..=(ay.max(by) + 2.).ceil() as i64 {
+            for x in (ax.min(bx) - 2.).floor() as i64..=(ax.max(bx) + 2.).ceil() as i64 {
+                let (px, py) = (x as f64 - ax, y as f64 - ay);
+                let t = ((px * dx + py * dy) / length.max(f64::EPSILON)).clamp(0., 1.);
+                let coverage = (1.15 - (px - t * dx).hypot(py - t * dy)).clamp(0., 1.);
+                canvas.blend(
+                    center.0.round() as i64 + x,
+                    center.1.round() as i64 + y,
+                    Color {
+                        a: (color.a as f64 * coverage).round() as u8,
+                        ..color
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn glyph_circle(
+    canvas: &mut Canvas<'_>,
+    center: (f64, f64),
+    radius: f64,
+    stroke: f64,
+    color: Color,
+) {
+    let extent = (radius + 2.).ceil() as i64;
+    for y in -extent..=extent {
+        for x in -extent..=extent {
+            let distance = (x as f64).hypot(y as f64);
+            let coverage = if stroke > 0. {
+                (0.5 + stroke / 2. - (distance - radius).abs()).clamp(0., 1.)
+            } else {
+                (0.5 + radius - distance).clamp(0., 1.)
+            };
+            canvas.blend(
+                center.0.round() as i64 + x,
+                center.1.round() as i64 + y,
+                Color {
+                    a: (color.a as f64 * coverage).round() as u8,
+                    ..color
+                },
+            );
+        }
+    }
+}
+
+fn draw_thin_icon(canvas: &mut Canvas<'_>, at: (f64, f64), item: Item, color: Color) {
+    if item == Item::Tool(Tool::Ellipse) {
+        glyph_circle(canvas, at, 5.8, 1.3, color);
+        return;
+    }
+    let paths: &[&[(f64, f64)]] = match item {
+        Item::Tool(Tool::Rect) => &[&[(-6., -4.5), (6., -4.5), (6., 4.5), (-6., 4.5), (-6., -4.5)]],
+        Item::Tool(Tool::Arrow) => &[&[(-5., 5.), (5., -5.)], &[(-1., -5.), (5., -5.), (5., 1.)]],
+        Item::Tool(Tool::Pen) => &[
+            &[
+                (-5.5, 5.5),
+                (-4.4, 1.6),
+                (3.7, -6.5),
+                (6.3, -3.9),
+                (-1.8, 4.2),
+                (-5.5, 5.5),
+            ],
+            &[(2., -4.8), (4.6, -2.2)],
+        ],
+        Item::Tool(Tool::Highlighter) => &[
+            &[
+                (-3., 2.),
+                (3., -5.),
+                (6., -2.),
+                (0., 4.),
+                (-3., 2.),
+                (-5., 5.),
+                (-1., 5.),
+            ],
+            &[(-6., 7.), (6., 7.)],
+        ],
+        Item::Tool(Tool::Mosaic) => &[
+            &[(-6., -5.), (6., -5.), (6., 5.), (-6., 5.), (-6., -5.)],
+            &[(-6., -2.), (1., 5.)],
+            &[(-5., -5.), (5., 5.)],
+            &[(-1., -5.), (6., 2.)],
+        ],
+        Item::Tool(Tool::Text) => &[
+            &[(-7., 5.), (-4., -5.), (-1., 5.)],
+            &[(-6., 1.), (-2., 1.)],
+            &[(5., 5.), (5., -1.), (1., -1.), (0., 2.), (1., 5.), (5., 4.)],
+        ],
+        Item::Tool(Tool::Eraser) => &[
+            &[
+                (-6., 1.),
+                (1., -6.),
+                (6., -1.),
+                (0., 5.),
+                (-3., 5.),
+                (-6., 1.),
+            ],
+            &[(-3., -2.), (2., 3.)],
+        ],
+        Item::Undo | Item::Redo => {
+            let s = if item == Item::Undo { 1. } else { -1. };
+            glyph_path(canvas, at, &[(-s, -5.), (-5. * s, -1.), (-s, 3.)], color);
+            glyph_path(
+                canvas,
+                at,
+                &[
+                    (-5. * s, -1.),
+                    (3. * s, -1.),
+                    (5. * s, 0.),
+                    (6. * s, 2.),
+                    (5. * s, 4.),
+                    (3. * s, 5.),
+                    (0., 5.),
+                ],
+                color,
+            );
+            return;
+        }
+        Item::Cancel => &[&[(-4.5, -4.5), (4.5, 4.5)], &[(-4.5, 4.5), (4.5, -4.5)]],
+        Item::Pin => &[
+            &[
+                (-4., -6.),
+                (4., -6.),
+                (2.5, -3.5),
+                (2.5, -0.5),
+                (4.8, 2.),
+                (-4.8, 2.),
+                (-2.5, -0.5),
+                (-2.5, -3.5),
+                (-4., -6.),
+            ],
+            &[(0., 2.), (0., 6.5)],
+        ],
+        Item::Save => &[
+            &[(-5.5, -1.), (-5.5, 6.), (5.5, 6.), (5.5, -1.)],
+            &[(0., -6.), (0., 3.)],
+            &[(-2.5, 0.5), (0., 3.), (2.5, 0.5)],
+        ],
+        Item::Copy => &[
+            &[(-5., -3.), (2., -3.), (2., 6.), (-5., 6.), (-5., -3.)],
+            &[(-2., -5.8), (5., -5.8), (5., 3.2)],
+        ],
+        _ => &[],
+    };
+    for path in paths {
+        glyph_path(canvas, at, path, color);
     }
 }
 
 /// 读当前的修饰键状态。
 ///
 /// `WM_KEYDOWN` 不带修饰键信息，只能现查 —— 与覆盖层里查 Shift 是同一个套路。
-fn current_modifiers() -> Modifiers {
+pub fn current_modifiers() -> Modifiers {
     unsafe {
         Modifiers {
             ctrl: (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0,
@@ -551,7 +1061,7 @@ fn current_modifiers() -> Modifiers {
 /// 不会像 Linux 那边一样被吃掉。但 `[` / `]` 会：它们既是调线宽的命令，
 /// 又是能打进文字标注里的字符 —— 不加判断的话，用户在文字里打一个 `[`
 /// 会顺手把画笔变粗。
-fn translate_key(virtual_key: u32, ctrl: bool, typing: bool) -> Option<EditorKey> {
+pub fn translate_key(virtual_key: u32, ctrl: bool, typing: bool) -> Option<EditorKey> {
     const VK_BACK: u32 = 0x08;
     const VK_RETURN: u32 = 0x0D;
     const VK_ESCAPE: u32 = 0x1B;

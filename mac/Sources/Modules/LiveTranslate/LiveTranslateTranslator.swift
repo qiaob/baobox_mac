@@ -96,14 +96,14 @@ final class LiveTranslateTranslator {
     }
 
     /// 离线模型 / 云端服务的翻译循环：由控制器在开始时起一个 Task，停止时取消。
-    func serveModel(route: AIService.Route) async {
+    func serveModel(route: AIRoute) async {
         let wake = registerWake()
         defer { unregisterWake(wake.id) }
         for await _ in wake.stream {
             while !finals.isEmpty || !latest.isEmpty {
                 if Task.isCancelled { return }
                 let isFinal = !finals.isEmpty
-                if route == .cloud, !isFinal,
+                if route != .local, !isFinal,
                    Date().timeIntervalSince(lastCloudPartial) < Self.cloudPartialInterval {
                     // 草稿还没到点：小睡一下再看（期间来了定稿就先翻定稿，草稿被更新的替换掉也正好）。
                     try? await Task.sleep(nanoseconds: 100_000_000)
@@ -111,7 +111,7 @@ final class LiveTranslateTranslator {
                 }
                 guard let job = next(for: nil) else { break }
                 guard let target = TranslationLanguage.from(code: job.target) else { continue }
-                if route == .cloud, !isFinal { lastCloudPartial = Date() }
+                if route != .local, !isFinal { lastCloudPartial = Date() }
                 do {
                     // 专有名词表每句现读：设置里改完，下一句翻译就用上。
                     let reply = try await AIService.shared.translate(

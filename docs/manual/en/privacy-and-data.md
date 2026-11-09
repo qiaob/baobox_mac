@@ -81,10 +81,10 @@ Not in normal use. Two places make requests, and both require **an explicit clic
 All session, usage, and cost data in both assistants is **computed from local files**. No AI
 API is called and no login is required.
 
-The **cloud AI service** (Settings → AI) is off by default. Only after you configure one and **explicitly pick
-"Cloud service"** in Selection Assistant or Subtitles & Interpretation settings is the text to translate (your
-selection / each recognized sentence) sent to the service you configured. The API key is stored in your Keychain.
-Meeting minutes, weekly reports and dictation polish always run on this Mac.
+**Cloud AI models** (Settings → AI) are off by default. You can add providers and models there and pick a model
+for each feature (selection translation, caption translation, AI correction, meeting minutes, weekly overview,
+dictation polish). **Only a feature set to a cloud model** sends its text; each feature says what it sends and to
+which provider. Everything else stays on this Mac. API keys are stored in your Keychain.
 
 ## Does it modify my files
 

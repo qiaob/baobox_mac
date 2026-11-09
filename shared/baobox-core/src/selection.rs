@@ -128,11 +128,18 @@ impl Selection {
             Phase::Hovering { window } | Phase::Pressed { window, .. } => {
                 window.and_then(|i| self.windows.get(i)).copied()
             }
-            Phase::Dragging { origin, current } => Some(Rect::from_points(
-                origin.0, origin.1, current.0, current.1,
-            )),
+            Phase::Dragging { origin, current } => {
+                Some(Rect::from_points(origin.0, origin.1, current.0, current.1))
+            }
             Phase::Adjusting { rect, .. } => Some(*rect),
             Phase::Done => None,
+        }
+    }
+
+    /// 平台层拖动已成形的选区时，保留大小并限制在屏幕内。
+    pub fn move_region_to(&mut self, x: f64, y: f64) {
+        if let Phase::Adjusting { rect, .. } = &mut self.phase {
+            *rect = Rect::new(x, y, rect.w, rect.h).clamped_to(&self.bounds);
         }
     }
 
@@ -230,8 +237,8 @@ impl Selection {
                 }
             }
             Phase::Dragging { origin, .. } => {
-                let rect =
-                    Rect::from_points(origin.0, origin.1, point.0, point.1).clamped_to(&self.bounds);
+                let rect = Rect::from_points(origin.0, origin.1, point.0, point.1)
+                    .clamped_to(&self.bounds);
                 self.phase = Phase::Adjusting {
                     rect,
                     dragging: None,
@@ -330,7 +337,10 @@ mod tests {
         s.mouse_up((350.0, 250.0));
         // 拖拽结束后进入可微调状态，而不是直接出结果
         assert!(matches!(s.phase(), Phase::Adjusting { .. }));
-        assert_eq!(s.current_rect(), Some(Rect::new(150.0, 150.0, 200.0, 100.0)));
+        assert_eq!(
+            s.current_rect(),
+            Some(Rect::new(150.0, 150.0, 200.0, 100.0))
+        );
         s.confirm();
         assert_eq!(
             s.outcome(),
@@ -343,7 +353,10 @@ mod tests {
         let mut s = setup();
         // 两个窗口都包含该点，应取 z 序靠前的那个
         s.mouse_moved((150.0, 150.0));
-        assert_eq!(s.current_rect(), Some(Rect::new(100.0, 100.0, 200.0, 200.0)));
+        assert_eq!(
+            s.current_rect(),
+            Some(Rect::new(100.0, 100.0, 200.0, 200.0))
+        );
         // 只有背景窗口包含
         s.mouse_moved((600.0, 600.0));
         assert_eq!(s.current_rect(), Some(Rect::new(0.0, 0.0, 1000.0, 800.0)));
@@ -387,7 +400,10 @@ mod tests {
         s.mouse_down((300.0, 300.0));
         s.mouse_moved((350.0, 350.0));
         s.mouse_up((350.0, 350.0));
-        assert_eq!(s.current_rect(), Some(Rect::new(100.0, 100.0, 250.0, 250.0)));
+        assert_eq!(
+            s.current_rect(),
+            Some(Rect::new(100.0, 100.0, 250.0, 250.0))
+        );
     }
 
     #[test]

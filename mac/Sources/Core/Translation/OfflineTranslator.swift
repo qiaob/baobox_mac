@@ -48,6 +48,87 @@ struct OfflineModel {
         // 纠错的请求很短；4096 是给实时翻译停止后整理纪要的（每段记录约 2200 token + 输出），KV 缓存约 0.5 GB。
         contextSize: 4096
     )
+
+    /// 可选的本地大模型（docs/local-models/DESIGN.md §2）：Qwen 官方 GGUF（Q4_K_M），大小和 SHA-256 取自 Hugging Face API（2026-11-09）。
+    static let qwen3_4b = qwen3("4B", byteSize: 2_497_280_256,
+                                sha256: "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5")
+    static let qwen3_8b = qwen3("8B", byteSize: 5_027_783_488,
+                                sha256: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785")
+    static let qwen3_14b = qwen3("14B", byteSize: 9_001_752_960,
+                                 sha256: "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0")
+    static let qwen3_30b_a3b = qwen3("30B-A3B", byteSize: 18_556_685_824,
+                                     sha256: "0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5")
+    static let qwen3_0_6b = qwen3("0.6B", quant: "Q8_0", byteSize: 639_446_688,
+                                  sha256: "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031")
+    static let qwen3_32b = qwen3("32B", byteSize: 19_762_149_024,
+                                 sha256: "efd971561896866f0e910cce52761ca77b1b138090c7f15fe284676d57d1f689")
+
+    /// 其它家的常见模型（2026-11-09 扩充，用户选 A）：Hugging Face 上的 GGUF（Q4_K_M），大小和 SHA-256 同样取自 Hugging Face API。
+    /// 这些在 ModelScope 上没有同名镜像，只有一个下载地址。
+    static let gemma3_4b = huggingFace(id: "gemma3-4b", name: "Gemma 3 4B", repo: "ggml-org/gemma-3-4b-it-GGUF",
+                                       file: "gemma-3-4b-it-Q4_K_M.gguf", byteSize: 2_489_757_856,
+                                       sha256: "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863")
+    static let gemma3_12b = huggingFace(id: "gemma3-12b", name: "Gemma 3 12B", repo: "ggml-org/gemma-3-12b-it-GGUF",
+                                        file: "gemma-3-12b-it-Q4_K_M.gguf", byteSize: 7_300_574_976,
+                                        sha256: "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5")
+    static let gemma3_27b = huggingFace(id: "gemma3-27b", name: "Gemma 3 27B", repo: "ggml-org/gemma-3-27b-it-GGUF",
+                                        file: "gemma-3-27b-it-Q4_K_M.gguf", byteSize: 16_546_404_736,
+                                        sha256: "edc9aff4d811a285b9157618130b08688b0768d94ee5355b02dc0cb713012e15")
+    static let llama31_8b = huggingFace(id: "llama3.1-8b", name: "Llama 3.1 8B",
+                                        repo: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+                                        file: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", byteSize: 4_920_739_232,
+                                        sha256: "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c")
+    static let glm4_9b = huggingFace(id: "glm4-9b", name: "GLM-4-9B", repo: "bartowski/THUDM_GLM-4-9B-0414-GGUF",
+                                     file: "THUDM_GLM-4-9B-0414-Q4_K_M.gguf", byteSize: 6_166_574_464,
+                                     sha256: "2b95f0b88eca423bfb874c4f8e7b9574ec76acab2befd272076e8a8dce31216a")
+    static let phi4_mini = huggingFace(id: "phi4-mini", name: "Phi-4-mini",
+                                       repo: "bartowski/microsoft_Phi-4-mini-instruct-GGUF",
+                                       file: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf", byteSize: 2_491_874_688,
+                                       sha256: "01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2")
+    /// 推理模型：先思考再回答，思考很长 —— 上下文开到 8192（docs/local-models/DESIGN.md §2）。
+    static let r1_distill_7b = huggingFace(id: "deepseek-r1-7b", name: "DeepSeek-R1 7B",
+                                           repo: "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+                                           file: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf", byteSize: 4_683_073_504,
+                                           sha256: "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+                                           contextSize: 8192)
+    static let r1_distill_14b = huggingFace(id: "deepseek-r1-14b", name: "DeepSeek-R1 14B",
+                                            repo: "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
+                                            file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf", byteSize: 8_988_110_240,
+                                            sha256: "0b319bd0572f2730bfe11cc751defe82045fad5085b4e60591ac2cd2d9633181",
+                                            contextSize: 8192)
+
+    private static func qwen3(_ size: String, quant: String = "Q4_K_M", byteSize: Int64, sha256: String) -> OfflineModel {
+        let file = "Qwen3-\(size)-\(quant).gguf"
+        return OfflineModel(
+            id: "qwen3-\(size.lowercased())",
+            displayName: "Qwen3-\(size)",
+            fileName: file,
+            byteSize: byteSize,
+            sha256: sha256,
+            mirrors: [
+                "https://huggingface.co/Qwen/Qwen3-\(size)-GGUF/resolve/main/\(file)",
+                "https://modelscope.cn/models/Qwen/Qwen3-\(size)-GGUF/resolve/master/\(file)",
+            ].compactMap(URL.init(string:)),
+            contextSize: 4096
+        )
+    }
+
+    /// Hugging Face 上的一个 GGUF 文件（自定义模型也走这个）。
+    static func huggingFace(id: String, name: String, repo: String, file: String, revision: String = "main",
+                            byteSize: Int64, sha256: String, contextSize: Int = 4096) -> OfflineModel {
+        let encodedPath = file.split(separator: "/")
+            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "/")
+        return OfflineModel(
+            id: id,
+            displayName: name,
+            fileName: (file as NSString).lastPathComponent,
+            byteSize: byteSize,
+            sha256: sha256,
+            mirrors: ["https://huggingface.co/\(repo)/resolve/\(revision)/\(encodedPath)"].compactMap(URL.init(string:)),
+            contextSize: contextSize
+        )
+    }
 }
 
 /// 离线翻译的路径约定：`~/Library/Application Support/Baobox/Translation/`。
@@ -115,6 +196,18 @@ final class OfflineTranslator: ObservableObject {
     static let shared = OfflineTranslator(model: .translation)
     static let corrector = OfflineTranslator(model: .corrector)
 
+    /// 可选的本地模型各一个实例，第一次用到时建（docs/local-models/DESIGN.md）。内置的两个直接返回 `shared` / `corrector`。
+    private static var instances: [String: OfflineTranslator] = [:]
+
+    static func instance(for model: OfflineModel) -> OfflineTranslator {
+        if model.id == OfflineModel.translation.id { return shared }
+        if model.id == OfflineModel.corrector.id { return corrector }
+        if let existing = instances[model.id] { return existing }
+        let created = OfflineTranslator(model: model)
+        instances[model.id] = created
+        return created
+    }
+
     /// 采样参数。
     struct Sampling {
         var temperature: Double
@@ -149,6 +242,10 @@ final class OfflineTranslator: ObservableObject {
     /// 有上次没下完的进度可以接着下。
     @Published private(set) var hasPartialDownload = false
     @Published private(set) var isStartingServer = false
+    /// 推理进程在跑、能接请求了（「AI」页的状态显示用）。
+    @Published private(set) var isServerRunning = false
+    /// 用户在「AI」页点了启动或开了开机自启：常驻，直到点停止（`pinned` 占一份 keep-alive）。
+    @Published private(set) var isPinned = false
 
     /// 构建时有没有把推理进程打进 App 包。
     let isHelperBundled: Bool
@@ -163,7 +260,9 @@ final class OfflineTranslator: ObservableObject {
 
     // 推理进程
     private var process: Process?
-    private var serverBase: URL?
+    private var serverBase: URL? {
+        didSet { isServerRunning = serverBase != nil }
+    }
     private var apiKey = ""
     private var launchTask: Task<URL, Error>?
     private var idleTimer: Timer?
@@ -237,6 +336,7 @@ final class OfflineTranslator: ObservableObject {
 
     func deleteModel() {
         cancelDownload()
+        unpin()
         stopServer()
         let fm = FileManager.default
         try? fm.removeItem(at: modelURL)
@@ -454,6 +554,44 @@ final class OfflineTranslator: ObservableObject {
 
     /// App 退出时调用。
     func shutdown() {
+        stopServer()
+    }
+
+    /// 退出 App 时：内置的两个和已经建过的大模型实例，推理进程都结束（没建过的不新建）。
+    static func shutdownAll() {
+        shared.shutdown()
+        corrector.shutdown()
+        for instance in instances.values {
+            instance.shutdown()
+        }
+    }
+
+    /// 推理进程的 PID（读内存占用用）；没在跑时为 nil。
+    var serverPID: Int32? {
+        guard let process, process.isRunning else { return nil }
+        return process.processIdentifier
+    }
+
+    /// 「AI」页的启动 / 开机自启：拉起来并常驻，直到 `stop()`（docs/local-models/DESIGN.md §4）。
+    func start() {
+        guard isReady else { return }
+        if !isPinned {
+            isPinned = true
+            keepAliveCount += 1
+        }
+        prewarm()
+    }
+
+    /// 只解除常驻、不立刻停（关掉开机自启时用）：没人用了就按空闲规则退出。
+    func unpin() {
+        guard isPinned else { return }
+        isPinned = false
+        endKeepAlive()
+    }
+
+    /// 「AI」页的停止：解除常驻并结束进程。之后哪个功能再用到，会按需重新拉起。
+    func stop() {
+        unpin()
         stopServer()
     }
 
