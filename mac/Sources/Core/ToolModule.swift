@@ -44,9 +44,13 @@ protocol ToolModule: AnyObject {
     /// 放在 Baobox 主菜单最上面的行（工具列表之前，框架另接一条分隔线），默认没有。
     /// 菜单栏管理用它放「被隐藏 / 被挤掉的图标」那一行（docs/menubar-manager/）。和 submenuItems 一样只读内存缓存。
     func statusMenuHeaderItems() -> [NSMenuItem]
+    /// 用到模型的功能，默认没有。设置的「AI」页按工具分组列出、每个功能选一个模型（同 `hotkeys()` 之于快捷键页），
+    /// 见 docs/ai-service/DESIGN.md §3.3。每次现建（文案跟着当前语言）。
+    func aiFeatures() -> [AIFeatureDefinition]
 }
 
 extension ToolModule {
     func willTerminate() {}
     func statusMenuHeaderItems() -> [NSMenuItem] { [] }
+    func aiFeatures() -> [AIFeatureDefinition] { [] }
 }

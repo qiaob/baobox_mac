@@ -18,8 +18,14 @@
 |---|---|---|---|
 | 系统翻译（`TranslationSession`） | 15+ | 本地 | 会话只能从视图的 `.translationTask` 拿，继续挂在浮层 / 字幕条上 |
 | 离线模型（Hy-MT2-1.8B） | 14+ | 本地 | 内置的 `llama-server` 子进程 + 单独下载的模型文件 |
+| 云端模型（「设置 → AI」接入的服务商和模型） | 14+ | **离开本机** | 经 `AIService`（`docs/ai-service/DESIGN.md`），只能手动选 |
 
-设置键 `translation.engine`：`auto`（默认）/ `system` / `offline`，两个模块共用。
+每个翻译功能一个设置（2026-11-09 起，issue #86）：划词翻译 `ai.feature.selectiontranslate.translate`，字幕翻译
+`ai.feature.livetranslate.translate`（会议的翻译也用它）。取值 `auto`（默认）/ `system` / `local`（离线模型）/
+`model:<云端模型 id>`。新键没值时读旧的共用键 `translation.engine`（`offline` 当 `local`；保留不删、不再写），升级后行为不变。
+在「设置 → AI」的功能表或模块设置页里选，是同一份设置。离线模型与云端的调用都从 `AIService` 进，系统翻译仍挂在视图上。
+
+- `model:<id>`：这个云端模型配置完整就用它，出错时自动退回离线模型（有的话）；配置不完整或已删除按 `local` 处理。「自动」不会切到云端。
 
 - `auto`：macOS 15+ 用系统翻译；系统不支持这对语言（`LanguageAvailability` 判为 unsupported）或翻译失败时，
   若离线模型已就绪则改用离线模型。macOS 14 直接用离线模型。
@@ -168,7 +174,10 @@
 
 | 键 | 取值 | 默认 |
 |---|---|---|
-| `translation.engine` | `auto` / `system` / `offline` | `auto` |
+| `ai.feature.selectiontranslate.translate` | `auto` / `system` / `local` / `model:<id>` | 旧键 `translation.engine` 的值，没有则 `auto` |
+| `ai.feature.livetranslate.translate` | 同上 | 同上 |
+| `ai.feature.livetranslate.correct` | `local` / `model:<id>` | `local` |
+| `translation.engine` | 旧的共用键：只在新键没值时读一次，不再写 | — |
 | `selectiontranslate.target` | 语言代码（如 `zh-Hans`） | 系统首选语言 |
 | `selectiontranslate.secondaryTarget` | 语言代码 | `en`（目标是英文时为 `zh-Hans`） |
 | `livetranslate.language` | `auto` 或识别 locale（`en-US`、`zh-CN`…；旧值兼容） | `en-US` |
@@ -180,9 +189,10 @@
 ```
 mac/Sources/Core/Translation/
   TranslationLanguage.swift     语言表、文字系统、语言检测
-  TranslationSettings.swift     引擎选择与解析
+  TranslationSettings.swift     引擎解析（按翻译功能：resolve(AIFeature)）
   OfflineTranslator.swift       离线模型：下载 / 校验 / 推理进程 / 请求
-  TranslationEngineSection.swift 设置页共用区块（引擎选择 + 模型状态 / 下载）
+  TranslationEngineSection.swift 设置页共用区块（这个功能的模型选择行 + 说明 + 模型状态 / 下载）
+mac/Sources/Core/AI/             AI 服务层：服务商与模型、功能选择、本地 / 云端路由、云端客户端、钥匙串（docs/ai-service/DESIGN.md）
 mac/Sources/Modules/LiveTranslate/LiveTranslateDualRecognizer.swift  双识别器
 mac/Vendor/llama/                构建时下载（gitignore）
 ```

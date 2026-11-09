@@ -1,19 +1,28 @@
 import Foundation
 
-/// AI 润色（需求 §4.4、技术设计 §4）：本地 Qwen3（`OfflineTranslator.corrector`，与实时翻译的纠错同一个模型）
-/// 把口语整理成书面语。提示词与结果把关在 `DictationTextProcessor`。最多等 8 秒，超时 / 出错 / 结果不可信都上原文。
+/// AI 润色（需求 §4.4、技术设计 §4）：把口语整理成书面语。用「AI 润色」这个功能选的模型（出厂本地 Qwen3，与实时翻译的纠错同一个；
+/// 也可以选云端模型，docs/ai-service/DESIGN.md §5.4）。提示词与结果把关在 `DictationTextProcessor`。最多等 8 秒，超时 / 出错 / 结果不可信都上原文。
 @MainActor
 enum DictationPolisher {
-    /// 模型已下载、推理进程已打包。
-    static var isReady: Bool { OfflineTranslator.corrector.isReady }
+    /// 这次走哪个模型。
+    private static var route: AIRoute { AIService.shared.route(for: .dictationPolish) }
 
-    /// 开始听写就预热（加载模型要几秒），结束时 `coolDown` 配对。
+    /// 预热时让哪个本地模型常驻（`coolDown` 只放自己占的那一份，中途改了设置也配得上对）。
+    private static var warmBackend: OfflineTranslator?
+
+    /// 能润色：走本地 = 模型已下载、推理进程已打包；走云端 = 模型配置完整。
+    static var isReady: Bool { AIService.shared.isReady(route, local: .generation) }
+
+    /// 开始听写就预热（加载模型要几秒），结束时 `coolDown` 配对。走云端时不加载本地模型。
     static func warmUp() {
-        OfflineTranslator.corrector.beginKeepAlive()
+        guard warmBackend == nil, let backend = AIService.shared.localBackend(for: route, local: .generation) else { return }
+        warmBackend = backend
+        backend.beginKeepAlive()
     }
 
     static func coolDown() {
-        OfflineTranslator.corrector.endKeepAlive()
+        warmBackend?.endKeepAlive()
+        warmBackend = nil
     }
 
     /// 润色结果；nil = 用原文（太短、模型不可用、超时、结果不可信）。
@@ -26,8 +35,8 @@ enum DictationPolisher {
         let reply: String? = await withCheckedContinuation { continuation in
             let once = DictationOnce(continuation)
             let work = Task { @MainActor in
-                let reply = try? await OfflineTranslator.corrector.respond(to: prompt, maxTokens: maxTokens,
-                                                                           sampling: .correction)
+                let reply = try? await AIService.shared.generate(prompt, maxTokens: maxTokens, sampling: .correction,
+                                                                 route: route, timeout: 8).text
                 once.resolve(reply)
             }
             // 模型第一次加载、或推理卡住时别让用户干等：到点就上原文（请求本身在后台跑完）。

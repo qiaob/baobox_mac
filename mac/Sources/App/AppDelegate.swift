@@ -40,6 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 后续完善后取消下一行注释即可恢复。
         // registry.register(NetCaptureTool())
         registry.activateAll()
+        // 开了「开机自启」的本地模型：现在拉起来并常驻（docs/local-models/DESIGN.md §4）。
+        LocalModels.startAutostartModels()
 
         statusItemController = StatusItemController(registry: registry)
         // 全局热键触发前先收起状态栏菜单：修复「菜单打开时按快捷键，动作被推迟/与菜单并存」。
@@ -63,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for tool in registry.tools {
             tool.willTerminate()
         }
+        // 本地模型的推理进程（含「AI」页里装的大模型）一并结束，不留在后台占内存。
+        OfflineTranslator.shutdownAll()
     }
 
     /// 构建最小主菜单。

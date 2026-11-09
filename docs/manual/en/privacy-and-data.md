@@ -81,6 +81,11 @@ Not in normal use. Two places make requests, and both require **an explicit clic
 All session, usage, and cost data in both assistants is **computed from local files**. No AI
 API is called and no login is required.
 
+**Cloud AI models** (Settings → AI) are off by default. You can add providers and models there and pick a model
+for each feature (selection translation, caption translation, AI correction, meeting minutes, weekly overview,
+dictation polish). **Only a feature set to a cloud model** sends its text; each feature says what it sends and to
+which provider. Everything else stays on this Mac. API keys are stored in your Keychain.
+
 ## Does it modify my files
 
 Yes, but only when you ask it to, and always under the same rules:

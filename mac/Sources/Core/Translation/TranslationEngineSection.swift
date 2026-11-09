@@ -1,23 +1,13 @@
 import SwiftUI
 
-/// 设置页共用区块：翻译引擎选择 + 离线模型（下载 / 暂停 / 删除）。划词翻译、实时翻译的设置页都嵌这一块。
+/// 模块设置页的翻译区块（docs/ai-service/DESIGN.md §6.2）：这个翻译功能用哪个模型（与「AI」页的功能表是同一行、同一份设置）
+/// + 引擎说明 + 离线模型下载。划词助手、字幕与同传的设置页各嵌一块。字幕与同传运行中改了，按 `AIFeatureSettings.didChange` 重启。
 struct TranslationEngineSection: View {
-    @AppStorage(TranslationSettings.engineKey) private var engine = TranslationEngineChoice.auto.rawValue
-    /// 引擎变了要做的事（如实时翻译运行中重启）。
-    var onEngineChange: (() -> Void)?
-
-    init(onEngineChange: (() -> Void)? = nil) {
-        self.onEngineChange = onEngineChange
-    }
+    let definition: AIFeatureDefinition
 
     var body: some View {
         Section {
-            Picker("translation.settings.engine", selection: $engine) {
-                ForEach(TranslationEngineChoice.allCases) { choice in
-                    Text(choice.title).tag(choice.rawValue)
-                }
-            }
-            .onChange(of: engine) { _, _ in onEngineChange?() }
+            AIFeatureRow(definition: definition, showsManage: true)
             Text(TranslationSettings.systemAvailable
                  ? L("translation.settings.engineHelp")
                  : L("translation.settings.engineHelpNoSystem"))

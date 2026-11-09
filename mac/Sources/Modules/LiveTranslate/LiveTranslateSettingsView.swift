@@ -138,9 +138,7 @@ struct LiveTranslateSettingsSections: View {
                 .foregroundStyle(.secondary)
         }
 
-        TranslationEngineSection {
-            controller.restartIfRunning()
-        }
+        TranslationEngineSection(definition: .liveTranslate)
 
         Section("livetranslate.settings.correctionSection") {
             Toggle("livetranslate.settings.aiCorrection", isOn: $aiCorrection)
@@ -148,6 +146,7 @@ struct LiveTranslateSettingsSections: View {
             Text("livetranslate.settings.aiCorrectionHelp")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            AIFeatureRow(definition: .liveCorrection, showsManage: true)
             OfflineModelRow(translator: .corrector,
                             title: "livetranslate.correction.modelTitle",
                             notInstalledHelp: "livetranslate.correction.notInstalledHelp",

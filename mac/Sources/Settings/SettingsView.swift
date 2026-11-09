@@ -24,6 +24,7 @@ struct SettingsView: View {
         var list = [
             Entry(id: "general", title: L("settings.tab.general"), symbol: "gearshape"),
             Entry(id: "hotkeys", title: L("settings.tab.hotkeys"), symbol: "command"),
+            Entry(id: AISettingsView.tabID, title: L("settings.tab.ai"), symbol: "sparkles"),
         ]
         list += registry.tools.map { Entry(id: $0.id, title: $0.name, symbol: $0.symbolName) }
         list.append(Entry(id: "about", title: L("settings.tab.about"), symbol: "info.circle"))
@@ -60,6 +61,8 @@ struct SettingsView: View {
             GeneralSettingsView()
         case "hotkeys":
             HotkeySettingsView(registry: registry)
+        case AISettingsView.tabID:
+            AISettingsView(registry: registry)
         case "about":
             AboutView()
         default:

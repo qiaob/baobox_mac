@@ -3,38 +3,20 @@ import Foundation
 import Translation
 #endif
 
-/// 用户在设置里选的翻译引擎（两个翻译模块共用）。见 docs/translation-engine/DESIGN.md §2。
-enum TranslationEngineChoice: String, CaseIterable, Identifiable {
-    case auto
-    case system
-    case offline
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .auto: return L("translation.engine.auto")
-        case .system: return L("translation.engine.system")
-        case .offline: return L("translation.engine.offline")
-        }
-    }
-}
-
-/// 一次翻译实际用的引擎。
+/// 这次实际用的翻译引擎（`TranslationSettings.resolve`）。
 enum TranslationEngineKind: Equatable {
     case system
     case offline
+    /// 云端模型（`AICloudModel.id`）。
+    case cloud(String)
+    /// 本机下载的 Qwen3 大模型（`LocalModelEntry.id`）。
+    case localModel(String)
 }
 
+/// 翻译功能的引擎解析（docs/ai-service/DESIGN.md §5.1）。每个翻译功能选什么存在 `AIFeatureSettings` 里。
 enum TranslationSettings {
-    static let engineKey = "translation.engine"
-
-    static var engineChoice: TranslationEngineChoice {
-        get {
-            UserDefaults.standard.string(forKey: engineKey).flatMap(TranslationEngineChoice.init(rawValue:)) ?? .auto
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: engineKey) }
-    }
+    /// 旧版两个翻译模块共用的引擎键（`auto` / `system` / `offline`）：翻译类功能的新键没值时读它（只读、不删、不写），升级后行为不变。
+    static let legacyEngineKey = "translation.engine"
 
     /// 本机能否用系统翻译（Translation 框架要求 macOS 15）。
     static var systemAvailable: Bool {
@@ -45,13 +27,20 @@ enum TranslationSettings {
     }
 
     /// 本次该用哪个引擎；nil = 都不可用（典型：macOS 14 且没下载离线模型）。
+    /// 选了云端模型但它配置不完整（或已删除）：有离线模型就用离线模型。
     @MainActor
-    static func resolve() -> TranslationEngineKind? {
+    static func resolve(_ feature: AIFeature) -> TranslationEngineKind? {
         let offlineReady = OfflineTranslator.shared.isReady
-        switch engineChoice {
+        switch AIFeatureSettings.choice(feature) {
         case .system:
             return systemAvailable ? .system : nil
-        case .offline:
+        case .local:
+            return offlineReady ? .offline : nil
+        case .model(let id):
+            if AIModelStore.shared.isConfigured(id) { return .cloud(id) }
+            return offlineReady ? .offline : nil
+        case .localModel(let id):
+            if LocalModels.isInstalled(id) { return .localModel(id) }
             return offlineReady ? .offline : nil
         case .auto:
             if systemAvailable { return .system }
@@ -59,10 +48,10 @@ enum TranslationSettings {
         }
     }
 
-    /// 系统翻译失败或不支持这对语言时，能否自动改用离线模型。
+    /// 系统翻译失败或不支持这对语言时，能否自动改用离线模型（只有「自动」会用到系统翻译之后再退）。
     @MainActor
-    static var canFallBackToOffline: Bool {
-        engineChoice == .auto && OfflineTranslator.shared.isReady
+    static func canFallBackToOffline(_ feature: AIFeature) -> Bool {
+        AIFeatureSettings.choice(feature) == .auto && OfflineTranslator.shared.isReady
     }
 
     /// 系统翻译是否支持这些翻译方向（macOS 15+；判为 unsupported 才算不支持，未下载语言包不算）。

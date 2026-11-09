@@ -241,6 +241,8 @@ struct MeetingSettingsView: View {
             Text("meeting.settings.templateHelp")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            AIFeatureRow(definition: .meetingMinutes)
+            AIFeatureRow(definition: .meetingWeekly, showsManage: true)
             Picker("meeting.settings.retention", selection: $retentionDays) {
                 ForEach(MeetingSettings.retentionChoices, id: \.self) { days in
                     Text(verbatim: MeetingText.retentionName(days)).tag(days)
