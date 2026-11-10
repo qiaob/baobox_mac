@@ -1142,13 +1142,13 @@ mod tests {
 
     #[test]
     fn composing_puts_the_image_where_it_belongs() {
-        let base = vec![255u8, 0, 0, 255].repeat(4);
+        let base = [255u8, 0, 0, 255].repeat(4);
         let image = Rect::new(11.0, 21.0, 2.0, 2.0);
         let frame = Rect::new(10.0, 20.0, 4.0, 4.0);
         let pixels = compose(&frame, &base, image);
         assert_eq!(pixels.len(), 4 * 4 * 4);
         assert_eq!(&pixels[0..4], &BACKDROP);
-        let at = (1 * 4 + 1) * 4;
+        let at = (4 + 1) * 4;
         assert_eq!(&pixels[at..at + 4], &[255, 0, 0, 255]);
     }
 }

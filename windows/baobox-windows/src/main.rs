@@ -14,17 +14,17 @@
 //! baobox-windows info
 //! ```
 
-mod gdi;
+// 模块文件里有 `#![cfg(windows)]`，这里声明时也写了 `#[cfg(windows)]`：两处都留着，一眼看出哪些只在 Windows 上编。
+#![allow(clippy::duplicated_attributes)]
+
 #[cfg(windows)]
 mod app;
-#[cfg(windows)]
-mod clipboard;
-#[cfg(windows)]
-mod terminal;
 #[cfg(windows)]
 mod caffeinate;
 #[cfg(windows)]
 mod caffeinate_module;
+#[cfg(windows)]
+mod clipboard;
 #[cfg(windows)]
 mod clipboard_module;
 mod clipboard_panel;
@@ -37,47 +37,50 @@ mod clipboard_text_tools;
 mod clipboard_text_window;
 #[cfg(windows)]
 mod editor;
+mod gdi;
+#[cfg(windows)]
+mod hint_overlay;
 #[cfg(windows)]
 mod hotkeys;
+#[cfg(windows)]
+mod keyboardnav;
+#[cfg(windows)]
+mod keyboardnav_module;
 mod ocr;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod paste;
 #[cfg(windows)]
-mod pin;
-#[cfg(windows)]
 mod pet;
+#[cfg(windows)]
+mod pet_download;
+#[cfg(windows)]
+mod pet_model;
 #[cfg(windows)]
 mod pet_notify;
 #[cfg(windows)]
 mod pet_pack;
 #[cfg(windows)]
-mod pet_model;
-#[cfg(windows)]
-mod pet_download;
-#[cfg(windows)]
 mod pet_ring;
+#[cfg(windows)]
+mod pin;
+mod record;
 #[cfg(windows)]
 mod screenshot_module;
 #[cfg(windows)]
 mod screenshot_preview;
 #[cfg(windows)]
 mod settings_window;
+mod store;
 #[cfg(windows)]
-mod hint_overlay;
+mod terminal;
 #[cfg(windows)]
-mod keyboardnav;
-#[cfg(windows)]
-mod keyboardnav_module;
+mod tray;
 #[cfg(windows)]
 mod windowmanager;
 #[cfg(windows)]
 mod windowmanager_module;
-#[cfg(windows)]
-mod tray;
-mod record;
-mod store;
 
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
@@ -108,7 +111,10 @@ fn main() {
 fn run(args: &[String]) -> Result<String, String> {
     match args.first().map(String::as_str) {
         #[cfg(windows)]
-        Some("pet-preview") => pet::preview(args.get(1).map(std::path::Path::new), args.get(2).map(String::as_str)),
+        Some("pet-preview") => pet::preview(
+            args.get(1).map(std::path::Path::new),
+            args.get(2).map(String::as_str),
+        ),
         Some("app") => run_app(args.get(1).is_some_and(|arg| arg == "--settings")),
         None => run_app(false),
         Some("capture") => capture(&args[1..]),
@@ -155,7 +161,11 @@ fn info() -> String {
     let screen = gdi::virtual_screen();
     format!(
         "DPI 感知：{}\n虚拟屏幕：{}×{} @ ({},{})\n可见窗口：{} 个",
-        if dpi_ok { "Per-Monitor V2" } else { "设置失败（可能已由清单指定）" },
+        if dpi_ok {
+            "Per-Monitor V2"
+        } else {
+            "设置失败（可能已由清单指定）"
+        },
         screen.w as i64,
         screen.h as i64,
         screen.x as i64,
@@ -181,7 +191,12 @@ fn list_windows() -> Result<String, String> {
         .map(|w| {
             format!(
                 "0x{:08x}  {:>5}×{:<5} @ ({},{})  {}",
-                w.id, w.frame.w as i64, w.frame.h as i64, w.frame.x as i64, w.frame.y as i64, w.title
+                w.id,
+                w.frame.w as i64,
+                w.frame.h as i64,
+                w.frame.x as i64,
+                w.frame.y as i64,
+                w.title
             )
         })
         .collect::<Vec<_>>()
@@ -201,17 +216,26 @@ fn capture(args: &[String]) -> Result<String, String> {
     let target = match (options.full, options.region, options.window) {
         (true, _, _) => gdi::virtual_screen(),
         (_, Some(rect), _) => rect,
-        (_, _, Some(id)) => gdi::windows()
-            .into_iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
-            .frame,
+        (_, _, Some(id)) => {
+            gdi::windows()
+                .into_iter()
+                .find(|w| w.id == id)
+                .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
+                .frame
+        }
         // 什么都没指定 → 交互式覆盖层，这是默认用法
         _ => interactive_target()?,
     };
 
     let shot = gdi::capture(target)?;
-    finish(target, shot, options.output, options.copy, options.save, options.edit)
+    finish(
+        target,
+        shot,
+        options.output,
+        options.copy,
+        options.save,
+        options.edit,
+    )
 }
 
 /// 截完图之后的去向：先（可选地）进标注编辑器，再按结果收尾。
@@ -298,7 +322,12 @@ fn deliver(
     if notes.is_empty() {
         return Err("--no-copy 与 --no-save 同时给了，什么都不会发生".to_string());
     }
-    Ok(format!("{}（{}×{}）", notes.join("，"), shot.width, shot.height))
+    Ok(format!(
+        "{}（{}×{}）",
+        notes.join("，"),
+        shot.width,
+        shot.height
+    ))
 }
 
 /// 屏幕取字：框一块区域，把里面的文字识别出来。
@@ -431,7 +460,6 @@ fn history(args: &[String]) -> Result<String, String> {
 /// 与 Linux / macOS 同一套算法（`baobox_core::stitch`），三边拼出来的结果一致。
 #[cfg(windows)]
 fn scroll(args: &[String]) -> Result<String, String> {
-
     let mut region: Option<Rect> = None;
     let mut frames = 20usize;
     let mut interval_ms = 400u64;
@@ -476,13 +504,23 @@ fn scroll(args: &[String]) -> Result<String, String> {
 
     gdi::prepare();
     eprintln!("开始长截屏：现在滚动页面，将抓取 {frames} 帧（间隔 {interval_ms}ms）…");
-    let (shot, count) = capture_scroll(region, frames, std::time::Duration::from_millis(interval_ms), |_, _| Ok(false))?;
+    let (shot, count) = capture_scroll(
+        region,
+        frames,
+        std::time::Duration::from_millis(interval_ms),
+        |_, _| Ok(false),
+    )?;
     let path = match output {
         Some(path) => path,
         None => default_path("")?,
     };
     baobox_image::write_rgba(&path, shot.width, shot.height, &shot.rgba)?;
-    Ok(format!("已保存 {}（{}×{}，由 {count} 帧拼成）", path.display(), shot.width, shot.height))
+    Ok(format!(
+        "已保存 {}（{}×{}，由 {count} 帧拼成）",
+        path.display(),
+        shot.width,
+        shot.height
+    ))
 }
 
 #[cfg(windows)]
@@ -498,12 +536,16 @@ fn capture_scroll(
     let mut frame_height = 0;
     let mut stored_bytes = 0usize;
     for _ in 0..frames {
-        if finished(kept.len(), stitcher.total_height())? { break; }
+        if finished(kept.len(), stitcher.total_height())? {
+            break;
+        }
         let shot = gdi::capture(region)?;
         frame_height = shot.height as usize;
         let gray = baobox_image::to_gray(&shot.rgba);
         if let Some(frame) = Frame::from_gray(shot.width as usize, frame_height, &gray) {
-            if stored_bytes.saturating_add(shot.rgba.len()) > 192 * 1024 * 1024 { break; }
+            if stored_bytes.saturating_add(shot.rgba.len()) > 192 * 1024 * 1024 {
+                break;
+            }
             if stitcher.push(frame) {
                 stored_bytes += shot.rgba.len();
                 kept.push(shot.rgba);
@@ -513,12 +555,27 @@ fn capture_scroll(
     }
 
     if kept.len() < 2 {
-        return Err("没有拼接到新内容。请框选可滚动的内容区，每次少滚一点，让前后画面保留重叠。".into());
+        return Err(
+            "没有拼接到新内容。请框选可滚动的内容区，每次少滚一点，让前后画面保留重叠。".into(),
+        );
     }
     let refs: Vec<&[u8]> = kept.iter().map(Vec::as_slice).collect();
-    let rgba = compose_rgba(&refs, frame_height, stitcher.placements(), stitcher.width(), stitcher.total_height())
-        .ok_or("拼接失败：帧尺寸不一致")?;
-    Ok((gdi::Capture { width: stitcher.width() as u32, height: stitcher.total_height() as u32, rgba }, kept.len()))
+    let rgba = compose_rgba(
+        &refs,
+        frame_height,
+        stitcher.placements(),
+        stitcher.width(),
+        stitcher.total_height(),
+    )
+    .ok_or("拼接失败：帧尺寸不一致")?;
+    Ok((
+        gdi::Capture {
+            width: stitcher.width() as u32,
+            height: stitcher.total_height() as u32,
+            rgba,
+        },
+        kept.len(),
+    ))
 }
 #[cfg(not(windows))]
 fn scroll(_args: &[String]) -> Result<String, String> {
@@ -592,11 +649,15 @@ fn parse_capture_args(args: &[String]) -> Result<CaptureOptions, String> {
             "--full" => options.full = true,
             "--region" => {
                 index += 1;
-                options.region = Some(parse_region(args.get(index).ok_or("--region 缺少参数 X,Y,W,H")?)?);
+                options.region = Some(parse_region(
+                    args.get(index).ok_or("--region 缺少参数 X,Y,W,H")?,
+                )?);
             }
             "--window" => {
                 index += 1;
-                options.window = Some(parse_window_id(args.get(index).ok_or("--window 缺少句柄")?)?);
+                options.window = Some(parse_window_id(
+                    args.get(index).ok_or("--window 缺少句柄")?,
+                )?);
             }
             "-o" | "--output" => {
                 index += 1;
@@ -646,7 +707,11 @@ pub fn default_path(save_dir: &str) -> Result<PathBuf, String> {
     configured_capture_path(save_dir, DEFAULT_TEMPLATE, "png")
 }
 
-fn configured_capture_path(save_dir: &str, template: &str, extension: &str) -> Result<PathBuf, String> {
+fn configured_capture_path(
+    save_dir: &str,
+    template: &str,
+    extension: &str,
+) -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "%USERPROFILE% 未设置".to_string())?;
@@ -658,7 +723,11 @@ fn configured_capture_path(save_dir: &str, template: &str, extension: &str) -> R
 }
 
 fn capture_path(dir: &Path, template: &str, extension: &str) -> PathBuf {
-    let template = if template.trim().is_empty() { DEFAULT_TEMPLATE } else { template };
+    let template = if template.trim().is_empty() {
+        DEFAULT_TEMPLATE
+    } else {
+        template
+    };
     let stem = format_template(template, now_parts());
     // 走 Windows 规则：非法字符更多，另有 CON/PRN/NUL 等保留名
     let safe = sanitize(&stem, Platform::Windows, "screenshot");
@@ -694,7 +763,10 @@ mod tests {
 
     #[test]
     fn region_parsing_matches_the_linux_build() {
-        assert_eq!(parse_region("10,20,30,40").unwrap(), Rect::new(10.0, 20.0, 30.0, 40.0));
+        assert_eq!(
+            parse_region("10,20,30,40").unwrap(),
+            Rect::new(10.0, 20.0, 30.0, 40.0)
+        );
         assert!(parse_region("10,20,30").is_err());
         assert!(parse_region("10,20,0,40").is_err());
     }

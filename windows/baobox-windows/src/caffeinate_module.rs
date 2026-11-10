@@ -55,11 +55,7 @@ struct Settings {
 impl Settings {
     fn read(config: &Config) -> Self {
         Self {
-            default_duration: duration_from_config(&config.string_or(
-                ID,
-                "default_duration",
-                "0",
-            )),
+            default_duration: duration_from_config(&config.string_or(ID, "default_duration", "0")),
             prevent_display_sleep: config.bool_or(ID, "prevent_display_sleep", false),
         }
     }
@@ -184,9 +180,11 @@ impl ToolModule for CaffeinateTool {
         // **保留剩下的时间**（不然用户改个开关会顺手把计时清零）
         if was_display != self.settings.prevent_display_sleep {
             if let Some(session) = self.session {
-                let remaining = session.until.map(|until| (until - crate::now_seconds()).max(1));
+                let remaining = session
+                    .until
+                    .map(|until| (until - crate::now_seconds()).max(1));
                 let requested = session.requested;
-                if let Ok(_) = self.start(remaining) {
+                if self.start(remaining).is_ok() {
                     // start 会把 requested 写成「剩余秒数」，那样菜单里
                     // 四个预设会一个勾都没有 —— 还原成用户当初选的那一档
                     if let Some(current) = self.session.as_mut() {
@@ -264,7 +262,10 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused() {
         let mut tool = CaffeinateTool::new();
-        assert!(tool.perform("caffeinate.nope").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("caffeinate.nope")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]
@@ -309,7 +310,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(ids.iter().any(|id| id == TOGGLE), "「按默认时长开启」得能按到");
+        assert!(
+            ids.iter().any(|id| id == TOGGLE),
+            "「按默认时长开启」得能按到"
+        );
     }
 
     #[test]

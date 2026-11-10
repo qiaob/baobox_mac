@@ -216,14 +216,8 @@ pub fn open(store: &Store) -> Outcome {
                     let index = selected_index(&list)?;
                     let id = visible.borrow().get(index).cloned()?;
                     let item = snapshot.iter().find(|e| e.id == id)?;
-                    match tools_for(item) {
-                        Some(entries) => Some(Mode::Tools {
-                            item: id,
-                            entries,
-                        }),
-                        // 图片、打码的内容、认不出任何动作的：留在第一层
-                        None => None,
-                    }
+                    // 图片、打码的内容、认不出任何动作的：没有动作，留在第一层
+                    tools_for(item).map(|entries| Mode::Tools { item: id, entries })
                 }
             }?;
             let browsing = matches!(next, Mode::Browse);

@@ -184,7 +184,7 @@ fn nonce_seed() -> [u8; NONCE_LEN] {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let pid = std::process::id() as u32;
+    let pid = std::process::id();
     let mut out = [0u8; NONCE_LEN];
     out[..8].copy_from_slice(&nanos.to_le_bytes());
     out[8..].copy_from_slice(&pid.to_le_bytes());
@@ -278,8 +278,8 @@ mod secret {
             "application/octet-stream".to_string(),
         );
 
-        let collection =
-            proxy(&conn, COLLECTION, "org.freedesktop.Secret.Collection").map_err(|e| e.to_string())?;
+        let collection = proxy(&conn, COLLECTION, "org.freedesktop.Secret.Collection")
+            .map_err(|e| e.to_string())?;
         let _: (OwnedObjectPath, OwnedObjectPath) = collection
             .call("CreateItem", &(properties, secret, true))
             .map_err(|e| e.to_string())?;

@@ -33,7 +33,11 @@ impl History {
     pub fn new(limit: usize) -> Self {
         Self {
             entries: Vec::new(),
-            limit: if limit == 0 { Self::DEFAULT_LIMIT } else { limit },
+            limit: if limit == 0 {
+                Self::DEFAULT_LIMIT
+            } else {
+                limit
+            },
         }
     }
 
@@ -66,7 +70,11 @@ impl History {
 
     /// 调整上限，返回因缩小上限而被淘汰的记录。
     pub fn set_limit(&mut self, limit: usize) -> Vec<Entry> {
-        self.limit = if limit == 0 { Self::DEFAULT_LIMIT } else { limit };
+        self.limit = if limit == 0 {
+            Self::DEFAULT_LIMIT
+        } else {
+            limit
+        };
         self.trim()
     }
 

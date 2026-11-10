@@ -26,6 +26,7 @@
 //! `SelectionNotify` 事件，服务器在所有者变更时主动告诉我们 ——
 //! 不轮询、不漏、也不浪费 CPU。这个扩展在现代 X 服务器上必有。
 
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::{self, ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
@@ -33,7 +34,6 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
-use std::time::{Duration, Instant};
 
 /// 等所有者回应的上限。
 ///
@@ -362,7 +362,10 @@ mod tests {
     fn a_plus_in_a_filename_stays_a_plus() {
         // `+` 代表空格是 query 的规矩，路径里不是 ——
         // 弄错的话 c++.txt 会变成一个根本不存在的文件
-        assert_eq!(parse_uri_list("file:///home/me/c++.txt"), vec!["/home/me/c++.txt"]);
+        assert_eq!(
+            parse_uri_list("file:///home/me/c++.txt"),
+            vec!["/home/me/c++.txt"]
+        );
     }
 
     #[test]

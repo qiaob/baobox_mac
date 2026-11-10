@@ -216,7 +216,10 @@ mod tests {
         // 选区贴着右边缘
         let right = Rect::new(1880.0, 100.0, 40.0, 40.0);
         let bar = Toolbar::layout(&right, &screen());
-        assert!(bar.frame.right() <= screen().right() + 1e-9, "不能越过右边缘");
+        assert!(
+            bar.frame.right() <= screen().right() + 1e-9,
+            "不能越过右边缘"
+        );
     }
 
     #[test]
