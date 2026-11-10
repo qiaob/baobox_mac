@@ -1,6 +1,6 @@
 # 会议引擎接口（MeetingEngine）· 技术设计
 
-> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR3 已合入（#143、#142、#148），PR4 见本 PR。
+> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR4 已合入（#143、#142、#148、#155），PR5 见本 PR。
 > 基线：main `50103fe`（#106 已合并）。下文路径都相对 `mac/Sources/`，行号以这个提交为准。之后 main 到 `a3cadcd` 只动了两处相关的：
 > #134 加了测试 target `BaoboxTests`（§5.1）；#137 改了 `LiveTranslateSettingsView.swift` 里纪要提示的判断（`:251` 起的行号 +2，见 §1.3）。
 > 相关：`TECH_DESIGN.md` §2–§3、§9（引擎改造与会议会话的落地记录），`../live-translate/DESIGN.md` §6–§7，
@@ -1026,6 +1026,9 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
   这一步 `activate()` 里的静态赋值还在（PR6 删）。
 - 行为不变：适配器逐行对照 `MeetingSessionController.swift:212–238`；`activity` 与旧判断一一对应（菜单 `isRunning` ⇔ `.freeListening`：
   会议空闲时引擎在跑只可能是自由听译）。
+- 落地时定下的两处细节：`MeetingEngineConfig.documentURL` 照本文不是可选的，会话在空闲时（引擎不会来取）的兜底是会议库根目录；
+  装配链在第一次碰 `MeetingSessionController.shared` 时建好（启动时 `MeetingReminder.start()` 刷倒计时就会碰到），
+  `LiveTranslateController.shared` 因此比原来（建菜单栏菜单时）早一点建出来，都在启动流程里、看不出差别。
 - 验证：§7.3 会议与自由听译整张清单。
 - 文档：根目录 `CLAUDE.md` 的 Core 清单加 `MeetingEngine/`、docs 布局加本文。
 
