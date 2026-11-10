@@ -64,8 +64,10 @@ struct MeetingSettingsView: View {
             } header: {
                 Text("meeting.settings.subtitlesSection")
             }
-            // 「停止后整理纪要」那行提示问的是会议纪要生成器：纪要归会议，字幕与同传只拿结果（docs/meeting/ENGINE.md §4.5.4）。
-            LiveTranslateSettingsSections(minutesReady: { MeetingMinutesGenerator.isReady })
+            // 「记录与纪要」的保存位置就是会议库（自由听译的记录写进去，docs/meeting/ENGINE.md §4.6）；
+            // 「停止后整理纪要」那行提示问的是会议纪要生成器：纪要归会议，字幕与同传只拿结果（§4.5.4）。
+            LiveTranslateSettingsSections(recordFolder: MeetingStore.shared.rootURL,
+                                          minutesReady: { MeetingMinutesGenerator.isReady })
         }
         .formStyle(.grouped)
         .onAppear {

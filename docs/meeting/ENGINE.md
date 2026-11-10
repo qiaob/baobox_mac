@@ -1,6 +1,6 @@
 # 会议引擎接口（MeetingEngine）· 技术设计
 
-> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR4 已合入（#143、#142、#148、#155），PR5 见本 PR。
+> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR5 已合入（#143、#142、#148、#155、#158），PR6 见本 PR。
 > 基线：main `50103fe`（#106 已合并）。下文路径都相对 `mac/Sources/`，行号以这个提交为准。之后 main 到 `a3cadcd` 只动了两处相关的：
 > #134 加了测试 target `BaoboxTests`（§5.1）；#137 改了 `LiveTranslateSettingsView.swift` 里纪要提示的判断（`:251` 起的行号 +2，见 §1.3）。
 > 相关：`TECH_DESIGN.md` §2–§3、§9（引擎改造与会议会话的落地记录），`../live-translate/DESIGN.md` §6–§7，
@@ -1043,6 +1043,17 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
 - 行为不变：静态在现在的启动流程里总是装上的，「有会议库」一直是唯一走得到的分支；删掉的都是到不了的分支。
 - 验证：§7.3 自由听译几项（含「启动后第一个动作就开自由听译」）；用一份有旧记录文件夹、`meeting.migratedLegacy` 为 false 的配置启动，迁移照常。
 - 文档：`live-translate/DESIGN.md` §6–§7（保存位置一节）。
+- 落地时定下的几处细节：
+  - 迁移要读的两个旧键是 `MeetingStore` 里的私有常量（`legacyRecordEnabledKey` / `legacyRecordFolderKey`，字面量不变）；`defaultFolder` 删了以后，
+    旧版的默认位置（「文稿」+ `livetranslate.record.defaultFolderName`，名字随界面语言）也在 `legacyFoldersToMigrate()` 里照原样算。要看的文件夹清单不变。
+  - `toggle(startingWith:)` 收的是配置本身：适配器每次都组一份 `.fromSettings(recordLibrary:)`，结果是停止或转给托管方时就丢掉（只读设置，没有副作用）。
+  - 控制器开过会话之前的占位配置是 `.fromSettings(recordLibrary: nil)`，不拿它开会话；`startTranscript` 里「配置没带会议库就不记录、记一条 fault」
+    留着兜可选值，走不到。`recordFolder` 为 nil 时字幕条的文件夹按钮什么也不做（字幕条只在适配器开的会话里出现，总带着会议库）。
+  - 设置页「保存位置」下的说明行（`livetranslate.record.libraryHelp`）原来看「静态装上没有」决定显不显示（实际总是显示），现在无条件显示。
+  - 验证：真代码抽进探针，与 main（PR5 合入后）逐字对比会议与自由听译 38 个场景（含启动后第一个动作就按快捷键开自由听译、自由听译中途切换整理纪要、
+    开着字幕改设置重启、关着保存重启后再打开保存）全部一致，字幕条文件夹按钮与设置页「保存位置」都指向会议库、没有「更改…」；
+    另一个「会议模块没 activate 就开自由听译」的场景按预期不同：main 的记录进不了会议库、文件夹指向「文稿」，本 PR 照样进会议库（§1.5）。
+    迁移要看的文件夹清单在八种设置组合 × 中英界面下与 main 一致。
 
 ### PR7 会话、文档模型与纪要提示词拆成纯逻辑
 

@@ -20,11 +20,14 @@ struct LiveTranslateSettingsSections: View {
 
     @ObservedObject private var controller = LiveTranslateController.shared
 
+    /// 「记录与纪要」的保存位置：会议库目录（自由听译的记录写进会议库）。由会议设置页传进来（docs/meeting/ENGINE.md §4.6）。
+    private let recordFolder: URL
     /// 「停止后整理纪要」下面那行提示用：纪要此刻整理得了吗（看「会议纪要」选的模型）。纪要归会议，由会议设置页传进来，
     /// 字幕与同传不认识会议声明的 AI 功能（docs/meeting/ENGINE.md §4.5.4）。
     private let minutesReady: () -> Bool
 
-    init(minutesReady: @escaping () -> Bool) {
+    init(recordFolder: URL, minutesReady: @escaping () -> Bool) {
+        self.recordFolder = recordFolder
         self.minutesReady = minutesReady
     }
 
@@ -129,7 +132,7 @@ struct LiveTranslateSettingsSections: View {
             controller.restartIfRunning()
         }
 
-        LiveTranslateRecordSection(minutesReady: minutesReady)
+        LiveTranslateRecordSection(recordFolder: recordFolder, minutesReady: minutesReady)
 
         Section("livetranslate.settings.barSection") {
             Picker("livetranslate.settings.display", selection: $display) {
@@ -217,16 +220,17 @@ private struct LiveTranslateRouteStatus: View {
     }
 }
 
-/// 「记录与纪要」：自动保存记录、保存位置、停止后用本地 AI 整理纪要（docs/live-translate/DESIGN.md §6）。
+/// 「记录与纪要」：自动保存记录、保存位置（就是会议库，只显示、能打开）、停止后用本地 AI 整理纪要（docs/live-translate/DESIGN.md §6）。
 /// 改了从下一次开始生效，不用重开。
 private struct LiveTranslateRecordSection: View {
     @AppStorage(LiveTranslateRecordSettings.enabledKey) private var enabled = false
-    @AppStorage(LiveTranslateRecordSettings.folderKey) private var folder = ""
     @AppStorage(LiveTranslateRecordSettings.summaryKey) private var summary = true
     @ObservedObject private var corrector = OfflineTranslator.corrector
+    private let recordFolder: URL
     private let minutesReady: () -> Bool
 
-    init(minutesReady: @escaping () -> Bool) {
+    init(recordFolder: URL, minutesReady: @escaping () -> Bool) {
+        self.recordFolder = recordFolder
         self.minutesReady = minutesReady
     }
 
@@ -244,21 +248,16 @@ private struct LiveTranslateRecordSection: View {
                 HStack {
                     Text("livetranslate.record.folder")
                     Spacer()
-                    Text(verbatim: displayPath)
+                    // 新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3），位置不能改；原来的文件夹设置只用于迁移旧记录。
+                    Text(verbatim: (recordFolder.path as NSString).abbreviatingWithTildeInPath)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    // 新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3），原来的文件夹设置只用于迁移，这里不再能改。
-                    if !writesToLibrary {
-                        Button("livetranslate.record.choose") { chooseFolder() }
-                    }
-                    Button("livetranslate.record.openFolder") { LiveTranslateRecordSettings.openFolder() }
+                    Button("livetranslate.record.openFolder") { LiveTranslateRecordSettings.openFolder(recordFolder) }
                 }
-                if writesToLibrary {
-                    Text("livetranslate.record.libraryHelp")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("livetranslate.record.libraryHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("livetranslate.record.summary", isOn: $summary)
                 Group {
                     // 和结束时决定整不整理纪要的判断是同一条（会议那边纪要生成器的 isReady）：看「会议纪要」选的模型，
@@ -272,28 +271,6 @@ private struct LiveTranslateRecordSection: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var writesToLibrary: Bool { LiveTranslateController.recordLibrary != nil }
-
-    private var displayPath: String {
-        if writesToLibrary {
-            return (LiveTranslateRecordSettings.effectiveFolder.path as NSString).abbreviatingWithTildeInPath
-        }
-        let path = folder.isEmpty ? LiveTranslateRecordSettings.defaultFolder.path : folder
-        return (path as NSString).abbreviatingWithTildeInPath
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = L("livetranslate.record.choosePrompt")
-        if panel.runModal() == .OK, let url = panel.url {
-            folder = url.path
         }
     }
 }

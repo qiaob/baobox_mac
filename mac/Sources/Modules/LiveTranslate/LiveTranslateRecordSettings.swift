@@ -2,9 +2,10 @@ import AppKit
 import Foundation
 
 /// 实时翻译的本地记录与纪要设置（前缀 `livetranslate.record.`）。见 docs/live-translate/DESIGN.md §6。
+/// 记录写进会议库，保存位置就是会议库目录（跟着会话配置来，docs/meeting/ENGINE.md §4.6），这里没有保存位置的设置；
+/// 旧版的 `livetranslate.record.folder` 只剩会议库首次启动迁移旧记录时读（键在会议那边）。
 enum LiveTranslateRecordSettings {
     static let enabledKey = "livetranslate.record.enabled"
-    static let folderKey = "livetranslate.record.folder"
     static let summaryKey = "livetranslate.record.summary"
 
     /// 保存记录（默认关，2026-11-05 用户要求）：设置页或字幕条「记录」菜单里手动开，开了以后每次开始都记。
@@ -18,30 +19,9 @@ enum LiveTranslateRecordSettings {
         UserDefaults.standard.object(forKey: summaryKey) as? Bool ?? true
     }
 
-    /// 默认：~/Documents/Baobox 实时翻译记录。
-    static var defaultFolder: URL {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
-        return documents.appendingPathComponent(L("livetranslate.record.defaultFolderName"), isDirectory: true)
-    }
-
-    static var folder: URL {
-        let path = UserDefaults.standard.string(forKey: folderKey) ?? ""
-        return path.isEmpty ? defaultFolder : URL(fileURLWithPath: path, isDirectory: true)
-    }
-
-    /// 设置页「保存位置」、「打开记录文件夹」指向哪：会议库（新记录都由它写，docs/meeting/TECH_DESIGN.md §2.3）；
-    /// 会议库没装上时退回上面这个文件夹（那时也不记录，见 `LiveTranslateController.startTranscript`）。
-    /// `folder` 设置保留，只用于首次启动把旧记录迁进会议库。
+    /// 打开记录文件夹（会议库目录；还没有就先建）。建目录放后台，别让磁盘 IO 卡住主线程。
     @MainActor
-    static var effectiveFolder: URL {
-        LiveTranslateController.recordLibrary?.folderURL ?? folder
-    }
-
-    /// 打开记录文件夹（还没有就先建）。建目录放后台：第一次碰「文稿」时系统会弹授权框，别卡住主线程。
-    @MainActor
-    static func openFolder() {
-        let url = effectiveFolder
+    static func openFolder(_ url: URL) {
         DispatchQueue.global(qos: .userInitiated).async {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             DispatchQueue.main.async {

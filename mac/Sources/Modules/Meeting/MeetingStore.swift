@@ -168,16 +168,23 @@ final class MeetingStore: ObservableObject {
         applyRetention()
     }
 
+    /// 旧版实时翻译「保存记录」开关与保存位置的设置键（字面量不能改）。会议这边只在迁移时读：看用户用没用过、旧记录在哪。
+    private static let legacyRecordEnabledKey = "livetranslate.record.enabled"
+    private static let legacyRecordFolderKey = "livetranslate.record.folder"
+
     /// 要迁移的旧记录文件夹：用户开过「保存记录」或改过保存位置才看 —— 没用过就不去碰「文稿」（首次启动就弹授权框）。
     /// 没改过位置时，默认文件夹的名字随界面语言，两种都看一眼。
     private static func legacyFoldersToMigrate() -> [URL] {
         let defaults = UserDefaults.standard
-        let custom = defaults.string(forKey: LiveTranslateRecordSettings.folderKey) ?? ""
-        guard defaults.object(forKey: LiveTranslateRecordSettings.enabledKey) != nil || !custom.isEmpty else { return [] }
+        let custom = defaults.string(forKey: legacyRecordFolderKey) ?? ""
+        guard defaults.object(forKey: legacyRecordEnabledKey) != nil || !custom.isEmpty else { return [] }
         if !custom.isEmpty {
             return [URL(fileURLWithPath: custom, isDirectory: true)]
         }
-        let current = LiveTranslateRecordSettings.defaultFolder
+        // 旧版的默认位置：~/Documents/Baobox 实时翻译记录（名字随界面语言）。
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+        let current = documents.appendingPathComponent(L("livetranslate.record.defaultFolderName"), isDirectory: true)
         let parent = current.deletingLastPathComponent()
         var folders = [current]
         for name in ["Baobox 实时翻译记录", "Baobox Live Translate"] {
