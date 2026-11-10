@@ -16,12 +16,15 @@
 
 #![cfg(windows)]
 
-use crate::{keyboardnav_module, caffeinate_module, clipboard_module, hotkeys, windowmanager_module, screenshot_module, settings_window, store, tray};
+use crate::pet_notify::{self, Center, Level, Notice};
+use crate::{
+    caffeinate_module, clipboard_module, hotkeys, keyboardnav_module, screenshot_module,
+    settings_window, store, tray, windowmanager_module,
+};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
 use baobox_core::hotkey::KeyCombo;
-use crate::pet_notify::{self, Center, Level, Notice};
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -69,45 +72,83 @@ impl App {
     fn open_pet_ring(&mut self) {
         use crate::{caffeinate_module as awake, pet_ring as ring};
         let has_action = |tool_id: &str, action: &str| {
-            self.registry.tools().iter().find(|tool| tool.id() == tool_id)
-                .is_some_and(|tool| tool.menu_items().iter().any(|item| item.action_ids().contains(&action)))
+            self.registry
+                .tools()
+                .iter()
+                .find(|tool| tool.id() == tool_id)
+                .is_some_and(|tool| {
+                    tool.menu_items()
+                        .iter()
+                        .any(|item| item.action_ids().contains(&action))
+                })
         };
         let mut outer = {
             let mut items = vec![
-                ("desktop-pet.feed", "喂食"), ("desktop-pet.play", "陪玩"),
+                ("desktop-pet.feed", "喂食"),
+                ("desktop-pet.play", "陪玩"),
                 (crate::keyboardnav_module::CLICK, "键盘点击"),
-                (screenshot_module::HISTORY, "截图历史"), (ACTION_SETTINGS, "设置"),
+                (screenshot_module::HISTORY, "截图历史"),
+                (ACTION_SETTINGS, "设置"),
                 (ring::ADVANCED, "宠物动作"),
             ];
-            if let Some(baobox_app::MenuItem::Action { label, .. }) = self.registry.tools().iter()
+            if let Some(baobox_app::MenuItem::Action { label, .. }) = self
+                .registry
+                .tools()
+                .iter()
                 .find(|tool| tool.id() == screenshot_module::ID)
-                .and_then(|tool| tool.menu_items().into_iter().find(|item| item.action_ids().contains(&screenshot_module::RECORD))) {
-                let title = if label.contains("停止") { "停止录制" } else { "录屏" };
+                .and_then(|tool| {
+                    tool.menu_items()
+                        .into_iter()
+                        .find(|item| item.action_ids().contains(&screenshot_module::RECORD))
+                })
+            {
+                let title = if label.contains("停止") {
+                    "停止录制"
+                } else {
+                    "录屏"
+                };
                 items.insert(0, (screenshot_module::RECORD, title));
             }
             items
         };
         let inner = {
             let mut items = ring::ITEMS.to_vec();
-            items[1] = if has_action(awake::ID, awake::STOP) { (awake::STOP, "关闭防休眠") } else { (awake::TOGGLE, "防休眠") };
-            if self.notices.manually_quiet() { items[6] = (pet_notify::RESUME, "结束勿扰"); }
+            items[1] = if has_action(awake::ID, awake::STOP) {
+                (awake::STOP, "关闭防休眠")
+            } else {
+                (awake::TOGGLE, "防休眠")
+            };
+            if self.notices.manually_quiet() {
+                items[6] = (pet_notify::RESUME, "结束勿扰");
+            }
             items
         };
-        outer.retain(|(id, _)| !matches!(*id, "desktop-pet.feed" | "desktop-pet.play") || has_action(crate::pet::ID, id));
-        self.pet_ring = crate::pet::anchor().and_then(|pet| ring::Ring::open(self.hwnd, pet, &inner, &outer).ok());
+        outer.retain(|(id, _)| {
+            !matches!(*id, "desktop-pet.feed" | "desktop-pet.play")
+                || has_action(crate::pet::ID, id)
+        });
+        self.pet_ring = crate::pet::anchor()
+            .and_then(|pet| ring::Ring::open(self.hwnd, pet, &inner, &outer).ok());
         crate::pet::set_menu_open(self.pet_ring.is_some());
-        if self.pet_ring.is_none() { self.pet_menu(); }
+        if self.pet_ring.is_none() {
+            self.pet_menu();
+        }
     }
 
     fn pet_menu(&mut self) {
-        use baobox_app::{MenuItem, menu::MenuModel};
+        use baobox_app::{menu::MenuModel, MenuItem};
         let mut items = vec![
             MenuItem::action(screenshot_module::CAPTURE, "截图"),
             MenuItem::action(screenshot_module::OCR, "屏幕取字"),
             MenuItem::action(clipboard_module::PANEL, "剪贴板"),
             MenuItem::Separator,
         ];
-        if let Some(tool) = self.registry.tools().iter().find(|tool| tool.id() == crate::pet::ID) {
+        if let Some(tool) = self
+            .registry
+            .tools()
+            .iter()
+            .find(|tool| tool.id() == crate::pet::ID)
+        {
             items.extend(tool.menu_items());
         }
         items.push(MenuItem::action(ACTION_SETTINGS, "设置"));
@@ -118,9 +159,16 @@ impl App {
 
     /// 执行一个动作。
     fn dispatch(&mut self, action: &str) {
-        use crate::screenshot_module::{CAPTURE, CAPTURE_FULL, QUICK_CAPTURE, OCR};
-        let capture = matches!(action, CAPTURE | CAPTURE_FULL | QUICK_CAPTURE | screenshot_module::LONG);
-        let paste_target = if action == QUICK_CAPTURE { self.screenshot_target.take() } else { None };
+        use crate::screenshot_module::{CAPTURE, CAPTURE_FULL, OCR, QUICK_CAPTURE};
+        let capture = matches!(
+            action,
+            CAPTURE | CAPTURE_FULL | QUICK_CAPTURE | screenshot_module::LONG
+        );
+        let paste_target = if action == QUICK_CAPTURE {
+            self.screenshot_target.take()
+        } else {
+            None
+        };
         let _visibility = (capture || action == OCR).then(crate::pet::CaptureVisibility::hide);
         match action {
             ACTION_QUIT => unsafe { PostQuitMessage(0) },
@@ -130,20 +178,32 @@ impl App {
             ACTION_ABOUT => about(self.hwnd),
             crate::pet_ring::ADVANCED => self.pet_menu(),
             "app.open-screenshot-folder" => {
-                let path = crate::default_path(&self.config.string_or(screenshot_module::ID, "save_dir", ""));
+                let path = crate::default_path(&self.config.string_or(
+                    screenshot_module::ID,
+                    "save_dir",
+                    "",
+                ));
                 if let Some(folder) = path.as_ref().ok().and_then(|path| path.parent()) {
-                    let _ = std::process::Command::new("explorer.exe").arg(folder).spawn();
+                    let _ = std::process::Command::new("explorer.exe")
+                        .arg(folder)
+                        .spawn();
                 }
             }
             pet_notify::HISTORY => {
                 let history = self.notices.history();
                 let wide: Vec<u16> = history.encode_utf16().chain(Some(0)).collect();
                 unsafe {
-                    MessageBoxW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()), w!("通知历史"), MB_OK);
+                    MessageBoxW(
+                        self.hwnd,
+                        windows::core::PCWSTR(wide.as_ptr()),
+                        w!("通知历史"),
+                        MB_OK,
+                    );
                 }
             }
             pet_notify::QUIET => {
-                self.notices.quiet(Some(std::time::Duration::from_secs(3600)));
+                self.notices
+                    .quiet(Some(std::time::Duration::from_secs(3600)));
                 self.notices.post(Notice::feedback("已安静一小时"));
             }
             pet_notify::QUIET_TODAY => self.notices.quiet_today(),
@@ -164,7 +224,8 @@ impl App {
                     notice.actions.push((pet_notify::HISTORY, "通知历史"));
                 }
                 if notice.level == Level::Alert {
-                    notice.expires = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+                    notice.expires =
+                        std::time::Instant::now() + std::time::Duration::from_secs(3600);
                 }
                 self.notices.post(notice);
             }
@@ -172,20 +233,32 @@ impl App {
                 Ok(mut message) if !message.is_empty() => {
                     let source = other.split_once('.').map_or(other, |(source, _)| source);
                     if capture {
-                        if message.contains("已复制到剪贴板") && paste_target.is_some_and(|target| target.paste(crate::paste::Style::Normal)) {
+                        if message.contains("已复制到剪贴板")
+                            && paste_target
+                                .is_some_and(|target| target.paste(crate::paste::Style::Normal))
+                        {
                             message.push_str("，已向原输入框发出粘贴");
                         }
                         let mut notice = Notice::ambient("capture-result", "截图完成");
                         notice.level = Level::Card;
                         notice.dedupe = None;
                         if message.starts_with("已保存 ") {
-                            notice.actions.push(("app.open-screenshot-folder", "打开截图文件夹"));
+                            notice
+                                .actions
+                                .push(("app.open-screenshot-folder", "打开截图文件夹"));
                         } else {
-                            notice.actions.push((screenshot_module::HISTORY, "打开截图历史"));
+                            notice
+                                .actions
+                                .push((screenshot_module::HISTORY, "打开截图历史"));
                         }
                         notice.body = message;
                         self.notices.post(notice);
-                    } else if matches!(other, crate::caffeinate_module::TOGGLE | crate::caffeinate_module::STOP | crate::pet::NEXT_CHARACTER) {
+                    } else if matches!(
+                        other,
+                        crate::caffeinate_module::TOGGLE
+                            | crate::caffeinate_module::STOP
+                            | crate::pet::NEXT_CHARACTER
+                    ) {
                         self.notices.post(Notice::feedback(&message));
                     } else {
                         self.notices.post(Notice::ambient(source, &message));
@@ -193,10 +266,18 @@ impl App {
                 }
                 Ok(_) => {}
                 // 用户主动取消也走这条路，不该一律当成故障弹窗
-                Err(why) if (capture || matches!(other, OCR | screenshot_module::RECORD)) && why != "已取消" => {
+                Err(why)
+                    if (capture || matches!(other, OCR | screenshot_module::RECORD))
+                        && why != "已取消" =>
+                {
                     let wide: Vec<u16> = why.encode_utf16().chain(Some(0)).collect();
                     unsafe {
-                        MessageBoxW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()), w!("BaoBox 截图操作未完成"), MB_OK);
+                        MessageBoxW(
+                            self.hwnd,
+                            windows::core::PCWSTR(wide.as_ptr()),
+                            w!("BaoBox 截图操作未完成"),
+                            MB_OK,
+                        );
                     }
                 }
                 Err(why) => eprintln!("{why}"),
@@ -206,8 +287,11 @@ impl App {
 
     fn perform_tool(&mut self, action: &str) -> Result<String, String> {
         let terminal_binding = if action == clipboard_module::PANEL
-            && crate::paste::Style::from_str(&self.config.string_or(clipboard_module::ID, "paste_style", "normal"))
-                == crate::paste::Style::Terminal
+            && crate::paste::Style::from_str(&self.config.string_or(
+                clipboard_module::ID,
+                "paste_style",
+                "normal",
+            )) == crate::paste::Style::Terminal
         {
             resolve_hotkeys(&self.registry, &self.config)
                 .into_iter()
@@ -235,7 +319,9 @@ impl App {
             windows::Win32::UI::WindowsAndMessaging::IsWindow(window).as_bool()
         }) {
             unsafe {
-                if let Some(section) = section { settings_window::show_section(existing, section); }
+                if let Some(section) = section {
+                    settings_window::show_section(existing, section);
+                }
                 let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(existing);
             }
             return;
@@ -243,12 +329,24 @@ impl App {
         self.settings = None;
         let mut pages = self.registry.settings_pages();
         use baobox_app::{Field, SettingsPage};
-        let hotkeys = self.registry.hotkeys().into_iter().map(|spec| {
-            let default = spec.default.map(|combo| combo.to_string());
-            Field::hotkey(&spec.id, &spec.label, default.as_deref())
-        }).collect();
+        let hotkeys = self
+            .registry
+            .hotkeys()
+            .into_iter()
+            .map(|spec| {
+                let default = spec.default.map(|combo| combo.to_string());
+                Field::hotkey(&spec.id, &spec.label, default.as_deref())
+            })
+            .collect();
         pages.insert(0, SettingsPage::new("hotkey", "快捷键", hotkeys));
-        pages.insert(0, SettingsPage::new("general", "通用", vec![Field::toggle("autostart", "开机时自动启动 BaoBox", false)]));
+        pages.insert(
+            0,
+            SettingsPage::new(
+                "general",
+                "通用",
+                vec![Field::toggle("autostart", "开机时自动启动 BaoBox", false)],
+            ),
+        );
         pages.push(SettingsPage::new("about", "关于", vec![]));
         let hwnd = self.hwnd;
         let opened = settings_window::open(
@@ -256,12 +354,18 @@ impl App {
             self.config.clone(),
             Box::new(move |index| unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-                    hwnd, WM_PET_DOWNLOAD, WPARAM(index), LPARAM(0),
+                    hwnd,
+                    WM_PET_DOWNLOAD,
+                    WPARAM(index),
+                    LPARAM(0),
                 );
             }),
             Box::new(move || unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-                    hwnd, WM_PET_PICK_AREA, WPARAM(0), LPARAM(0),
+                    hwnd,
+                    WM_PET_PICK_AREA,
+                    WPARAM(0),
+                    LPARAM(0),
                 );
             }),
             Box::new(move |updated: &Config| {
@@ -281,9 +385,11 @@ impl App {
         );
         match opened {
             Ok(window) => {
-                if let Some(section) = section { settings_window::show_section(window, section); }
+                if let Some(section) = section {
+                    settings_window::show_section(window, section);
+                }
                 self.settings = Some(window);
-            },
+            }
             Err(why) => eprintln!("打不开设置窗口：{why}"),
         }
     }
@@ -295,7 +401,9 @@ impl App {
         self.registry.config_changed_all(&self.config);
         // 快捷键可能变了：先全撤，再按新配置注册
         self.hotkeys.unregister_all();
-        let report = self.hotkeys.register_all(&resolve_hotkeys(&self.registry, &self.config));
+        let report = self
+            .hotkeys
+            .register_all(&resolve_hotkeys(&self.registry, &self.config));
         if report.has_problems() {
             eprintln!("{}", report.describe());
         }
@@ -372,7 +480,12 @@ pub fn run(show_settings: bool) -> Result<String, String> {
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            if app.settings.is_some_and(|settings| settings_window::route_input(settings, &message)) { continue; }
+            if app
+                .settings
+                .is_some_and(|settings| settings_window::route_input(settings, &message))
+            {
+                continue;
+            }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -477,7 +590,9 @@ unsafe extern "system" fn wndproc(
         }
         m if m == WM_RELOAD_CONFIG => {
             app.reload_config();
-            if let Some(settings) = app.settings { settings_window::refresh_pet(settings, &app.config); }
+            if let Some(settings) = app.settings {
+                settings_window::refresh_pet(settings, &app.config);
+            }
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam.0 == TIMER_TICK => {
@@ -486,7 +601,9 @@ unsafe extern "system" fn wndproc(
             let _ = app.registry.tick_all();
             crate::pet::set_quiet(app.notices.suppressed());
             crate::pet::set_menu_open(app.pet_ring.as_ref().is_some_and(|ring| ring.visible()));
-            if let Some(action) = app.notices.tick(crate::pet::anchor(), |title, body| notify(hwnd, title, body)) {
+            if let Some(action) = app.notices.tick(crate::pet::anchor(), |title, body| {
+                notify(hwnd, title, body)
+            }) {
                 app.dispatch(action);
             }
             LRESULT(0)
@@ -540,7 +657,10 @@ fn notify(hwnd: HWND, title: &str, body: &str) {
             ..Default::default()
         };
         write_field(&mut data.szInfo, if body.is_empty() { title } else { body });
-        write_field(&mut data.szInfoTitle, if body.is_empty() { "BaoBox" } else { title });
+        write_field(
+            &mut data.szInfoTitle,
+            if body.is_empty() { "BaoBox" } else { title },
+        );
         if !Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() {
             // 气泡被系统的「专注助手」之类挡掉时，至少留个记录
             println!("{title} {body}");
@@ -602,7 +722,10 @@ mod tests {
                 .map(|combo| combo.to_string())
                 .unwrap_or_default()
         };
-        assert_eq!(capture(&resolve_hotkeys(&registry, &config)), "Ctrl+Shift+S");
+        assert_eq!(
+            capture(&resolve_hotkeys(&registry, &config)),
+            "Ctrl+Shift+S"
+        );
 
         config.set("hotkey", screenshot_module::CAPTURE, "Ctrl+Alt+P");
         assert_eq!(capture(&resolve_hotkeys(&registry, &config)), "Ctrl+Alt+P");
@@ -612,22 +735,25 @@ mod tests {
     fn only_two_hotkeys_ship_bound() {
         let resolved = resolve_hotkeys(&build_registry(HWND::default()), &Config::new());
         // 出厂绑定的：截图与剪贴板面板各一个。其余易冲突的组合留给用户自设
-        assert_eq!(resolved.iter().filter(|(_, combo)| combo.is_some()).count(), 2);
+        assert_eq!(
+            resolved.iter().filter(|(_, combo)| combo.is_some()).count(),
+            2
+        );
         assert!(resolved.len() > 2, "其余规格仍要列出来，设置里才看得到");
     }
 
     #[test]
     fn custom_messages_sit_above_wm_app_and_do_not_collide() {
         use windows::Win32::UI::WindowsAndMessaging::WM_APP;
-        assert!(WM_RELOAD_CONFIG > WM_APP);
+        const { assert!(WM_RELOAD_CONFIG > WM_APP) };
         assert_ne!(WM_RELOAD_CONFIG, tray::WM_TRAY);
     }
 
     #[test]
     fn the_tick_timer_is_frequent_enough_to_feel_live_but_not_a_spin() {
         // 复制完托盘菜单里的计数就该是对的；但也不能一秒跑几十遍
-        assert!(TICK_MS >= 50);
-        assert!(TICK_MS <= 1000);
+        const { assert!(TICK_MS >= 50) };
+        const { assert!(TICK_MS <= 1000) };
     }
 
     #[test]

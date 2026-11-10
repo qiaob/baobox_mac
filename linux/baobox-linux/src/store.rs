@@ -66,8 +66,7 @@ pub fn load_config() -> Config {
 pub fn save_config(config: &Config) -> Result<(), String> {
     let dir = config_dir().ok_or("找不到配置目录（$HOME 与 $XDG_CONFIG_HOME 都没设）")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败：{e}"))?;
-    std::fs::write(dir.join(CONFIG), config.to_text())
-        .map_err(|e| format!("写入配置失败：{e}"))
+    std::fs::write(dir.join(CONFIG), config.to_text()).map_err(|e| format!("写入配置失败：{e}"))
 }
 
 /// 历史目录：`<data>/baobox/screenshot/`。
@@ -171,7 +170,10 @@ mod tests {
     #[test]
     fn config_and_data_live_in_different_directories() {
         // 配置是用户会手编、会备份的东西，不该和历史缓存混在一起
-        assert_eq!(config_dir_from(Some("/c"), None), Some(PathBuf::from("/c/baobox")));
+        assert_eq!(
+            config_dir_from(Some("/c"), None),
+            Some(PathBuf::from("/c/baobox"))
+        );
         assert_eq!(
             data_dir_from(Some("/d"), None),
             Some(PathBuf::from("/d/baobox/screenshot"))

@@ -460,13 +460,15 @@ struct LearnWordCard: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+                // 自己画的按钮：浮层不是当前窗口，系统按钮会变灰（#95）。
                 pronounceButton(L("selectiontranslate.learn.us"), british: false)
+                    .buttonStyle(SelectionSecondaryButtonStyle())
                 pronounceButton(L("selectiontranslate.learn.uk"), british: true)
-                Toggle(L("selectiontranslate.learn.slow"), isOn: $slow)
-                    .toggleStyle(.button)
+                    .buttonStyle(SelectionSecondaryButtonStyle())
+                Button(L("selectiontranslate.learn.slow")) { slow.toggle() }
+                    .buttonStyle(SelectionToggleButtonStyle(isOn: slow))
                 Spacer()
             }
-            .controlSize(.small)
 
             if let lookup {
                 definitions(lookup)
@@ -699,7 +701,7 @@ struct LearnSentenceView: View {
             Button(L("selectiontranslate.learn.detail")) {
                 detailWord = word
             }
-            .controlSize(.small)
+            .buttonStyle(SelectionSecondaryButtonStyle())
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
@@ -891,8 +893,13 @@ struct EnglishDictionaryRow: View {
                     }
                     Spacer()
                 }
-                actions
-                if compact { Spacer(minLength: 0) }
+                if compact {
+                    // 浮层里自己画（不是当前窗口，系统按钮会变灰，#95）；设置页里照旧用系统按钮。
+                    actions.buttonStyle(SelectionSecondaryButtonStyle())
+                    Spacer(minLength: 0)
+                } else {
+                    actions
+                }
             }
             status
         }

@@ -101,14 +101,10 @@ enum ClipboardCrypto {
 
     /// 按当前开关写盘：开着且拿得到密钥就写密文，否则写明文。返回是否写成功。
     @discardableResult
-    static func write(_ data: Data, to url: URL) -> Bool {
+    /// 写失败抛出系统的错误，调用方报给用户（#101）。
+    static func write(_ data: Data, to url: URL) throws {
         let payload = isEnabled ? (seal(data) ?? data) : data
-        do {
-            try payload.write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
+        try payload.write(to: url, options: .atomic)
     }
 
     /// 读盘并解密；解不开就按明文返回（老版本遗留文件）。

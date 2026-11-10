@@ -572,7 +572,7 @@ mod tests {
             model_id: String::new(),
             ..entry(NOON, 5, "")
         };
-        assert!(report(&[blank.clone()], GroupBy::Project)[0]
+        assert!(report(std::slice::from_ref(&blank), GroupBy::Project)[0]
             .label
             .contains("未知"));
         assert!(report(&[blank], GroupBy::Model)[0].label.contains("未知"));

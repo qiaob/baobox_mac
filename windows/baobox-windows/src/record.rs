@@ -72,7 +72,9 @@ pub fn start(region: Rect, fps: u32, output: &Path) -> Result<Recording, String>
 /// 与 Linux 版共享同样的两条硬约束：宽高必须是偶数（H.264 的 4:2:0），
 /// 像素格式必须显式给 `yuv420p`（否则默认的 yuv444p 很多播放器不认）。
 pub fn build_args(region: Rect, fps: u32, output: &Path) -> Vec<String> {
-    let gif = output.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    let gif = output
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
     let mut args = vec![
         "-y".to_string(),
         "-f".to_string(),
@@ -91,7 +93,9 @@ pub fn build_args(region: Rect, fps: u32, output: &Path) -> Vec<String> {
     let encoding: &[&str] = if gif {
         &["-vf", r"scale=min(720\,iw):-1:flags=lanczos", "-loop", "0"]
     } else {
-        &["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
+        &[
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        ]
     };
     args.extend(encoding.iter().map(|value| (*value).to_owned()));
     args.push(output.to_string_lossy().into_owned());
@@ -154,7 +158,9 @@ mod tests {
     #[test]
     fn the_pixel_format_is_the_widely_playable_one() {
         let a = args(Rect::new(0.0, 0.0, 100.0, 100.0));
-        assert!(a.windows(2).any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"));
+        assert!(a
+            .windows(2)
+            .any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"));
     }
 
     #[test]

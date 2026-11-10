@@ -57,8 +57,8 @@ const KEY_HEADERS: [&str; 6] = [
 
 /// 一望即知是密钥的前缀。这些是各家自己定的、不会撞上普通文本的招牌。
 const TOKEN_PREFIXES: [&str; 8] = [
-    "ghp_",     // GitHub personal access token
-    "gho_",     // GitHub OAuth
+    "ghp_", // GitHub personal access token
+    "gho_", // GitHub OAuth
     "github_pat_",
     "sk-",      // OpenAI
     "sk_live_", // Stripe
@@ -139,7 +139,7 @@ fn luhn(digits: &[u32]) -> bool {
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// 是不是一串长而随机的令牌。
@@ -207,13 +207,19 @@ mod tests {
     #[test]
     fn card_numbers_must_pass_luhn_so_order_ids_are_not_caught() {
         // 这是 Visa 的公开测试卡号，过 Luhn
-        assert_eq!(classify("4111111111111111", false), Some(Reason::CardNumber));
+        assert_eq!(
+            classify("4111111111111111", false),
+            Some(Reason::CardNumber)
+        );
         assert_eq!(
             classify("4111 1111 1111 1111", false),
             Some(Reason::CardNumber),
             "四位一组的写法也要认"
         );
-        assert_eq!(classify("4111-1111-1111-1111", false), Some(Reason::CardNumber));
+        assert_eq!(
+            classify("4111-1111-1111-1111", false),
+            Some(Reason::CardNumber)
+        );
 
         // 位数够但过不了 Luhn = 多半是订单号，不该拦
         assert_eq!(classify("1234567890123456", false), None);

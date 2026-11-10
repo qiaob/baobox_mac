@@ -13,13 +13,14 @@ extension AIFeature {
 extension AIFeatureDefinition {
     static var liveTranslate: AIFeatureDefinition {
         AIFeatureDefinition(feature: .liveTranslate, title: L("livetranslate.ai.translate"),
-                            sends: L("livetranslate.ai.translateSends"))
+                            sends: L("livetranslate.ai.translateSends"), shortTitle: L("livetranslate.ai.translateShort"))
     }
 
     static var liveCorrection: AIFeatureDefinition {
         // 边说边纠，每句要一秒内：建议最快的。
         AIFeatureDefinition(feature: .liveCorrection, title: L("livetranslate.ai.correct"),
-                            sends: L("livetranslate.ai.correctSends"), advice: .fastest)
+                            sends: L("livetranslate.ai.correctSends"), advice: .fastest,
+                            shortTitle: L("livetranslate.ai.correctShort"))
     }
 }
 

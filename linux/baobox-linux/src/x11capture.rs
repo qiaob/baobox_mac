@@ -12,9 +12,7 @@
 
 use baobox_core::geometry::Rect;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt as _, ImageFormat, Window,
-};
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, Window};
 use x11rb::rust_connection::RustConnection;
 
 /// 一块屏幕 / 一个窗口的抓取结果，像素为 RGBA8。
@@ -167,7 +165,7 @@ impl X11Session {
         let mut out = Vec::new();
         // 栈序是从下到上，我们要从前到后 → 反过来
         for id in ids.into_iter().rev() {
-            let Ok(geometry) = self.conn.get_geometry(id).and_then(|c| Ok(c.reply())) else {
+            let Ok(geometry) = self.conn.get_geometry(id).map(|c| c.reply()) else {
                 continue;
             };
             let Ok(geometry) = geometry else { continue };

@@ -237,7 +237,13 @@ pub fn draw_icon(canvas: &mut Canvas<'_>, frame: &Rect, item: Item, color: Color
         }
         Item::Save => {
             // 向下的箭头落进一个托盘
-            line(canvas, (cx, top), (cx, bottom - box_rect.h * 0.3), STROKE, color);
+            line(
+                canvas,
+                (cx, top),
+                (cx, bottom - box_rect.h * 0.3),
+                STROKE,
+                color,
+            );
             let head = box_rect.w * 0.3;
             let tip = (cx, bottom - box_rect.h * 0.3);
             line(canvas, tip, (tip.0 - head, tip.1 - head), STROKE, color);
@@ -248,11 +254,22 @@ pub fn draw_icon(canvas: &mut Canvas<'_>, frame: &Rect, item: Item, color: Color
             // 图钉：一个头加一根针
             stroke_ellipse_in(
                 canvas,
-                &Rect::new(cx - box_rect.w * 0.3, top, box_rect.w * 0.6, box_rect.h * 0.6),
+                &Rect::new(
+                    cx - box_rect.w * 0.3,
+                    top,
+                    box_rect.w * 0.6,
+                    box_rect.h * 0.6,
+                ),
                 STROKE,
                 color,
             );
-            line(canvas, (cx, top + box_rect.h * 0.6), (cx, bottom), STROKE, color);
+            line(
+                canvas,
+                (cx, top + box_rect.h * 0.6),
+                (cx, bottom),
+                STROKE,
+                color,
+            );
         }
         Item::Cancel => {
             line(canvas, (left, top), (right, bottom), STROKE, color);
@@ -372,7 +389,10 @@ mod tests {
         draw_icon(&mut canvas, &frame, Item::Color(2), Color::rgb(0, 0, 0));
         let center = canvas.get(20, 20).unwrap();
         let swatch = PALETTE[2];
-        assert_eq!([center[0], center[1], center[2]], [swatch.r, swatch.g, swatch.b]);
+        assert_eq!(
+            [center[0], center[1], center[2]],
+            [swatch.r, swatch.g, swatch.b]
+        );
     }
 
     #[test]
@@ -412,7 +432,9 @@ mod tests {
         }
         // 底板之外没被碰过
         assert_eq!(
-            canvas.get(toolbar.frame.x as i64 - 3, toolbar.frame.y as i64).unwrap()[3],
+            canvas
+                .get(toolbar.frame.x as i64 - 3, toolbar.frame.y as i64)
+                .unwrap()[3],
             0
         );
     }

@@ -194,21 +194,16 @@ mod tests {
             bottom: 7.0,
         };
         let work = Rect::new(0.0, 0.0, 1920.0, 1040.0);
-        let left = baobox_core::layout::target(
-            baobox_core::layout::Layout::Left,
-            &work,
-            &work,
-            0.0,
-        );
-        let right = baobox_core::layout::target(
-            baobox_core::layout::Layout::Right,
-            &work,
-            &work,
-            0.0,
-        );
+        let left =
+            baobox_core::layout::target(baobox_core::layout::Layout::Left, &work, &work, 0.0);
+        let right =
+            baobox_core::layout::target(baobox_core::layout::Layout::Right, &work, &work, 0.0);
         let left_outer = inflate_for_shadow(&left, &shadow);
         let right_outer = inflate_for_shadow(&right, &shadow);
         // 可见边界严丝合缝
-        assert_eq!(left_outer.right() - shadow.right, right_outer.x + shadow.left);
+        assert_eq!(
+            left_outer.right() - shadow.right,
+            right_outer.x + shadow.left
+        );
     }
 }

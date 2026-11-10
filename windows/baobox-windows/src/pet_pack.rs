@@ -153,6 +153,8 @@ struct Animation {
     fps: f64,
 }
 
+// 一只宠物只有一个 Pack，两种变体大小不同也没关系，装箱换不来什么。
+#[allow(clippy::large_enum_variant)]
 pub enum Pack {
     Sprites(Sprites),
     Model(super::pet_model::Model),

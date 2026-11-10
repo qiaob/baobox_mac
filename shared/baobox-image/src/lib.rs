@@ -13,15 +13,22 @@ use std::path::Path;
 pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let expected = width as usize * height as usize * 4;
     if rgba.len() != expected {
-        return Err(format!("像素数据长度不符：{} 字节，应为 {expected}", rgba.len()));
+        return Err(format!(
+            "像素数据长度不符：{} 字节，应为 {expected}",
+            rgba.len()
+        ));
     }
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| format!("PNG 头写入失败：{e}"))?;
-        writer.write_image_data(rgba).map_err(|e| format!("PNG 数据写入失败：{e}"))?;
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("PNG 头写入失败：{e}"))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|e| format!("PNG 数据写入失败：{e}"))?;
     }
     Ok(out)
 }
@@ -30,19 +37,27 @@ pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Stri
 pub fn write_rgba(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let expected = width as usize * height as usize * 4;
     if rgba.len() != expected {
-        return Err(format!("像素数据长度不符：{} 字节，应为 {expected}", rgba.len()));
+        return Err(format!(
+            "像素数据长度不符：{} 字节，应为 {expected}",
+            rgba.len()
+        ));
     }
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("无法创建目录 {}：{e}", dir.display()))?;
         }
     }
     let file = File::create(path).map_err(|e| format!("无法写入 {}：{e}", path.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| format!("PNG 头写入失败：{e}"))?;
-    writer.write_image_data(rgba).map_err(|e| format!("PNG 数据写入失败：{e}"))?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| format!("PNG 头写入失败：{e}"))?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|e| format!("PNG 数据写入失败：{e}"))?;
     Ok(())
 }
 
@@ -63,7 +78,9 @@ pub fn decode_rgba(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     // EXPAND：调色板 → RGB、低位深灰度 → 8 位、tRNS → 真的 alpha 通道
     // STRIP_16：16 位截成 8 位
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info().map_err(|e| format!("PNG 读取失败：{e}"))?;
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("PNG 读取失败：{e}"))?;
     let mut buffer = vec![0u8; reader.output_buffer_size()];
     let info = reader
         .next_frame(&mut buffer)
@@ -133,7 +150,10 @@ mod tests {
     fn encodes_a_png_in_memory() {
         let rgba: Vec<u8> = (0..2 * 2 * 4).map(|i| (i % 256) as u8).collect();
         let bytes = encode_rgba(2, 2, &rgba).unwrap();
-        assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &bytes[..8],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+        );
         assert!(encode_rgba(2, 2, &[0u8; 4]).is_err(), "长度不符应拒绝");
     }
 
@@ -165,7 +185,10 @@ mod tests {
         let rgba: Vec<u8> = (0..4 * 4 * 4).map(|i| (i % 256) as u8).collect();
         write_rgba(&path, 4, 4, &rgba).unwrap();
         let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &bytes[..8],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+        );
         std::fs::remove_file(&path).ok();
     }
 }

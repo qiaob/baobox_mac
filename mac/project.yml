@@ -18,6 +18,10 @@ targets:
         excludes:
           - "Resources/Pets"
           - "Resources/PhoneTransfer"
+          # 网络抓包（NetCapture）暂缓发布（#103）：里面有 MITM 代理和自签 CA，没注册也不该编进发布包，代码先留在仓库。
+          # 恢复时：删掉这一行；AppDelegate 里取消 `registry.register(NetCaptureTool())` 的注释；
+          # NSLocalNetworkUsageDescription 补回「网络抓包」；按 docs/packet-capture/ 重新过一遍安全评审（CA 私钥存放、代理只听本机）。
+          - "Modules/NetCapture"
       # 内置宠物形象：整个文件夹原样拷进 Resources/Pets/<形象>/（每个形象都有自己的 pet.json，
       # 按普通资源平铺会同名冲突）。见 docs/desktop-pet/PACKS.md。
       - path: Sources/Resources/Pets
@@ -44,7 +48,7 @@ targets:
         # 会议记录、实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
         NSSpeechRecognitionUsageDescription: "会议记录、实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Meeting recording, Live Translate and Dictation convert speech into text (on this Mac when possible)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
-        NSLocalNetworkUsageDescription: "手机互传与网络抓包需要使用局域网，让同一 Wi-Fi 下的手机连接这台 Mac。Phone Transfer and the packet-capture proxy use the local network so phones on the same Wi-Fi can connect to this Mac."
+        NSLocalNetworkUsageDescription: "手机互传需要使用局域网，让同一 Wi-Fi 下的手机连接这台 Mac。Phone Transfer uses the local network so phones on the same Wi-Fi can connect to this Mac."
         # 会议读本机日历（只读、数据不出本机）：下一场会议、会前提醒、一键入会、会议绑定日历事件。
         # 缺这条描述，申请日历权限时进程会被系统直接杀掉。
         NSCalendarsFullAccessUsageDescription: "会议需要读取你选中的日历，用来显示下一场会议、会前提醒、一键入会，并把会议记录与日历事件对应起来；只读，数据不出本机。Meeting reads the calendars you choose to show your next meeting, remind you before it starts, join it in one click and link recordings to calendar events. Read-only; nothing leaves this Mac."
@@ -72,6 +76,8 @@ targets:
         DEVELOPMENT_TEAM: JD2ZQL6YU2
         ENABLE_HARDENED_RUNTIME: true
         DEAD_CODE_STRIPPING: true
+        # 唯一的 Objective-C：接住系统 API 抛的 Objective-C 异常（Swift 接不住，进程直接崩），见 Core/ObjC/BBXObjC.h。
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Core/ObjC/Baobox-Bridging-Header.h
         # 下面的脚本阶段要写 Contents/Helpers，不能跑在脚本沙盒里。
         ENABLE_USER_SCRIPT_SANDBOXING: NO
     # 离线翻译的推理进程（docs/translation-engine/DESIGN.md §2.2）：把 `make vendor` 下载的

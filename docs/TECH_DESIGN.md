@@ -1,6 +1,9 @@
 # Baobox M1 技术设计文档
 
 > 版本：v1.0（2026-07-20）
+>
+> **历史文档**（2026-11-10 标注，#116）：这是 M1 的技术设计，之后的模块各有自己的设计文档（`docs/<功能>/`），
+> 签名与发布方式也变了（见 `CLAUDE.md`「发布」）。**现状以 `CLAUDE.md`、`mac/CLAUDE.md` 和各功能的设计文档为准**。
 > 配套文档：`docs/REQUIREMENTS.md`（需求）、`docs/design/ui-design-v1.html`（UI 设计稿）
 > 实现约定：Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · **零第三方依赖** · XcodeGen 生成工程
 

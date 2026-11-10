@@ -12,12 +12,12 @@ extension AIFeatureDefinition {
     static var meetingMinutes: AIFeatureDefinition {
         // 会后才写，慢几秒没关系：建议跑得动的最大的。
         AIFeatureDefinition(feature: .meetingMinutes, title: L("meeting.ai.minutes"), sends: L("meeting.ai.minutesSends"),
-                            advice: .best)
+                            advice: .best, shortTitle: L("meeting.ai.minutesShort"))
     }
 
     static var meetingWeekly: AIFeatureDefinition {
         AIFeatureDefinition(feature: .meetingWeekly, title: L("meeting.ai.weekly"), sends: L("meeting.ai.weeklySends"),
-                            advice: .best)
+                            advice: .best, shortTitle: L("meeting.ai.weeklyShort"))
     }
 }
 
@@ -64,6 +64,23 @@ final class MeetingTool: ToolModule {
                              subtitle: nil, defaultCombo: nil) {
                 MeetingSessionController.shared.toggleNotes()
             },
+            // 字幕与同传的开关：独立入口删掉以后（#106）由会议声明，id 不变，已绑的键照常生效；环形菜单的「翻译」也认它。
+            HotkeyDefinition(
+                id: "livetranslate.toggle",
+                title: L("livetranslate.hotkey.toggle"),
+                subtitle: L("livetranslate.hotkey.toggle.subtitle"),
+                // 易冲突组合出厂不绑定（仓库惯例），在快捷键页自设。
+                defaultCombo: nil,
+                action: { LiveTranslateController.shared.toggle() },
+                // 环形菜单的标题跟着开关走（与二级菜单同一套判断）；没开着时用环形菜单自己的「翻译」。
+                stateTitle: {
+                    let controller = LiveTranslateController.shared
+                    if controller.isHostedSession {
+                        return controller.barVisible ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
+                    }
+                    return controller.isRunning ? L("livetranslate.action.stop") : nil
+                }
+            ),
         ]
     }
 
@@ -91,6 +108,9 @@ final class MeetingTool: ToolModule {
         MeetingCalendar.shared.stop()
         MeetingDeviceTest.shared.cancel()
         MeetingSessionController.shared.terminate()
+        // 不在会议里的自由听译也要收尾（停音源、写完记录）：以前由独立的「字幕与同传」入口做（#106）。
+        // 会议进行中上面已经调过一次，再调是空操作。推理进程由 AppDelegate 的 OfflineTranslator.shutdownAll() 统一结束。
+        LiveTranslateController.shared.terminate()
     }
 }
 

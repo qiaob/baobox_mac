@@ -236,7 +236,9 @@ impl ClipboardTool {
                 Ok("已删除".to_string())
             }
             clipboard_panel::Outcome::Paste(id) => self.paste(&id, target),
-            clipboard_panel::Outcome::PasteText(text) => self.deliver(target, &mut || clipboard::copy_text(&text)),
+            clipboard_panel::Outcome::PasteText(text) => {
+                self.deliver(target, &mut || clipboard::copy_text(&text))
+            }
         }
     }
 
@@ -263,7 +265,11 @@ impl ClipboardTool {
     ///
     /// 顺序不能错：面板已经在 `open_panel` 里关掉了，这里先等焦点回位，
     /// 再放剪贴板，最后合成按键。
-    fn deliver(&mut self, target: Option<paste::PasteTarget>, write: &mut dyn FnMut() -> Result<(), String>) -> Result<String, String> {
+    fn deliver(
+        &mut self,
+        target: Option<paste::PasteTarget>,
+        write: &mut dyn FnMut() -> Result<(), String>,
+    ) -> Result<String, String> {
         // 我们自己写进去的这一次不该再被记一遍
         SUPPRESS_NEXT.store(true, Ordering::SeqCst);
         if let Err(why) = write() {
@@ -363,7 +369,9 @@ unsafe extern "system" fn monitor_wndproc(
             return LRESULT(0);
         }
         let caught = match clipboard_read::read(hwnd) {
-            clipboard_read::Content::Text(text) if !text.trim().is_empty() => Some(Caught::Text(text)),
+            clipboard_read::Content::Text(text) if !text.trim().is_empty() => {
+                Some(Caught::Text(text))
+            }
             clipboard_read::Content::Dib(bytes) => Some(Caught::Image(bytes)),
             clipboard_read::Content::Files(paths) => Some(Caught::Files(paths)),
             _ => None,
@@ -414,13 +422,21 @@ impl ToolModule for ClipboardTool {
             ID,
             "剪贴板",
             vec![
-                Field::number("history_limit", "保留条数", Store::DEFAULT_LIMIT as i64, 10, 2000)
-                    .with_help("收藏与片段不占这个额度，也永远不会被挤掉"),
+                Field::number(
+                    "history_limit",
+                    "保留条数",
+                    Store::DEFAULT_LIMIT as i64,
+                    10,
+                    2000,
+                )
+                .with_help("收藏与片段不占这个额度，也永远不会被挤掉"),
                 Field::number("expire_days", "自动清理（天）", 0, 0, 365)
                     .with_help("0 = 不自动清理"),
-                Field::toggle("record_concealed", "记录敏感内容", false)
-                    .with_help("密码、私钥、银行卡号默认根本不入库；打开之后会记录，但在面板里打码显示"),
-                Field::toggle("text_tools", "启用文本工具", true).with_help("选中文本后，在预览下方显示格式转换、编码解码和二维码等操作。"),
+                Field::toggle("record_concealed", "记录敏感内容", false).with_help(
+                    "密码、私钥、银行卡号默认根本不入库；打开之后会记录，但在面板里打码显示",
+                ),
+                Field::toggle("text_tools", "启用文本工具", true)
+                    .with_help("选中文本后，在预览下方显示格式转换、编码解码和二维码等操作。"),
                 Field::choice(
                     "paste_style",
                     "粘贴方式",
@@ -510,8 +526,13 @@ impl ToolModule for ClipboardTool {
                     return Err("先复制一段文字，再新建片段".to_string());
                 }
                 let id = fresh_id(crate::now_seconds());
-                let title: String =
-                    latest.lines().next().unwrap_or("片段").chars().take(20).collect();
+                let title: String = latest
+                    .lines()
+                    .next()
+                    .unwrap_or("片段")
+                    .chars()
+                    .take(20)
+                    .collect();
                 self.store
                     .add_snippet(&id, &title, &latest, "", crate::now_seconds());
                 self.persist();
@@ -541,7 +562,10 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused() {
         let mut tool = ClipboardTool::new();
-        assert!(tool.perform("clipboard.nope").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("clipboard.nope")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]
@@ -565,7 +589,11 @@ mod tests {
     #[test]
     fn recording_sensitive_content_ships_switched_off() {
         let page = ClipboardTool::new().settings_page().unwrap();
-        let field = page.fields.iter().find(|f| f.key == "record_concealed").unwrap();
+        let field = page
+            .fields
+            .iter()
+            .find(|f| f.key == "record_concealed")
+            .unwrap();
         assert_eq!(field.value(&Config::new(), ID), "false");
     }
 
@@ -588,7 +616,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn a_tool_that_never_activated_refuses_to_write_to_disk() {
         // 没 activate 过时 Store 是空的，落盘等于把用户磁盘上那份历史清掉。
         // 命令行子命令与这些单元测试走的都是这条路

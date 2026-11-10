@@ -47,7 +47,7 @@ struct MeetingSettingsView: View {
             recordSection
 
             Section {
-                // id 与 MeetingTool.hotkeys() / LiveTranslateTool.hotkeys() 一致。
+                // id 与 MeetingTool.hotkeys() 一致（livetranslate.toggle 也在那里声明，#106）。
                 ModuleHotkeyRows(ids: ["meeting.join", "meeting.startOnline", "meeting.startOffline",
                                        "livetranslate.toggle", "meeting.mark", "meeting.notes"])
                 Text("meeting.settings.hotkeyHelp")
@@ -64,7 +64,7 @@ struct MeetingSettingsView: View {
             } header: {
                 Text("meeting.settings.subtitlesSection")
             }
-            LiveTranslateSettingsSections(embedded: true)
+            LiveTranslateSettingsSections()
         }
         .formStyle(.grouped)
         .onAppear {
