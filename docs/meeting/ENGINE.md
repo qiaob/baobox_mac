@@ -1,6 +1,6 @@
 # 会议引擎接口（MeetingEngine）· 技术设计
 
-> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR5 已合入（#143、#142、#148、#155、#158），PR6 见本 PR。
+> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR6 已合入（#143、#142、#148、#155、#158、#160），PR7 + PR8 见本 PR（#107 的最后一步）。
 > 基线：main `50103fe`（#106 已合并）。下文路径都相对 `mac/Sources/`，行号以这个提交为准。之后 main 到 `a3cadcd` 只动了两处相关的：
 > #134 加了测试 target `BaoboxTests`（§5.1）；#137 改了 `LiveTranslateSettingsView.swift` 里纪要提示的判断（`:251` 起的行号 +2，见 §1.3）。
 > 相关：`TECH_DESIGN.md` §2–§3、§9（引擎改造与会议会话的落地记录），`../live-translate/DESIGN.md` §6–§7，
@@ -723,6 +723,8 @@ PR7 把会议里要测的东西劈成「纯逻辑」与「App 外壳」两半。
 /// 会话要会议库做的几件事（MeetingStore 实现，前几个签名与它现在的方法一致）。
 @MainActor
 protocol MeetingSessionLibrary: AnyObject {
+    /// 会议库根目录：会话空闲时 `engineConfig.documentURL` 的兜底（PR5 定下的，引擎这时不会来取）。
+    var rootURL: URL { get }
     func createMeeting(type: MeetingType, title: String, start: Date, event: MeetingEventInfo?,
                        template: String) -> MeetingRecord
     func markdownURL(for record: MeetingRecord) -> URL
@@ -731,8 +733,8 @@ protocol MeetingSessionLibrary: AnyObject {
     func finishWriting(_ id: String)
     func discard(_ id: String)
     func flush()
-    /// 这场的 meeting.md（App 里是 MeetingTranscript，测试里是假的）。
-    func makeTranscript(_ spec: MeetingTranscriptSpec) -> MeetingTranscriptWriting
+    /// 这场的 meeting.md（App 里是 MeetingTranscript，测试里是假的）：第一次开起来时建，`start` = 那一刻，`run` = 这次怎么跑的。
+    func makeTranscript(_ spec: MeetingTranscriptSpec, start: Date, run: MeetingEngineRun) -> MeetingTranscriptWriting
 }
 
 /// 一场会议的 meeting.md。
@@ -1067,6 +1069,22 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
   `ended` 仍是「收尾文档（→ meta 或作废）→ 撤勿扰 → 停心跳 → 收控制条 → 复位 → 指示器」。排版拆成纯函数后输出逐字不变（PR8 的金样测试钉住）。
 - 建议与 PR8 一起上，拆的时候就有测试兜底。
 - 验证：同 PR5 的整张清单。
+- 落地时定下的几处细节：
+  - `makeTranscript(_:start:run:)`：`MeetingTranscriptSpec` 在开始时组好（文件、名字、头信息、说话人、模板，同原来在 `begin` 里组的
+    `Destination`），第一次 `.started` 时再带上那一刻与 `run` 建文档 —— 与原来的 `MeetingTranscript(start:config:destination:)` 一一对应。
+    `MeetingTranscriptSpec` 取代了 `MeetingTranscript.Destination`（少了 `onEvent`：它成了文档上的属性，`MeetingTranscriptWriting.onEvent`），
+    会议库开自由听译记录也用它。`MeetingSessionLibrary` 多一个 `rootURL`（上面的兜底要它）。
+  - 说明行：会话只交 `MeetingTranscriptNote`，文案由文档的 `Labels` 出（key 仍是 `livetranslate.record.doc.*`）。原来在记下时就取好文案、
+    现在排版时取；界面语言要重启才换（`L10n`），同一个进程里取到的是同一句。
+  - `MeetingStatus.after(_:)`、`MeetingTranscriptNote`、`MeetingTranscriptSpec` 放在 `Logic/MeetingTranscriptTypes.swift`。
+  - `MeetingMinutesPrompts` 连输入行（`contentRows` / `meetingRows`）和会议纪要的分段预算（`meetingBudget`）一起拿走，生成器只剩选模型、
+    常驻、调用；`MeetingMinutesGenerator.Line` 是 `MeetingMinutesPrompts.Line` 的别名，周报直接借 `MeetingMinutesPrompts.clip`。
+  - `ended()` 收录音指示改成复位之后调 `refreshIndicators()`（空闲时就是收起），与原来复位前直接 `statusItem.update(nil)` 等价。
+    纪要决策的 `ready`（`MeetingMinutesGenerator.isReady`）在收尾时先取好再交给模型（它只读状态，原来短路求值，结果一样）。
+  - 外壳：`MeetingSessionShell`（`init` 不碰 `shared`）+ `extension MeetingSessionController`（`static let shared`、`setCountdown(_:)`、`statusLine()`）。
+    `MeetingLevelMeter` 随会话进 `Logic/`；会话 `import Combine`（`ObservableObject`）与 `os`（日志）。
+  - 验证：PR6 的金样探针改成「PR6 合入后的 main 对本分支」，编真的外壳与纯逻辑，40 个场景（原 39 个 + 新加的「绑了日历事件：标题、参会人、日历、
+    速记、🔖」）整份输出逐字一致；三处故意改坏（`ended` 里收控制条与撤勿扰换序、一条说明行文案、「太短」的边界）都被它查出来。
 
 ### PR8 单元测试
 
@@ -1077,6 +1095,15 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
 - `mac/Tests/Meeting/`：假引擎 / 假文档 / 假会议库 / 假环境，`MeetingSessionTests`、`MeetingTranscriptModelTests`（金样 + 与 `MeetingMarkdown` 往返）、
   `MeetingMinutesPromptsTests`、`MeetingMinutesFormatTests`，以及七个纯文件的测试（§5.4）。
 - 验证：`xcodebuild test`（§7.2）；CI 跑同一条。
+- 落地：`mac/Tests/Meeting/` 14 个文件，163 个测试（加上原有的 34 个共 197 个）。
+  - `MeetingTestSupport.swift`：§5.3 的四个假对象 + 一本按先后记副作用的账（断言 R16 的调用序列）；假文档里跑一份真的 `MeetingTranscriptModel`，
+    会话测试能直接看 meeting.md；固定中文文案逐字取自 `Localizable.xcstrings`。
+  - `MeetingTranscriptModelTests` 的金样（`MeetingTranscriptGoldens.swift`）是探针里旧代码（PR6）实际写到盘上的五份 meeting.md，测试照探针里那份文档
+    收到的调用逐个重放；时刻按本机时区造，在哪个时区跑都一样。
+  - 另加 `LiveTranslateMixing.swift` 的测试（环形缓冲、抖动缓冲与混音、节拍时钟、说话人判定）。
+  - #149 没修：两个标了 `XCTExpectFailure` 的测试把现状钉住（重启失败、重启成功后结束都会让字幕条上的旧句子以新的运行次数重报一遍 ——
+    探针 s06 / y08 / x05 里重启成功的场景同样重复，比 #149 写的范围大）。修 #149 时它们会「意外通过」，那时翻成正面断言。
+  - 三处故意改坏（控制条先于 `engine.start` 打开、开起来时不补写之前定稿的句子、「太短」的边界）各有测试失败。
 
 ### P2 候选（另开 issue）
 
