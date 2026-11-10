@@ -9,6 +9,10 @@ targets:
   Baobox:
     type: application
     platform: macOS
+    # 共享的 Baobox scheme：Test 动作跑 BaoboxTests（`xcodebuild test -scheme Baobox`）。
+    scheme:
+      testTargets:
+        - BaoboxTests
     sources:
       - path: Sources
         excludes:
@@ -123,3 +127,21 @@ targets:
             /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --timestamp=none \
               "${DEST}/BaoboxInterpreter.driver"
           fi
+
+  # 纯逻辑单元测试：只编 Tests/ 与被测的共用层源码（目前是 Core/CLIUsage/），不链接 App、不设 TEST_HOST，
+  # 由 xctest 直接加载，不启动 Baobox。要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
+  BaoboxTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: Sources/Core/CLIUsage
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        # 测试包不需要签名身份：本地与 CI 一律 ad-hoc（Sign to Run Locally），xctest 照样加载。
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
