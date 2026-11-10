@@ -50,9 +50,8 @@ final class DictationAudioPipe: @unchecked Sendable {
     private var levelValue: Float = 0
     private var lastVoiceAt = Date.distantPast
     private var sampleRate: Double = 48_000
-
-    /// 约 -40 dBFS：安静房间的底噪在它之下，正常说话在它之上（同实时翻译）。
-    private static let voiceRMS: Float = 0.01
+    /// 「人声」门槛：固定 -40 dBFS，底噪更高时跟着抬（见 `DictationVoiceFloor`）。
+    private var voiceFloor = DictationVoiceFloor()
     /// 交接最多攒多少秒（正常两秒内就交接完，只防意外）。
     private static let maxHeldSeconds: Double = 20
     /// 一段录音最多留多少秒（技术设计 §3：最长 2 分钟）。
@@ -63,6 +62,13 @@ final class DictationAudioPipe: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return levelValue
+    }
+
+    /// 现在的底噪估计（RMS；还没攒够一格为 0）。只给日志用。
+    var noiseFloor: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return voiceFloor.floor
     }
 
     /// 最近一次有人声（音量过阈值）的时间。
@@ -88,7 +94,8 @@ final class DictationAudioPipe: @unchecked Sendable {
         if buffer.format.sampleRate > 0 { sampleRate = buffer.format.sampleRate }
         // 起得快、落得慢：说话时跳得起来，停下时慢慢回落。
         levelValue = normalized > levelValue ? normalized : levelValue * 0.82 + normalized * 0.18
-        if rms > Self.voiceRMS { lastVoiceAt = now }
+        voiceFloor.add(rms: rms, frames: Int(buffer.frameLength), sampleRate: sampleRate)
+        if rms > voiceFloor.threshold { lastVoiceAt = now }
         if holding {
             // 音源回调给的缓冲区之后可能被复用，攒的时候拷一份。
             guard let copy = LiveTranslateAudioGate.copy(buffer) else { return }
@@ -165,6 +172,7 @@ final class DictationAudioPipe: @unchecked Sendable {
         recorded = []
         recordedFrames = 0
         levelValue = 0
+        voiceFloor = DictationVoiceFloor()
         lock.unlock()
     }
 
@@ -288,6 +296,9 @@ final class DictationRecognizer {
     static let finalWait: TimeInterval = 2
     /// 分段模式：停顿这么久收一段（秒）。
     static let pauseCut: TimeInterval = 1.2
+    /// 分段模式兜底：字这么久没变也收一段（秒），即使一直有声音 —— 底噪起伏大（远处有人说话、外放）时
+    /// 人声判断一直为真，不兜底的话一句都不上屏。说话时识别结果每零点几秒就变一次，3 秒不变就是说完了。
+    static let settledCut: TimeInterval = 3
     /// 一段最长多久（秒）。
     static let maxSegment: TimeInterval = 50
     /// 平均置信度低于它就拿录音换一种语言重认。
@@ -354,6 +365,7 @@ final class DictationRecognizer {
         guard running, !finishing else { return }
         finishing = true
         finishCompletion = completion
+        DictationLog.recognition.notice("finish requested: tail \(String(format: "%.1f", tail), privacy: .public)s, \(self.finals.count) segment(s) so far")
         guard tail > 0 else {
             stopAudioAndFlush()
             return
@@ -533,6 +545,7 @@ final class DictationRecognizer {
     /// 一段定稿：记下（长听写交出去）；结束中就把松手前攒下的那点音频认完再交，否则接着开下一段。
     private func accept(text: String, languageIndex: Int) {
         let language = languages[languageIndex]
+        DictationLog.recognition.notice("seg \(self.segmentID) final: \(text.count) chars, \(language.code, privacy: .public)")
         if !text.isEmpty {
             finals.append((text, language))
             if mode == .segmented { onSegment?(text, language) }
@@ -628,10 +641,21 @@ final class DictationRecognizer {
         }
         guard !finishing, segmentOpen else { return }
         let age = now.timeIntervalSince(segmentStart)
-        let quiet = now.timeIntervalSince(max(lastTextChange, pipe.lastVoice))
-        if age >= Self.maxSegment || (mode == .segmented && !partial.isEmpty && quiet >= Self.pauseCut) {
-            cut()
+        let textQuiet = now.timeIntervalSince(lastTextChange)
+        let voiceQuiet = now.timeIntervalSince(pipe.lastVoice)
+        let reason: String
+        if age >= Self.maxSegment {
+            reason = "max length"
+        } else if mode == .segmented, !partial.isEmpty, min(textQuiet, voiceQuiet) >= Self.pauseCut {
+            reason = "pause"
+        } else if mode == .segmented, !partial.isEmpty, textQuiet >= Self.settledCut {
+            reason = "text settled"
+        } else {
+            return
         }
+        DictationLog.recognition.notice(
+            "cut seg \(self.segmentID): \(reason, privacy: .public), text quiet \(String(format: "%.1f", textQuiet), privacy: .public)s, voice quiet \(String(format: "%.1f", voiceQuiet), privacy: .public)s, floor \(String(format: "%.4f", self.pipe.noiseFloor), privacy: .public)")
+        cut()
     }
 
     private func previewText() -> String {
