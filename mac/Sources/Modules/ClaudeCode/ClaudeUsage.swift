@@ -1,116 +1,61 @@
 import Foundation
 
-/// Claude Code 助手 —— 定价表、用量聚合、5 小时额度窗口与报表。
+/// Claude Code 助手 —— 定价表、用量条目解析、5 小时 + 周额度窗口与报表。
 ///
 /// 费用为按公开定价的**估算**（定价表内置常量，见 TECH_DESIGN 3.3），UI 处处标「估算」。
 /// 用量去重：同一条 assistant 消息在续接/分叉文件里会重复，用 `message.id + requestId` 去重。
 /// 重 IO 后台，`@Published` 只在主线程写。
 ///
+/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法在共用层 `Core/AIUsage/`（与 Codex 助手共用，有单元测试）；
+/// 这里只留 Claude 自己的部分：定价表、`~/.claude/projects` JSONL 的解析、设置键与提醒的发送。
+///
 /// 本文件无独立用户可见文案（额度提醒文案在 ClaudeNotifier / ClaudeLiveStatus.swift 中定义）。
 
 // MARK: - 定价
 
-/// 每百万 token 的美元单价。
-struct ModelPricing {
-    let inputPerM: Double
-    let outputPerM: Double
-    let cacheWritePerM: Double
-    let cacheReadPerM: Double
+/// Claude 的定价表（每百万 token 美元单价）。Anthropic 口径：input 不含缓存，缓存写 / 缓存读单列。
+enum ClaudePricingTable: AIUsagePricingTable {
+    static let inputIncludesCacheRead = false
 
-    static let zero = ModelPricing(inputPerM: 0, outputPerM: 0, cacheWritePerM: 0, cacheReadPerM: 0)
-
-    /// 按 model id 关键字匹配定价；未知返回全 0 并标记 unpriced。
+    /// 按 model id 关键字匹配定价；未知返回 nil（共用层记 0 费用并标 unpriced）。
     /// 缓存写 = 输入 ×1.25(5 分钟 TTL 口径),缓存读 = 输入 ×0.1,与官方定价页一致。
-    static func pricing(for modelID: String) -> (pricing: ModelPricing, unpriced: Bool) {
+    static func pricing(for modelID: String) -> ModelPricing? {
         let id = modelID.lowercased()
         if id.contains("fable") || id.contains("mythos") {
-            return (ModelPricing(inputPerM: 10, outputPerM: 50, cacheWritePerM: 12.5, cacheReadPerM: 1.0), false)
+            return ModelPricing(inputPerM: 10, outputPerM: 50, cacheWritePerM: 12.5, cacheReadPerM: 1.0)
         }
         if id.contains("opus") {
             // Opus 4.1 / 4.0 / Claude 3 Opus 为 $15/$75;Opus 4.5 起降为 $5/$25。
             if id.contains("opus-4-1") || id.contains("opus-4-0")
                 || id.contains("opus-4-2025") || id.contains("3-opus") {
-                return (ModelPricing(inputPerM: 15, outputPerM: 75, cacheWritePerM: 18.75, cacheReadPerM: 1.5), false)
+                return ModelPricing(inputPerM: 15, outputPerM: 75, cacheWritePerM: 18.75, cacheReadPerM: 1.5)
             }
-            return (ModelPricing(inputPerM: 5, outputPerM: 25, cacheWritePerM: 6.25, cacheReadPerM: 0.5), false)
+            return ModelPricing(inputPerM: 5, outputPerM: 25, cacheWritePerM: 6.25, cacheReadPerM: 0.5)
         }
         if id.contains("sonnet") {
-            return (ModelPricing(inputPerM: 3, outputPerM: 15, cacheWritePerM: 3.75, cacheReadPerM: 0.3), false)
+            return ModelPricing(inputPerM: 3, outputPerM: 15, cacheWritePerM: 3.75, cacheReadPerM: 0.3)
         }
         if id.contains("haiku") {
-            return (ModelPricing(inputPerM: 1, outputPerM: 5, cacheWritePerM: 1.25, cacheReadPerM: 0.1), false)
+            return ModelPricing(inputPerM: 1, outputPerM: 5, cacheWritePerM: 1.25, cacheReadPerM: 0.1)
         }
-        return (.zero, true)
+        return nil
     }
 }
 
-// MARK: - 聚合模型
+// MARK: - 聚合模型（共用层套上 Claude 定价表；名字不变，UI 照旧引用）
 
 /// 一组 token 与估算费用的累计。
-struct UsageTotals {
-    var input: Int = 0
-    var output: Int = 0
-    var cacheWrite: Int = 0
-    var cacheRead: Int = 0
-    var costUSD: Double = 0
-    /// 命中过未知模型（费用可能偏低）。
-    var unpriced: Bool = false
-
-    static let zero = UsageTotals()
-
-    /// 计费口径下的 token 总数（用于额度窗口预算比对）。
-    var totalTokens: Int { input + output + cacheWrite + cacheRead }
-
-    /// 累加一条消息的用量，并按其模型算增量费用。
-    mutating func add(input i: Int, output o: Int, cacheWrite cw: Int, cacheRead cr: Int, modelID: String) {
-        input += i
-        output += o
-        cacheWrite += cw
-        cacheRead += cr
-        let (price, isUnpriced) = ModelPricing.pricing(for: modelID)
-        costUSD += Double(i) / 1_000_000 * price.inputPerM
-            + Double(o) / 1_000_000 * price.outputPerM
-            + Double(cw) / 1_000_000 * price.cacheWritePerM
-            + Double(cr) / 1_000_000 * price.cacheReadPerM
-        if isUnpriced { unpriced = true }
-    }
-}
-
-/// 一个 5 小时额度窗口。`end == start + 5h`。
-struct UsageWindow {
-    let start: Date
-    let end: Date
-    var totals: UsageTotals
-
-    /// 距重置剩余秒数（相对现在，最少 0）。
-    var secondsUntilReset: TimeInterval { max(0, end.timeIntervalSinceNow) }
-}
-
-/// 周窗口锚点配置（主线程读 UserDefaults 构造，值类型跨线程安全传入后台计算）。
-struct WeeklyAnchor: Sendable {
-    /// false = 近 7 天滚动 168h 块；true = 固定锚点（星期 + 小时）。
-    let fixed: Bool
-    /// 1...7（Calendar.current 口径，1=周日）。
-    let weekday: Int
-    /// 0...23。
-    let hour: Int
-}
-
+typealias UsageTotals = AIUsageTotals<ClaudePricingTable>
+/// 一个额度窗口（5h 或周）。
+typealias UsageWindow = AIUsageWindow<ClaudePricingTable>
+/// 周窗口锚点配置。
+typealias WeeklyAnchor = AIUsageWeeklyAnchor
 /// 报表一行（按天 / 按项目 / 按模型通用）。
-struct UsageBucket: Identifiable {
-    let id: String
-    let label: String
-    var totals: UsageTotals
-    /// 「按天」维度携带日期用于排序；其余为 nil。
-    var date: Date?
-}
-
+typealias UsageBucket = AIUsageBucket<ClaudePricingTable>
 /// 三维度报表。
-struct ClaudeUsageReport {
-    var byDay: [UsageBucket] = []
-    var byProject: [UsageBucket] = []
-    var byModel: [UsageBucket] = []
-}
+typealias ClaudeUsageReport = AIUsageReport<ClaudePricingTable>
+
+private typealias ClaudeUsageCalculator = AIUsageCalculator<ClaudePricingTable>
 
 /// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
 struct ClaudeMCPServerStat: Sendable {
@@ -128,19 +73,6 @@ struct ClaudeInvocationStats: Sendable {
     var mcp: [String: ClaudeMCPServerStat] = [:]
     /// 内置工具：工具名 → 次数。
     var builtin: [String: Int] = [:]
-}
-
-// MARK: - 一条已解析的用量条目（后台内部使用）
-
-/// 去重后参与聚合的一条 assistant 用量。
-fileprivate struct UsageEntry {
-    let timestamp: Date
-    let modelID: String
-    let projectPath: String
-    let input: Int
-    let output: Int
-    let cacheWrite: Int
-    let cacheRead: Int
 }
 
 // MARK: - 用量单例
@@ -167,10 +99,10 @@ final class ClaudeUsageStore: ObservableObject {
     static let weeklyWeekdayKey = "claudecode.weeklyResetWeekday"
     /// 固定锚点：重置小时（0...23）。默认 0。
     static let weeklyHourKey = "claudecode.weeklyResetHour"
-    /// 已提醒过 80% 的窗口起点集合（防重复轰炸）。仅主线程访问。
-    private var remindedWindowStarts: Set<Date> = []
-    /// 已提醒过 80% 的周窗口起点集合（与 5h 独立防重）。仅主线程访问。
-    private var remindedWeekStarts: Set<Date> = []
+    /// 5h 窗口 80% 提醒的防重状态（防重复轰炸）。仅主线程访问。
+    private var budgetReminder = AIUsageBudgetReminder()
+    /// 周窗口 80% 提醒的防重状态（与 5h 独立防重）。仅主线程访问。
+    private var weeklyBudgetReminder = AIUsageBudgetReminder()
     private var refreshing = false
     private var lastHookRefresh: Date = .distantPast
     private var timer: Timer?
@@ -215,9 +147,9 @@ final class ClaudeUsageStore: ObservableObject {
         let anchor = Self.weeklyAnchorConfig()   // 主线程读 UserDefaults 后传入后台。
         DispatchQueue.global(qos: .utility).async {
             let entries = Self.collectEntries(sinceHoursAgo: 180)
-            let window = Self.activeWindow(from: entries)
-            let today = Self.todayTotals(from: entries)
-            let weekly = Self.weeklyWindow(from: entries, anchor: anchor)
+            let window = ClaudeUsageCalculator.activeWindow(from: entries)
+            let today = ClaudeUsageCalculator.todayTotals(from: entries)
+            let weekly = ClaudeUsageCalculator.weeklyWindow(from: entries, anchor: anchor)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.currentWindow = window
@@ -235,13 +167,10 @@ final class ClaudeUsageStore: ObservableObject {
     /// 主线程读取周窗口锚点配置（值类型，可安全传入后台）。
     static func weeklyAnchorConfig() -> WeeklyAnchor {
         let defaults = UserDefaults.standard
-        let fixed = defaults.object(forKey: weeklyFixedKey) as? Bool ?? false
-        let weekday = defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2   // 默认周一。
-        let hour = defaults.object(forKey: weeklyHourKey) as? Int ?? 0
         return WeeklyAnchor(
-            fixed: fixed,
-            weekday: min(7, max(1, weekday)),
-            hour: min(23, max(0, hour))
+            fixed: defaults.object(forKey: weeklyFixedKey) as? Bool ?? false,
+            clampingWeekday: defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2,   // 默认周一。
+            hour: defaults.object(forKey: weeklyHourKey) as? Int ?? 0
         )
     }
 
@@ -272,42 +201,26 @@ final class ClaudeUsageStore: ObservableObject {
     private func checkBudgetReminder(window: UsageWindow?) {
         guard let window else { return }
         let budget = UserDefaults.standard.integer(forKey: Self.budgetKey)
-        guard budget > 0 else { return }
-        // 清掉非当前窗口的旧记录，顺带处理「窗口切换」。
-        if !remindedWindowStarts.contains(window.start), remindedWindowStarts.contains(where: { $0 != window.start }) {
-            // 检测到窗口已切换：可选发「额度已恢复」。
-            if ClaudeNotifierSettings.budgetRestoreEnabled {
-                ClaudeNotifier.shared.notifyBudgetRestored()
-            }
-            remindedWindowStarts = []
+        let outcome = budgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
+        // 检测到窗口已切换：可选发「额度已恢复」。
+        if outcome.windowChanged, ClaudeNotifierSettings.budgetRestoreEnabled {
+            ClaudeNotifier.shared.notifyBudgetRestored()
         }
-        let ratio = Double(window.totals.totalTokens) / Double(budget)
-        if ratio >= 0.8, !remindedWindowStarts.contains(window.start) {
-            remindedWindowStarts.insert(window.start)
-            if ClaudeNotifierSettings.budgetAlertEnabled {
-                ClaudeNotifier.shared.notifyBudget(percent: Int((ratio * 100).rounded()), windowEnd: window.end)
-            }
+        if let percent = outcome.reachedPercent, ClaudeNotifierSettings.budgetAlertEnabled {
+            ClaudeNotifier.shared.notifyBudget(percent: percent, windowEnd: window.end)
         }
     }
 
-    /// 周预算提醒：与 `checkBudgetReminder` 同构，独立 key 与独立防重集合。
+    /// 周预算提醒：与 `checkBudgetReminder` 同构，独立 key 与独立防重状态。
     private func checkWeeklyBudgetReminder(window: UsageWindow?) {
         guard let window else { return }
         let budget = UserDefaults.standard.integer(forKey: Self.weeklyBudgetKey)
-        guard budget > 0 else { return }
-        // 清掉非当前周窗口的旧记录，顺带处理「周窗口切换」。
-        if !remindedWeekStarts.contains(window.start), remindedWeekStarts.contains(where: { $0 != window.start }) {
-            if ClaudeNotifierSettings.budgetRestoreEnabled {
-                ClaudeNotifier.shared.notifyWeeklyBudgetRestored()
-            }
-            remindedWeekStarts = []
+        let outcome = weeklyBudgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
+        if outcome.windowChanged, ClaudeNotifierSettings.budgetRestoreEnabled {
+            ClaudeNotifier.shared.notifyWeeklyBudgetRestored()
         }
-        let ratio = Double(window.totals.totalTokens) / Double(budget)
-        if ratio >= 0.8, !remindedWeekStarts.contains(window.start) {
-            remindedWeekStarts.insert(window.start)
-            if ClaudeNotifierSettings.budgetAlertEnabled {
-                ClaudeNotifier.shared.notifyWeeklyBudget(percent: Int((ratio * 100).rounded()), windowEnd: window.end)
-            }
+        if let percent = outcome.reachedPercent, ClaudeNotifierSettings.budgetAlertEnabled {
+            ClaudeNotifier.shared.notifyWeeklyBudget(percent: percent, windowEnd: window.end)
         }
     }
 }
@@ -317,10 +230,10 @@ final class ClaudeUsageStore: ObservableObject {
 extension ClaudeUsageStore {
 
     /// 收集近 N 小时内 mtime 文件的去重用量条目。
-    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [UsageEntry] {
+    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [AIUsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
-        var entries: [UsageEntry] = []
+        var entries: [AIUsageEntry] = []
         var seenKeys = Set<String>()
 
         guard let projectDirs = try? fm.contentsOfDirectory(
@@ -368,14 +281,14 @@ extension ClaudeUsageStore {
                     let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                         ?? ClaudeSessionIndex.demungeDirName(mungedName)
 
-                    entries.append(UsageEntry(
+                    entries.append(AIUsageEntry(
                         timestamp: date,
                         modelID: modelID,
                         projectPath: projectPath,
-                        input: intValue(usage["input_tokens"]),
-                        output: intValue(usage["output_tokens"]),
-                        cacheWrite: intValue(usage["cache_creation_input_tokens"]),
-                        cacheRead: intValue(usage["cache_read_input_tokens"])
+                        input: AIUsageEntry.tokenCount(usage["input_tokens"]),
+                        output: AIUsageEntry.tokenCount(usage["output_tokens"]),
+                        cacheWrite: AIUsageEntry.tokenCount(usage["cache_creation_input_tokens"]),
+                        cacheRead: AIUsageEntry.tokenCount(usage["cache_read_input_tokens"])
                     ))
                 }
             }
@@ -383,139 +296,14 @@ extension ClaudeUsageStore {
         return entries
     }
 
-    /// 5h 窗口算法（对齐 ccusage）：升序，blockStart 向下取整到小时；超 5h 开新块。
-    /// 若 `now <= 末块.start + 5h` 则末块为活跃窗口，否则无活跃窗口。
-    /// 实现委托给参数化的 `lastActiveBlock(from:span:)`，与周窗口共用同一分块逻辑。
-    nonisolated fileprivate static func activeWindow(from entries: [UsageEntry]) -> UsageWindow? {
-        lastActiveBlock(from: entries, span: 5 * 3_600)
-    }
-
-    /// 通用「末个活跃分块」算法（跨度参数化）：升序，blockStart 向下取整到小时；
-    /// 条目时间 > `blockStart + span` 时开新块。末块满足 `now <= blockStart + span` 即为活跃窗口，否则返回 nil。
-    /// span=5h 为 5 小时窗口，span=168h 为周窗口（滚动块口径），两者行为一致。
-    nonisolated fileprivate static func lastActiveBlock(from entries: [UsageEntry], span: TimeInterval) -> UsageWindow? {
-        guard !entries.isEmpty else { return nil }
-        let sorted = entries.sorted { $0.timestamp < $1.timestamp }
-
-        var blocks: [UsageWindow] = []
-        var start: Date?
-        var totals = UsageTotals.zero
-
-        for entry in sorted {
-            if let currentStart = start {
-                if entry.timestamp > currentStart.addingTimeInterval(span) {
-                    blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
-                    start = floorToHour(entry.timestamp)
-                    totals = .zero
-                }
-            } else {
-                start = floorToHour(entry.timestamp)
-                totals = .zero
-            }
-            totals.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-        }
-        if let currentStart = start {
-            blocks.append(UsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
-        }
-
-        guard let last = blocks.last, Date() <= last.end else { return nil }
-        return last
-    }
-
-    /// 周窗口：滚动块（默认）复用分块算法、跨度换 168h；固定锚点聚合 [anchorStart, anchorStart+7d) 内条目。
-    /// 滚动块无条目返回 nil；固定锚点即使 totals 为 0 也返回一个 window（有明确起止与倒计时可展示）。
-    nonisolated fileprivate static func weeklyWindow(from entries: [UsageEntry], anchor: WeeklyAnchor) -> UsageWindow? {
-        let weekSpan: TimeInterval = 168 * 3_600
-        if !anchor.fixed {
-            // 滚动块：无条目返回 nil。
-            guard !entries.isEmpty else { return nil }
-            return lastActiveBlock(from: entries, span: weekSpan)
-        }
-        // 固定锚点：即使无任何用量也返回一个 window（有明确起止与倒计时可展示，符合本属性契约）；
-        // 取不到锚点则回退滚动块口径（此时无条目才返回 nil）。
-        guard let start = weekAnchorStart(before: Date(), weekday: anchor.weekday, hour: anchor.hour) else {
-            guard !entries.isEmpty else { return nil }
-            return lastActiveBlock(from: entries, span: weekSpan)
-        }
-        let end = start.addingTimeInterval(weekSpan)
-        var totals = UsageTotals.zero
-        for entry in entries where entry.timestamp >= start && entry.timestamp < end {
-            totals.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-        }
-        return UsageWindow(start: start, end: end, totals: totals)
-    }
-
-    /// `date` 之前最近一个「指定星期几的指定小时:00:00」。取不到返回 nil（调用方回退滚动块）。
-    nonisolated fileprivate static func weekAnchorStart(before date: Date, weekday: Int, hour: Int) -> Date? {
-        var components = DateComponents()
-        components.weekday = weekday
-        components.hour = hour
-        components.minute = 0
-        components.second = 0
-        return Calendar.current.nextDate(
-            after: date,
-            matching: components,
-            matchingPolicy: .nextTime,
-            direction: .backward
+    /// 三维度报表：按项目 / 按模型两张表按估算费用从高到低排；项目显示名取路径最后一段（`ClaudeSessionIndex`）。
+    nonisolated fileprivate static func buildReport(from entries: [AIUsageEntry]) -> ClaudeUsageReport {
+        ClaudeUsageCalculator.buildReport(
+            from: entries,
+            order: .byCost,
+            locale: L10n.locale,
+            projectBucket: { path in (id: path, label: ClaudeSessionIndex.projectName(fromPath: path)) }
         )
-    }
-
-    /// 今日（本地时区）累计。
-    nonisolated fileprivate static func todayTotals(from entries: [UsageEntry]) -> UsageTotals? {
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: Date())
-        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
-        var totals = UsageTotals.zero
-        var any = false
-        for entry in entries where entry.timestamp >= dayStart && entry.timestamp < dayEnd {
-            any = true
-            totals.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-        }
-        return any ? totals : nil
-    }
-
-    /// 三维度报表构建。
-    nonisolated fileprivate static func buildReport(from entries: [UsageEntry]) -> ClaudeUsageReport {
-        var report = ClaudeUsageReport()
-        let calendar = Calendar.current
-
-        var byDay: [Date: UsageTotals] = [:]
-        var byProject: [String: UsageTotals] = [:]
-        var byModel: [String: UsageTotals] = [:]
-
-        let dayFormatter = DateFormatter()
-        dayFormatter.locale = L10n.locale
-        dayFormatter.dateFormat = "yyyy-MM-dd"
-
-        for entry in entries {
-            let dayKey = calendar.startOfDay(for: entry.timestamp)
-            var day = byDay[dayKey] ?? .zero
-            day.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-            byDay[dayKey] = day
-
-            var proj = byProject[entry.projectPath] ?? .zero
-            proj.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-            byProject[entry.projectPath] = proj
-
-            let modelLabel = entry.modelID.isEmpty ? "unknown" : entry.modelID
-            var model = byModel[modelLabel] ?? .zero
-            model.add(input: entry.input, output: entry.output, cacheWrite: entry.cacheWrite, cacheRead: entry.cacheRead, modelID: entry.modelID)
-            byModel[modelLabel] = model
-        }
-
-        report.byDay = byDay.map { key, value in
-            UsageBucket(id: dayFormatter.string(from: key), label: dayFormatter.string(from: key), totals: value, date: key)
-        }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
-
-        report.byProject = byProject.map { key, value in
-            UsageBucket(id: key, label: ClaudeSessionIndex.projectName(fromPath: key), totals: value, date: nil)
-        }.sorted { $0.totals.costUSD > $1.totals.costUSD }
-
-        report.byModel = byModel.map { key, value in
-            UsageBucket(id: key, label: key, totals: value, date: nil)
-        }.sorted { $0.totals.costUSD > $1.totals.costUSD }
-
-        return report
     }
 
     /// 调用统计：遍历近 `days` 天 mtime 的会话文件，聚合 Skill/斜杠命令、MCP、内置工具三类计数。
@@ -623,23 +411,5 @@ extension ClaudeUsageStore {
             }.joined(separator: "\n")
         }
         return ""
-    }
-
-    // MARK: - 私有辅助
-
-    /// 时间戳向下取整到整点（对齐 UTC 小时，稳定不随时区漂移）。
-    nonisolated fileprivate static func floorToHour(_ date: Date) -> Date {
-        let seconds = date.timeIntervalSinceReferenceDate
-        let floored = (seconds / 3_600).rounded(.down) * 3_600
-        return Date(timeIntervalSinceReferenceDate: floored)
-    }
-
-    /// 容错取整数（可能是 Int / Double / NSNumber / 字符串）。
-    nonisolated fileprivate static func intValue(_ any: Any?) -> Int {
-        if let i = any as? Int { return i }
-        if let d = any as? Double { return Int(d) }
-        if let n = any as? NSNumber { return n.intValue }
-        if let s = any as? String, let i = Int(s) { return i }
-        return 0
     }
 }

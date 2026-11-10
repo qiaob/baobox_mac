@@ -1,9 +1,11 @@
 import Foundation
 
-/// Codex 助手 —— 定价表、用量聚合、5 小时 + 周额度窗口与报表。
+/// Codex 助手 —— 定价表、用量条目解析、5 小时 + 周额度窗口与报表。
 ///
-/// 结构对照 `ClaudeUsage.swift`（**平行实现、不跨模块依赖**）。费用为按公开定价的**估算**，
-/// UI 处处标「估算」；很多 Codex 用户走 ChatGPT 订阅（无按量计费），故费用为次要信息、token 数为主。
+/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法与 Claude Code 助手共用 `Core/AIUsage/`（有单元测试，
+/// 两个模块之间仍不互相依赖）；这里只留 Codex 自己的部分：定价表、rollout 文件的解析、设置键与提醒的发送。
+/// 费用为按公开定价的**估算**，UI 处处标「估算」；很多 Codex 用户走 ChatGPT 订阅（无按量计费），
+/// 故费用为次要信息、token 数为主（报表按 token 数排序）。
 /// 重 IO 后台，`@Published` 只在主线程写（严格照 `ClaudeUsageStore.refresh`）。解析全程容错不 crash。
 ///
 /// —— token_count 聚合口径（本文件的唯一难点，见 DESIGN §2）——
@@ -17,103 +19,60 @@ import Foundation
 
 // MARK: - 定价
 
-/// 每百万 token 的美元单价（Codex 无「缓存写」概念，cachedInput 是折扣读）。
-/// 定价为估算常量，来源日期 2026-07（随时可能变）。
-struct CodexPricing {
-    let inputPerM: Double
-    let cachedInputPerM: Double
-    let outputPerM: Double
+/// Codex 的定价表（每百万 token 美元单价，估算常量，来源日期 2026-07，随时可能变）。
+/// OpenAI 口径：input 已含缓存读（cached input 是 input 里打折的那部分），没有「缓存写」。
+enum CodexPricingTable: AIUsagePricingTable {
+    static let inputIncludesCacheRead = true
 
-    static let zero = CodexPricing(inputPerM: 0, cachedInputPerM: 0, outputPerM: 0)
-
-    /// 按 model id 关键字匹配定价；未知返回全 0 并标记 unpriced。
-    static func pricing(for modelID: String) -> (pricing: CodexPricing, unpriced: Bool) {
+    /// 按 model id 关键字匹配定价；未知返回 nil（共用层记 0 费用并标 unpriced）。
+    static func pricing(for modelID: String) -> ModelPricing? {
         let id = modelID.lowercased()
         // gpt-5 覆盖 gpt-5-codex（默认 Codex 模型族）。
         if id.contains("gpt-5") {
-            return (CodexPricing(inputPerM: 1.25, cachedInputPerM: 0.125, outputPerM: 10), false)
+            return rates(inputPerM: 1.25, cachedInputPerM: 0.125, outputPerM: 10)
         }
         if id.contains("o4-mini") || id.contains("o3-mini") {
-            return (CodexPricing(inputPerM: 1.1, cachedInputPerM: 0.275, outputPerM: 4.4), false)
+            return rates(inputPerM: 1.1, cachedInputPerM: 0.275, outputPerM: 4.4)
         }
         if id.contains("o3") {
-            return (CodexPricing(inputPerM: 2, cachedInputPerM: 0.5, outputPerM: 8), false)
+            return rates(inputPerM: 2, cachedInputPerM: 0.5, outputPerM: 8)
         }
         if id.contains("gpt-4.1") {
-            return (CodexPricing(inputPerM: 2, cachedInputPerM: 0.5, outputPerM: 8), false)
+            return rates(inputPerM: 2, cachedInputPerM: 0.5, outputPerM: 8)
         }
         if id.contains("codex-mini") {
-            return (CodexPricing(inputPerM: 1.5, cachedInputPerM: 0.375, outputPerM: 6), false)
+            return rates(inputPerM: 1.5, cachedInputPerM: 0.375, outputPerM: 6)
         }
-        return (.zero, true)
+        return nil
+    }
+
+    /// Codex 的三项单价 → 共用结构：缓存输入 = 共用层的缓存读，缓存写恒为 0。
+    private static func rates(inputPerM: Double, cachedInputPerM: Double, outputPerM: Double) -> ModelPricing {
+        ModelPricing(inputPerM: inputPerM, outputPerM: outputPerM, cacheWritePerM: 0, cacheReadPerM: cachedInputPerM)
     }
 }
 
-// MARK: - 聚合模型
+// MARK: - 聚合模型（共用层套上 Codex 定价表；名字不变，UI 照旧引用）
 
-/// 一组 token 与估算费用的累计。
-struct CodexUsageTotals {
-    var input: Int = 0
-    var cachedInput: Int = 0
-    var output: Int = 0
-    var costUSD: Double = 0
-    /// 命中过未知模型（费用可能偏低）。
-    var unpriced: Bool = false
-
-    static let zero = CodexUsageTotals()
-
-    /// Codex 计费口径以 input+output 为主（额度窗口预算比对用）。
-    var totalTokens: Int { input + output }
-
-    /// 累加一条用量并按其模型算增量费用。
-    /// `input` 通常已含缓存读部分，故计费时从 input 扣除 `cachedInput`（取不到 cached 即为 0，全按 input 计）。
-    mutating func add(input i: Int, cachedInput c: Int, output o: Int, modelID: String) {
-        input += i
-        cachedInput += c
-        output += o
-        let (price, isUnpriced) = CodexPricing.pricing(for: modelID)
-        let billableInput = max(0, i - c)
-        costUSD += Double(billableInput) / 1_000_000 * price.inputPerM
-            + Double(c) / 1_000_000 * price.cachedInputPerM
-            + Double(o) / 1_000_000 * price.outputPerM
-        if isUnpriced { unpriced = true }
-    }
-}
-
+/// 一组 token 与估算费用的累计。`totalTokens` = input + output（input 已含缓存输入）。
+typealias CodexUsageTotals = AIUsageTotals<CodexPricingTable>
 /// 一个额度窗口（5h 或周）。`end == start + span`。
-struct CodexUsageWindow {
-    let start: Date
-    let end: Date
-    var totals: CodexUsageTotals
-
-    /// 距重置剩余秒数（相对现在，最少 0）。
-    var secondsUntilReset: TimeInterval { max(0, end.timeIntervalSinceNow) }
-}
-
-/// 周窗口锚点配置（主线程读 UserDefaults 构造，值类型跨线程安全传入后台计算）。
-struct CodexWeeklyAnchor: Sendable {
-    /// false = 近 7 天滚动 168h 块；true = 固定锚点（星期 + 小时）。
-    let fixed: Bool
-    /// 1...7（Calendar.current 口径，1=周日）。
-    let weekday: Int
-    /// 0...23。
-    let hour: Int
-}
-
+typealias CodexUsageWindow = AIUsageWindow<CodexPricingTable>
+/// 周窗口锚点配置。
+typealias CodexWeeklyAnchor = AIUsageWeeklyAnchor
 /// 报表一行（按天 / 按项目 / 按模型通用）。
-struct CodexUsageBucket: Identifiable {
-    let id: String
-    let label: String
-    var totals: CodexUsageTotals
-    /// 「按天」维度携带日期用于排序；其余为 nil。
-    var date: Date?
-}
-
+typealias CodexUsageBucket = AIUsageBucket<CodexPricingTable>
 /// 三维度报表。
-struct CodexUsageReport {
-    var byDay: [CodexUsageBucket] = []
-    var byProject: [CodexUsageBucket] = []
-    var byModel: [CodexUsageBucket] = []
+typealias CodexUsageReport = AIUsageReport<CodexPricingTable>
+
+private typealias CodexUsageCalculator = AIUsageCalculator<CodexPricingTable>
+
+extension AIUsageTotals where Table == CodexPricingTable {
+    /// 缓存输入（Codex 的叫法）= 共用层的 `cacheRead`；`input` 已含这部分。
+    var cachedInput: Int {
+        get { cacheRead }
+        set { cacheRead = newValue }
+    }
 }
 
 /// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
@@ -131,17 +90,6 @@ struct CodexInvocationStats: Sendable {
     var mcp: [String: CodexMCPServerStat] = [:]
 }
 
-// MARK: - 一条已解析的用量条目（后台内部使用）
-
-fileprivate struct CodexUsageEntry {
-    let timestamp: Date
-    let modelID: String
-    let projectPath: String
-    let input: Int
-    let cachedInput: Int
-    let output: Int
-}
-
 // MARK: - 用量单例
 
 /// 用量聚合：当前 5h 窗口、周窗口、今日累计、报表、调用统计。
@@ -151,7 +99,7 @@ final class CodexUsageStore: ObservableObject {
 
     /// nil = 无活跃 5h 窗口。
     @Published private(set) var fiveHourWindow: CodexUsageWindow?
-    /// nil = 近 7 天无用量（滚动块口径）；固定锚点口径下始终有值。
+    /// nil = 近 7 天无用量（滚动块口径）；固定锚点口径下近 180h 有过用量就有值（见 `weeklyWindow(from:anchor:)`）。
     @Published private(set) var weeklyWindow: CodexUsageWindow?
     @Published private(set) var todayTotals: CodexUsageTotals?
     @Published private(set) var isRefreshing = false
@@ -167,9 +115,9 @@ final class CodexUsageStore: ObservableObject {
     /// 固定锚点：重置小时（0...23）。默认 0。
     static let weeklyHourKey = "codex.weeklyResetHour"
 
-    /// 已提醒过 80% 的窗口起点集合（防重复轰炸）。仅主线程访问。
-    private var remindedWindowStarts: Set<Date> = []
-    private var remindedWeekStarts: Set<Date> = []
+    /// 5h / 周窗口 80% 提醒的防重状态（防重复轰炸，两者独立）。仅主线程访问。
+    private var budgetReminder = AIUsageBudgetReminder()
+    private var weeklyBudgetReminder = AIUsageBudgetReminder()
     private var refreshing = false
     private var lastHookRefresh: Date = .distantPast
     private var timer: Timer?
@@ -214,8 +162,8 @@ final class CodexUsageStore: ObservableObject {
         let anchor = Self.weeklyAnchorConfig()   // 主线程读 UserDefaults 后传入后台。
         DispatchQueue.global(qos: .utility).async {
             let entries = Self.collectEntries(sinceHoursAgo: 180)
-            let window = Self.activeWindow(from: entries)
-            let today = Self.todayTotals(from: entries)
+            let window = CodexUsageCalculator.activeWindow(from: entries)
+            let today = CodexUsageCalculator.todayTotals(from: entries)
             let weekly = Self.weeklyWindow(from: entries, anchor: anchor)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -234,13 +182,10 @@ final class CodexUsageStore: ObservableObject {
     /// 主线程读取周窗口锚点配置（值类型，可安全传入后台）。
     static func weeklyAnchorConfig() -> CodexWeeklyAnchor {
         let defaults = UserDefaults.standard
-        let fixed = defaults.object(forKey: weeklyFixedKey) as? Bool ?? false
-        let weekday = defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2
-        let hour = defaults.object(forKey: weeklyHourKey) as? Int ?? 0
         return CodexWeeklyAnchor(
-            fixed: fixed,
-            weekday: min(7, max(1, weekday)),
-            hour: min(23, max(0, hour))
+            fixed: defaults.object(forKey: weeklyFixedKey) as? Bool ?? false,
+            clampingWeekday: defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2,
+            hour: defaults.object(forKey: weeklyHourKey) as? Int ?? 0
         )
     }
 
@@ -267,35 +212,22 @@ final class CodexUsageStore: ObservableObject {
 
     // MARK: - 额度提醒
 
+    /// Codex 没有「额度已恢复」提醒：窗口切换只清防重记录（共用层已清）。
     private func checkBudgetReminder(window: CodexUsageWindow?) {
         guard let window else { return }
         let budget = UserDefaults.standard.integer(forKey: Self.budgetKey)
-        guard budget > 0 else { return }
-        if !remindedWindowStarts.contains(window.start), remindedWindowStarts.contains(where: { $0 != window.start }) {
-            remindedWindowStarts = []
-        }
-        let ratio = Double(window.totals.totalTokens) / Double(budget)
-        if ratio >= 0.8, !remindedWindowStarts.contains(window.start) {
-            remindedWindowStarts.insert(window.start)
-            if AIToolsNotifierSettings.budgetAlertEnabled {
-                CodexNotify.shared.notifyBudget(percent: Int((ratio * 100).rounded()), weekly: false)
-            }
+        let outcome = budgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
+        if let percent = outcome.reachedPercent, AIToolsNotifierSettings.budgetAlertEnabled {
+            CodexNotify.shared.notifyBudget(percent: percent, weekly: false)
         }
     }
 
     private func checkWeeklyBudgetReminder(window: CodexUsageWindow?) {
         guard let window else { return }
         let budget = UserDefaults.standard.integer(forKey: Self.weeklyBudgetKey)
-        guard budget > 0 else { return }
-        if !remindedWeekStarts.contains(window.start), remindedWeekStarts.contains(where: { $0 != window.start }) {
-            remindedWeekStarts = []
-        }
-        let ratio = Double(window.totals.totalTokens) / Double(budget)
-        if ratio >= 0.8, !remindedWeekStarts.contains(window.start) {
-            remindedWeekStarts.insert(window.start)
-            if AIToolsNotifierSettings.budgetAlertEnabled {
-                CodexNotify.shared.notifyBudget(percent: Int((ratio * 100).rounded()), weekly: true)
-            }
+        let outcome = weeklyBudgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
+        if let percent = outcome.reachedPercent, AIToolsNotifierSettings.budgetAlertEnabled {
+            CodexNotify.shared.notifyBudget(percent: percent, weekly: true)
         }
     }
 }
@@ -305,10 +237,10 @@ final class CodexUsageStore: ObservableObject {
 extension CodexUsageStore {
 
     /// 收集近 N 小时内 mtime 文件的用量条目，按 §2 口径处理每文件的增量 / 累计。
-    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [CodexUsageEntry] {
+    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [AIUsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
-        var entries: [CodexUsageEntry] = []
+        var entries: [AIUsageEntry] = []
 
         guard let enumerator = fm.enumerator(
             at: CodexEnv.sessionsDir,
@@ -328,7 +260,7 @@ extension CodexUsageStore {
     }
 
     /// 解析单个 rollout 文件为用量条目序列（按 §2 口径）。
-    nonisolated fileprivate static func parseFile(data: Data, fallbackDate: Date) -> [CodexUsageEntry] {
+    nonisolated fileprivate static func parseFile(data: Data, fallbackDate: Date) -> [AIUsageEntry] {
         // 会话级维度：cwd（项目）与最后可见 model。
         var cwd = ""
         var modelID = ""
@@ -360,22 +292,22 @@ extension CodexUsageStore {
 
             if let last = info?["last_token_usage"] as? [String: Any] {
                 lastEvents.append(Counts(ts: ts,
-                                         input: intValue(last["input_tokens"]),
-                                         cachedInput: intValue(last["cached_input_tokens"]),
-                                         output: intValue(last["output_tokens"])))
+                                         input: AIUsageEntry.tokenCount(last["input_tokens"]),
+                                         cachedInput: AIUsageEntry.tokenCount(last["cached_input_tokens"]),
+                                         output: AIUsageEntry.tokenCount(last["output_tokens"])))
             }
             if let total = info?["total_token_usage"] as? [String: Any] {
                 totalEvents.append(Counts(ts: ts,
-                                          input: intValue(total["input_tokens"]),
-                                          cachedInput: intValue(total["cached_input_tokens"]),
-                                          output: intValue(total["output_tokens"])))
+                                          input: AIUsageEntry.tokenCount(total["input_tokens"]),
+                                          cachedInput: AIUsageEntry.tokenCount(total["cached_input_tokens"]),
+                                          output: AIUsageEntry.tokenCount(total["output_tokens"])))
             }
             // payload 顶层计数（仅当无 info 时才作为增量来源，避免与 info 双计）。
             if info == nil, let payload, payload["input_tokens"] != nil || payload["output_tokens"] != nil {
                 topEvents.append(Counts(ts: ts,
-                                        input: intValue(payload["input_tokens"]),
-                                        cachedInput: intValue(payload["cached_input_tokens"]),
-                                        output: intValue(payload["output_tokens"])))
+                                        input: AIUsageEntry.tokenCount(payload["input_tokens"]),
+                                        cachedInput: AIUsageEntry.tokenCount(payload["cached_input_tokens"]),
+                                        output: AIUsageEntry.tokenCount(payload["output_tokens"])))
             }
         }
 
@@ -393,9 +325,10 @@ extension CodexUsageStore {
             chosen = topEvents
         }
 
+        // 缓存输入记作共用层的缓存读（input 已含这部分）；Codex 没有缓存写。
         return chosen.map { c in
-            CodexUsageEntry(timestamp: c.ts, modelID: modelID, projectPath: cwd,
-                            input: c.input, cachedInput: c.cachedInput, output: c.output)
+            AIUsageEntry(timestamp: c.ts, modelID: modelID, projectPath: cwd,
+                         input: c.input, output: c.output, cacheRead: c.cachedInput)
         }
     }
 
@@ -417,133 +350,27 @@ extension CodexUsageStore {
         return ts.flatMap { CodexJSONLParsing.parseDate($0) } ?? fallback
     }
 
-    // MARK: 窗口算法（与 Claude 完全同构）
+    // MARK: 窗口与报表（算法在共用层，这里只传 Codex 的口径）
 
-    nonisolated fileprivate static func activeWindow(from entries: [CodexUsageEntry]) -> CodexUsageWindow? {
-        lastActiveBlock(from: entries, span: 5 * 3_600)
+    /// 周窗口。与 Claude 有一处原有差异，照旧保留：近 180h 一条用量都没有时，固定锚点口径也返回 nil
+    /// （Claude 那边返回一个 0 用量、有起止的窗口）。
+    nonisolated fileprivate static func weeklyWindow(from entries: [AIUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
+        guard !entries.isEmpty else { return nil }
+        return CodexUsageCalculator.weeklyWindow(from: entries, anchor: anchor)
     }
 
-    /// 通用「末个活跃分块」：升序，blockStart 向下取整到小时；条目时间 > start+span 时开新块。
-    /// 末块满足 now <= start+span 即为活跃窗口，否则返回 nil。span=5h 为 5 小时，span=168h 为周（滚动块）。
-    nonisolated fileprivate static func lastActiveBlock(from entries: [CodexUsageEntry], span: TimeInterval) -> CodexUsageWindow? {
-        guard !entries.isEmpty else { return nil }
-        let sorted = entries.sorted { $0.timestamp < $1.timestamp }
-
-        var blocks: [CodexUsageWindow] = []
-        var start: Date?
-        var totals = CodexUsageTotals.zero
-
-        for entry in sorted {
-            if let currentStart = start {
-                if entry.timestamp > currentStart.addingTimeInterval(span) {
-                    blocks.append(CodexUsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
-                    start = floorToHour(entry.timestamp)
-                    totals = .zero
-                }
-            } else {
-                start = floorToHour(entry.timestamp)
-                totals = .zero
+    /// 三维度报表：按项目 / 按模型两张表按 token 数从高到低排；取不到 cwd 的用量归到 "unknown" 项目。
+    nonisolated fileprivate static func buildReport(from entries: [AIUsageEntry]) -> CodexUsageReport {
+        CodexUsageCalculator.buildReport(
+            from: entries,
+            order: .byTokens,
+            locale: L10n.locale,
+            projectBucket: { path in
+                path.isEmpty
+                    ? (id: "unknown", label: "unknown")
+                    : (id: path, label: CodexSessionIndex.projectName(fromPath: path))
             }
-            totals.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-        }
-        if let currentStart = start {
-            blocks.append(CodexUsageWindow(start: currentStart, end: currentStart.addingTimeInterval(span), totals: totals))
-        }
-
-        guard let last = blocks.last, Date() <= last.end else { return nil }
-        return last
-    }
-
-    /// 周窗口：滚动块（默认）复用分块算法、跨度 168h；固定锚点聚合 [anchorStart, anchorStart+7d) 内条目。
-    nonisolated fileprivate static func weeklyWindow(from entries: [CodexUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
-        guard !entries.isEmpty else { return nil }
-        let weekSpan: TimeInterval = 168 * 3_600
-        if !anchor.fixed {
-            return lastActiveBlock(from: entries, span: weekSpan)
-        }
-        guard let start = weekAnchorStart(before: Date(), weekday: anchor.weekday, hour: anchor.hour) else {
-            return lastActiveBlock(from: entries, span: weekSpan)
-        }
-        let end = start.addingTimeInterval(weekSpan)
-        var totals = CodexUsageTotals.zero
-        for entry in entries where entry.timestamp >= start && entry.timestamp < end {
-            totals.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-        }
-        return CodexUsageWindow(start: start, end: end, totals: totals)
-    }
-
-    /// `date` 之前最近一个「指定星期几的指定小时:00:00」。
-    nonisolated fileprivate static func weekAnchorStart(before date: Date, weekday: Int, hour: Int) -> Date? {
-        var components = DateComponents()
-        components.weekday = weekday
-        components.hour = hour
-        components.minute = 0
-        components.second = 0
-        return Calendar.current.nextDate(
-            after: date,
-            matching: components,
-            matchingPolicy: .nextTime,
-            direction: .backward
         )
-    }
-
-    /// 今日（本地时区）累计。
-    nonisolated fileprivate static func todayTotals(from entries: [CodexUsageEntry]) -> CodexUsageTotals? {
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: Date())
-        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
-        var totals = CodexUsageTotals.zero
-        var any = false
-        for entry in entries where entry.timestamp >= dayStart && entry.timestamp < dayEnd {
-            any = true
-            totals.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-        }
-        return any ? totals : nil
-    }
-
-    /// 三维度报表构建。
-    nonisolated fileprivate static func buildReport(from entries: [CodexUsageEntry]) -> CodexUsageReport {
-        var report = CodexUsageReport()
-        let calendar = Calendar.current
-
-        var byDay: [Date: CodexUsageTotals] = [:]
-        var byProject: [String: CodexUsageTotals] = [:]
-        var byModel: [String: CodexUsageTotals] = [:]
-
-        let dayFormatter = DateFormatter()
-        dayFormatter.locale = L10n.locale
-        dayFormatter.dateFormat = "yyyy-MM-dd"
-
-        for entry in entries {
-            let dayKey = calendar.startOfDay(for: entry.timestamp)
-            var day = byDay[dayKey] ?? .zero
-            day.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-            byDay[dayKey] = day
-
-            var proj = byProject[entry.projectPath] ?? .zero
-            proj.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-            byProject[entry.projectPath] = proj
-
-            let modelLabel = entry.modelID.isEmpty ? "unknown" : entry.modelID
-            var model = byModel[modelLabel] ?? .zero
-            model.add(input: entry.input, cachedInput: entry.cachedInput, output: entry.output, modelID: entry.modelID)
-            byModel[modelLabel] = model
-        }
-
-        report.byDay = byDay.map { key, value in
-            CodexUsageBucket(id: dayFormatter.string(from: key), label: dayFormatter.string(from: key), totals: value, date: key)
-        }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
-
-        report.byProject = byProject.map { key, value in
-            let label = key.isEmpty ? "unknown" : CodexSessionIndex.projectName(fromPath: key)
-            return CodexUsageBucket(id: key.isEmpty ? "unknown" : key, label: label, totals: value, date: nil)
-        }.sorted { $0.totals.totalTokens > $1.totals.totalTokens }
-
-        report.byModel = byModel.map { key, value in
-            CodexUsageBucket(id: key, label: key, totals: value, date: nil)
-        }.sorted { $0.totals.totalTokens > $1.totals.totalTokens }
-
-        return report
     }
 
     /// 调用统计：遍历近 `days` 天 mtime 的 rollout 文件，聚合内置工具与 MCP（服务器›工具两级）。
@@ -618,21 +445,5 @@ extension CodexUsageStore {
         let prefix = server + "__"
         if name.hasPrefix(prefix) { return String(name.dropFirst(prefix.count)) }
         return name
-    }
-
-    // MARK: - 私有辅助
-
-    nonisolated fileprivate static func floorToHour(_ date: Date) -> Date {
-        let seconds = date.timeIntervalSinceReferenceDate
-        let floored = (seconds / 3_600).rounded(.down) * 3_600
-        return Date(timeIntervalSinceReferenceDate: floored)
-    }
-
-    nonisolated fileprivate static func intValue(_ any: Any?) -> Int {
-        if let i = any as? Int { return i }
-        if let d = any as? Double { return Int(d) }
-        if let n = any as? NSNumber { return n.intValue }
-        if let s = any as? String, let i = Int(s) { return i }
-        return 0
     }
 }

@@ -93,6 +93,18 @@ jobs:
             CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/build" \
             build
 
+      # 纯逻辑单元测试 BaoboxTests（只编 mac/Tests/ 与被测的 Core 源码，不启动 App），两套 Xcode 都跑。
+      # 参数与上一步逐个相同（签名同理，ad-hoc）：App 不会重编，只多编一个测试包；参数一变就会整个再编一遍。
+      - name: Test (BaoboxTests)
+        run: |
+          xcodebuild -project Baobox.xcodeproj -scheme Baobox -configuration Release \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM="" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/build" \
+            test
+
       - name: Package
         if: matrix.upload
         run: |
