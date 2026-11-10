@@ -30,7 +30,7 @@ final class DesktopPetTool: ToolModule {
         quietMenu.addItem(ClosureMenuItem(title: L("pet.menu.quietToday")) {
             PetController.shared.quietForToday()
         })
-        if PetSettings.quietUntil != nil {
+        if NotifySettings.quietUntil != nil {
             quietMenu.addItem(ClosureMenuItem(title: L("pet.menu.quietOff")) {
                 PetController.shared.clearQuiet()
             })

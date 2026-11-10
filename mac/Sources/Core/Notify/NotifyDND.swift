@@ -2,7 +2,7 @@ import AppKit
 import CoreAudio
 import Foundation
 
-/// 勿扰判定（设计 §4）：手动安静、外部抑制令牌（录屏 / 会议 #42 / 专注与休息 #43）、
+/// 勿扰判定（docs/desktop-pet/DESIGN.md §4）：手动安静、外部抑制令牌（录屏 / 会议 #42 / 专注与休息 #43）、
 /// 前台全屏应用。勿扰信号统一收敛到这里，各模块不要各写一份。
 @MainActor
 final class NotifyDND {
@@ -36,7 +36,7 @@ final class NotifyDND {
     /// 实时翻译也会占用麦克风，分不清是谁在用，不能因此让宠物睡着、把别的通知攒起来。
     var isSuppressed: Bool {
         if !tokens.isEmpty { return true }
-        if let until = PetSettings.quietUntil, until > Date() { return true }
+        if let until = NotifySettings.quietUntil, until > Date() { return true }
         return frontmostAppIsFullscreen
     }
 
@@ -44,7 +44,7 @@ final class NotifyDND {
     /// 不能被自己的 focus / break 令牌挡住）。
     func reasons(ignoringTokens ignored: Set<String> = []) -> [Reason] {
         var result: [Reason] = tokens.subtracting(ignored).sorted().map { .token($0) }
-        if let until = PetSettings.quietUntil, until > Date() { result.append(.quiet) }
+        if let until = NotifySettings.quietUntil, until > Date() { result.append(.quiet) }
         if microphoneInUse { result.append(.microphone) }
         if frontmostAppIsFullscreen { result.append(.fullscreen) }
         return result

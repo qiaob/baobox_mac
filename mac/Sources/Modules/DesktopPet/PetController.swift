@@ -939,7 +939,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             let action = def.action
             return RadialMenuItem(id: id, symbol: symbol, title: def.stateTitle?() ?? title) { action() }
         }
-        let quiet = PetSettings.quietUntil.map { $0 > Date() } ?? false
+        let quiet = NotifySettings.quietUntil.map { $0 > Date() } ?? false
 
         var inner: [RadialMenuItem] = [
             tool("focushealth.focus", "timer", L("pet.ring.focus")),
@@ -1137,15 +1137,15 @@ final class PetController: ObservableObject, NotifyPresenting {
     // MARK: - 安静一下
 
     func quietForOneHour() {
-        PetSettings.setQuietUntil(Date().addingTimeInterval(3600))
+        NotifySettings.setQuietUntil(Date().addingTimeInterval(3600))
     }
 
     func quietForToday() {
-        PetSettings.setQuietUntil(Calendar.current.startOfDay(for: Date().addingTimeInterval(86400)))
+        NotifySettings.setQuietUntil(Calendar.current.startOfDay(for: Date().addingTimeInterval(86400)))
     }
 
     func clearQuiet() {
-        PetSettings.setQuietUntil(nil)
+        NotifySettings.setQuietUntil(nil)
     }
 
     // MARK: - 测试通知（三种样式各一条，走完整的通知内核）

@@ -45,7 +45,7 @@ BaoboxApp(@main, Settings scene)
 
 核心协议 **`ToolModule`**（`mac/Sources/Core/ToolModule.swift`）：每个工具实现 `id / name / symbolName / submenuItems() / hotkeys() / settingsTab() / activate() / willTerminate()`（可选 `aiFeatures()`：用到模型的功能，进「AI」页的功能表），向 `ToolRegistry` 注册即接入菜单栏、二级菜单、设置 Tab、全局快捷键。**框架不认识具体工具**。
 
-共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`、`PasteboardBorrow`（借剪贴板取一次文字再还原，剪贴板历史据此跳过；`paste(_:)` 借剪贴板 ⌘V 插入文字）、`TextInserter`（把文字插入前台 App 的焦点：AX → 粘贴 → 复制，听写用）、`AudioCaptureCoordinator`（录音类功能互斥登记：会议 / 实时翻译 / 听写同一时刻只有一个在用语音识别）、`Translation/`（两个翻译模块共用：语言表 + 语种检测、引擎解析、离线模型下载与 `llama-server` 进程管理、设置区块）、`AI/`（**AI 服务层**：用到模型的地方都从 `AIService` 进；「AI」页接入多个服务商、每个服务商挂多个起了名字的模型（`AIModelStore`），每个功能单独选模型（模块用 `aiFeatures()` 声明，同 `hotkeys()` 之于快捷键页）；本地转调 `OfflineTranslator`，云端 = Claude / OpenAI 兼容，Key 在钥匙串，出错自动退回本地，见 `docs/ai-service/DESIGN.md`）。设置窗口在 `mac/Sources/Settings/`（含「AI」页）。
+共享基础设施（`mac/Sources/Core/`）：`HotkeyCenter`（Carbon 全局快捷键，单例转发 C 回调）、`KeyCombo`、`Permissions`（屏幕录制 / 辅助功能）、`Geometry`（CG↔AK 坐标系转换，最易错点）、`ClosureMenuItem`（带 hotkeyID 的菜单项）、`TappableDisclosure`、`L10n`（本地化）、`TerminalAppPreference`、`PasteboardBorrow`（借剪贴板取一次文字再还原，剪贴板历史据此跳过；`paste(_:)` 借剪贴板 ⌘V 插入文字）、`TextInserter`（把文字插入前台 App 的焦点：AX → 粘贴 → 复制，听写用）、`AudioCaptureCoordinator`（录音类功能互斥登记：会议 / 实时翻译 / 听写同一时刻只有一个在用语音识别）、`Notify/`（**通知内核**：所有模块投递通知（`NotifyCenter.shared.post`）、挂勿扰（`NotifyDND`）的入口；宠物开着由宠物气泡呈现，关着回退系统通知；设置在 `NotifySettings`，见 `docs/notify-core/DESIGN.md`）、`Translation/`（两个翻译模块共用：语言表 + 语种检测、引擎解析、离线模型下载与 `llama-server` 进程管理、设置区块）、`AI/`（**AI 服务层**：用到模型的地方都从 `AIService` 进；「AI」页接入多个服务商、每个服务商挂多个起了名字的模型（`AIModelStore`），每个功能单独选模型（模块用 `aiFeatures()` 声明，同 `hotkeys()` 之于快捷键页）；本地转调 `OfflineTranslator`，云端 = Claude / OpenAI 兼容，Key 在钥匙串，出错自动退回本地，见 `docs/ai-service/DESIGN.md`）。设置窗口在 `mac/Sources/Settings/`（含「AI」页）。
 
 ## 模块清单（`mac/Sources/Modules/<名>/`，菜单顺序 = 注册顺序）
 
@@ -91,6 +91,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/codex-assistant/DESIGN.md` —— Codex 对齐 Claude Code（取代 `docs/cursor-codex-assistant/` 的 Codex 部分）。
 - `docs/screen-draw/DESIGN.md` —— 屏幕标注画笔（同一套标注引擎换一块画布；绘制/穿透两态）。2026-11 起是菜单栏一级入口（`ScreenDrawTool`），代码仍在 Screenshot 目录、与截图共用标注引擎。
 - `docs/desktop-pet/` —— 桌面宠物：DESIGN（总设计）、INTERACTION、PACKS（素材包）、ROAM（活动范围 / 跳窗口）、VRM（二次元人形 + 程序化动作）、ENTRANCE（黑洞出场 / 退场）、SETTLE（找个不碍事的地方待着 + 原地动作）、WAKE（系统睡眠唤醒、动画重建与看门狗，日志 category `pet`）、MOCAP（走路用开源真人动捕数据，三种走法按场景换）。
+- `docs/notify-core/DESIGN.md` —— 通知内核搬出桌面宠物（#108）：`Core/Notify/`（`NotifyCenter` / `NotifyDND` / `NotifySettings`，键名不变）；宠物替别的模块做的事（通知呈现 / 会议控制条挂靠 / 休息画面主角）改成 Core 的呈现角色，由框架在启动时接上；§4 是分 PR 的迁移步骤。
 - `docs/focus-health/` —— 专注与健康 REQUIREMENTS + TECH_DESIGN：计时规则（用电脑的时间 / 实际时间 / 固定时刻、自然休息）、专注—休息状态机、避让与撞车、休息画面（借宠物渲染视图放大、拦截边界、看门狗）；HISTORY（专注历史：记什么、写入点、400 天、统计口径）。
 - `docs/data-export/DESIGN.md` —— 数据导出 / 导入（设置 → 通用 → 数据）：一个明文 JSON（片段、听写历史、专注与健康的提醒 / 设置 / 历史），导入只合并不覆盖；代码在 `mac/Sources/Settings/DataExport/`。
 - `docs/snippets/DESIGN.md` —— 文本片段（片段 = 手工创建的收藏条目，不另开数据源）+ 关键字展开的隐私边界与事件时序。

@@ -22,6 +22,8 @@
 ```
 
 - `NotifyCore`：通知数据模型、来源注册表、去重、勿扰聚合、动作回调用分发。与 UI 无关，可单测。
+  代码不在本模块：2026-11-10（#108）起放在 `mac/Sources/Core/Notify/`（`NotifyCenter` / `NotifyDND` / `NotifySettings`），
+  宠物模块只当呈现端、提供设置入口，见 `docs/notify-core/DESIGN.md`。
 - `NotifyGateway`（M2，未实现）：对外协议层（socket 监听、CLI 与 URL scheme 的参数解析），只做校验与转交，不持有呈现状态。
 - `PetEngine`：宠物状态机与行为（位置、移动、朝向、当前动画状态），只产出「渲染意图」（状态 + 位置 + 朝向），不关心 2D/3D。
 - `PetRenderer`（协议）：消费渲染意图。两个实现：`SpriteRenderer`（2D 帧序列）、`SceneRenderer`（SceneKit 3D）。
@@ -130,13 +132,17 @@ NotifyCenter.shared.post(_ n: PetNotification,
 
 ## 9. 设置（UserDefaults 键，前缀 `pet.` / `notify.`）
 
-- `pet.enabled`（默认开）、`pet.character`（形象 id)、`pet.renderer`（auto / 2d / 3d)、`pet.size`、`pet.roam`（是否走动）、`pet.quietUntil`（勿扰截止）。
-- `notify.<source>.enabled`（逐来源开关，内外来源统一）、`notify.sound`（alert 提示音，默认关）、`notify.historyLimit`。
+- 宠物（`PetSettings`，本模块）：`pet.enabled`（默认开）、`pet.character`（形象 id)、`pet.renderer`（auto / 2d / 3d)、`pet.size`、`pet.roam`（是否走动）。
+- 通知内核（`NotifySettings`，`Core/Notify/`；#108 从 `PetSettings` 拆出，键名一个没改）：`notify.source.<id>`（逐来源开关，内外来源统一，默认开）、
+  `notify.sound`（alert 提示音，默认关）、`notify.historyLimit`（默认 50）、`pet.quietUntil`（「安静一下」的勿扰截止，沿用老键名）。
+  设置页的「通知」一组开关和「安静一下」入口仍在宠物设置页 / 宠物菜单里。
 - 来源授权名单与限流状态存 `~/Library/Application Support/Baobox/Pet/sources.json`，不走 UserDefaults。
 
 ## 10. 文件
 
-- 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`NotifyCenter.swift`、`NotifyGateway.swift`（socket/CLI/URL，M2 未实现）、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
+- 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
+- 通知内核：`mac/Sources/Core/Notify/`（#108 从本模块搬出）——`NotifyCenter.swift`（通知模型、去重、勿扰聚合、系统通知回退）、`NotifyDND.swift`（勿扰判定）、
+  `NotifySettings.swift`（通知设置）。`NotifyGateway.swift`（socket/CLI/URL，M2 未实现）落地时也放这里。
 - 资源：`mac/Sources/Resources/Pets/`（内置形象目录）。
 - CLI 源码：`tools/baobox-pet/`（单文件 Swift，随包分发方式从待定项里定；M2 未实现）。
 - 本地化：`pet.*` / `notify.*` 键入 `Localizable.xcstrings`，中英齐全。

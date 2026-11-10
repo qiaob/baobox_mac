@@ -9,7 +9,7 @@ struct PetSettingsView: View {
     @AppStorage(PetSettings.entranceKey) private var entrance = true
     @AppStorage(PetSettings.sizeKey) private var size = 1.0
     @AppStorage(PetSettings.rangeKey) private var range = PetRange.bottom.rawValue
-    @AppStorage(PetSettings.soundKey) private var sound = false
+    @AppStorage(NotifySettings.soundKey) private var sound = false
     @AppStorage("notify.source.claudecode") private var sourceClaude = true
     @AppStorage("notify.source.codex") private var sourceCodex = true
     @AppStorage("notify.source.livetranslate") private var sourceLive = true
