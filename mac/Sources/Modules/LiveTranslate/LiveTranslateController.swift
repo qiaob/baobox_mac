@@ -39,20 +39,9 @@ enum LiveTranslateSource: String, CaseIterable, Identifiable {
     }
 }
 
-/// 说话的语言：固定一种，或在两种之间逐句自动判别（双识别器）。
-/// 见 docs/translation-engine/DESIGN.md §3.2。
-enum LiveTranslateSpeech: Equatable {
-    case fixed(TranslationLanguage)
-    case auto(TranslationLanguage, TranslationLanguage)
-
-    /// 这次会出现的语言（固定 = 一种，自动 = 两种）。
-    var languages: [TranslationLanguage] {
-        switch self {
-        case .fixed(let language): return [language]
-        case .auto(let first, let second): return [first, second]
-        }
-    }
-
+/// 说话语言的显示名（设置页、字幕条、记录头信息）。类型与设置在 Core（`SpeechLanguages` / `SpeechSettings`），
+/// 显示名用 `L()`，留在这边。
+extension SpeechLanguages {
     var title: String {
         switch self {
         case .fixed(let language): return language.endonym
@@ -103,9 +92,9 @@ struct LiveTranslateChannelState: Equatable {
     let mode: Mode
 }
 
+/// 说话语言（含自动 A / B）与专有名词表不在这里：字幕与同传、会议、听写共用，键与读写在 `SpeechSettings`（Core/Translation）。
 enum LiveTranslateSettings {
     static let sourceKey = "livetranslate.source"
-    static let languageKey = "livetranslate.language"
     static let translateKey = "livetranslate.translate"
     /// AI 纠正识别错字（中文；要先下载纠错模型）。
     static let aiCorrectionKey = "livetranslate.aiCorrection"
@@ -116,12 +105,7 @@ enum LiveTranslateSettings {
     /// 旧版只记位置；现在记位置 + 大小（`barFrameKey`），旧值只在没有新值时用一次。
     static let barOriginKey = "livetranslate.barOrigin"
     static let barFrameKey = "livetranslate.barFrame"
-    static let vocabularyKey = "livetranslate.vocabulary"
     static let targetKey = "livetranslate.target"
-    static let autoAKey = "livetranslate.autoA"
-    static let autoBKey = "livetranslate.autoB"
-    /// `languageKey` 存这个值 = 自动（双识别器）；否则存识别 locale（`en-US`、`zh-CN`…，与旧版兼容）。
-    static let autoValue = "auto"
 
     static let defaultFontSize: Double = 24
     static let defaultOpacity: Double = 0.75
@@ -144,40 +128,13 @@ enum LiveTranslateSettings {
         return available.isEmpty ? [.simplifiedChinese, .english] : available
     }()
 
-    static var speech: LiveTranslateSpeech {
-        let raw = UserDefaults.standard.string(forKey: languageKey) ?? "en-US"
-        if raw == autoValue { return .auto(autoA, autoB) }
-        return .fixed(TranslationLanguage.from(speechLocale: raw) ?? .english)
-    }
-
-    /// 设为固定某种语言。
-    static func setSpeech(_ language: TranslationLanguage) {
-        guard let locale = language.speechLocale else { return }
-        UserDefaults.standard.set(locale, forKey: languageKey)
-    }
-
-    static func setAutoSpeech() {
-        UserDefaults.standard.set(autoValue, forKey: languageKey)
-    }
-
-    static var autoA: TranslationLanguage {
-        TranslationLanguage.from(code: UserDefaults.standard.string(forKey: autoAKey)) ?? .simplifiedChinese
-    }
-
-    /// 与 A 相同时自动换成另一种（中英互为兜底）。
-    static var autoB: TranslationLanguage {
-        let stored = TranslationLanguage.from(code: UserDefaults.standard.string(forKey: autoBKey)) ?? .english
-        guard stored.isSameLanguage(as: autoA) else { return stored }
-        return autoA.isSameLanguage(as: .english) ? .simplifiedChinese : .english
-    }
-
     /// 译成什么（默认：说的是中文 → 英文，否则 → 中文，与旧版「英中互译」一致）。
     static var target: TranslationLanguage {
         get {
             if let stored = TranslationLanguage.from(code: UserDefaults.standard.string(forKey: targetKey)) {
                 return stored
             }
-            if case .fixed(let language) = speech, language.isChinese { return .english }
+            if case .fixed(let language) = SpeechSettings.speech, language.isChinese { return .english }
             return .simplifiedChinese
         }
         set { UserDefaults.standard.set(newValue.code, forKey: targetKey) }
@@ -204,7 +161,7 @@ enum LiveTranslateSettings {
     }
 
     /// 设置页「当前识别方式」：每种在听的语言此刻走本机还是 Apple 服务器、为什么。
-    static func recognitionRoutes(for speech: LiveTranslateSpeech) -> [LiveTranslateRecognitionRoute] {
+    static func recognitionRoutes(for speech: SpeechLanguages) -> [LiveTranslateRecognitionRoute] {
         let languages = speech.languages
         let supports = languages.map { language -> Bool in
             guard let localeID = language.speechLocale,
@@ -222,16 +179,6 @@ enum LiveTranslateSettings {
             }
             return LiveTranslateRecognitionRoute(language: languages[index], kind: kind)
         }
-    }
-
-    /// 专有名词表（设置页编辑，存成文本，格式见 `TranslationGlossary`）。
-    static var glossary: [GlossaryEntry] {
-        TranslationGlossary.parse(UserDefaults.standard.string(forKey: vocabularyKey) ?? "")
-    }
-
-    /// 识别器的提示词：专有名词的原文与译名。识别器每段现读，改完从下一句起生效。
-    static var vocabulary: [String] {
-        TranslationGlossary.recognitionHints(glossary)
     }
 
     /// 本机能否用新一代识别引擎（SpeechAnalyzer，macOS 26，且需 Xcode 26 编译）。
@@ -594,7 +541,7 @@ final class LiveTranslateController: ObservableObject {
         if config.followsSettings {
             // 实时翻译：音源、语言就在这里现读 —— 与改造前读设置的时刻一样（`start()` 到这里之间改了也算数）。
             config.sources = LiveTranslateSessionConfig.Sources(LiveTranslateSettings.source)
-            config.speech = LiveTranslateSettings.speech
+            config.speech = SpeechSettings.speech
             config.target = LiveTranslateSettings.target
         }
         // 没能开起来（权限被拒、识别不可用…）：改设置重启时留着的记录也就此收尾。
@@ -773,7 +720,7 @@ final class LiveTranslateController: ObservableObject {
     }
 
     /// 每种可能出现的语言各一个翻译方向（自动模式两个）；本来就是「译成」那种的不用翻。
-    private static func directions(speech: LiveTranslateSpeech,
+    private static func directions(speech: SpeechLanguages,
                                    target: TranslationLanguage) -> [(source: TranslationLanguage,
                                                                      target: TranslationLanguage)] {
         speech.languages.compactMap { language -> (source: TranslationLanguage, target: TranslationLanguage)? in
@@ -816,7 +763,7 @@ final class LiveTranslateController: ObservableObject {
     }
 
     /// 自动模式：双识别器；某一种语言的识别器不可用就退回单语言。
-    private func startRecognizer(speech: LiveTranslateSpeech) async -> LiveTranslateRecognizer? {
+    private func startRecognizer(speech: SpeechLanguages) async -> LiveTranslateRecognizer? {
         switch speech {
         case .fixed(let language):
             return await startSingleRecognizer(language: language)
@@ -870,7 +817,7 @@ final class LiveTranslateController: ObservableObject {
             if await LiveTranslateAnalyzerRecognizer.supports(locale) {
                 // 新引擎一路流到底，提示词只在开始时给（改了专有名词要重新开始才生效）。
                 let analyzer = LiveTranslateAnalyzerRecognizer(locale: locale, router: router,
-                                                               vocabulary: LiveTranslateSettings.vocabulary)
+                                                               vocabulary: SpeechSettings.vocabulary)
                 wire(analyzer)
                 do {
                     try await analyzer.start()

@@ -7,9 +7,9 @@ struct LiveTranslateSettingsSections: View {
 
     @AppStorage(LiveTranslateSettings.sourceKey) private var source = LiveTranslateSource.system.rawValue
     /// `auto` 或识别 locale（`en-US`、`zh-CN`…）。
-    @AppStorage(LiveTranslateSettings.languageKey) private var language = "en-US"
-    @AppStorage(LiveTranslateSettings.autoAKey) private var autoA = TranslationLanguage.simplifiedChinese.code
-    @AppStorage(LiveTranslateSettings.autoBKey) private var autoB = TranslationLanguage.english.code
+    @AppStorage(SpeechSettings.languageKey) private var language = "en-US"
+    @AppStorage(SpeechSettings.autoAKey) private var autoA = TranslationLanguage.simplifiedChinese.code
+    @AppStorage(SpeechSettings.autoBKey) private var autoB = TranslationLanguage.english.code
     @AppStorage(LiveTranslateSettings.targetKey) private var target = LiveTranslateSettings.target.code
     @AppStorage(LiveTranslateSettings.translateKey) private var translate = true
     @AppStorage(LiveTranslateSettings.onDeviceKey) private var onDevice = true
@@ -38,15 +38,15 @@ struct LiveTranslateSettingsSections: View {
                 .foregroundStyle(.secondary)
 
             Picker("livetranslate.settings.language", selection: $language) {
-                Text(LiveTranslateSpeech.auto(LiveTranslateSettings.autoA, LiveTranslateSettings.autoB).title)
-                    .tag(LiveTranslateSettings.autoValue)
+                Text(SpeechLanguages.auto(SpeechSettings.autoA, SpeechSettings.autoB).title)
+                    .tag(SpeechSettings.autoValue)
                 ForEach(LiveTranslateSettings.speechLanguages) { item in
                     Text(item.endonym).tag(item.speechLocale ?? item.code)
                 }
             }
             .onChange(of: language) { _, _ in controller.restartIfRunning() }
 
-            if language == LiveTranslateSettings.autoValue {
+            if language == SpeechSettings.autoValue {
                 Picker("livetranslate.settings.autoA", selection: $autoA) {
                     ForEach(LiveTranslateSettings.speechLanguages) { item in
                         Text(item.endonym).tag(item.code)
@@ -74,7 +74,7 @@ struct LiveTranslateSettingsSections: View {
                 Text("livetranslate.settings.onDeviceHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                LiveTranslateRouteStatus(speech: LiveTranslateSettings.speech, preferOnDevice: onDevice)
+                LiveTranslateRouteStatus(speech: SpeechSettings.speech, preferOnDevice: onDevice)
             }
         }
 
@@ -153,7 +153,7 @@ struct LiveTranslateSettingsSections: View {
 /// 「优先本地识别」下的当前状态：每种在听的语言此刻走本机还是 Apple 服务器、为什么。
 /// 单独成一个视图、结果存在 @State 里：设置页跟着字幕刷新会频繁重算 body，不能每次都去问识别器。
 private struct LiveTranslateRouteStatus: View {
-    let speech: LiveTranslateSpeech
+    let speech: SpeechLanguages
     let preferOnDevice: Bool
     @State private var routes: [LiveTranslateRecognitionRoute] = []
 

@@ -521,7 +521,7 @@ final class LiveTranslateLegacyRecognizer: LiveTranslateRecognizer {
         request.taskHint = .dictation
         request.addsPunctuation = true
         // 专有名词每段现读：设置里改完，下一句起生效。
-        request.contextualStrings = LiveTranslateSettings.vocabulary
+        request.contextualStrings = SpeechSettings.vocabulary
         if LiveTranslateSettings.preferOnDevice && recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true
         }

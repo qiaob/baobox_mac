@@ -137,7 +137,7 @@ enum DictationSettings {
         let languages: [TranslationLanguage]
         switch setting {
         case .follow:
-            languages = LiveTranslateSettings.speech.languages
+            languages = SpeechSettings.speech.languages
         case .chinese:
             languages = [.simplifiedChinese]
         case .english:

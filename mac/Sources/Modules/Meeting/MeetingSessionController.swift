@@ -215,7 +215,7 @@ final class MeetingSessionController: ObservableObject {
             owner: Self.source,
             label: L("meeting.captureLabel"),
             sources: type == .online ? .mixed : .microphone,
-            speech: LiveTranslateSettings.speech,
+            speech: SpeechSettings.speech,
             target: LiveTranslateSettings.target,
             translate: subtitlesOn && LiveTranslateSettings.translateEnabled,
             showsBar: subtitlesOn,

@@ -191,12 +191,17 @@
 | `livetranslate.autoA` / `livetranslate.autoB` | 语言代码 | `zh-Hans` / `en` |
 | `livetranslate.target` | 语言代码 | 说的是中文 → `en`，否则 `zh-Hans` |
 
+说话语言（`livetranslate.language`、`livetranslate.autoA` / `autoB`）和专有名词表（`livetranslate.vocabulary`，格式见 §2.3）是字幕与同传、
+会议、听写共用的设置，键与读写定义在 `Core/Translation/SpeechSettings.swift`（`SpeechSettings`，类型 `SpeechLanguages`；#107 从
+`LiveTranslateSettings` 搬过来，键名不变）。`livetranslate.target` 只有字幕与同传用，仍在 `LiveTranslateSettings`。
+
 ## 5. 文件
 
 ```
 mac/Sources/Core/Translation/
   TranslationLanguage.swift     语言表、文字系统、语言检测
   TranslationSettings.swift     引擎解析（按翻译功能：resolve(AIFeature)）
+  SpeechSettings.swift          说话语言（含自动 A / B）与专有名词表：字幕与同传、会议、听写共用的设置键与读写
   OfflineTranslator.swift       离线模型：下载 / 校验 / 推理进程 / 请求
   TranslationEngineSection.swift 设置页共用区块（这个功能的模型选择行 + 说明 + 模型状态 / 下载）
 mac/Sources/Core/AI/             AI 服务层：服务商与模型、功能选择、本地 / 云端路由、云端客户端、钥匙串（docs/ai-service/DESIGN.md）

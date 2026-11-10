@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// 整张表放在一个 Form 行里：onAppear / onChange 只挂一次，不会被拆到每一行上重复执行。
 struct LiveTranslateGlossaryEditor: View {
-    @AppStorage(LiveTranslateSettings.vocabularyKey) private var stored = ""
+    @AppStorage(SpeechSettings.vocabularyKey) private var stored = ""
     @State private var entries: [GlossaryEntry] = []
     @State private var loaded = false
     @FocusState private var focus: Field?

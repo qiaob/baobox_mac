@@ -188,7 +188,7 @@ final class DictationController: ObservableObject {
         guard let recognizer = DictationRecognizer(mode: mode == .hold ? .utterance : .segmented,
                                                    languages: DictationSettings.speechLanguages,
                                                    preferOnDevice: DictationSettings.preferOnDevice,
-                                                   vocabulary: LiveTranslateSettings.vocabulary) else {
+                                                   vocabulary: SpeechSettings.vocabulary) else {
             notify(L("dictation.error.unavailable"))
             abortStart()
             return
