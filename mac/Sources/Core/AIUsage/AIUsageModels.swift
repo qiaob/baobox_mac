@@ -73,13 +73,30 @@ struct AIUsageEntry: Equatable, Sendable {
         self.cacheRead = cacheRead
     }
 
-    /// 容错取 token 数（JSON 里可能是 Int / Double / NSNumber / 字符串），取不到记 0。
+    /// 一条记录 token 数的上限：真实值远到不了（一次请求不会有一万亿 token），只用来挡住损坏的日志 ——
+    /// 超出 Int 范围的小数转 Int、或几个 Int.max 累加，都会直接崩溃。
+    static let maxTokenCount = 1_000_000_000_000
+
+    /// 容错取 token 数（JSON 里可能是 Int / Double / NSNumber / 字符串），取不到记 0；
+    /// 结果限制在 0...`maxTokenCount`（负数记 0，过大的记上限）。
     static func tokenCount(_ value: Any?) -> Int {
-        if let i = value as? Int { return i }
-        if let d = value as? Double { return Int(d) }
-        if let n = value as? NSNumber { return n.intValue }
-        if let s = value as? String, let i = Int(s) { return i }
-        return 0
+        let raw: Int
+        if let i = value as? Int {
+            raw = i
+        } else if let d = value as? Double {
+            if d.isNaN {
+                raw = 0
+            } else {
+                raw = Int(exactly: d.rounded(.towardZero)) ?? (d > 0 ? maxTokenCount : 0)
+            }
+        } else if let n = value as? NSNumber {
+            raw = n.intValue
+        } else if let s = value as? String, let i = Int(s) {
+            raw = i
+        } else {
+            raw = 0
+        }
+        return min(max(raw, 0), maxTokenCount)
     }
 }
 

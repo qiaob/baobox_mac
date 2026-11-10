@@ -88,4 +88,24 @@ final class AIUsagePricingTests: XCTestCase {
         XCTAssertEqual(AIUsageEntry.tokenCount(nil), 0)
         XCTAssertEqual(AIUsageEntry.tokenCount(["input_tokens": 5]), 0)
     }
+
+    /// 损坏的日志不能让 App 崩：超出 Int 范围的小数、能累加溢出的大数都限到上限，负数记 0。
+    func testTokenCountClampsCorruptValues() {
+        let cap = AIUsageEntry.maxTokenCount
+        XCTAssertEqual(AIUsageEntry.tokenCount(1e300), cap)
+        XCTAssertEqual(AIUsageEntry.tokenCount(-1e300), 0)
+        XCTAssertEqual(AIUsageEntry.tokenCount(Double.infinity), cap)
+        XCTAssertEqual(AIUsageEntry.tokenCount(Double.nan), 0)
+        XCTAssertEqual(AIUsageEntry.tokenCount(Int.max), cap)
+        XCTAssertEqual(AIUsageEntry.tokenCount(-5), 0)
+        XCTAssertEqual(AIUsageEntry.tokenCount("99999999999999999999"), 0)
+
+        // 两条到顶的记录累加也不溢出。
+        let entry = AIUsageEntry(timestamp: Date(timeIntervalSince1970: 0), modelID: "", projectPath: "/p",
+                                 input: AIUsageEntry.tokenCount(Int.max), output: AIUsageEntry.tokenCount(Int.max))
+        var totals = AIUsageTotals<AnthropicStyleTable>.zero
+        totals.add(entry)
+        totals.add(entry)
+        XCTAssertEqual(totals.input, 2 * cap)
+    }
 }
