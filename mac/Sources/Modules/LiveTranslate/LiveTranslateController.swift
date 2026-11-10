@@ -323,16 +323,17 @@ final class LiveTranslateController: ObservableObject {
     /// 字幕条保留的句数：拉高字幕条可以往上翻（完整的在本地记录里）。
     private static let historyLines = 200
 
-    /// 本次的本地记录（docs/live-translate/DESIGN.md §6）；没开记录为 nil。
+    /// 自由听译的本地记录（docs/live-translate/DESIGN.md §6）；没开记录为 nil。托管会话（会议）从不建：会议的文档由会议自己写。
     private var transcript: LiveTranslateTranscript?
-    /// 字幕条「记录」菜单里「打开本次记录」用；还没记下任何一句时为 nil（文件还没建）。
+    /// 字幕条「记录」菜单里「打开本次记录」用；还没记下任何一句时为 nil（文件还没建）。托管会话是配置里的 `documentURL`。
     @Published private(set) var transcriptURL: URL?
-    /// 这一次正在记录（字幕条「记录」菜单里的开关）。
+    /// 这一次正在记录（字幕条「记录」按钮）：自由听译 = 在保存记录；托管会话 = 会议没暂停。
     @Published private(set) var recording = false
     /// 本次的音源、语言（中途打开记录时新建记录要用）。
     private var transcriptConfig: MeetingEngineRun?
-    /// 最近一次的记录：菜单栏「打开最近一次记录」、App 退出时收尾纪要用。
-    private(set) var lastTranscript: LiveTranslateTranscript?
+    /// 托管会话（会议）这一场开到了「开始记」那一步（第一次 `startFlow` 问完权限）：从这时到会话结束，字幕条的「记录」按钮
+    /// 跟着会议的暂停走，记下第一句后「打开本次记录」指向 `documentURL`；改设置重启时不动（docs/meeting/ENGINE.md §4.5.2）。
+    private var hostedRecording = false
     /// 第几次开始：改设置重启后接着写同一份记录，而句子 id 会从头编，记录里按「第几次 + id」区分。
     private var run = 0
     /// 正在因为改设置而重启：停止时不收尾记录、不清字幕历史，接着写 / 接着显示。
@@ -458,12 +459,12 @@ final class LiveTranslateController: ObservableObject {
     /// 字幕条上能换音源（实时翻译）；会议的音源由会议类型定。
     var showsSourceMenu: Bool { sessionConfig.followsSettings }
 
-    /// App 退出：停下来，记录同步写完；上一次还在整理的纪要标成「没整理完」。
+    /// App 退出：停下来，自由听译的记录同步写完；托管会话剩下的句子与 `.ended` 在返回前同步报完。
+    /// 还在整理的纪要（会议的、自由听译的）由会议在退出时统一标「没整理完」（`LiveTranslateTranscript.abortAllMinutes()`）。
     func terminate() {
         terminating = true
         stop()
         finishTranscript()
-        lastTranscript?.abortMinutesIfRunning()
     }
 
     func stop() {
@@ -474,7 +475,8 @@ final class LiveTranslateController: ObservableObject {
         for index in lines.indices where !lines[index].isFinal {
             settleSpeaker(index)
         }
-        // 记录：最后那句还没定稿也记上；改设置重启时接着写，否则收尾（结束时间、整理纪要）。
+        // 记录：最后那句还没定稿也记上（托管会话经 onFinalLine 报给会议，都在 .ended 之前）；改设置重启时接着写，
+        // 否则收尾（结束时间、整理纪要）。
         for line in lines {
             record(line, force: true)
         }
@@ -716,7 +718,7 @@ final class LiveTranslateController: ObservableObject {
         audioSource = audio
         mixedSource = mixed
         speakerBaseline = mixed?.laneTotals ?? LiveTranslateLaneStats()
-        config.onLifecycle?(.started)
+        config.onLifecycle?(.started(recordConfig))
     }
 
     /// 每种可能出现的语言各一个翻译方向（自动模式两个）；本来就是「译成」那种的不用翻。
@@ -871,7 +873,7 @@ final class LiveTranslateController: ObservableObject {
     // MARK: - 托管会话（会议记录，docs/meeting/TECH_DESIGN.md §2.1）
 
     /// 结束并等最后一句定稿（会议结束、听写结束用；实时翻译的 ✕ / `stop` 不变）：先停音频 → 识别器 endAudio →
-    /// 等最后一个 final（最多 1.5 秒）→ 再停（记录收尾、整理纪要照常）。
+    /// 等最后一个 final（最多 1.5 秒）→ 再停（记录收尾、整理纪要照常；托管会话是最后几句报完再报 `.ended`，会议在那里收尾文档）。
     func finish() async {
         guard isRunning, !isFinishing else { return }
         isFinishing = true
@@ -976,29 +978,23 @@ final class LiveTranslateController: ObservableObject {
         sessionEngine = nil
     }
 
-    /// 会议暂停 / 继续：暂停 = 不往识别器送音频，会话不停（手头那句照常定稿）。字幕条的「记录」按钮跟着变，
-    /// 记录里记一行「暂停 / 继续」。
+    /// 会议暂停 / 继续：暂停 = 不往识别器送音频，会话不停（手头那句照常定稿）。字幕条的「记录」按钮跟着变；
+    /// 「暂停 / 继续」那行由会议记进它自己的文档（docs/meeting/ENGINE.md §4.5.2）。
     func setPaused(_ paused: Bool) {
         guard isRunning || isStarting, audioPaused != paused else { return }
         audioPaused = paused
         mixedSource?.setPaused(paused)
-        if transcript != nil, !sessionConfig.followsSettings {
+        if hostedRecording {
             recording = !paused
         }
-        transcript?.note(paused ? L("livetranslate.record.doc.paused") : L("livetranslate.record.doc.resumed"), at: Date())
     }
 
-    /// 会议里单独不录某一路（麦克风 = 你的声音，系统声音 = 对方的声音）：这一路换成静音送进去，另一路照录；
-    /// 记录里记一行。只是 Baobox 不录，会议软件里照样听得到。
+    /// 会议里单独不录某一路（麦克风 = 你的声音，系统声音 = 对方的声音）：这一路换成静音送进去，另一路照录。
+    /// 只是 Baobox 不录，会议软件里照样听得到；说明行由会议记进它自己的文档。
     func setLaneMuted(_ muted: Bool, lane: Int) {
         guard isRunning || isStarting, mutedLanes.contains(lane) != muted else { return }
         if muted { mutedLanes.insert(lane) } else { mutedLanes.remove(lane) }
         mixedSource?.setMuted(muted, lane: lane)
-        let microphone = lane == LiveTranslateMixerCore.microphoneLane
-        let note = microphone
-            ? (muted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"))
-            : (muted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"))
-        transcript?.note(note, at: Date())
     }
 
     /// 两路此刻的电平（控制条的电平点，取一次清一次）；不是混音链路时为 nil。
@@ -1006,14 +1002,10 @@ final class LiveTranslateController: ObservableObject {
         mixedSource?.takeLevels()
     }
 
-    /// 会议的 🔖 标记重点：记录里记一行，整理纪要时这一刻前后的句子加「【重点】」。
-    func addTranscriptMark(at time: Date) {
-        transcript?.mark(at: time)
-    }
-
-    /// 会议速记：写进记录的「速记」一节，整理纪要时作为上下文。
-    func setTranscriptNotes(_ notes: String) {
-        transcript?.setNotes(notes)
+    /// 在字幕条上显示一行提示（会议的文档写盘失败时用）。没在运行就不显示 —— 同自由听译记录的写盘失败提示；字幕条收着就看不到。
+    func showNotice(_ text: String) {
+        guard isRunning else { return }
+        notice = text
     }
 
     // MARK: - 字幕
@@ -1062,7 +1054,7 @@ final class LiveTranslateController: ObservableObject {
     /// 线上会议：一句定稿时按这句期间两路的人声时长判「我 / 对方」（docs/meeting/TECH_DESIGN.md §2.2）。
     /// 这句的期间 = 上一句定稿到这句定稿（识别单元一个接一个）。不标说话人的会话什么也不做。
     private func settleSpeaker(_ index: Int) {
-        guard let mixedSource, sessionConfig.transcript?.speakers == true,
+        guard let mixedSource, sessionConfig.speakers,
               lines.indices.contains(index), !lines[index].speakerSettled else { return }
         let totals = mixedSource.laneTotals
         lines[index].speaker = LiveTranslateSpeakerJudge.decide(totals - speakerBaseline)
@@ -1073,34 +1065,43 @@ final class LiveTranslateController: ObservableObject {
     // MARK: - 本地记录
 
     /// 开始：新建一份记录；改设置后的重启接着写原来那份（设置变了记一行「改为：…」）。
+    /// 托管会话（会议）不建记录：文档归会议，它在 `.started` 时建、重启时续写（docs/meeting/ENGINE.md §4.5.2）；
+    /// 这里只在第一次开起来时把字幕条的「记录」按钮置为在记，重启时不动。
     private func startTranscript(_ config: MeetingEngineRun) {
+        if !sessionConfig.followsSettings {
+            guard !hostedRecording else { return }
+            hostedRecording = true
+            transcriptURL = nil
+            recording = true
+            return
+        }
         if let transcript {
             transcript.continueWith(config, at: Date())
             return
         }
+        guard LiveTranslateRecordSettings.enabled else { return }
         let start = Date()
-        let destination: LiveTranslateTranscript.Destination
-        if let given = sessionConfig.transcript {
-            // 会议：这次一定记，写到会议库里这场会议的目录。
-            destination = given
-        } else {
-            guard LiveTranslateRecordSettings.enabled else { return }
-            // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3）；会议模块没装就写到原来的文件夹。
-            destination = Self.recordLibrary?.freeListeningDestination(start: start) ?? .legacy(start: start)
-        }
+        // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3）；会议模块没装就写到原来的文件夹。
+        let destination = Self.recordLibrary?.freeListeningDestination(start: start) ?? .legacy(start: start)
         let transcript = LiveTranslateTranscript(start: start, config: config, destination: destination)
         transcript.onWriteError = { [weak self] message in
             guard let self, self.isRunning else { return }
             self.notice = L("livetranslate.record.writeFailed \(message)")
         }
         self.transcript = transcript
-        lastTranscript = transcript
         transcriptURL = nil
         recording = true
     }
 
-    /// 停止：写结束时间、整理纪要（App 退出时同步写完、不整理）。
+    /// 停止：写结束时间、整理纪要（App 退出时同步写完、不整理）。托管会话只把字幕条的「记录」按钮复原 ——
+    /// 会议在 `.ended` 里收尾它自己的文档。
     private func finishTranscript() {
+        if hostedRecording {
+            hostedRecording = false
+            transcriptURL = nil
+            recording = false
+            return
+        }
         guard let transcript else { return }
         self.transcript = nil
         transcriptURL = nil
@@ -1115,7 +1116,7 @@ final class LiveTranslateController: ObservableObject {
             LiveTranslateRecordSettings.enabled = on
         }
         // 会议记录中：这个开关只管自由听译的记录，不动会议的转录。
-        guard isRunning, sessionConfig.transcript == nil else { return }
+        guard isRunning, sessionConfig.followsSettings else { return }
         if on {
             guard transcript == nil, let transcriptConfig else { return }
             startTranscript(transcriptConfig)
@@ -1139,7 +1140,8 @@ final class LiveTranslateController: ObservableObject {
         }
     }
 
-    /// 记进本地记录：说完（定稿）的句子；停止时 `force` 把最后那句没定稿的也记上。会议另外经 `onFinalLine` 报给会议会话。
+    /// 记进本地记录：说完（定稿）的句子；停止时 `force` 把最后那句没定稿的也记上。托管会话（会议）只经 `onFinalLine`
+    /// 报给会议、由会议写进它自己的文档；记下第一句后字幕条的「打开本次记录」指向这场的 meeting.md（`documentURL`）。
     private func record(_ line: Line, force: Bool = false) {
         guard transcript != nil || sessionConfig.onFinalLine != nil, line.isFinal || force else { return }
         let original = line.original.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1148,6 +1150,10 @@ final class LiveTranslateController: ObservableObject {
         let translation = line.translates ? line.translation : ""
         sessionConfig.onFinalLine?(MeetingEngineLine(
             key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker))
+        if hostedRecording {
+            if transcriptURL == nil, isRunning { transcriptURL = sessionConfig.documentURL }
+            return
+        }
         guard let transcript else { return }
         transcript.update(key: key, time: line.startedAt, original: original, translation: translation,
                           speaker: line.speaker)

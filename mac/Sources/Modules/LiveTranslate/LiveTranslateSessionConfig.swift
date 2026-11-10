@@ -41,7 +41,9 @@ struct LiveTranslateSessionConfig {
 
     /// 会话的开始与结束（改设置引起的重启不算结束，只会再报一次 `.started`）。
     enum Lifecycle {
-        case started
+        /// 开起来了（音源已经在送）；`run` = 这次怎么跑的（托管方据此写文档头、改设置重启后的「改为：…」）。
+        case started(MeetingEngineRun)
+        /// 会话结束（结束、识别出错停了、没开起来），每场一次；这一场的 `onFinalLine` 都在它之前报完。
         case ended
     }
 
@@ -70,9 +72,12 @@ struct LiveTranslateSessionConfig {
     /// 运行中用 `LiveTranslateController.setBarVisible(_:translate:)` 切换。
     var showsBar: Bool
     var correction: Correction
-    /// 转录去向：nil = 实时翻译原来的行为（按「保存记录」开关，写进会议库的自由听译）；给定 = 这次一定记，写到这里。
-    var transcript: LiveTranslateTranscript.Destination?
-    /// 一句定稿（含之后纠错 / 译文回来的更新，同一句 `key` 不变）。
+    /// 每句按两路音量判「我 / 对方」（线上会议）。
+    var speakers = false
+    /// 托管会话（会议）这场的 meeting.md：只给字幕条用 —— 记下第一句后，「记录」按钮旁的小按钮打开它。
+    /// 引擎不写它：会议的文档由会议自己写（docs/meeting/ENGINE.md §4.5）。自由听译为 nil（记录照旧由引擎按「保存记录」开关写）。
+    var documentURL: URL?
+    /// 一句定稿（含之后纠错 / 译文回来的更新，同一句 `key` 不变）。停止时没定稿的最后几句也报，都在 `.ended` 之前。
     var onFinalLine: ((MeetingEngineLine) -> Void)?
 
     /// 整份配置跟着 `livetranslate.*` 设置走（实时翻译）：运行中改设置时按设置重来，字幕条上能换音源。
@@ -84,8 +89,7 @@ struct LiveTranslateSessionConfig {
     var onUserRequest: ((UserRequest) -> Void)?
 
     init(owner: String, label: String, sources: Sources, speech: SpeechLanguages, target: TranslationLanguage,
-         translate: Bool, showsBar: Bool, correction: Correction,
-         transcript: LiveTranslateTranscript.Destination? = nil) {
+         translate: Bool, showsBar: Bool, correction: Correction) {
         self.owner = owner
         self.label = label
         self.sources = sources
@@ -94,7 +98,6 @@ struct LiveTranslateSessionConfig {
         self.translate = translate
         self.showsBar = showsBar
         self.correction = correction
-        self.transcript = transcript
     }
 
     /// 实时翻译（自由听译）：全部取自原来的设置。
