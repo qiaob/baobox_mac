@@ -136,6 +136,7 @@ targets:
     sources:
       - path: Tests
       - path: Sources/Core/CLIUsage
+      - path: Sources/Core/EventFile
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests
