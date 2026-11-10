@@ -2,7 +2,7 @@
 
 [简体中文](../shortcuts.md) · English
 
-For 0.0.6. Every binding can be re-recorded, cleared, or reset under Settings → Shortcuts.
+For 0.0.8. Every binding can be re-recorded, cleared, or reset under Settings → Shortcuts.
 Conflicts with the system or another app are flagged **while you record**.
 
 ## Bound out of the box
@@ -15,6 +15,7 @@ Conflicts with the system or another app are flagged **while you record**.
 | ⌘⌥V | Paste the last entry as plain text | Clipboard |
 | ⌘⇧Space | Keyboard clicking (letter labels on elements) | Keyboard clicking |
 | ⌃⇧Space | Claude Code quick resume panel | Claude Code |
+| ⌥Space | Start / stop dictation (each finished sentence is typed right away; keep talking; stops after 30 s of silence) | Voice dictation |
 | ⌃⌥← / → / ↑ / ↓ | Left / right / top / bottom half | Window manager |
 | ⌃⌥U / I / J / K | Top-left / top-right / bottom-left / bottom-right quarter | Window manager |
 | ⌃⌥⏎ | Maximize (fills the visible area, not fullscreen) | Window manager |
@@ -41,6 +42,23 @@ combination:
 | Codex session center | Codex assistant |
 | Codex quick resume panel | Codex assistant |
 | Toggle Keep Awake (default duration) | Keep awake |
+| Open the Baobox menu | Menu bar |
+| Join the next meeting | Meeting |
+| Start / end online meeting recording | Meeting |
+| Start in-person meeting recording | Meeting |
+| Mark key point | Meeting |
+| Open notes | Meeting |
+| Toggle live captions | Subtitles & Interpreting |
+| Show the action bar | Selection assistant |
+| Translate the selection | Selection assistant |
+| Run one action on the selection (Translate / Learn / Polish / Rewrite / Natural English / Explain / Summarize) | Selection assistant |
+| Region text | Selection assistant |
+| Hold to talk | Voice dictation |
+| Long dictation | Voice dictation |
+| Start / pause focus | Focus & health |
+| Take a break now | Focus & health |
+| Show / hide the pet | Desktop pet |
+| Open Phone Transfer | Phone Transfer |
 
 ## In-interface keys (not global)
 
