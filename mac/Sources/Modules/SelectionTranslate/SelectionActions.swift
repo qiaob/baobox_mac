@@ -169,7 +169,12 @@ enum SelectionActionStore {
 
     /// 动作条上显示的（打开的）。翻译永远在 —— 关掉它也照样显示，免得一个按钮都不剩。
     static var visible: [SelectionAction] {
-        all.filter { $0.enabled || $0.id == SelectionBuiltinAction.translate.rawValue }
+        all.filter(isVisible)
+    }
+
+    /// 这个动作在不在动作条上（`visible` 与设置页的 ⌥ 编号共用这一条）。
+    static func isVisible(_ action: SelectionAction) -> Bool {
+        action.enabled || action.id == SelectionBuiltinAction.translate.rawValue
     }
 
     static func action(id: String) -> SelectionAction? {
