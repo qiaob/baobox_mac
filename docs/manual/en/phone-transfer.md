@@ -72,7 +72,10 @@ The "Open Phone Transfer" shortcut is unbound by default; set it in Settings →
 
 ## Privacy
 
-- LAN mode: a random token in the QR code plus approval on the Mac; unapproved devices get nothing.
+- LAN mode: a random token in the QR code plus approval on the Mac; unapproved devices get nothing. The token never
+  travels over the network (each request carries a signature instead); once allowed, the phone switches to its own key and
+  the QR code changes. A phone that is idle for 30 minutes has to scan again. When approving, check that the 4-digit
+  device code matches on the phone and the Mac. **File contents are not encrypted**: on public Wi-Fi, use Internet mode.
 - Internet mode: the session ID and key live only after the `#` in the QR code (browsers never send that part to a server).
   Connection setup is relayed by ntfy.sh / public MQTT brokers, encrypted with that key the whole way, so the relays can
   neither read nor forge it; files travel over an encrypted WebRTC channel directly between the two devices.
