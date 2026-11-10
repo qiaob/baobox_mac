@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// 桌面宠物工具模块壳：注册通知呈现端并启动宠物（设计见 docs/desktop-pet/DESIGN.md)。
+/// 桌面宠物工具模块壳：交出通知呈现端（框架在启动时接上，docs/notify-core/DESIGN.md §3.3）并启动宠物
+/// （设计见 docs/desktop-pet/DESIGN.md）。
 @MainActor
 final class DesktopPetTool: ToolModule {
     let id = "desktop-pet"
@@ -64,8 +65,12 @@ final class DesktopPetTool: ToolModule {
         AnyView(PetSettingsView())
     }
 
+    /// 宠物替框架呈现通知：开着 → 气泡；关着（isReady 为假）→ 通知内核走系统通知。
+    func presentationRoles() -> PresentationRoles {
+        PresentationRoles(notifications: PetController.shared)
+    }
+
     func activate() {
-        NotifyCenter.shared.presenter = PetController.shared
         // 宠物关着启动：通知会走系统通知，先把权限问好。
         NotifyCenter.shared.prepareSystemFallback(requestPermission: !PetSettings.enabled)
         PetController.shared.start()
