@@ -355,7 +355,7 @@ mac/Sources/
 └── Resources/              # Localizable.xcstrings、Assets
 ```
 
-`NetCapture`（网络抓包）代码在仓库里但**当前版本未注册发布**。
+`NetCapture`（网络抓包）代码在仓库里但**暂缓**：既不编进 App，也不注册（#103）。
 
 ## 新增一个工具
 

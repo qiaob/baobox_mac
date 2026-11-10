@@ -424,7 +424,7 @@ mac/Sources/
 └── Resources/              # Localizable.xcstrings, Assets
 ```
 
-`NetCapture` (packet capture) is in the repo but **not registered in the current release**.
+`NetCapture` (packet capture) is in the repo but **paused**: it is neither built into the app nor registered (#103).
 
 ## Adding a tool
 

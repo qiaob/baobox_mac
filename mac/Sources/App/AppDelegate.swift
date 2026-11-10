@@ -36,8 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(DictationTool())
         registry.register(PhoneTransferTool())
         registry.register(DesktopPetTool())
-        // 0.0.2 暂不发布抓包工具（NetCapture 尚在完善）：模块代码保留在仓库，仅此版本不注册/不激活，
-        // 后续完善后取消下一行注释即可恢复。
+        // 网络抓包（NetCapture）暂缓发布（#103）：代码留在仓库，但不编译（project.yml 的 excludes）也不注册。
+        // 恢复步骤见 project.yml 里那条 excludes 的注释，最后取消下一行注释。
         // registry.register(NetCaptureTool())
         registry.activateAll()
         // 开了「开机自启」的本地模型：现在拉起来并常驻（docs/local-models/DESIGN.md §4）。

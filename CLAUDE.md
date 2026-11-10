@@ -6,7 +6,7 @@
 
 **Baobox** —— macOS 菜单栏常驻的「效率工具集合」App（对标 CleanShot X + Paste，再加一组开发者工具）。一个 App 内置多个工具，统一入口 / 快捷键 / 设置。无 Dock 图标（`LSUIElement`），**非沙盒 + Hardened Runtime**，bundle id `com.baobox.app`。
 
-- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（例外三个：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书；离线翻译把 llama.cpp 官方预编译的 `llama-server` 作为子进程打进 App 包 —— `make vendor` 按固定构建号 + SHA-256 下载、不进 git，模型文件由用户在 App 里单独下载，见 `docs/translation-engine/DESIGN.md`；朗读译文的「Baobox 同传」虚拟麦克风是 BlackHole（GPL-3.0）源码改名编译的音频驱动 —— `make vendor` 按固定版本 + SHA-256 下载源码编译、打进 App 包，用户在设置里点安装才装进系统，见 `docs/live-translate-voice/DESIGN.md`）。
+- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（例外三个：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书（该模块暂缓、不编译，#103）；离线翻译把 llama.cpp 官方预编译的 `llama-server` 作为子进程打进 App 包 —— `make vendor` 按固定构建号 + SHA-256 下载、不进 git，模型文件由用户在 App 里单独下载，见 `docs/translation-engine/DESIGN.md`；朗读译文的「Baobox 同传」虚拟麦克风是 BlackHole（GPL-3.0）源码改名编译的音频驱动 —— `make vendor` 按固定版本 + SHA-256 下载源码编译、打进 App 包，用户在设置里点安装才装进系统，见 `docs/live-translate-voice/DESIGN.md`）。
 - 工程用 **XcodeGen** 生成（见 `mac/project.yml`，`sources: - Sources`（相对 mac/） 全量 glob，新增 `.swift` 文件自动纳入，无需改 project.yml）。
 
 ## 构建与验证（重要）
@@ -62,7 +62,7 @@ BaoboxApp(@main, Settings scene)
 | SelectionTranslate | `selectiontranslate` | **划词助手**（#85，原划词翻译）：选中后先弹动作条（翻译 · 学习 · 润色 · 改写 · 地道英文 · 解释 · 总结 · 自定义动作），AI 动作走 `AIService`，改写类在可写输入框里可替换原文（替换前 AX 核对选区），⌥ + 数字 / 键盘模式 / 各动作直达快捷键（临时快捷键 `HotkeyCenter.registerTransient`）；「学习」= 离线 ECDICT 词典卡 + 整句点词 / 朗读高亮 / 跟读，见 `docs/selection-translate/ASSISTANT.md`。底层：全系统选中文字就地浮层翻译 + 朗读（AX 取词 / 借剪贴板兜底（App 自己的「拷贝」菜单项，终端等 AX 读不到的 App 自动弹出也能用）/ 框选 OCR；原文语种自动识别，译成可选语言；系统翻译 / 离线模型，macOS 14 也能翻）。`docs/selection-translate/` |
 | Dictation | `dictation` | **语音听写**（#45）：按住说话 / 连续听写（开始·结束听写，出厂快捷键 ⌥Space：一句定稿就上屏，可以一直说，安静 30 秒自动结束）/ 长听写（收集面板，可编辑再插入）；录音条不抢焦点，Esc 取消；识别走自己的 `SFSpeechRecognizer`（taskHint 听写、优先设备端、术语表共用），默认中英自动判别（低置信度时换语言重认；连续听写与长听写按停顿切段、逐句判）；后处理：语音指令、口头禅过滤、标点规整、可选本地 AI 润色（按 App）；插入按可靠性降级：AX 写入焦点（读回校验）→ 借剪贴板 ⌘V（不进剪贴板历史）→ 复制 + 提示（密码框 / 无权限）。听写历史只存文本。`docs/dictation/` |
 | PhoneTransfer | `phonetransfer` | **手机互传**：扫码连接，Mac ↔ 手机互传文件和文字，手机只用浏览器。局域网模式 = `NWListener` 极简 HTTP 服务（令牌 + Mac 端允许）；公网模式 = 隐藏 `WKWebView` 跑 WebRTC DataChannel（UDP 打洞，**不做中继**），信令 AES-GCM 加密后经公共 ntfy.sh / MQTT 中转。网页在 `Resources/PhoneTransfer/`（folder 资源，同一份由 `pages.yml` 发布到 GitHub Pages `/transfer/`）。`docs/phone-transfer/` |
-| NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
+| NetCapture | `netcapture` | **网络抓包（暂缓，#103）**：代码在仓库，但 `project.yml` 的 excludes 把它排除在编译之外、AppDelegate 也不注册，发布包里没有；恢复步骤写在那条 excludes 的注释里。原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
 
