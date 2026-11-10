@@ -61,7 +61,7 @@
 ## 3. 会议会话（Meeting 模块）
 
 - `MeetingSessionController`：`start(type:event:)` → 组 config → `LiveTranslateController.shared.start(config:)`；claim 失败（听写 / 实时翻译在用）→ 宠物提示。记录中：挂 `meeting` 勿扰、菜单栏录音指示、控制条、超时检查（绑定日历事件时）。`pause/resume`（暂停 = 停喂音频，不停会话）、`mark()`、`notes`、`setSubtitles(_:)`、`finish()` → 引擎 `finish` → 写 `meta.json` → 生成纪要（后台，状态 `summarizing`）→ 完成后更新 meta + 索引 + 通知。
-- **控制条** `MeetingControlBar`：nonactivating 面板，`.statusBar` 级，速记展开时可成为 key（输入用），收起后交还焦点。宠物在（开着、显示着、没借给休息画面）时经 `PetController.dockAccessory` 挂成宠物窗的子窗口，贴在宠物头顶，跟着宠物走，自己不能拖；宠物关着、中途被关掉或借出时回到屏幕顶部居中，可拖动（记住位置）。
+- **控制条** `MeetingControlBar`：nonactivating 面板，`.statusBar` 级，速记展开时可成为 key（输入用），收起后交还焦点。经 Core 的 `AccessoryDock` 找挂靠点，不认识宠物（#108）：宠物在（开着、显示着、没借给休息画面、不在出场退场途中）时挂成宠物窗的子窗口，贴在宠物头顶，跟着宠物走，自己不能拖；宠物关着、中途被关掉或借出、宠物模块没注册时回到屏幕顶部居中，可拖动（记住位置）。
 - **合规说明**：首次开始记录弹一次（宠物常驻气泡，[我已告知][取消]）。
 
 ## 4. 会议库
@@ -125,7 +125,7 @@
 - **会议库**：`MeetingStore` 主线程模型（`records` = index.json 的内存副本）+ 后台串行写盘；启动读索引，缺失 / 损坏扫目录重建，否则与磁盘对账；上次没收尾的 `recording / summarizing` 改成 `transcribed`。一句没记下的会议直接作废（不进废纸篓）；删除进废纸篓（迁移来的旧记录连原文件）。保留时长只在启动时清理。迁移只在用过「保存记录」或改过保存位置时才去读旧文件夹（免得首次启动就弹「文稿」授权框），两种语言的默认文件夹名都看。
 - **控制条**：尺寸由「新建一个不进窗口的宿主视图量当前状态」得到，状态变了下一拍重量、上边不动往下长（窗口里的宿主视图 `sizingOptions = []`）；计时按「0:00:00」占位，过一小时宽度不变。
 - **单路静音**（2026-11-06 用户要求：有时想不录自己的声音，或只录自己）：控制条的麦克风 / 喇叭图标是开关。`LiveTranslateController.setLaneMuted(_:lane:)` → 混音器 `LiveTranslateMixerCore.setMuted`：被点掉的那一路照样按时长送一段静音进去（两路仍对齐、不算断流），电平随之为 0，「我 / 对方」按电平判也就跟着对；状态跟暂停一样存在引擎里、跨「改设置引起的重启」保留，新会话清零；记录里记一行（`livetranslate.record.doc.micMuted` 等）。只是 Baobox 不录，不碰会议软件的麦克风。
-- **控制条挂在宠物头顶**（2026-11-06 真机反馈后改）：Chrome 全屏开 Google Meet，从宠物气泡点「开始记录」后控制条出在屏幕顶上，用户没看见，以为没开始 —— 控制条要出在用户刚点的地方。挂件接口在宠物模块（`dockAccessory` / `undockAccessory` / `refreshAccessory(size:)`），一次挂一个：贴在宠物窗高度 86% 处（同气泡尾巴）往上 4 pt，与宠物居中对齐，左右挪进屏内；头顶放不下就放到脚下。气泡排在挂件外侧（`BubbleController.accessoryClearance`）。挂上、摘下（宠物开关、借出归还）都回调，先回调再挂，控制条据此停掉拖动和记位置。会中宠物按勿扰原地打盹不溜达，挂件只在被拖、跟着窗口挪、掉下来时动；挂着时速记展开往上长（宠物按新尺寸重新贴位）。收起速记时 orderOut 会把子窗口摘下来，之后重新挂回。
+- **控制条挂在宠物头顶**（2026-11-06 真机反馈后改）：Chrome 全屏开 Google Meet，从宠物气泡点「开始记录」后控制条出在屏幕顶上，用户没看见，以为没开始 —— 控制条要出在用户刚点的地方。挂件接口原在宠物模块（`dockAccessory` / `undockAccessory` / `refreshAccessory(size:)`），#108 起控制条改调 Core 的 `AccessoryDock.dock` / `undock` / `refresh(_:size:)`，宠物实现 `AccessoryHost` 转给这组方法（docs/notify-core/DESIGN.md §3.4）。一次挂一个：贴在宠物窗高度 86% 处（同气泡尾巴）往上 4 pt，与宠物居中对齐，左右挪进屏内；头顶放不下就放到脚下。气泡排在挂件外侧（`BubbleController.accessoryClearance`）。挂上、摘下（宠物开关、借出归还）都回调，先回调再挂，控制条据此停掉拖动和记位置。会中宠物按勿扰原地打盹不溜达，挂件只在被拖、跟着窗口挪、掉下来时动；挂着时速记展开往上长（宠物按新尺寸重新贴位）。收起速记时 orderOut 会把子窗口摘下来，之后重新挂回。
 - **屏幕顶部的位置要让开刘海**：全屏 App 里菜单栏收起，visibleFrame 顶到屏幕边；带刘海的屏顶上那条（`safeAreaInsets.top`，这台 32 pt）是黑的，旧位置（visibleFrame 顶下 12 pt）让黑底控制条半截落进黑带、中间被刘海挡住。现在让开「菜单栏 / safeAreaInsets / 菜单栏厚度」三者里最大的那个，记住的位置也往下拉出这条。
 - **勿扰下的提示**：记录中挂着 `meeting` 令牌，普通提示会被攒起来，所以会中的轻提示（已在记录、超时）用 alert 级 + toast 样式；会后的「纪要已生成」晚一拍再发（等令牌撤掉）。
 
