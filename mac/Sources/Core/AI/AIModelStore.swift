@@ -107,7 +107,12 @@ final class AIModelStore: ObservableObject {
         guard let model = model(modelID), let account = account(model.accountID) else {
             return L("ai.problem.deleted")
         }
-        guard let url = baseURL(of: account) else { return L("ai.problem.baseURL") }
+        guard let url = baseURL(of: account) else {
+            if AICloudSettings.urlProblem(account.baseURL, fallback: account.kind.defaultBaseURL) == .insecure {
+                return L("ai.problem.baseURLInsecure")
+            }
+            return L("ai.problem.baseURL")
+        }
         if model.modelName.isEmpty { return L("ai.problem.model") }
         if keys[account.id] == nil, !AICloudSettings.keyOptional(account.kind, baseURL: url) {
             return L("ai.problem.key")
