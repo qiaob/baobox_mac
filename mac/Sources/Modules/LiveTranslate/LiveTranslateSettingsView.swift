@@ -248,7 +248,9 @@ private struct LiveTranslateRecordSection: View {
                 }
                 Toggle("livetranslate.record.summary", isOn: $summary)
                 Group {
-                    if corrector.isReady {
+                    // 和结束时决定整不整理纪要的判断是同一条（LiveTranslateTranscript.finish）：看「会议纪要」选的模型，
+                    // 不只是内置的 Qwen3-1.7B。`corrector` 仍然观察着，它下载完这一行会跟着变。
+                    if AIService.shared.isReady(AIService.shared.route(for: .meetingMinutes), local: .generation) {
                         Text("livetranslate.record.summaryHelp")
                     } else {
                         Text("livetranslate.record.summaryNeedsModel")
