@@ -1,7 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "selectiontranslate.bar.tone" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Rewrite tone" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "改写语气" } } } },
     "ai.settings.sendsNone" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No feature uses a cloud model right now, so nothing is sent." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "现在没有功能用云端模型，什么都不会发出去。" } } } },
     "ai.settings.sendsLine %@ %@ %@" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "%1$@: sends %2$@ to “%3$@”." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%1$@：会把%2$@发给「%3$@」。" } } } },
     "ai.advice.onlyFitsDetail" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This Mac doesn't have enough memory for a larger model." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这台 Mac 的内存跑不动更大的模型。" } } } },
@@ -1057,6 +1056,7 @@
     "selectiontranslate.action.translate.help" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Translate the selection" }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "翻译选中的文字" }}}},
     "selectiontranslate.action.untitled" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Untitled Action" }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未命名动作" }}}},
     "selectiontranslate.bar.settings" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "More actions and settings" }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "更多动作与设置" }}}},
+    "selectiontranslate.bar.tone" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Rewrite tone" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "改写语气" } } } },
     "selectiontranslate.dict.buildFailed" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't prepare the dictionary. Try downloading it again." }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "词典整理失败，请重新下载。" }}}},
     "selectiontranslate.dict.download %@" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Download Dictionary (%@)" }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "下载词典（%@）" }}}},
     "selectiontranslate.dict.downloadHint" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Download the offline dictionary for phonetics, meanings and word forms." }}, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "下载离线词典后可以看音标、释义和词形变化。" }}}},
