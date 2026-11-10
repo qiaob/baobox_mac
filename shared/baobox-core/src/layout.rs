@@ -61,7 +61,10 @@ impl Layout {
     /// 跨屏与恢复不是 —— 它们要的是别的信息（有哪些屏、之前在哪），
     /// 不能只看当前这块屏。
     pub fn is_slicing(&self) -> bool {
-        !matches!(self, Layout::NextDisplay | Layout::PrevDisplay | Layout::Restore)
+        !matches!(
+            self,
+            Layout::NextDisplay | Layout::PrevDisplay | Layout::Restore
+        )
     }
 
     /// 动作 id 里用的那一段，也是配置里的快捷键键名。
@@ -315,8 +318,16 @@ mod tests {
     #[test]
     fn the_neighbour_display_wraps_around_in_both_directions() {
         assert_eq!(neighbour_display(0, 3, true), 1);
-        assert_eq!(neighbour_display(2, 3, true), 0, "最后一块的下一块转回第一块");
-        assert_eq!(neighbour_display(0, 3, false), 2, "第一块的上一块是最后一块");
+        assert_eq!(
+            neighbour_display(2, 3, true),
+            0,
+            "最后一块的下一块转回第一块"
+        );
+        assert_eq!(
+            neighbour_display(0, 3, false),
+            2,
+            "第一块的上一块是最后一块"
+        );
         assert_eq!(neighbour_display(1, 3, false), 0);
         // 只有一块屏时哪儿也去不了，但不能除以零
         assert_eq!(neighbour_display(0, 1, true), 0);

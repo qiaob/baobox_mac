@@ -79,7 +79,9 @@ pub fn run(
 
     let mut editor = Editor::new(image, screen_rect);
     // 窗口要同时盖住图像和它的工具条
-    let frame = image.union(&editor.toolbar().frame).clamped_to(&screen_rect);
+    let frame = image
+        .union(&editor.toolbar().frame)
+        .clamped_to(&screen_rect);
     let (fw, fh) = (frame.w.round() as u16, frame.h.round() as u16);
 
     let window = create_window(conn, screen, &frame)?;
@@ -93,8 +95,18 @@ pub fn run(
     grab_input(conn, window);
 
     let outcome = event_loop(
-        conn, window, pixmap, gc, &mut editor, &frame, &rgba, image, font.as_ref(), &keymap,
-        msb_first, depth,
+        conn,
+        window,
+        pixmap,
+        gc,
+        &mut editor,
+        &frame,
+        &rgba,
+        image,
+        font.as_ref(),
+        &keymap,
+        msb_first,
+        depth,
     );
 
     // 先撤掉窗口，再导出 —— 导出走的是离屏 Pixmap，与窗口无关，
@@ -109,7 +121,15 @@ pub fn run(
         (rgba, image.w.round() as u32, image.h.round() as u32)
     } else {
         export(
-            conn, gc, screen, depth, &editor, &rgba, image, font.as_ref(), msb_first,
+            conn,
+            gc,
+            screen,
+            depth,
+            &editor,
+            &rgba,
+            image,
+            font.as_ref(),
+            msb_first,
         )?
     };
     let _ = conn.free_pixmap(pixmap);
@@ -139,7 +159,9 @@ fn event_loop(
     msb_first: bool,
     depth: u8,
 ) -> Result<EditorOutcome, String> {
-    redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth)?;
+    redraw(
+        conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth,
+    )?;
     loop {
         if let Some(outcome) = editor.outcome() {
             return Ok(outcome);
@@ -149,7 +171,9 @@ fn event_loop(
             .map_err(|e| format!("事件循环出错：{e}"))?;
         match event {
             Event::Expose(_) => {}
-            Event::MotionNotify(motion) => editor.mouse_moved(to_screen(frame, motion.event_x, motion.event_y)),
+            Event::MotionNotify(motion) => {
+                editor.mouse_moved(to_screen(frame, motion.event_x, motion.event_y))
+            }
             Event::ButtonPress(press) => match press.detail {
                 1 => {
                     editor.mouse_down(to_screen(frame, press.event_x, press.event_y));
@@ -187,7 +211,9 @@ fn event_loop(
             }
             _ => continue,
         }
-        redraw(conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth)?;
+        redraw(
+            conn, window, pixmap, gc, editor, frame, base, image, font, msb_first, depth,
+        )?;
     }
 }
 
@@ -303,7 +329,15 @@ fn export(
         }
     }
     let read = conn
-        .get_image(ImageFormat::Z_PIXMAP, pixmap, 0, 0, iw as u16, ih as u16, !0)
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            pixmap,
+            0,
+            0,
+            iw as u16,
+            ih as u16,
+            !0,
+        )
         .map_err(|e| e.to_string())?
         .reply()
         .map_err(|e| format!("读回导出缓冲失败：{e}"))?;
@@ -396,9 +430,8 @@ fn draw_annotations(
     texts
         .into_iter()
         .map(|text| {
-            let color = ((text.color.r as u32) << 16)
-                | ((text.color.g as u32) << 8)
-                | text.color.b as u32;
+            let color =
+                ((text.color.r as u32) << 16) | ((text.color.g as u32) << 8) | text.color.b as u32;
             (text.text, color, text.x as i16, text.y as i16)
         })
         .collect()
@@ -645,7 +678,9 @@ impl KeyMap {
         } else {
             None
         };
-        shifted.or_else(|| self.keysyms.get(base).copied()).filter(|k| *k != 0)
+        shifted
+            .or_else(|| self.keysyms.get(base).copied())
+            .filter(|k| *k != 0)
     }
 }
 
@@ -688,9 +723,18 @@ mod tests {
         // 但按着 Ctrl 时仍然是快捷键 —— 打字途中也要能撤销
         assert_eq!(command_for(Some(0x7a), true, true), Some(EditorKey::Z));
         // Esc / ⏎ / 退格在打字时仍是命令，否则文字没法落定也没法删字
-        assert_eq!(command_for(Some(0xff1b), false, true), Some(EditorKey::Escape));
-        assert_eq!(command_for(Some(0xff0d), false, true), Some(EditorKey::Enter));
-        assert_eq!(command_for(Some(0xff08), false, true), Some(EditorKey::Backspace));
+        assert_eq!(
+            command_for(Some(0xff1b), false, true),
+            Some(EditorKey::Escape)
+        );
+        assert_eq!(
+            command_for(Some(0xff0d), false, true),
+            Some(EditorKey::Enter)
+        );
+        assert_eq!(
+            command_for(Some(0xff08), false, true),
+            Some(EditorKey::Backspace)
+        );
     }
 
     #[test]
@@ -723,7 +767,7 @@ mod tests {
     #[test]
     fn composing_puts_the_image_where_it_belongs_and_backfills_the_rest() {
         // 图像 2×2 全红，窗口 4×4 —— 图像在 (1,1)
-        let base = vec![255u8, 0, 0, 255].repeat(4);
+        let base = [255u8, 0, 0, 255].repeat(4);
         let image = Rect::new(11.0, 21.0, 2.0, 2.0);
         let frame = Rect::new(10.0, 20.0, 4.0, 4.0);
         let pixels = compose(&frame, &base, image);
@@ -732,7 +776,8 @@ mod tests {
         // (0,0) 是底衬
         assert_eq!(&pixels[0..4], &BACKDROP);
         // (1,1) 是图像的第一个像素
-        let at = (1 * 4 + 1) * 4;
+        let (x, y, width) = (1, 1, 4);
+        let at = (y * width + x) * 4;
         assert_eq!(&pixels[at..at + 4], &[255, 0, 0, 255]);
         // (3,3) 在图像外，仍是底衬
         let corner = (3 * 4 + 3) * 4;

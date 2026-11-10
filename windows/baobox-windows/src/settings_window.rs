@@ -823,6 +823,8 @@ unsafe fn build(
     (y + MARGIN, groups)
 }
 
+// Win32 控件的创建参数本来就多，拆成结构体只是把同样的字段挪个地方。
+#[allow(clippy::too_many_arguments)]
 unsafe fn static_text(
     parent: HWND,
     instance: HINSTANCE,
@@ -849,6 +851,7 @@ unsafe fn static_text(
 }
 
 /// `SS_ETCHEDHORZ` 的原始值 —— windows crate 没导出这个静态控件样式常量。
+#[allow(clippy::too_many_arguments)]
 unsafe fn control(
     parent: HWND,
     instance: HINSTANCE,
@@ -1181,7 +1184,13 @@ unsafe fn smooth_fill(graphics: *mut GpGraphics, rect: RECT, diameter: i32, colo
     }
     GdipDeletePath(path);
 }
-pub(crate) unsafe fn rounded(dc: HDC, bounds: RECT, radius: i32, color: COLORREF, border: COLORREF) {
+pub(crate) unsafe fn rounded(
+    dc: HDC,
+    bounds: RECT,
+    radius: i32,
+    color: COLORREF,
+    border: COLORREF,
+) {
     static GDI_PLUS: OnceLock<usize> = OnceLock::new();
     let token = GDI_PLUS.get_or_init(|| {
         let mut token = 0;
@@ -2315,13 +2324,13 @@ mod tests {
     #[test]
     fn scrolling_one_step_is_about_one_row() {
         // 一格滚半行会看着像卡住，滚三行会晕
-        assert!(SCROLL_STEP > 0);
-        assert!(SCROLL_STEP <= ROW_HEIGHT);
+        const { assert!(SCROLL_STEP > 0) };
+        const { assert!(SCROLL_STEP <= ROW_HEIGHT) };
     }
 
     #[test]
     fn control_ids_start_above_the_system_reserved_range() {
         // IDOK / IDCANCEL 这些是 1..9，撞上的话会收到莫名其妙的 WM_COMMAND
-        assert!(FIRST_CONTROL > 10);
+        const { assert!(FIRST_CONTROL > 10) };
     }
 }

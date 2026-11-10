@@ -49,8 +49,16 @@ impl Rect {
 
     /// 宽或高为负时翻正。
     pub fn normalized(&self) -> Rect {
-        let x = if self.w < 0.0 { self.x + self.w } else { self.x };
-        let y = if self.h < 0.0 { self.y + self.h } else { self.y };
+        let x = if self.w < 0.0 {
+            self.x + self.w
+        } else {
+            self.x
+        };
+        let y = if self.h < 0.0 {
+            self.y + self.h
+        } else {
+            self.y
+        };
         Rect::new(x, y, self.w.abs(), self.h.abs())
     }
 

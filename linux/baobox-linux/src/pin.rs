@@ -19,8 +19,8 @@
 use baobox_core::geometry::Rect;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
-    PropMode, Screen, Window, WindowClass,
+    self, AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
+    EventMask, PropMode, Screen, Window, WindowClass,
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
@@ -208,6 +208,6 @@ mod tests {
     #[test]
     fn double_click_window_is_a_human_scale_interval() {
         // 太短双击关不掉，太长会把两次独立的点击误判成双击
-        assert!(DOUBLE_CLICK_MS >= 200 && DOUBLE_CLICK_MS <= 600);
+        const { assert!(DOUBLE_CLICK_MS >= 200 && DOUBLE_CLICK_MS <= 600) };
     }
 }

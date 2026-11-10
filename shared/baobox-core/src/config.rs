@@ -247,7 +247,8 @@ screenshot.capture = Ctrl+Shift+S
     #[test]
     fn unknown_keys_and_comments_survive_a_read_modify_write() {
         // 老版本读到新版本写的配置，改一个自己认识的键，再写回来
-        let text = "[screenshot]\n# 这是未来版本的键\nfuture_option = 42\ncopy_to_clipboard = false\n";
+        let text =
+            "[screenshot]\n# 这是未来版本的键\nfuture_option = 42\ncopy_to_clipboard = false\n";
         let mut config = Config::parse(text);
         config.set_bool("screenshot", "copy_to_clipboard", true);
         let out = config.to_text();

@@ -164,7 +164,9 @@ pub fn scan_dir(dir: &Path, flavor: Flavor, now: i64) -> Snapshot {
         }
     }
     // 最近的排最前 —— 用户要续接的几乎总是刚才那个
-    snapshot.sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    snapshot
+        .sessions
+        .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     snapshot
 }
 
@@ -203,12 +205,12 @@ fn collect(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         let path = entry.path();
         // 用 `file_type` 而不是 `path.is_dir()`：后者会跟着符号链接走，
         // 一个指回上层的链接就能让这里转到天荒地老
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if kind.is_dir() {
             collect(&path, depth + 1, found);
-        } else if kind.is_file()
-            && path.extension().map(|e| e == "jsonl").unwrap_or(false)
-        {
+        } else if kind.is_file() && path.extension().map(|e| e == "jsonl").unwrap_or(false) {
             found.push(path);
         }
     }
@@ -321,7 +323,10 @@ mod tests {
         let root = std::env::temp_dir().join("baobox-assistant-order");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        for (name, at) in [("old", "2026-08-01T00:00:00Z"), ("new", "2026-08-04T00:00:00Z")] {
+        for (name, at) in [
+            ("old", "2026-08-01T00:00:00Z"),
+            ("new", "2026-08-04T00:00:00Z"),
+        ] {
             std::fs::write(
                 root.join(format!("{name}.jsonl")),
                 format!(
@@ -340,14 +345,14 @@ mod tests {
     #[test]
     fn the_lookback_covers_the_weekly_window_with_room_to_spare() {
         // 周窗口最多回看 7 天；扫两年前的日志纯属浪费，而那正是「菜单卡三秒」的原因
-        assert!(LOOKBACK_DAYS >= 7);
-        assert!(LOOKBACK_DAYS <= 90);
+        const { assert!(LOOKBACK_DAYS >= 7) };
+        const { assert!(LOOKBACK_DAYS <= 90) };
     }
 
     #[test]
     fn the_directory_walk_has_a_depth_limit_so_a_symlink_loop_cannot_hang_it() {
-        assert!(MAX_DEPTH >= 4, "Codex 的布局是 年/月/日/文件，至少四层");
-        assert!(MAX_DEPTH <= 8);
+        const { assert!(MAX_DEPTH >= 4, "Codex 的布局是 年/月/日/文件，至少四层") };
+        const { assert!(MAX_DEPTH <= 8) };
     }
 
     #[test]

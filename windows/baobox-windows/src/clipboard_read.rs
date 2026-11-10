@@ -195,9 +195,8 @@ pub fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if dib.len() < 40 {
         return None;
     }
-    let read_i32 = |at: usize| -> i32 {
-        i32::from_le_bytes([dib[at], dib[at + 1], dib[at + 2], dib[at + 3]])
-    };
+    let read_i32 =
+        |at: usize| -> i32 { i32::from_le_bytes([dib[at], dib[at + 1], dib[at + 2], dib[at + 3]]) };
     let header_size = read_i32(0) as usize;
     let width = read_i32(4);
     let height_raw = read_i32(8);
@@ -229,7 +228,7 @@ pub fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             rgba.push(dib[at + 2]); // R
             rgba.push(dib[at + 1]); // G
             rgba.push(dib[at]); // B
-            // alpha 不可信：很多程序填 0，直接用的话整张图透明
+                                // alpha 不可信：很多程序填 0，直接用的话整张图透明
             rgba.push(255);
         }
     }
@@ -248,8 +247,8 @@ mod tests {
         let height: i32 = if bottom_up { 2 } else { -2 };
         dib[8..12].copy_from_slice(&height.to_le_bytes());
         dib[14] = 24; // biBitCount
-        // 两行像素，每行 2 个 BGR = 6 字节，补齐到 8
-        // 第一行（内存里的）：红、绿
+                      // 两行像素，每行 2 个 BGR = 6 字节，补齐到 8
+                      // 第一行（内存里的）：红、绿
         dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
         // 第二行：蓝、白
         dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
@@ -329,7 +328,10 @@ mod tests {
 
     #[test]
     fn opening_is_retried_because_another_app_may_hold_the_clipboard() {
-        assert!(OPEN_ATTEMPTS > 1, "剪贴板是全局独占的，一次打不开很正常");
-        assert!(OPEN_ATTEMPTS * OPEN_RETRY.as_millis() as u32 <= 500, "重试总时长不该让界面卡顿");
+        const { assert!(OPEN_ATTEMPTS > 1, "剪贴板是全局独占的，一次打不开很正常") };
+        assert!(
+            OPEN_ATTEMPTS * OPEN_RETRY.as_millis() as u32 <= 500,
+            "重试总时长不该让界面卡顿"
+        );
     }
 }

@@ -23,7 +23,7 @@
 //! 里面那些标签在 AT-SPI 看来都是可点的元素。
 
 use crate::keyboardnav;
-use baobox_app::{HotkeySpec, MenuItem, SettingsPage, ToolModule, Field};
+use baobox_app::{Field, HotkeySpec, MenuItem, SettingsPage, ToolModule};
 use baobox_core::config::Config;
 use baobox_core::hints::{self, Session};
 
@@ -111,7 +111,6 @@ impl KeyboardNavTool {
         }
         Ok(format!("点了 {} 下", picked.len()))
     }
-
 }
 
 impl ToolModule for KeyboardNavTool {
@@ -138,8 +137,13 @@ impl ToolModule for KeyboardNavTool {
             ID,
             "键盘点击",
             vec![
-                Field::text("alphabet", "标签字母表", hints::DEFAULT_ALPHABET, "asdfghjk…")
-                    .with_help("用哪些字母发标签；重复的会被去掉，少于两个则退回默认"),
+                Field::text(
+                    "alphabet",
+                    "标签字母表",
+                    hints::DEFAULT_ALPHABET,
+                    "asdfghjk…",
+                )
+                .with_help("用哪些字母发标签；重复的会被去掉，少于两个则退回默认"),
                 Field::toggle("continuous", "连续点击", false)
                     .with_help("点完一个不退出，可以接着点下一个；按 Esc 退出"),
             ],
@@ -181,7 +185,10 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused() {
         let mut tool = KeyboardNavTool::new();
-        assert!(tool.perform("keyboardnav.nope").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("keyboardnav.nope")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]

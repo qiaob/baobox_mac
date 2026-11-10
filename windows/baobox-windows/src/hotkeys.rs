@@ -99,8 +99,7 @@ impl HotkeyCenter {
             .ok_or_else(|| format!("这个键在 Windows 上没有对应的虚拟键码：{}", combo.key))?;
         let id = self.next_id;
         unsafe {
-            RegisterHotKey(self.hwnd, id, modifiers_for(combo), key)
-                .map_err(|e| format!("{e}"))?;
+            RegisterHotKey(self.hwnd, id, modifiers_for(combo), key).map_err(|e| format!("{e}"))?;
         }
         self.actions.insert(id, action.to_string());
         self.next_id += 1;
@@ -127,7 +126,11 @@ impl HotkeyCenter {
 
     /// Release a single binding while a tool needs to send the same keys.
     pub fn unregister_action(&mut self, action: &str) -> bool {
-        let Some(id) = self.actions.iter().find_map(|(&id, name)| (name == action).then_some(id)) else {
+        let Some(id) = self
+            .actions
+            .iter()
+            .find_map(|(&id, name)| (name == action).then_some(id))
+        else {
             return false;
         };
         if unsafe { UnregisterHotKey(self.hwnd, id) }.is_err() {

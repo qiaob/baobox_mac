@@ -108,7 +108,7 @@ impl MenuModel {
     pub fn build(tools: &[Box<dyn ToolModule>], config: &Config) -> MenuModel {
         let mut items = Vec::new();
         for tool in tools {
-            let children = decorate(tool, config);
+            let children = decorate(tool.as_ref(), config);
             if children.is_empty() {
                 continue;
             }
@@ -129,7 +129,10 @@ impl MenuModel {
 
     /// 菜单里所有可点动作的 id。平台层用它建 id → 菜单项号的映射。
     pub fn action_ids(&self) -> Vec<&str> {
-        self.items.iter().flat_map(|item| item.action_ids()).collect()
+        self.items
+            .iter()
+            .flat_map(|item| item.action_ids())
+            .collect()
     }
 }
 
@@ -137,7 +140,7 @@ impl MenuModel {
 ///
 /// 提示来自 [`crate::HotkeySpec::resolve`]，所以显示的**永远是用户当前实际绑定的**，
 /// 而不是出厂默认值 —— 改过快捷键之后菜单里还写着旧的，是很讨厌的一类不一致。
-fn decorate(tool: &Box<dyn ToolModule>, config: &Config) -> Vec<MenuItem> {
+fn decorate(tool: &dyn ToolModule, config: &Config) -> Vec<MenuItem> {
     let hotkeys = tool.hotkeys();
     tool.menu_items()
         .into_iter()
@@ -218,7 +221,10 @@ mod tests {
         let registry = registry(Vec::new());
         let menu = registry.menu(&Config::new());
         assert!(
-            !menu.items.iter().any(|item| matches!(item, MenuItem::Submenu { .. })),
+            !menu
+                .items
+                .iter()
+                .any(|item| matches!(item, MenuItem::Submenu { .. })),
             "空的二级菜单点开什么都没有，不如不显示"
         );
         // 但内建项还在，托盘菜单不会变成空的
@@ -264,7 +270,10 @@ mod tests {
         };
         assert_eq!(items.len(), 2, "置灰项仍然占位置");
         // 但它不该出现在可点动作里
-        assert_eq!(menu.action_ids().iter().filter(|id| **id == "t.go").count(), 1);
+        assert_eq!(
+            menu.action_ids().iter().filter(|id| **id == "t.go").count(),
+            1
+        );
         assert!(!menu.action_ids().iter().any(|id| id.is_empty()));
     }
 
@@ -275,6 +284,9 @@ mod tests {
             items: vec![MenuItem::action("t.deep", "深处")],
         };
         let registry = registry(vec![nested]);
-        assert!(registry.menu(&Config::new()).action_ids().contains(&"t.deep"));
+        assert!(registry
+            .menu(&Config::new())
+            .action_ids()
+            .contains(&"t.deep"));
     }
 }

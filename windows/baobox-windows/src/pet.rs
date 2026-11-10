@@ -305,7 +305,13 @@ pub fn configured_size(config: &Config) -> i32 {
     let humanoid = anchor().is_some_and(|hwnd| unsafe {
         (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State)
             .as_ref()
-            .is_some_and(|state| state.pack.borrow().as_ref().is_some_and(|pack| pack.is_humanoid()))
+            .is_some_and(|state| {
+                state
+                    .pack
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|pack| pack.is_humanoid())
+            })
     });
     appearance.size(humanoid)
 }
@@ -429,14 +435,18 @@ impl ToolModule for PetTool {
             },
         ];
         if self.window.is_some() {
-            items.extend(INTERACTIONS.iter().filter_map(|&(action, kind, label)| {
-                (kind == "pet"
-                    || self
-                        .pack
-                        .as_ref()
-                        .is_some_and(|p| p.interaction_seconds(kind).is_some()))
-                .then(|| MenuItem::action(action, label))
-            }));
+            items.extend(
+                INTERACTIONS
+                    .iter()
+                    .filter(|&&(_, kind, _)| {
+                        kind == "pet"
+                            || self
+                                .pack
+                                .as_ref()
+                                .is_some_and(|p| p.interaction_seconds(kind).is_some())
+                    })
+                    .map(|&(action, _, label)| MenuItem::action(action, label)),
+            );
         }
         if self.window.is_some() && self.pack.as_ref().is_some_and(|pack| pack.is_humanoid()) {
             items.push(MenuItem::Submenu {
@@ -511,7 +521,8 @@ impl ToolModule for PetTool {
                     ("free", "随意放"),
                 ],
                 "bottom",
-            ).with_help("自定义区域：拖动框选，按 Enter 确认，按 Esc 取消。"),
+            )
+            .with_help("自定义区域：拖动框选，按 Enter 确认，按 Esc 取消。"),
             Field::choice(
                 "size",
                 "大小",
@@ -723,6 +734,9 @@ struct Drag {
     moved: bool,
 }
 
+/// 最近一次扫到的窗口（扫描时刻 + 各窗口的句柄与位置），短时间内复用。
+type WindowScan = Option<(Instant, Vec<(HWND, baobox_core::geometry::Rect)>)>;
+
 struct State {
     owner: HWND,
     appearance: Cell<Appearance>,
@@ -738,7 +752,7 @@ struct State {
     frame_pending: Arc<AtomicBool>,
     last_window: Cell<Option<HWND>>,
     perched: Cell<Option<(HWND, &'static str)>>,
-    window_scan: RefCell<Option<(Instant, Vec<(HWND, baobox_core::geometry::Rect)>)>>,
+    window_scan: RefCell<WindowScan>,
 }
 
 #[derive(Clone, Copy)]

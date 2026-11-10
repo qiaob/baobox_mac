@@ -24,9 +24,9 @@
 //! 菜单每次重建都会换一批 id，所以重建后必须发 `LayoutUpdated` 让桌面重新拉取。
 
 use baobox_app::{MenuItem, MenuModel};
-use baobox_render::Canvas;
 use baobox_core::annotation::Color;
 use baobox_core::geometry::Rect;
+use baobox_render::Canvas;
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -196,8 +196,12 @@ impl MenuState {
         let structure = Value::from(self.node(id, depth));
         OwnedValue::try_from(structure).unwrap_or_else(|_| {
             // 理论上不会失败；真失败了给一个空项，总好过让整个菜单拉取报错
-            OwnedValue::try_from(Value::from((id, HashMap::<String, OwnedValue>::new(), Vec::<OwnedValue>::new())))
-                .expect("空的布局项一定构造得出来")
+            OwnedValue::try_from(Value::from((
+                id,
+                HashMap::<String, OwnedValue>::new(),
+                Vec::<OwnedValue>::new(),
+            )))
+            .expect("空的布局项一定构造得出来")
         })
     }
 }
@@ -307,7 +311,11 @@ impl DBusMenu {
     ) -> fdo::Result<(u32, LayoutNode)> {
         let state = self.state.lock().map_err(|_| poisoned())?;
         // -1 = 全部；这里给一个足够深的值，菜单只有两层
-        let depth = if recursion_depth < 0 { 8 } else { recursion_depth };
+        let depth = if recursion_depth < 0 {
+            8
+        } else {
+            recursion_depth
+        };
         Ok((state.revision, state.node(parent_id, depth)))
     }
 
@@ -318,7 +326,10 @@ impl DBusMenu {
         _property_names: Vec<String>,
     ) -> fdo::Result<Vec<(i32, HashMap<String, OwnedValue>)>> {
         let state = self.state.lock().map_err(|_| poisoned())?;
-        Ok(ids.into_iter().map(|id| (id, state.properties(id))).collect())
+        Ok(ids
+            .into_iter()
+            .map(|id| (id, state.properties(id)))
+            .collect())
     }
 
     /// 取单个属性。
@@ -502,7 +513,11 @@ fn icon_argb() -> Vec<u8> {
     };
     let accent = Color::rgb(0x17, 0xA3, 0x98);
     let size = ICON_SIZE as f64;
-    baobox_render::fill_rect(&mut canvas, &Rect::new(1.0, 1.0, size - 2.0, size - 2.0), accent);
+    baobox_render::fill_rect(
+        &mut canvas,
+        &Rect::new(1.0, 1.0, size - 2.0, size - 2.0),
+        accent,
+    );
 
     // 一个粗略的 B：一竖两半圆
     let ink = Color::rgb(0xFF, 0xFF, 0xFF);
@@ -767,7 +782,12 @@ mod protocol_tests {
         };
         menu.call::<_, _, ()>(
             "Event",
-            &(clickable, "clicked", zbus::zvariant::Value::from(0i32), 0u32),
+            &(
+                clickable,
+                "clicked",
+                zbus::zvariant::Value::from(0i32),
+                0u32,
+            ),
         )
         .expect("Event 调用");
         let received = rx

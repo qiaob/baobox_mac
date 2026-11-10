@@ -264,11 +264,15 @@ mod tests {
     fn a_nested_field_can_be_read_without_a_pile_of_ifs() {
         let value = parse(r#"{"message":{"usage":{"input_tokens":12}}}"#).unwrap();
         assert_eq!(
-            value.path(&["message", "usage", "input_tokens"]).and_then(Json::as_i64),
+            value
+                .path(&["message", "usage", "input_tokens"])
+                .and_then(Json::as_i64),
             Some(12)
         );
         assert!(value.path(&["message", "nope"]).is_none());
-        assert!(value.path(&["message", "usage", "input_tokens", "更深"]).is_none());
+        assert!(value
+            .path(&["message", "usage", "input_tokens", "更深"])
+            .is_none());
     }
 
     #[test]

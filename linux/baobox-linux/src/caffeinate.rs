@@ -137,7 +137,10 @@ mod tests {
     fn a_partial_success_says_what_is_still_not_covered() {
         // 只挡住一半却说「已开启」，用户会以为万事大吉，然后机器该睡还是睡
         let text = empty().describe();
-        assert!(text.contains("没有"), "一家都没答应时不能说得像成功了：{text}");
+        assert!(
+            text.contains("没有"),
+            "一家都没答应时不能说得像成功了：{text}"
+        );
     }
 
     #[test]

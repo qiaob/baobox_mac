@@ -20,18 +20,17 @@ use baobox_core::hints::{Hint, Outcome, Session};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, InvalidateRect, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, SelectObject,
-    SetBkMode, SetTextColor, TextOutW, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_BOLD,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect,
+    SelectObject, SetBkMode, SetTextColor, TextOutW, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE,
+    FW_BOLD, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, UnregisterClassW, GWLP_USERDATA, IDC_ARROW, LWA_COLORKEY, MSG, SW_SHOW,
-    WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, ShowWindow, TranslateMessage, UnregisterClassW,
+    GWLP_USERDATA, IDC_ARROW, LWA_COLORKEY, MSG, SW_SHOW, WM_CHAR, WM_DESTROY, WM_KEYDOWN,
+    WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 /// 覆盖层窗口类名。
@@ -103,7 +102,11 @@ pub fn run(session: &mut Session) -> Result<Vec<Hint>, String> {
 
         // 那个颜色整片透过去；其余部分照常画
         let _ = SetLayeredWindowAttributes(hwnd, COLORREF(TRANSPARENT_KEY), 255, LWA_COLORKEY);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut OverlayState as isize);
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            state.as_mut() as *mut OverlayState as isize,
+        );
         let _ = ShowWindow(hwnd, SW_SHOW);
         // 不抢焦点的话，用户打的字会全落到原来那个程序里去 ——
         // 那可能是一个正在编辑的文档
@@ -269,7 +272,7 @@ mod tests {
 
     #[test]
     fn the_label_stays_readable() {
-        assert!(PAD > 0);
-        assert!(FONT_SIZE >= 10, "太小的话密密麻麻一片看不清");
+        const { assert!(PAD > 0) };
+        const { assert!(FONT_SIZE >= 10, "太小的话密密麻麻一片看不清") };
     }
 }

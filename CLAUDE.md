@@ -13,6 +13,9 @@
 
 - **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；三个平台各有一条构建工作流（`.github/workflows/build-{macos,windows,linux}.yml`），手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。Windows 与 Linux 的 Rust 代码在本机就能编译与测试。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
 - Mac 上构建：`brew install xcodegen && xcodegen generate && open Baobox.xcodeproj`（或 `xcodebuild -scheme Baobox build`）。
+- Rust（`shared/`、`windows/`、`linux/`）：CI 卡 `cargo fmt --check` 和 `cargo clippy --all-targets -- -D warnings`，工具链固定 **1.90.0**（#115，升级时改两个工作流里的版本、顺手修掉新冒出来的警告）。
+  本机：`cargo +1.90.0 fmt`、`cargo +1.90.0 clippy --all-targets`；Windows 的 crate 在 Mac 上加 `--target x86_64-pc-windows-gnu` 检查；
+  Linux 的 crate 依赖 GTK，在 Mac 上用 Docker（`rust:1.90-bookworm` 里装 `libgtk-3-dev pkg-config`）。测试里的常量断言写成 `const { assert!(…) }`（clippy 不许运行期 `assert!(常量)`）。
 - 无法编译时的自查：① 只引用真实存在的类型/方法（先 grep 确认签名）；② 每个 `L()` / `Text()` 的 key 都已入 `Localizable.xcstrings`（可跑下方脚本校验）；③ 所有 `@Published` 只在主线程写；④ `Process` / `NWConnection` / `URLSession` 不在主线程同步等待。
 
 ## 仓库结构（2026-08 起三平台并列）

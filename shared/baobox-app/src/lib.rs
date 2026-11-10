@@ -64,7 +64,7 @@ impl HotkeySpec {
         match config.get("hotkey", &self.id) {
             Some("") => None,
             Some(text) => KeyCombo::parse(text).ok(),
-            None => self.default.clone(),
+            None => self.default,
         }
     }
 }
@@ -268,7 +268,10 @@ mod tests {
         }
 
         /// 一个会报告「变了」的工具，外加一个能从外面读的计数器。
-        fn counted(id: &str, reports_change: bool) -> (Box<Fake>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        fn counted(
+            id: &str,
+            reports_change: bool,
+        ) -> (Box<Fake>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
             let mut fake = Fake::new(id);
             fake.reports_change = reports_change;
             let counter = std::sync::Arc::clone(&fake.ticks);
@@ -362,7 +365,10 @@ mod tests {
         registry.register(Fake::new("alpha"));
         registry.register(Fake::new("beta"));
         assert_eq!(registry.perform("beta.go").unwrap(), "做了 beta.go");
-        assert!(registry.perform("nobody.go").unwrap_err().contains("nobody"));
+        assert!(registry
+            .perform("nobody.go")
+            .unwrap_err()
+            .contains("nobody"));
     }
 
     #[test]

@@ -97,11 +97,8 @@ impl WindowManagerTool {
                 // 顺序要稳定，否则「下一块」两次调用可能指向不同的屏
                 let order = layout::sort_displays(&areas);
                 let at = order.iter().position(|&i| i == index).unwrap_or(0);
-                let next = order[layout::neighbour_display(
-                    at,
-                    order.len(),
-                    want == Layout::NextDisplay,
-                )];
+                let next =
+                    order[layout::neighbour_display(at, order.len(), want == Layout::NextDisplay)];
                 map_across_displays(&current, &areas[index], &areas[next])
             }
             slicing => layout::target(slicing, &current, &areas[index], self.settings.gap),
@@ -153,8 +150,10 @@ impl ToolModule for WindowManagerTool {
         Some(SettingsPage::new(
             ID,
             "窗口管理",
-            vec![Field::number("gap", "窗口间距（像素）", layout::DEFAULT_GAP as i64, 0, 64)
-                .with_help("窗口之间与到屏幕边缘留多少空隙；0 = 严丝合缝")],
+            vec![
+                Field::number("gap", "窗口间距（像素）", layout::DEFAULT_GAP as i64, 0, 64)
+                    .with_help("窗口之间与到屏幕边缘留多少空隙；0 = 严丝合缝"),
+            ],
         ))
     }
 
@@ -170,8 +169,8 @@ impl ToolModule for WindowManagerTool {
         let slug = action
             .strip_prefix(ACTION_PREFIX)
             .ok_or_else(|| format!("窗口管理工具不认识动作 {action}"))?;
-        let want = Layout::from_slug(slug)
-            .ok_or_else(|| format!("窗口管理工具不认识动作 {action}"))?;
+        let want =
+            Layout::from_slug(slug).ok_or_else(|| format!("窗口管理工具不认识动作 {action}"))?;
         self.apply(want)
     }
 }
@@ -195,8 +194,14 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused() {
         let mut tool = WindowManagerTool::new();
-        assert!(tool.perform("windowmanager.nope").unwrap_err().contains("不认识"));
-        assert!(tool.perform("别的工具的动作").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("windowmanager.nope")
+            .unwrap_err()
+            .contains("不认识"));
+        assert!(tool
+            .perform("别的工具的动作")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]
@@ -214,7 +219,10 @@ mod tests {
 
     #[test]
     fn the_settings_section_matches_the_tool_id() {
-        assert_eq!(WindowManagerTool::new().settings_page().unwrap().section, ID);
+        assert_eq!(
+            WindowManagerTool::new().settings_page().unwrap().section,
+            ID
+        );
     }
 
     #[test]
@@ -256,7 +264,8 @@ mod tests {
     fn restoring_does_not_overwrite_the_remembered_position() {
         // 连按两次「恢复」会把窗口锁在原地 —— 第二次记的是第一次恢复后的位置
         let mut tool = WindowManagerTool::new();
-        tool.previous.insert(42, Rect::new(100.0, 100.0, 800.0, 600.0));
+        tool.previous
+            .insert(42, Rect::new(100.0, 100.0, 800.0, 600.0));
         // 这里没有真的窗口，apply 会在取前台窗口那步就失败；只验「记忆没被动过」
         let _ = tool.perform(&action_for(Layout::Restore));
         assert_eq!(
