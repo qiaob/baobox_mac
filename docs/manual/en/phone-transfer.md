@@ -77,5 +77,8 @@ The "Open Phone Transfer" shortcut is unbound by default; set it in Settings →
   Connection setup is relayed by ntfy.sh / public MQTT brokers, encrypted with that key the whole way, so the relays can
   neither read nor forge it; files travel over an encrypted WebRTC channel directly between the two devices.
 - No transfer history is kept; the list clears when you close the window (received files stay in the folder).
+- Incoming files have limits so the phone side can't fill your disk: 10 GB per file, 20 GB per session (one QR code),
+  and at least 2 GB must stay free. The phone shows the reason, and the Mac lists the file as refused; click
+  New Session to send more.
 
 Technical details: [docs/phone-transfer/](../../phone-transfer/TECH_DESIGN.md).

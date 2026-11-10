@@ -11,6 +11,8 @@ enum LANServerEvent {
     case uploadProgress(uploadID: String, received: Int64)
     case uploadFinished(uploadID: String, url: URL)
     case uploadFailed(uploadID: String)
+    /// 超过上限，没收（#99）。
+    case uploadRefused(name: String, size: Int64, refusal: PhoneTransferRefusal)
     case text(String)
     /// 手机下载完一次 Mac 共享的文件（同一个文件可以被下载多次）。
     case downloadFinished(fileID: String, started: Date, finished: Date)
@@ -52,6 +54,19 @@ final class LANTransferServer: @unchecked Sendable {
     private var textSeq = 0
     private var connections: [ObjectIdentifier: LANConnection] = [:]
     private var stopped = false
+    /// 这次会话已经收下（含正在收）的字节：上传按 Content-Length 先占上，失败了再还回去（#99）。
+    private var receivedBytes: Int64 = 0
+    private var activeUploads = 0
+    /// 还没答复的设备请求：clientID → 来源 IP（#99：限制审批框的数量）。
+    private var pendingIPs: [String: String] = [:]
+
+    /// 同时最多几个连接：手机网页平时 1～3 个（轮询 + 上传 + 下载）。
+    static let maxConnections = 24
+    /// 同时最多几个上传：手机网页是一个一个传的。
+    static let maxActiveUploads = 3
+    /// 没答复的设备请求：每个 IP 一个、总共几个，免得乱发的 hello 刷出一串审批框（#99）。
+    static let maxPendingPerIP = 1
+    static let maxPending = 4
 
     static let staticFiles: [String: String] = [
         "index.html": "text/html; charset=utf-8",
@@ -98,10 +113,11 @@ final class LANTransferServer: @unchecked Sendable {
             guard let self else { nw.cancel(); return }
             let connection = LANConnection(nw: nw, queue: self.queue, server: self)
             self.lock.lock()
-            let isStopped = self.stopped
-            if !isStopped { self.connections[ObjectIdentifier(connection)] = connection }
+            // 连接太多（有人在刷）就直接断开新来的。
+            let accept = !self.stopped && self.connections.count < Self.maxConnections
+            if accept { self.connections[ObjectIdentifier(connection)] = connection }
             self.lock.unlock()
-            if isStopped { nw.cancel(); return }
+            if !accept { nw.cancel(); return }
             connection.start()
         }
         listener.start(queue: queue)
@@ -123,6 +139,7 @@ final class LANTransferServer: @unchecked Sendable {
     func setDecision(clientID: String, approved: Bool) {
         lock.lock()
         devices[clientID] = approved ? .approved : .denied
+        pendingIPs[clientID] = nil
         lock.unlock()
     }
 
@@ -184,7 +201,7 @@ final class LANTransferServer: @unchecked Sendable {
 
         switch (req.method, path) {
         case ("GET", "/api/hello"):
-            handleHello(clientID: clientID, name: req.query["name"] ?? "", conn)
+            handleHello(clientID: clientID, name: req.query["name"] ?? "", ip: conn.remoteIP, conn)
         case ("GET", "/api/poll"):
             handlePoll(clientID: clientID, since: Int(req.query["since"] ?? "") ?? 0, conn)
         case ("GET", "/api/file"):
@@ -210,12 +227,26 @@ final class LANTransferServer: @unchecked Sendable {
         conn.respond(status: 200, contentType: type, body: data)
     }
 
-    private func handleHello(clientID: String, name: String, _ conn: LANConnection) {
+    private func handleHello(clientID: String, name: String, ip: String, _ conn: LANConnection) {
         lock.lock()
         let existing = devices[clientID]
-        if existing == nil { devices[clientID] = .pending }
+        var limited = false
+        if existing == nil {
+            let fromHere = pendingIPs.values.filter { $0 == ip }.count
+            if fromHere >= Self.maxPendingPerIP || pendingIPs.count >= Self.maxPending {
+                limited = true
+            } else {
+                devices[clientID] = .pending
+                pendingIPs[clientID] = ip
+            }
+        }
         let state = devices[clientID] ?? .pending
         lock.unlock()
+        if limited {
+            // 不记这台设备、不弹审批框；网页收到 429 会隔一秒再问。
+            conn.respond(status: 429, json: ["error": "busy"])
+            return
+        }
         if existing == nil {
             let display = String(name.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
             emit(.deviceRequest(clientID: clientID, name: display.isEmpty ? "Phone" : display))
@@ -233,12 +264,18 @@ final class LANTransferServer: @unchecked Sendable {
             ["seq": $0.seq, "text": $0.text, "ts": Self.millis($0.date)] as [String: Any]
         }
         let seq = textSeq
+        let received = receivedBytes
         lock.unlock()
         guard state == .approved else {
             conn.respond(status: 200, json: ["state": (state ?? .pending).rawValue])
             return
         }
-        conn.respond(status: 200, json: ["state": "approved", "files": files, "texts": newTexts, "seq": seq])
+        // 上限也告诉网页：发之前先比一下，超了直接在手机上说清楚，不必传一半被断开（#99）。
+        let room = PhoneTransferLimits.room(received: received, freeSpace: PhoneTransferLimits.freeSpace(at: receiveDir))
+        let limits: [String: Any] = ["file": NSNumber(value: PhoneTransferLimits.maxFileBytes),
+                                     "room": NSNumber(value: room)]
+        conn.respond(status: 200, json: ["state": "approved", "files": files, "texts": newTexts, "seq": seq,
+                                         "limits": limits])
     }
 
     private func handleDownload(id: String, _ conn: LANConnection) {
@@ -274,10 +311,31 @@ final class LANTransferServer: @unchecked Sendable {
             conn.respond(status: 500, json: ["error": "folder"])
             return
         }
+        // 上限（#99）：单个文件、这次会话合计、收完磁盘要剩的。先按 Content-Length 占上，失败再还。
+        let freeSpace = PhoneTransferLimits.freeSpace(at: receiveDir)
+        lock.lock()
+        let refusal = PhoneTransferLimits.check(size: length, received: receivedBytes, freeSpace: freeSpace)
+        let busy = refusal == nil && activeUploads >= Self.maxActiveUploads
+        if refusal == nil, !busy {
+            receivedBytes += length
+            activeUploads += 1
+        }
+        lock.unlock()
+        if busy {
+            conn.respond(status: 429, json: ["error": "busy"])
+            return
+        }
+        if let refusal {
+            emit(.uploadRefused(name: name, size: length, refusal: refusal))
+            let reason = refusal.phoneReason
+            conn.respond(status: 413, json: ["error": reason.why, "limit": NSNumber(value: reason.limit)])
+            return
+        }
         let uploadID = UUID().uuidString
         let temp = receiveDir.appendingPathComponent(".\(uploadID).part")
         guard FileManager.default.createFile(atPath: temp.path, contents: nil),
               let handle = try? FileHandle(forWritingTo: temp) else {
+            endUpload(length: length, kept: false)
             conn.respond(status: 500, json: ["error": "write"])
             return
         }
@@ -295,25 +353,45 @@ final class LANTransferServer: @unchecked Sendable {
             guard let self else { return }
             guard ok else {
                 try? FileManager.default.removeItem(at: temp)
+                self.endUpload(length: length, kept: false)
                 self.emit(.uploadFailed(uploadID: uploadID))
                 return
             }
             let target = PhoneTransferSettings.uniqueURL(in: self.receiveDir, name: name)
             do {
                 try FileManager.default.moveItem(at: temp, to: target)
+                self.endUpload(length: length, kept: true)
                 self.emit(.uploadFinished(uploadID: uploadID, url: target))
                 conn.respond(status: 200, json: ["ok": true])
             } catch {
                 try? FileManager.default.removeItem(at: temp)
+                self.endUpload(length: length, kept: false)
                 self.emit(.uploadFailed(uploadID: uploadID))
                 conn.respond(status: 500, json: ["error": "rename"])
             }
         })
     }
 
+    /// 一个上传结束：没收下的把占的额度还回去。
+    private func endUpload(length: Int64, kept: Bool) {
+        lock.lock()
+        activeUploads = max(0, activeUploads - 1)
+        if !kept { receivedBytes = max(0, receivedBytes - length) }
+        lock.unlock()
+    }
+
     private func handleText(_ req: LANRequest, _ conn: LANConnection) {
         guard let length = Int(req.headers["content-length"] ?? ""), length >= 0, length <= 1_048_576 else {
             conn.respond(status: 413, json: ["error": "too large"])
+            return
+        }
+        // 文字也算进这次会话的合计（#99）。
+        lock.lock()
+        let fits = receivedBytes + Int64(length) <= PhoneTransferLimits.maxSessionBytes
+        if fits { receivedBytes += Int64(length) }
+        lock.unlock()
+        guard fits else {
+            conn.respond(status: 413, json: ["error": "room", "limit": NSNumber(value: 0)])
             return
         }
         conn.readBody(length: length) { [weak self] data in
@@ -378,6 +456,17 @@ final class LANConnection: @unchecked Sendable {
         self.nw = nw
         self.queue = queue
         self.server = server
+    }
+
+    /// 对方的 IP（限制审批框数量用）；取不到为空串。
+    var remoteIP: String {
+        guard case .hostPort(let host, _) = nw.endpoint else { return "" }
+        switch host {
+        case .ipv4(let address): return "\(address)"
+        case .ipv6(let address): return "\(address)"
+        case .name(let name, _): return name
+        @unknown default: return ""
+        }
     }
 
     func start() {
@@ -490,6 +579,7 @@ final class LANConnection: @unchecked Sendable {
         case 404: return "Not Found"
         case 411: return "Length Required"
         case 413: return "Payload Too Large"
+        case 429: return "Too Many Requests"
         default: return "Internal Server Error"
         }
     }

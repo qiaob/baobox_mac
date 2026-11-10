@@ -533,7 +533,7 @@ struct PhoneTransferMainPanel: View {
             parts.append(item.incoming ? L("phonetransfer.state.received") : L("phonetransfer.state.sent"))
             parts.append(contentsOf: timing(item))
         case .failed:
-            parts.append(L("phonetransfer.state.failed"))
+            parts.append(item.note ?? L("phonetransfer.state.failed"))
             parts.append(PhoneTransferFormat.time(item.finishedAt ?? item.createdAt))
         case .shared(let downloads):
             if downloads == 0 {
