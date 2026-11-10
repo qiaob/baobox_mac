@@ -21,6 +21,7 @@ use crate::{
     caffeinate_module, clipboard_module, hotkeys, keyboardnav_module, screenshot_module,
     settings_window, store, tray, windowmanager_module,
 };
+use baobox_app::config_file::{Startup, Unreadable};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -396,7 +397,14 @@ impl App {
 
     /// 配置被改过了，重新读一遍并让各处跟上。
     fn reload_config(&mut self) {
-        self.config = store::load_config();
+        // 文件在运行中被改坏了就留着内存里这份 —— 换成空配置等于把设置全丢了
+        self.config = match store::load_config() {
+            Ok(config) => config,
+            Err(why) => {
+                eprintln!("{}", String::from(why));
+                return;
+            }
+        };
         self.notices.configure(&self.config);
         self.registry.config_changed_all(&self.config);
         // 快捷键可能变了：先全撤，再按新配置注册
@@ -436,8 +444,13 @@ pub fn run(show_settings: bool) -> Result<String, String> {
             .into();
         let hwnd = tray::message_window(instance, wndproc)?;
         let mut registry = build_registry(hwnd);
-        // 首次启动时把默认值写成一份完整的配置文件，用户照着改就行
-        let mut config = store::load_config();
+        // 首次启动时把默认值写成一份完整的配置文件，用户照着改就行。
+        // 原文件在却读不了时，open_config 已经把它改名备份了（改不了名就这次运行不写盘），
+        // 下面这一下存盘盖不到它
+        let Startup {
+            mut config,
+            problem,
+        } = store::open_config();
         for page in registry.settings_pages() {
             page.fill_defaults(&mut config);
         }
@@ -455,6 +468,10 @@ pub fn run(show_settings: bool) -> Result<String, String> {
 
         let mut notices = Center::default();
         notices.configure(&config);
+        if let Some(problem) = &problem {
+            eprintln!("{problem}");
+            notices.post(unreadable_config_notice(problem));
+        }
         let mut app = Box::new(App {
             registry,
             config,
@@ -583,7 +600,9 @@ unsafe extern "system" fn wndproc(
         WM_PET_PICK_AREA => {
             app.dispatch(crate::pet::PICK_AREA);
             if let Some(settings) = app.settings {
-                settings_window::finish_area_pick(settings, &store::load_config());
+                // 读不了时宠物那边也没存成（它先读后写，读失败就停），照内存里这份对齐控件
+                let config = store::load_config().unwrap_or_else(|_| app.config.clone());
+                settings_window::finish_area_pick(settings, &config);
                 let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(settings);
             }
             LRESULT(0)
@@ -629,6 +648,21 @@ pub fn resolve_hotkeys(
             (spec, combo)
         })
         .collect()
+}
+
+/// 启动时设置文件读不了 → 一条提醒。
+///
+/// 用 `Alert`：勿扰、全屏都压不住它，用户点「关闭」或一小时后才消失 ——
+/// 说的是「你的设置换成了默认值」，错过了用户只会以为设置自己丢了。
+/// 来源不在 `pet_notify::SOURCES` 里，按来源静音也静不掉它。
+/// 宠物在就是它头上的气泡，不在就退回托盘气泡（`Center::tick` 的规矩）。
+fn unreadable_config_notice(problem: &Unreadable) -> Notice {
+    let mut notice = Notice::ambient("config", problem.title());
+    notice.level = Level::Alert;
+    notice.body = problem.body();
+    notice.dedupe = None;
+    notice.expires = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+    notice
 }
 
 /// 关于对话框。
@@ -754,6 +788,34 @@ mod tests {
         // 复制完托盘菜单里的计数就该是对的；但也不能一秒跑几十遍
         const { assert!(TICK_MS >= 50) };
         const { assert!(TICK_MS <= 1000) };
+    }
+
+    #[test]
+    fn an_unreadable_config_is_announced_even_with_every_source_muted() {
+        use baobox_app::config_file::ReadError;
+        let problem = Unreadable::SetAside {
+            error: ReadError::Io {
+                path: std::path::PathBuf::from("C:/roaming/Baobox/config.ini"),
+                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "拒绝访问"),
+            },
+            backup: std::path::PathBuf::from("C:/roaming/Baobox/config.ini.unreadable"),
+        };
+        let notice = unreadable_config_notice(&problem);
+        assert!(notice.level == Level::Alert, "勿扰和全屏都不该压住它");
+        assert!(
+            notice.body.contains("config.ini.unreadable"),
+            "要说清备份在哪"
+        );
+
+        // 用户把每个来源的通知都关了，这一条也照样进得去
+        let mut muted = Config::new();
+        for (source, _) in pet_notify::SOURCES {
+            muted.set_bool(crate::pet::ID, &format!("notify-{source}"), false);
+        }
+        let mut notices = Center::default();
+        notices.configure(&muted);
+        notices.post(notice);
+        assert!(notices.history().contains(problem.title()));
     }
 
     #[test]

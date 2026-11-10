@@ -62,6 +62,7 @@ shared/
 │   ├── ToolModule   工具接入协议 + ToolRegistry（注册顺序 = 菜单顺序）
 │   ├── assistant    AI 助手：找日志、扫目录（纯 std::fs，没有平台耦合）
 │   ├── assistant_tool  两个助手工具的 ToolModule 实现（终端打开器由平台传入）
+│   ├── config_file  配置文件的读与「读不了时怎么办」：先改名备份再用默认值，改不了名就整次运行不写盘（#152）
 │   ├── menu         托盘菜单模型
 │   └── settings     设置的**声明**（开关/下拉/输入框/数字/快捷键）
 ├── baobox-render/   把标注光栅化进 RGBA（三平台逐像素一致）

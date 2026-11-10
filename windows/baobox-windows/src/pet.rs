@@ -123,7 +123,11 @@ pub fn preview(trace_path: Option<&std::path::Path>, mode: Option<&str>) -> Resu
     if mode == Some("--front") {
         set_menu_open(true);
     }
-    let mut config = crate::store::load_config();
+    // 验收预览只在内存里改、不存盘，读不了就从默认值起
+    let mut config = crate::store::load_config().unwrap_or_else(|why| {
+        eprintln!("{}", String::from(why));
+        Config::new()
+    });
     config.set_bool(ID, "startup", true);
     config.set_bool(ID, "roam", true);
     config.set(ID, "range", "bottom");
@@ -377,7 +381,8 @@ impl PetTool {
     }
 
     fn select(&mut self, id: &str) -> Result<(), String> {
-        let mut config = crate::store::load_config();
+        // 先读后写：读不了就停在这里 —— 拿空配置改一个键再存回去，会把用户的设置整份盖掉
+        let mut config = crate::store::load_config()?;
         config.set(ID, "character", id);
         crate::store::save_config(&config)?;
         self.config_changed(&config);
@@ -614,7 +619,8 @@ impl ToolModule for PetTool {
             let screen = crate::gdi::virtual_screen();
             let selected = crate::overlay::run(screen, Vec::new())?;
             if let baobox_core::selection::Outcome::Region(area) = selected.outcome {
-                let mut config = crate::store::load_config();
+                // 同 `select`：读不了就不写
+                let mut config = crate::store::load_config()?;
                 config.set(ID, "range", "custom");
                 config.set(
                     ID,
