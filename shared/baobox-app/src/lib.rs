@@ -22,6 +22,7 @@
 
 pub mod assistant;
 pub mod assistant_tool;
+pub mod config_file;
 pub mod menu;
 pub mod settings;
 

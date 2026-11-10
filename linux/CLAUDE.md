@@ -134,7 +134,7 @@ zbus 线程   zbus 自己起的，应答桌面对托盘/菜单的调用
 
 | | 位置 |
 |---|---|
-| 配置 | `$XDG_CONFIG_HOME/baobox/config.ini`，默认 `~/.config/baobox/` |
+| 配置 | `$XDG_CONFIG_HOME/baobox/config.ini`，默认 `~/.config/baobox/`。读不了时改名为同目录的 `config.ini.unreadable`（被占就 `.1`、`.2`……），规则见 `baobox_app::config_file` |
 | 截图历史 | `$XDG_DATA_HOME/baobox/screenshot/`，默认 `~/.local/share/baobox/` |
 | 剪贴板历史 | `$XDG_DATA_HOME/baobox/clipboard/`（`clipboard.dat` + `images/`） |
 | 截图默认存放 | `~/Pictures/Baobox/`，可被设置里的「保存到」覆盖 |

@@ -27,6 +27,7 @@ use crate::{
     caffeinate_module, clipboard_module, hotkeys, keyboardnav_module, screenshot_module,
     settings_window, store, windowmanager_module, x11capture,
 };
+use baobox_app::config_file::Startup;
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
 use baobox_app::{HotkeySpec, ToolRegistry};
 use baobox_core::config::Config;
@@ -73,13 +74,21 @@ pub fn run() -> Result<String, String> {
     let mut registry = build_registry();
 
     // 首次启动时把默认值写成一份完整的配置文件，用户照着改就行，
-    // 不必去翻文档才知道有哪些键
-    let mut config = store::load_config();
+    // 不必去翻文档才知道有哪些键。原文件在却读不了时，open_config 已经把它
+    // 改名备份了（改不了名就这次运行不写盘），下面这一下存盘盖不到它
+    let Startup {
+        mut config,
+        problem,
+    } = store::open_config();
     for page in registry.settings_pages() {
         page.fill_defaults(&mut config);
     }
     if let Err(why) = store::save_config(&config) {
         eprintln!("提示：配置存不下来（{why}），这次的改动不会保留。");
+    }
+    if let Some(problem) = &problem {
+        eprintln!("{problem}");
+        notify_urgent(problem.title(), &problem.body());
     }
     registry.activate_all(&config);
 
@@ -164,7 +173,14 @@ impl AppState {
 
     /// 配置在设置窗口里被改过了，重新读一遍并让各处跟上。
     fn reload_config(&mut self) {
-        self.config = store::load_config();
+        // 文件在运行中被改坏了就留着内存里这份 —— 换成空配置等于把设置全丢了
+        self.config = match store::load_config() {
+            Ok(config) => config,
+            Err(why) => {
+                eprintln!("{}", String::from(why));
+                return;
+            }
+        };
         self.registry.config_changed_all(&self.config);
         // 快捷键可能变了，让快捷键线程重新 grab
         let specs = resolve_hotkeys(&self.registry, &self.config);
@@ -337,6 +353,25 @@ fn notify(message: &str) {
     if !sent {
         println!("{message}");
     }
+}
+
+/// 把一件用户必须知道的事告诉他（比如设置文件读不了、已经换成默认设置）。
+///
+/// 与 [`notify`] 同走 `notify-send`，但标成 `critical`：GNOME / KDE 上它会一直挂着，
+/// 直到用户自己关掉 —— 开机自启时人多半不在屏幕前，几秒就消失的通知等于没发。
+/// 放到另一条线程上发：登录那一刻通知服务可能还没起来，`notify-send` 会等它，
+/// 不该让整个启动陪着等。没装 libnotify 时就只剩调用方打到 stderr 的那一句。
+fn notify_urgent(title: &str, body: &str) {
+    let (title, body) = (title.to_string(), body.to_string());
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("notify-send")
+            .arg("--app-name=Baobox")
+            .arg("--icon=dialog-warning")
+            .arg("--urgency=critical")
+            .arg(title)
+            .arg(body)
+            .status();
+    });
 }
 
 #[cfg(test)]

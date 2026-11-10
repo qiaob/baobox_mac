@@ -146,7 +146,7 @@ Windows 把一次按键拆成两条消息，所以**字母键不会像 Linux 那
 
 | | 位置 |
 |---|---|
-| 配置 | `%APPDATA%\Baobox\config.ini` |
+| 配置 | `%APPDATA%\Baobox\config.ini`。读不了时改名为同目录的 `config.ini.unreadable`（被占就 `.1`、`.2`……），规则见 `baobox_app::config_file` |
 | 截图历史 | `%APPDATA%\Baobox\screenshot\` |
 | 剪贴板历史 | `%APPDATA%\Baobox\clipboard\`（`clipboard.dat` + `images\`） |
 | 截图默认存放 | `%USERPROFILE%\Pictures\Baobox\`，可被设置里的「保存到」覆盖 |

@@ -10,9 +10,11 @@
 //! 用 `%APPDATA%` 而不是 `%LOCALAPPDATA%`：截图历史是用户数据，
 //! 在域账号的漫游配置里跟着走是合理的。
 
+use baobox_app::config_file::{ReadError, Session, Startup};
 use baobox_core::config::Config;
 use baobox_core::history::{decode_index, encode_index, Entry, History};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// 索引文件名。
 const INDEX: &str = "index.tsv";
@@ -32,16 +34,45 @@ fn config_path_from(data_dir: &Path) -> Option<PathBuf> {
     data_dir.parent().map(|base| base.join(CONFIG))
 }
 
-/// 读配置。读不出来就当是空的 —— 配置坏了不该让程序起不来。
-pub fn load_config() -> Config {
-    match config_path().and_then(|path| std::fs::read_to_string(path).ok()) {
-        Some(text) => Config::parse(&text),
-        None => Config::new(),
+/// 这次运行的配置读写状态。放全局：App 装配之外，设置窗口的回调、宠物工具也要存盘。
+///
+/// 平时它什么都不管；启动时原文件读不了、又没能改名备份，它才把这次运行的配置
+/// 收在内存里，让哪一处存盘都碰不到原文件（规则见 `baobox_app::config_file`）。
+static CONFIG_SESSION: Mutex<Session> = Mutex::new(Session::new());
+
+fn session() -> MutexGuard<'static, Session> {
+    // 持锁的线程 panic 过也照用：里面只有一份配置，不会留下半截状态
+    CONFIG_SESSION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// 启动时读配置，只调一次。
+///
+/// 配置坏了不该让程序起不来，但也绝不能拿默认值把用户的文件盖掉（#152）：
+/// 读不了时原文件先改名备份（改不了名就这次运行不写盘），要告诉用户的话在 `problem` 里。
+pub fn open_config() -> Startup {
+    match config_path() {
+        Some(path) => session().open(&path),
+        // 连 %APPDATA% 都没有：同以前一样，当成没有配置
+        None => Startup::default(),
     }
 }
 
-/// 写配置。
+/// 读配置。**没有文件**给空配置；**文件在但读不了**返回错误 ——
+/// 别把它当成空配置再存回去，那会把用户的设置整份盖掉。
+pub fn load_config() -> Result<Config, ReadError> {
+    match config_path() {
+        Some(path) => session().load(&path),
+        None => Ok(Config::new()),
+    }
+}
+
+/// 写配置。启动时原文件读不了、又没能改名备份的那次运行里，只换掉内存里那份，不碰文件。
 pub fn save_config(config: &Config) -> Result<(), String> {
+    if session().keep_in_memory(config) {
+        return Ok(());
+    }
     let path = config_path().ok_or("找不到配置目录（%APPDATA% 未设置）")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败：{e}"))?;
