@@ -153,7 +153,8 @@ struct DictationSettingsView: View {
                     Text(verbatim: L("dictation.settings.glossaryCount \(TranslationGlossary.parse(vocabulary).count)"))
                     Spacer()
                     Button("dictation.settings.editGlossary") {
-                        SettingsTabSelection.shared.selectedTab = "livetranslate"
+                        // 术语表在会议页嵌入的「字幕与同传」设置里（#106）。
+                        SettingsTabSelection.shared.selectedTab = "meeting"
                     }
                 }
                 Text("dictation.settings.glossaryHelp")

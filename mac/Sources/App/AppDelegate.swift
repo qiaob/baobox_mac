@@ -29,9 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())
-        // 会议在实时翻译前面：启动时先装好会议库，自由听译的新记录才写得进去（docs/meeting/TECH_DESIGN.md §7）。
+        // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），引擎（LiveTranslateController）照旧，菜单、设置、快捷键都在会议里。
         registry.register(MeetingTool())
-        registry.register(LiveTranslateTool())
         registry.register(SelectionTranslateTool())
         registry.register(DictationTool())
         registry.register(PhoneTransferTool())
