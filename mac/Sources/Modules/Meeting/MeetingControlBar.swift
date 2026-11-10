@@ -9,8 +9,8 @@ private final class MeetingControlPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// 会议控制条（docs/meeting/TECH_DESIGN.md §3）：记录期间常驻的小浮条。宠物开着时挂在宠物头顶、跟着宠物走
-/// （要挪就拖宠物）；宠物关着时在屏幕顶部居中，可拖动（记住位置）。
+/// 会议控制条（docs/meeting/TECH_DESIGN.md §3）：记录期间常驻的小浮条。经 `AccessoryDock` 找挂靠点：宠物开着时挂在宠物头顶、
+/// 跟着宠物走（要挪就拖宠物）；挂不上（宠物关着、宠物模块没注册）时在屏幕顶部居中，可拖动（记住位置）。
 /// `● REC 时长 · 类型 · 两路电平点 | 暂停 / 继续 · 标记重点 · 速记 · 字幕 | 结束`；速记展开一个内嵌编辑区。
 @MainActor
 final class MeetingControlBarController {
@@ -24,7 +24,7 @@ final class MeetingControlBarController {
     func show() {
         if let panel {
             panel.orderFrontRegardless()
-            if docked { PetController.shared.refreshAccessory() }
+            if docked { AccessoryDock.refresh(panel) }
             return
         }
         let hosting = NSHostingView(rootView: Self.makeView())
@@ -55,7 +55,7 @@ final class MeetingControlBarController {
         }
         observers.append(observer)
         // 宠物开着就挂到它头顶；宠物关着、或开会中途被关掉时，回到上面摆的位置。先挂好再显示，免得从屏幕顶上跳过去。
-        PetController.shared.dockAccessory(panel) { [weak self] docked in
+        AccessoryDock.dock(panel) { [weak self] docked in
             self?.setDocked(docked)
         }
         panel.orderFrontRegardless()
@@ -77,7 +77,7 @@ final class MeetingControlBarController {
             NotificationCenter.default.removeObserver(observer)
         }
         observers = []
-        if let panel { PetController.shared.undockAccessory(panel) }
+        if let panel { AccessoryDock.undock(panel) }
         docked = false
         panel?.acceptsKey = false
         panel?.orderOut(nil)
@@ -94,7 +94,7 @@ final class MeetingControlBarController {
             panel.orderOut(nil)
             panel.orderFrontRegardless()
             // orderOut 会把子窗口从宠物窗上摘下来：挂着的话重新挂回去。
-            if docked { PetController.shared.refreshAccessory() }
+            if docked { AccessoryDock.refresh(panel) }
         }
     }
 
@@ -115,7 +115,7 @@ final class MeetingControlBarController {
         guard abs(frame.width - size.width) > 0.5 || abs(frame.height - size.height) > 0.5 else { return }
         if docked {
             // 在宠物头顶时底边贴着头顶往上长（在脚下时往下长）：交给宠物按新大小重新贴位。
-            PetController.shared.refreshAccessory(size: size)
+            AccessoryDock.refresh(panel, size: size)
             return
         }
         panel.setFrame(NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height),

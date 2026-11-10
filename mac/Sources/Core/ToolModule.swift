@@ -47,7 +47,7 @@ protocol ToolModule: AnyObject {
     /// 用到模型的功能，默认没有。设置的「AI」页按工具分组列出、每个功能选一个模型（同 `hotkeys()` 之于快捷键页），
     /// 见 docs/ai-service/DESIGN.md §3.3。每次现建（文案跟着当前语言）。
     func aiFeatures() -> [AIFeatureDefinition]
-    /// 这个模块替框架承担的呈现角色，默认没有（目前只有桌面宠物交出通知呈现端）。框架在调任何模块的 `activate()` 之前
+    /// 这个模块替框架承担的呈现角色，默认没有（目前只有桌面宠物交出通知呈现端与浮窗挂靠点）。框架在调任何模块的 `activate()` 之前
     /// 收集一次、装进 `PresentationHub`，与注册顺序无关，之后不再收集。见 docs/notify-core/DESIGN.md §3.3。
     func presentationRoles() -> PresentationRoles
 }

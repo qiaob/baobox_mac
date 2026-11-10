@@ -1,6 +1,6 @@
 import AppKit
 
-/// 宠物控制器：拥有窗口、引擎、气泡、环形菜单，并实现通知呈现端（设计 §2；交互见 docs/desktop-pet/INTERACTION.md）。
+/// 宠物控制器：拥有窗口、引擎、气泡、环形菜单，并实现通知呈现端与浮窗挂靠点（设计 §2；交互见 docs/desktop-pet/INTERACTION.md）。
 @MainActor
 final class PetController: ObservableObject, NotifyPresenting {
     static let shared = PetController()
@@ -1199,5 +1199,24 @@ final class PetController: ObservableObject, NotifyPresenting {
         point.x = min(max(point.x, visible.minX), visible.maxX - panelSide)
         point.y = min(max(point.y, visible.minY), visible.maxY - panelSide)
         return point
+    }
+}
+
+// MARK: - 浮窗挂靠点（AccessoryHost，docs/notify-core/DESIGN.md §3.4）
+
+/// 宠物替框架当浮窗挂靠点：转给上面「头顶挂件」那组方法，语义不变。放在这个文件里才读得到 private 的 `accessory`。
+extension PetController: AccessoryHost {
+    func dock(_ window: NSWindow, onChange: @escaping (Bool) -> Void) {
+        dockAccessory(window, onChange: onChange)
+    }
+
+    func undock(_ window: NSWindow) {
+        undockAccessory(window)
+    }
+
+    /// 比 `refreshAccessory` 多一道检查：传进来的不是当前挂件就忽略（只有一个挂件时恒为真）。
+    func refresh(_ window: NSWindow, size: CGSize?) {
+        guard accessory === window else { return }
+        refreshAccessory(size: size)
     }
 }
