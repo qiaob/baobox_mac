@@ -48,14 +48,26 @@ final class FocusHealthStore {
         write(state, to: stateURL, sync: sync)
     }
 
+    /// 写失败报给用户一次、记 fault 日志（#101）；下次保存再试。
     private func write<T: Encodable>(_ value: T, to url: URL, sync: Bool) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(value) else { return }
+        let data: Data
+        do {
+            data = try encoder.encode(value)
+        } catch {
+            StorageWriteFailure.report(L("storage.what.focus"), reason: error.localizedDescription)
+            return
+        }
         let directory = self.directory
+        let what = L("storage.what.focus")
         let work = {
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                StorageWriteFailure.report(what, reason: error.localizedDescription)
+            }
         }
         if sync {
             queue.sync(execute: work)

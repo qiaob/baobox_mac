@@ -74,7 +74,8 @@ BaoboxApp(@main, Settings scene)
 5. **解析全程容错**：外部文件字段缺失/类型不符只跳过或降级，**决不 crash**（无 force-unwrap、无 `try!`）。
 6. **快捷键**：易冲突的组合出厂**不绑定**（`defaultCombo: nil`），由用户在快捷键页自设；纯菜单操作的模块 `hotkeys()` 返回 `[]`。
 7. **未安装即降级**：依赖外部 CLI 的模块（ClaudeCode/AITools/NetCapture）在目录/二进制不存在时显示一条置灰引导，不报错、不启动后台服务。
-8. **支持目录**：`~/Library/Application Support/Baobox/<模块>/`；各模块独立子目录避免串扰。
+8. **支持目录**：`~/Library/Application Support/Baobox/<模块>/`；各模块独立子目录避免串扰。写盘失败别用 `try?` 吞掉：
+   调 `StorageWriteFailure.report(数据名, reason:)`（`Core/StorageWriteFailure.swift`，记 fault 日志 + 同一份数据只提示一次，#101）。
 
 ## docs/ 布局
 
