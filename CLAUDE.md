@@ -115,7 +115,7 @@ BaoboxApp(@main, Settings scene)
 
 1. `project.yml` 里 **只有 `MARKETING_VERSION` 一处**版本号改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。（`CFBundleShortVersionString` / `CFBundleVersion` 现在写的是 `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`，跟着构建设置走 —— 以前写死字面量，导致工作流在命令行上覆盖版本号根本不起作用，v0.0.7 的包里仍写着上一版的号。）
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
-3. `.github/workflows/release.yml` 自动：Release 构建 → **ad-hoc 签名** → zip → 创建 GitHub Release（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。
+3. `.github/workflows/release.yml` 自动：三个平台并行构建（macOS Release + **ad-hoc 签名** → zip；Linux / Windows 按标签改 Cargo.toml 版本号 → `cargo rustc --release -D warnings` → tar.gz / zip），最后 `publish` 一次性创建 GitHub Release 挂上全部产物（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。Mac 包必须有，Linux / Windows 编不过就先不挂、不挡发版（#112）。想先验证打包：Actions 里手动跑 Release（填个试打包版本号），产物在那次运行的 Artifacts 里，不发布。
 
 背景与取舍：
 

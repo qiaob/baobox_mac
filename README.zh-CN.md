@@ -238,6 +238,10 @@ macOS 14+   ·   Swift 5.9   ·   零第三方依赖   ·   数据只存本机
 解压后把 `Baobox.app` 拖进「应用程序」。首次打开若被 Gatekeeper 拦下，
 在「系统设置 → 隐私与安全性」里点「仍要打开」。
 
+从 0.0.9 起同一个 Release 里也有 Linux 和 Windows 版：
+`Baobox-X.Y.Z-linux-x86_64.tar.gz`（解压后运行 `./baobox-linux`）、
+`Baobox-X.Y.Z-windows-x86_64.zip`（解压后运行 `baobox-windows.exe`）。
+
 ### 系统要求
 
 - macOS 14 (Sonoma) 或更新版本

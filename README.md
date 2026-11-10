@@ -297,6 +297,10 @@ Grab the latest `.zip` from [Releases](https://github.com/qiaob/baobox_mac/relea
 unzip it, and drag `Baobox.app` into Applications. If Gatekeeper blocks the first launch,
 allow it under System Settings → Privacy & Security.
 
+From 0.0.9 on the same release also carries the Linux and Windows builds:
+`Baobox-X.Y.Z-linux-x86_64.tar.gz` (unpack and run `./baobox-linux`) and
+`Baobox-X.Y.Z-windows-x86_64.zip` (unzip and run `baobox-windows.exe`).
+
 ### Requirements
 
 - macOS 14 (Sonoma) or later
