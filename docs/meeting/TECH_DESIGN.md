@@ -32,8 +32,9 @@
 | `correction` | AI 纠错（与翻译解耦：`correction && 纠错模型就绪 && 中文`） |
 | `speakers` / `documentURL` | 会议：每句判不判「我 / 对方」；字幕条「打开本次记录」打开哪个文件。#107 PR3 之前这里是 `transcript`（会议的转录去向，引擎替会议写 meeting.md），之后引擎不碰会议的文档（§2.3） |
 | `onFinalLine` | 回调（时间、原文、译文、说话人）—— 会议会话据此写自己的 meeting.md、算标记重点等 |
+| `recordLibrary` | 会议库（`FreeListeningLibrary`）：自由听译的记录写进它，字幕条「打开记录文件夹」打开它的目录。#107 PR6 起装配时交给适配器，适配器开的每个会话都带着它（`ENGINE.md` §4.6） |
 
-- `start()` 等价于 `start(config: .fromSettings())`：读的仍是原来那些 `livetranslate.*` 设置，行为不变。
+- 自由听译 = `start(config: .fromSettings(recordLibrary:))`：读的仍是原来那些 `livetranslate.*` 设置，行为不变（#107 PR6 起配置由适配器给，无参的 `start()` 删了）。
 - `start(config:)` 内把直接读全局设置的地方都改成读 config。
 - **字幕条可选**：`showsBar == false` 时不建字幕条；系统翻译（`TranslationSession` 挂在字幕条视图上）此时不可用 → 会议想看译文就打开字幕条（同实时翻译）。运行中 `setBarVisible(_:)` 切换。
 - **结束时冲刷最后一句**：识别器 `stop()` 现在直接取消、丢掉最后一句未定稿的内容。新增 `finish() async`：先停音频 → `endAudio()` → 等最后一个 final（最多 1.5 s）→ 再停。会议结束、听写结束都走 `finish`；实时翻译的 ✕ 仍走原来的 `stop`（行为不变）。
@@ -58,7 +59,7 @@
 > 由会议库开（`MeetingStore` 实现，见 §4），引擎只决定记不记、什么时候记。字幕与同传设置页「停止后整理纪要」下的提示由会议设置页传进 `MeetingMinutesGenerator.isReady`。
 > 下面的版式与纪要规则不变。
 
-- `MeetingTranscript` 支持：指定目录与文件名、头信息（标题、类型、时间、参会人、日历）、每行可选说话人（`**10:32:05 我**`）、🔖 标记行、速记段。实时翻译自己（自由听译）的新记录也写进会议库（见 §4），旧目录设置保留但只用于迁移；写回旧目录的分支 PR4 删了（会议库没装上就不记录）。
+- `MeetingTranscript` 支持：指定目录与文件名、头信息（标题、类型、时间、参会人、日历）、每行可选说话人（`**10:32:05 我**`）、🔖 标记行、速记段。实时翻译自己（自由听译）的新记录也写进会议库（见 §4），旧目录设置保留但只用于迁移；写回旧目录的分支 PR4 删了；会议库 PR6 起作为构造参数交给引擎、跟着会话配置走（`ENGINE.md` §4.6），与模块的 activate 顺序无关。
 - `MeetingMinutesGenerator.generate(lines:chinese:template:notes:)`：模板 `.content`（自由听译：要点 / 结论 / 待办，即现状）、`.meeting(.standard / .standup / .oneOnOne / .interview)`。会议模板的输出格式固定：
   ```
   ## 摘要

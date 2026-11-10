@@ -23,7 +23,8 @@ extension AIFeatureDefinition {
 
 /// 会议模块壳（docs/meeting/）：菜单、快捷键、设置 Tab；会话在 MeetingSessionController，会议库在 MeetingStore，
 /// 日历 / 提醒 / 检测在 MeetingCalendar / MeetingReminder / MeetingDetector，窗口在 MeetingWindowController。
-/// 注册在实时翻译前面（菜单顺序 = 注册顺序），启动时先装好会议库，自由听译的新记录才写得进去。
+/// 引擎与会议库在 `AppDelegate.meetingEngine` 装配（会议库是引擎的构造参数），自由听译的记录写进会议库
+/// 与注册 / activate 的顺序无关（docs/meeting/ENGINE.md §4.6）。
 @MainActor
 final class MeetingTool: ToolModule {
     let id = "meeting"
@@ -98,7 +99,6 @@ final class MeetingTool: ToolModule {
 
     func activate() {
         MeetingStore.shared.load()
-        LiveTranslateController.recordLibrary = MeetingStore.shared
         // 日历只在设置里打开过才读（没打开不碰 EventKit、不弹权限框）；提醒、检测只读内存里的缓存与系统状态。
         MeetingCalendar.shared.start()
         MeetingReminder.shared.start()

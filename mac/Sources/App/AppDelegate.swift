@@ -105,7 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate {
     /// 会议的引擎 = 字幕与同传的引擎包一层（docs/meeting/ENGINE.md §4.6）。整个 App 只有这里同时认识会议和字幕与同传；
-    /// 会议经 `MeetingSessionController.shared.engine` 拿它，没有第二条路。
+    /// 会议经 `MeetingSessionController.shared.engine` 拿它，没有第二条路。会议库（自由听译的记录写进去）也在这里
+    /// 作为构造参数交给引擎，取代原来会议模块 activate 时给引擎的可变静态赋值。
     /// 第一次用到时建好、之后不变，与注册 / activate 的顺序无关。
-    static let meetingEngine: MeetingEngine = LiveTranslateMeetingEngine(controller: .shared)
+    static let meetingEngine: MeetingEngine =
+        LiveTranslateMeetingEngine(controller: .shared, recordLibrary: MeetingStore.shared)
 }

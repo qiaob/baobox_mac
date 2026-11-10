@@ -346,8 +346,9 @@ final class LiveTranslateController: ObservableObject {
 
     // MARK: 会话配置（docs/meeting/TECH_DESIGN.md §2.1）
 
-    /// 本次会话的配置（开始时定下；改设置重启时按 `rebuild` 重组）。
-    private var sessionConfig = LiveTranslateSessionConfig.fromSettings()
+    /// 本次会话的配置（开始时定下；改设置重启时按 `rebuild` 重组）。开过会话之前是个占位，不拿它开会话：
+    /// 会话都由适配器给配置（带着会议库），见 `toggle(startingWith:)`、`start(config:)`。
+    private var sessionConfig = LiveTranslateSessionConfig.fromSettings(recordLibrary: nil)
     /// 本次会话还没报过 `.ended`（改设置引起的重启不算结束）。
     private var sessionOpen = false
     /// 会议的混音链路（电平、说话人能量、暂停）；实时翻译的单路音源时为 nil。
@@ -362,9 +363,6 @@ final class LiveTranslateController: ObservableObject {
     @Published private(set) var barVisible = false
     /// 运行中切字幕条：后来的切换让还在路上的那次作废。
     private var barGeneration = 0
-    /// 自由听译的新记录写进会议库（会议模块启动时装上）。没装上就不记录、记一条 fault —— 现在的启动流程里总是装上的；
-    /// 写回 ~/Documents 的旧去处已删（docs/meeting/ENGINE.md §8 第 4 条）。之后改成装配时作为构造参数交进来（§4.6）。
-    static var recordLibrary: FreeListeningLibrary?
 
     private init() {
         translator.onResult = { [weak self] job, source, target, text in
@@ -407,18 +405,15 @@ final class LiveTranslateController: ObservableObject {
 
     // MARK: - 开关
 
-    func toggle() {
+    /// 「开始自由听译」开关（菜单、`livetranslate.toggle`）：没在跑 → 按给的配置开（适配器给 `.fromSettings(recordLibrary:)`，
+    /// 带着会议库，docs/meeting/ENGINE.md §4.6）；自由听译中 → 停。
+    func toggle(startingWith config: LiveTranslateSessionConfig) {
         // 会议记录中：开关 = 打开 / 收起字幕（docs/meeting/REQUIREMENTS.md §1：记录中再点「自由听译」不另开）。
         if isRunning, let onUserRequest = sessionConfig.onUserRequest {
             onUserRequest(.toggle)
             return
         }
-        if isRunning { stop() } else { start() }
-    }
-
-    /// 实时翻译（自由听译）：按原来的设置开。
-    func start() {
-        start(config: .fromSettings())
+        if isRunning { stop() } else { start(config: config) }
     }
 
     /// 按给定配置开一次会话。正在运行 / 正在开始、或麦克风被别的会话占着时返回 false（后者发一条宠物提示）。
@@ -446,9 +441,10 @@ final class LiveTranslateController: ObservableObject {
     }
 
     /// 改了音源 / 语言 / 翻译开关等需要重建识别链路的设置后调用。本地记录接着写同一份。
+    /// 自由听译按设置重组，会议库照旧是这次会话带来的那个。
     func restartIfRunning() {
         guard isRunning, !isFinishing else { return }
-        let next = sessionConfig.rebuild?() ?? .fromSettings()
+        let next = sessionConfig.rebuild?() ?? .fromSettings(recordLibrary: sessionConfig.recordLibrary)
         restarting = true
         stop()
         restarting = false
@@ -460,6 +456,9 @@ final class LiveTranslateController: ObservableObject {
 
     /// 字幕条上能换音源（实时翻译）；会议的音源由会议类型定。
     var showsSourceMenu: Bool { sessionConfig.followsSettings }
+
+    /// 字幕条「打开记录文件夹」打开哪：当前会话配置里的会议库目录（自由听译、会议都带着，docs/meeting/ENGINE.md §4.6）。
+    var recordFolder: URL? { sessionConfig.recordLibrary?.folderURL }
 
     /// App 退出：停下来，自由听译的记录同步写完；托管会话剩下的句子与 `.ended` 在返回前同步报完。
     /// 还在整理的纪要（会议的、自由听译的）由会议在退出时统一标「没整理完」（docs/meeting/ENGINE.md §4.5.5）。
@@ -1083,8 +1082,9 @@ final class LiveTranslateController: ObservableObject {
         }
         guard LiveTranslateRecordSettings.enabled else { return }
         // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3），会议库定写到哪、写成什么样。
-        guard let library = Self.recordLibrary else {
-            LiveTranslateLog.recognition.fault("free listening record skipped: meeting library not installed")
+        // 会议库跟着会话配置来（适配器开的会话都带着，docs/meeting/ENGINE.md §4.6），没带就不记录 —— 走不到。
+        guard let library = sessionConfig.recordLibrary else {
+            LiveTranslateLog.recognition.fault("free listening record skipped: no meeting library in the session config")
             return
         }
         let transcript = library.beginFreeListeningRecord(start: Date(), run: config,

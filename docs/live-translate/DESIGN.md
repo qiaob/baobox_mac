@@ -175,7 +175,11 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 - **自由听译的记录由会议库写**（2026-11，#107 PR4，`docs/meeting/ENGINE.md` §4.5.3）：记不记、什么时候记（开关、字幕条按钮、中途打开时补记已有的句子）
   仍由引擎决定；开记录时经 `FreeListeningLibrary`（Core 协议，会议库 `MeetingStore` 实现）开一份 `FreeListeningRecord`，写成什么样、写到哪、整不整理纪要
   由会议库定。写文档的类 `MeetingTranscript` 与纪要生成器 `MeetingMinutesGenerator` 都在会议模块（`Modules/Meeting/`）。「停止后整理纪要」开关在开记录、
-  收尾时由引擎现读、作为参数交过去。写回 `~/Documents/Baobox 实时翻译记录/` 的旧去处已删：会议库没装上就不记录（记一条 fault，现在的启动流程里总是装上的）。
+  收尾时由引擎现读、作为参数交过去。写回 `~/Documents/Baobox 实时翻译记录/` 的旧去处已删（PR4）。
+- **会议库跟着会话配置走**（2026-11，#107 PR6，`docs/meeting/ENGINE.md` §4.6）：会议库在装配时（`AppDelegate.meetingEngine`）作为构造参数交给
+  适配器 `LiveTranslateMeetingEngine`，适配器开的每个会话（自由听译 `.fromSettings(recordLibrary:)`、会议）都把它放进 `LiveTranslateSessionConfig.recordLibrary`，
+  改设置重启时带过去；控制器开记录、字幕条「打开记录文件夹」（`recordFolder`）都只读当前会话的配置。原来靠会议模块 activate 时给可变静态赋值，
+  现在记录写到哪与模块的注册 / activate 顺序无关。
 
 - **开关**：「保存记录」**默认关**（2026-11-05 用户要求），字幕条上的「记录」按钮一点就切（用户：菜单里操作不方便），
   设置页「记录与纪要」里也能开关，记住选择；
@@ -194,8 +198,9 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
   「### 要点 / ### 结论 / ### 待办」三节，替换「## 纪要」下的占位文字；语言跟随界面语言。记录按估算 token（中日韩一字约一个，
   其余约 3.5 字符一个）凑段，每段 ≤ 2200：一段就直接整理；多段就先逐段提要点（每段最多 10 条），再合并整理。
   没下载模型 / 内容太少（< 40 字）/ 整理失败都在这一节写明原因。整理好发系统通知（开始记录时就先申请通知权限）。
-- 入口：字幕条「记录」按钮旁的小按钮（打开本次记录；还没有就打开记录文件夹）、菜单栏「打开最近一次记录」、设置页「记录与纪要」
-  （开关、保存位置、打开文件夹、纪要开关）。
+- 入口：字幕条「记录」按钮旁的小按钮（打开本次记录；还没有就打开记录文件夹 = 会议库目录）、菜单栏「打开最近一次记录」、设置页「记录与纪要」
+  （开关、保存位置、打开文件夹、纪要开关）。保存位置就是会议库目录（`~/Library/Application Support/Baobox/Meetings/`），由会议设置页传进来，
+  只显示、不能改：原来的「更改…」按钮只在会议库没装上时出现、实际到不了，#107 PR6 删掉了。
 
 ## 7. 设置（UserDefaults 键）
 
@@ -214,7 +219,7 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `livetranslate.barOrigin` | `NSStringFromPoint`（旧版；只在没有 `barFrame` 时用一次） | — | — |
 | `livetranslate.barFrame` | `NSStringFromRect` | — | 移动 / 改大小时写 |
 | `livetranslate.record.enabled` | Bool：保存记录 | `false` | 立刻（运行中开 = 从现在起记，关 = 收尾这一份） |
-| `livetranslate.record.folder` | 保存位置路径；空 = 默认 | 空 | 下次开始 |
+| `livetranslate.record.folder` | 旧版的保存位置路径；空 = 默认（`~/Documents/Baobox 实时翻译记录`）。设置页已不能改（#107 PR6），只剩会议库首次启动迁移旧记录时读（常量在 `MeetingStore`） | 空 | — |
 | `livetranslate.record.summary` | Bool：停止后整理纪要 | `true` | 下次停止 |
 
 `livetranslate.language`、`livetranslate.autoA` / `autoB`、`livetranslate.vocabulary`（说话语言与专有名词表）会议、听写也在用，
@@ -233,6 +238,6 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `LiveTranslateTranslator.swift` | 翻译节流队列（按方向分）+ `translationTask` 桥接 + 离线模型服务循环 |
 | `LiveTranslateDualRecognizer.swift` | 双识别器：两种语言同时听、共用切段、逐句打分定语种 |
 | `LiveTranslateBar.swift` | 字幕条 `NSPanel`（可拉伸、记位置大小）与 SwiftUI 视图（快捷菜单、延迟监控、可滚动历史） |
-| `LiveTranslateRecordSettings.swift` | 「保存记录」「停止后整理纪要」开关与保存位置（`LiveTranslateRecordSettings`）。记录本身由会议库写：`Modules/Meeting/MeetingTranscript.swift`（Markdown，增量整份重写）、`MeetingMinutesGenerator.swift`（停止后整理纪要，分段提要点再合并），#107 PR4 从这里搬过去 |
+| `LiveTranslateRecordSettings.swift` | 「保存记录」「停止后整理纪要」两个开关与「打开记录文件夹」（`LiveTranslateRecordSettings`；目录由调用方给：会话配置里的会议库，#107 PR6）。记录本身由会议库写：`Modules/Meeting/MeetingTranscript.swift`（Markdown，增量整份重写）、`MeetingMinutesGenerator.swift`（停止后整理纪要，分段提要点再合并），#107 PR4 从这里搬过去 |
 | `LiveTranslateMeetingEngine.swift` | 会议的引擎：`LiveTranslateController` 包一层，实现 Core 的 `MeetingEngine` 协议（#107 PR5，`docs/meeting/ENGINE.md` §4.4）；会议专属的规则（沿用这里的说话语言 / 译成 / 纠错、字幕关着只转录、只转录时也纠错）在这里，装配在 `AppDelegate.meetingEngine` |
 | `LiveTranslateSettingsView.swift` | 设置页 |

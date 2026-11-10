@@ -1,8 +1,8 @@
 import Foundation
 
 /// 一次实时翻译会话怎么开（docs/meeting/TECH_DESIGN.md §2.1）：实时翻译（自由听译）与会议记录共用一个引擎，
-/// 区别都在这里。`LiveTranslateController.start()` 等价于 `start(config: .fromSettings())` —— 读的仍是原来那些
-/// `livetranslate.*` 设置，行为与改造前一样；会议记录由会议的会话组一份自己的。
+/// 区别都在这里。两种都由适配器 `LiveTranslateMeetingEngine` 组：自由听译是 `.fromSettings(recordLibrary:)` —— 读的仍是
+/// 原来那些 `livetranslate.*` 设置，行为与改造前一样；会议记录按会议给的 `MeetingEngineConfig` 组一份自己的。
 struct LiveTranslateSessionConfig {
     /// 音源。`.microphone` / `.system` 是实时翻译原来的两种；`.mixed` = 麦克风 + 系统声音混成一路（线上会议）。
     enum Sources: Equatable {
@@ -77,12 +77,17 @@ struct LiveTranslateSessionConfig {
     /// 托管会话（会议）这场的 meeting.md：只给字幕条用 —— 记下第一句后，「记录」按钮旁的小按钮打开它。
     /// 引擎不写它：会议的文档由会议自己写（docs/meeting/ENGINE.md §4.5）。自由听译为 nil（记录照旧由引擎按「保存记录」开关写）。
     var documentURL: URL?
+    /// 会议库（docs/meeting/ENGINE.md §4.6）：自由听译的记录写进它，字幕条「打开记录文件夹」打开它的目录。
+    /// 装配时作为构造参数交给适配器（`AppDelegate.meetingEngine`），适配器开的每个会话（自由听译、托管）都带着它，
+    /// 控制器只从当前会话的配置里读。nil 只出现在控制器还没开过会话时的占位配置里。
+    var recordLibrary: FreeListeningLibrary?
     /// 一句定稿（含之后纠错 / 译文回来的更新，同一句 `key` 不变）。停止时没定稿的最后几句也报，都在 `.ended` 之前。
     var onFinalLine: ((MeetingEngineLine) -> Void)?
 
     /// 整份配置跟着 `livetranslate.*` 设置走（实时翻译）：运行中改设置时按设置重来，字幕条上能换音源。
     var followsSettings = false
-    /// 运行中改了设置（语言、译成、朗读…）要重建识别链路时，用它组新的一份；nil = `.fromSettings()`。
+    /// 运行中改了设置（语言、译成、朗读…）要重建识别链路时，用它组新的一份；nil = `.fromSettings(recordLibrary:)`
+    /// （带着这次的会议库）。
     var rebuild: (() -> LiveTranslateSessionConfig)?
     var onLifecycle: ((Lifecycle) -> Void)?
     /// nil = 实时翻译原来的行为（✕ 停止、记录按钮开关保存记录、开关就是开 / 停）。
@@ -100,8 +105,8 @@ struct LiveTranslateSessionConfig {
         self.correction = correction
     }
 
-    /// 实时翻译（自由听译）：全部取自原来的设置。
-    static func fromSettings() -> LiveTranslateSessionConfig {
+    /// 实时翻译（自由听译）：全部取自原来的设置；记录写进给的会议库。
+    static func fromSettings(recordLibrary: FreeListeningLibrary?) -> LiveTranslateSessionConfig {
         var config = LiveTranslateSessionConfig(
             owner: "livetranslate",
             label: L("livetranslate.name"),
@@ -113,6 +118,7 @@ struct LiveTranslateSessionConfig {
             correction: LiveTranslateSettings.aiCorrection ? .whenTranslating : .off
         )
         config.followsSettings = true
+        config.recordLibrary = recordLibrary
         return config
     }
 }
