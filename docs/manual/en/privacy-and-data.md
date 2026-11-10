@@ -2,21 +2,28 @@
 
 [简体中文](../privacy-and-data.md) · English
 
-In one sentence: **everything stays on this Mac. Baobox uploads nothing and has no accounts.**
+In one sentence: **your data stays on this Mac, there are no accounts, and no usage data is collected.** The network is
+used only where you ask for it (downloading models and assets, cloud AI, Phone Transfer over the internet); see
+"[Does it use the network](#does-it-use-the-network)".
 
 ## Which permissions are needed
 
 | Permission | Used by | Without it |
 |---|---|---|
-| **Screen Recording** | Screenshots, recording, OCR, live drawing | Those features can't run |
-| **Accessibility** | Clipboard paste-back, window management, keyboard clicking, keyword expansion | Degraded: the clipboard copies instead of pasting; window management and keyboard clicking are unavailable |
-| **Microphone** (optional) | Only requested when you enable "record microphone" during a recording | The recording continues without microphone audio |
+| **Screen Recording** | Screenshots, recording, OCR, live drawing; "System Audio" in meetings and Live Translate | Those features can't run; meetings and Live Translate can't hear system audio |
+| **Accessibility** | Clipboard paste-back, window management, keyboard clicking, keyword expansion, the selection assistant (reading and replacing selected text), inserting dictated text, the menu bar manager | Degraded: the clipboard copies instead of pasting; dictation copies instead of inserting; window management, keyboard clicking, reading selections and the menu bar manager are unavailable |
+| **Microphone** | Meetings, Live Translate (microphone source), dictation; "record microphone" during a screen recording | Those features can't run; screen recordings continue without microphone audio |
+| **Speech Recognition** | Meetings, Live Translate, dictation (on this Mac when possible) | Speech can't be turned into text |
+| **Calendars** (optional) | Meeting: requested only when you turn on calendars in Meeting settings; read-only | No next-meeting display, reminders or one-click join |
+| **Local Network** | Phone Transfer's local network mode | Local network mode can't connect (internet mode still works) |
+| **Automation** | Clicking a Claude Code notification jumps to the terminal window running that session | Clicking the notification doesn't switch to the terminal |
 
 > ⚠️ One system quirk: after ticking Screen Recording in System Settings you **must restart
 > Baobox** for it to take effect. Both the onboarding window and the settings page offer a
 > one-click restart.
 
-Not needed: **no network account, no background uploads, no usage analytics.**
+Not needed: **no network account, no background uploads, no usage analytics.** Each permission is requested only when
+you first use a feature that needs it.
 
 ## Where data lives
 
@@ -36,6 +43,13 @@ Per tool:
 | Keep awake | Settings only | UserDefaults |
 | Focus & Health | Reminders, the current round, focus records (last 400 days) | Support directory |
 | Dictation | Dictation history (text only, no audio) | Support directory |
+| Meeting / Live Translate | Transcripts (each sentence's original and translation), minutes, notes, action items; Live Translate transcripts (with "Save transcripts" on) go here too. No audio is stored | Support directory `Meetings/` (the meeting library) |
+| Selection assistant | Custom actions; the English dictionary for Learn (only after you download it) | UserDefaults / support directory |
+| Offline translation and local AI | Model files (around 1 GB each, only after you download them) | Support directory `Translation/` |
+| AI | Providers, models and each feature's choice, today's cloud usage; **API keys are in the Keychain** | UserDefaults / Keychain |
+| Desktop pet | Downloaded characters | Support directory `Pets/` |
+| Phone Transfer | Received files | `~/Downloads/Baobox` (configurable) |
+| Menu bar manager | Which icons to show or hide, an icon cache | UserDefaults / support directory |
 | Keyboard clicking | Settings only | UserDefaults |
 | Claude Code assistant | **Nothing** — reads `~/.claude` live | — |
 | Codex assistant | **Nothing** — reads `~/.codex` live | — |
@@ -86,10 +100,20 @@ the app that does, so the boundary is drawn tightly:
 
 ## Does it use the network
 
-Not in normal use. Two places make requests, and both require **an explicit click**:
+Nothing connects in the background, and nothing is reported back. These use the network, and only when you use them:
 
-- Claude Code assistant → Maintenance → Check for the latest version (an npm lookup)
-- Codex assistant → Maintenance → Check for the latest version (same)
+| When | Where to | What is sent |
+|---|---|---|
+| Downloading an offline translation or local AI model | Hugging Face, falling back to ModelScope | Download only |
+| Downloading the dictionary in the selection assistant's Learn | GitHub (the ECDICT English dictionary, a pinned version) | Download only |
+| Switching to a downloadable pet character | GitHub, falling back to jsDelivr (a pinned version, checked after download) | Download only |
+| Choosing a cloud AI model for a feature | The provider you chose | The text that feature uses (see below) |
+| Phone Transfer's **internet mode** | The phone's page is on GitHub Pages; connection details are **encrypted** and relayed by public ntfy.sh / MQTT servers; STUN servers (Cloudflare, Google and others) only discover public addresses | Files and text go **peer to peer**, through no server. Local network mode stays on your network |
+| Claude Code / Codex assistant → Maintenance → Check for the latest version | npm | A version lookup only |
+
+At the system level: on macOS 26 speech recognition is entirely on-device; on older systems without an on-device speech
+model, Apple's speech service is used (same as system Dictation). Translation language packs and the macOS 26 speech
+model are downloaded by macOS itself.
 
 All session, usage, and cost data in both assistants is **computed from local files**. No AI
 API is called and no login is required.
