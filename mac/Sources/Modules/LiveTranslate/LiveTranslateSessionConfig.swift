@@ -39,18 +39,6 @@ struct LiveTranslateSessionConfig {
         case whenTranslating
     }
 
-    /// 一句定稿（含之后纠错 / 译文回来的更新，同一句 `key` 不变）。
-    struct FinalLine {
-        /// 这一句在本次会话里的唯一键（改设置重启后句子 id 从头编，键里带着第几次运行）。
-        let key: String
-        let time: Date
-        let original: String
-        /// 空 = 没翻（不翻译、或这句本来就是「译成」的语言）。
-        let translation: String
-        /// 线上会议按两路音量判的「我 / 对方」；判不准、或不是线上会议时为 nil。
-        let speaker: LiveTranslateSpeaker?
-    }
-
     /// 会话的开始与结束（改设置引起的重启不算结束，只会再报一次 `.started`）。
     enum Lifecycle {
         case started
@@ -84,7 +72,8 @@ struct LiveTranslateSessionConfig {
     var correction: Correction
     /// 转录去向：nil = 实时翻译原来的行为（按「保存记录」开关，写进会议库的自由听译）；给定 = 这次一定记，写到这里。
     var transcript: LiveTranslateTranscript.Destination?
-    var onFinalLine: ((FinalLine) -> Void)?
+    /// 一句定稿（含之后纠错 / 译文回来的更新，同一句 `key` 不变）。
+    var onFinalLine: ((MeetingEngineLine) -> Void)?
 
     /// 整份配置跟着 `livetranslate.*` 设置走（实时翻译）：运行中改设置时按设置重来，字幕条上能换音源。
     var followsSettings = false

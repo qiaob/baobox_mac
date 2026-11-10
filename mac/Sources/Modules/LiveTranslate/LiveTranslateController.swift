@@ -240,7 +240,7 @@ final class LiveTranslateController: ObservableObject {
         /// 这句第一次出字的时刻（记录里的时间）。
         var startedAt = Date()
         /// 线上会议定稿时按两路音量判的「我 / 对方」（`speakerSettled` 之后不再变；判不准为 nil）。
-        var speaker: LiveTranslateSpeaker?
+        var speaker: MeetingSpeaker?
         var speakerSettled = false
     }
 
@@ -330,7 +330,7 @@ final class LiveTranslateController: ObservableObject {
     /// 这一次正在记录（字幕条「记录」菜单里的开关）。
     @Published private(set) var recording = false
     /// 本次的音源、语言（中途打开记录时新建记录要用）。
-    private var transcriptConfig: LiveTranslateTranscript.Config?
+    private var transcriptConfig: MeetingEngineRun?
     /// 最近一次的记录：菜单栏「打开最近一次记录」、App 退出时收尾纪要用。
     private(set) var lastTranscript: LiveTranslateTranscript?
     /// 第几次开始：改设置重启后接着写同一份记录，而句子 id 会从头编，记录里按「第几次 + id」区分。
@@ -640,7 +640,7 @@ final class LiveTranslateController: ObservableObject {
         }
         defaultLineLanguage = speech.languages.first ?? .english
         run += 1
-        let recordConfig = LiveTranslateTranscript.Config(
+        let recordConfig = MeetingEngineRun(
             source: source.title, speech: speech.title,
             target: config.translate && engine != nil ? target.endonym : nil)
         transcriptConfig = recordConfig
@@ -1002,7 +1002,7 @@ final class LiveTranslateController: ObservableObject {
     }
 
     /// 两路此刻的电平（控制条的电平点，取一次清一次）；不是混音链路时为 nil。
-    func takeInputLevels() -> LiveTranslateInputLevels? {
+    func takeInputLevels() -> MeetingInputLevels? {
         mixedSource?.takeLevels()
     }
 
@@ -1073,7 +1073,7 @@ final class LiveTranslateController: ObservableObject {
     // MARK: - 本地记录
 
     /// 开始：新建一份记录；改设置后的重启接着写原来那份（设置变了记一行「改为：…」）。
-    private func startTranscript(_ config: LiveTranslateTranscript.Config) {
+    private func startTranscript(_ config: MeetingEngineRun) {
         if let transcript {
             transcript.continueWith(config, at: Date())
             return
@@ -1146,7 +1146,7 @@ final class LiveTranslateController: ObservableObject {
         guard !original.isEmpty else { return }
         let key = "\(run)-\(line.id)"
         let translation = line.translates ? line.translation : ""
-        sessionConfig.onFinalLine?(LiveTranslateSessionConfig.FinalLine(
+        sessionConfig.onFinalLine?(MeetingEngineLine(
             key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker))
         guard let transcript else { return }
         transcript.update(key: key, time: line.startedAt, original: original, translation: translation,
