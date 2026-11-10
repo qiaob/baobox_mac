@@ -29,7 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())
-        // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），引擎（LiveTranslateController）照旧，菜单、设置、快捷键都在会议里。
+        // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），菜单、设置、快捷键都在会议里。
+        // 会议经 MeetingEngine 协议驱动字幕与同传的引擎，两边只在下面的 `AppDelegate.meetingEngine` 接上。
         registry.register(MeetingTool())
         registry.register(SelectionTranslateTool())
         registry.register(DictationTool())
@@ -100,4 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
     }
+}
+
+extension AppDelegate {
+    /// 会议的引擎 = 字幕与同传的引擎包一层（docs/meeting/ENGINE.md §4.6）。整个 App 只有这里同时认识会议和字幕与同传；
+    /// 会议经 `MeetingSessionController.shared.engine` 拿它，没有第二条路。
+    /// 第一次用到时建好、之后不变，与注册 / activate 的顺序无关。
+    static let meetingEngine: MeetingEngine = LiveTranslateMeetingEngine(controller: .shared)
 }

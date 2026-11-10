@@ -234,4 +234,5 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `LiveTranslateDualRecognizer.swift` | 双识别器：两种语言同时听、共用切段、逐句打分定语种 |
 | `LiveTranslateBar.swift` | 字幕条 `NSPanel`（可拉伸、记位置大小）与 SwiftUI 视图（快捷菜单、延迟监控、可滚动历史） |
 | `LiveTranslateRecordSettings.swift` | 「保存记录」「停止后整理纪要」开关与保存位置（`LiveTranslateRecordSettings`）。记录本身由会议库写：`Modules/Meeting/MeetingTranscript.swift`（Markdown，增量整份重写）、`MeetingMinutesGenerator.swift`（停止后整理纪要，分段提要点再合并），#107 PR4 从这里搬过去 |
+| `LiveTranslateMeetingEngine.swift` | 会议的引擎：`LiveTranslateController` 包一层，实现 Core 的 `MeetingEngine` 协议（#107 PR5，`docs/meeting/ENGINE.md` §4.4）；会议专属的规则（沿用这里的说话语言 / 译成 / 纠错、字幕关着只转录、只转录时也纠错）在这里，装配在 `AppDelegate.meetingEngine` |
 | `LiveTranslateSettingsView.swift` | 设置页 |

@@ -71,7 +71,7 @@
 
 ## 3. 会议会话（Meeting 模块）
 
-- `MeetingSessionController`：`start(type:event:)` → 组 config → `LiveTranslateController.shared.start(config:)`；claim 失败（听写 / 实时翻译在用）→ 宠物提示。记录中：挂 `meeting` 勿扰、菜单栏录音指示、控制条、超时检查（绑定日历事件时）。`pause/resume`（暂停 = 停喂音频，不停会话）、`mark()`、`notes`、`setSubtitles(_:)`、`finish()` → 引擎 `finish` → 写 `meta.json` → 生成纪要（后台，状态 `summarizing`）→ 完成后更新 meta + 索引 + 通知。
+- `MeetingSessionController`：`start(type:event:)` → `engine.start(host:)`；claim 失败（听写 / 实时翻译在用）→ 宠物提示。引擎是 Core 的 `MeetingEngine` 协议（#107 PR5，`ENGINE.md` §4.1–§4.4）：会话是托管方 `MeetingEngineHost`，只交出 `MeetingEngineConfig`（线上 / 线下、开不开字幕、标不标说话人、本场 meeting.md），句子 / 开起来 / 结束 / 字幕条上的操作都从 `meetingEngine(didReport:)` 回来；沿用「字幕与同传」的语言与纠错、字幕关着只转录这些规则在适配器 `LiveTranslateMeetingEngine` 里组成 `LiveTranslateSessionConfig`，装配在 `AppDelegate.meetingEngine`。记录中：挂 `meeting` 勿扰、菜单栏录音指示、控制条、超时检查（绑定日历事件时）。`pause/resume`（暂停 = 停喂音频，不停会话）、`mark()`、`notes`、`setSubtitles(_:)`、`finish()` → 引擎 `finish` → 写 `meta.json` → 生成纪要（后台，状态 `summarizing`）→ 完成后更新 meta + 索引 + 通知。
 - **本场的 meeting.md 归会话**（#107 PR3，`ENGINE.md` §4.5.2、§4.5.5）：第一次 `.started` 时建（开始中写的速记、开起来之前就定稿的句子一并写进去；引擎没开起来就没有文档，这场作废）；
   暂停 / 继续、单路静音、🔖、速记调完引擎就直接写；`.ended` 里先收尾文档（它同步报回的 `.finished` 写 meta 或作废）再撤勿扰、收控制条、复位。
   App 退出：先置 `terminating` 再让引擎停，引擎在返回前把剩下的句子和 `.ended` 同步报回来；没报 `.ended`（比如正因为改设置在重启）就自己收尾。

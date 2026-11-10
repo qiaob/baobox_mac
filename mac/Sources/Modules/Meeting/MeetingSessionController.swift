@@ -1,18 +1,25 @@
 import AppKit
 import os
 
-/// 一场会议记录的编排（docs/meeting/TECH_DESIGN.md §3）：组引擎配置交给 `LiveTranslateController`，
-/// 记录中挂 `meeting` 勿扰、菜单栏录音指示、控制条、超时检查；暂停 / 标记 / 速记 / 字幕；结束 → 等最后一句 →
-/// 写 meta.json → 后台整理纪要 → 解析行动项、更新会议库、宠物通知。所有状态只在主线程读写。
+/// 一场会议记录的编排（docs/meeting/TECH_DESIGN.md §3）：经 `MeetingEngine` 协议驱动引擎（docs/meeting/ENGINE.md；
+/// 实现是字幕与同传的适配器，装配在 `AppDelegate.meetingEngine`），记录中挂 `meeting` 勿扰、菜单栏录音指示、控制条、
+/// 超时检查；暂停 / 标记 / 速记 / 字幕；结束 → 等最后一句 → 写 meta.json → 后台整理纪要 → 解析行动项、更新会议库、宠物通知。
+/// 所有状态只在主线程读写。
 ///
 /// 本场的 meeting.md 由这里驱动（docs/meeting/ENGINE.md §4.5.2）：引擎只报「开起来 / 一句 / 结束」，第一次开起来时建文档，
 /// 句子、暂停 / 继续、单路静音、🔖、速记直接写，改设置重启时续写，`.ended` 里收尾。
 ///
 /// 第二段（日历、提醒、检测、会议库窗口）只经这里开始 / 结束会议，并读这里发布的状态。
 @MainActor
-final class MeetingSessionController: ObservableObject {
-    static let shared = MeetingSessionController()
-    private init() {}
+final class MeetingSessionController: ObservableObject, MeetingEngineHost {
+    static let shared = MeetingSessionController(engine: AppDelegate.meetingEngine)
+
+    /// 会议的引擎。会话只经它开始、暂停、结束；会议菜单、快捷键、退出收尾也经它（`MeetingSessionController.shared.engine`）。
+    let engine: MeetingEngine
+
+    private init(engine: MeetingEngine) {
+        self.engine = engine
+    }
 
     /// 通知来源、占用登记的 owner。
     static let source = "meeting"
@@ -73,7 +80,7 @@ final class MeetingSessionController: ObservableObject {
     private var transcript: MeetingTranscript?
     /// App 正在退出：文档同步写完、纪要标「没整理完」。
     private var terminating = false
-    /// 定稿的句子（`onFinalLine`）：算重点那段说了什么；建文档时补写开起来之前就定稿的那几句。
+    /// 定稿的句子（引擎报来的 `.line`）：算重点那段说了什么；建文档时补写开起来之前就定稿的那几句。
     private var finalLines: [String: MeetingEngineLine] = [:]
     /// 已经记下内容（转录或速记）的会议：结束时一句都没有的作废。
     private var contentIDs: Set<String> = []
@@ -127,7 +134,7 @@ final class MeetingSessionController: ObservableObject {
             return
         }
         guard phase == .idle else { return }
-        LiveTranslateController.shared.toggle()
+        engine.toggleFreeListening()
     }
 
     /// 合规说明：告知参会人是用户自己的事，这里只提醒、不代为通知（需求 §3）。确认一次后不再问；返回是否确认。
@@ -178,7 +185,7 @@ final class MeetingSessionController: ObservableObject {
         finishWhenStarted = false
         destination = makeDestination(record: record, type: type, title: title, start: now, event: event, style: style)
         phase = .starting
-        guard LiveTranslateController.shared.start(config: engineConfig()) else {
+        guard engine.start(host: self) else {
             // 麦克风被实时翻译 / 听写占着：引擎已经发了「正在 XX，先停止再开始」。
             Self.log.notice("meeting start refused: capture busy")
             MeetingStore.shared.discard(record.id)
@@ -214,36 +221,19 @@ final class MeetingSessionController: ObservableObject {
         return destination
     }
 
-    /// 引擎配置：线上 = 麦克风 + 系统声音混一路，线下 = 仅麦克风；语言、纠错沿用「字幕与同传」设置；
-    /// 默认只转录原文、不翻译、不出字幕条，「字幕」打开后叠加字幕条与译文（同实时翻译）。改设置引起的重启也按这里重组。
-    /// 文档不交给引擎（会议自己写），只告诉它标不标说话人、字幕条上「打开本次记录」打开哪个文件。
-    private func engineConfig() -> LiveTranslateSessionConfig {
+    /// 交给引擎的配置（`MeetingEngineHost`）：线上 = 麦克风 + 系统声音混一路，线下 = 仅麦克风；字幕默认关，「字幕」打开后
+    /// 叠加字幕条与译文。说什么语言、译成什么、纠不纠错由引擎按「字幕与同传」的设置定（适配器，docs/meeting/ENGINE.md §4.4）。
+    /// 改设置引起的重启也按这里重组。文档不交给引擎（会议自己写），只告诉它标不标说话人、字幕条上「打开本次记录」打开哪个文件。
+    var engineConfig: MeetingEngineConfig {
         let type = self.type ?? .offline
-        var config = LiveTranslateSessionConfig(
+        return MeetingEngineConfig(
             owner: Self.source,
             label: L("meeting.captureLabel"),
-            sources: type == .online ? .mixed : .microphone,
-            speech: SpeechSettings.speech,
-            target: LiveTranslateSettings.target,
-            translate: subtitlesOn && LiveTranslateSettings.translateEnabled,
-            showsBar: subtitlesOn,
-            correction: LiveTranslateSettings.aiCorrection ? .always : .off)
-        config.usesMixer = true
-        config.speakers = destination?.speakers == true
-        config.documentURL = destination?.fileURL
-        config.onFinalLine = { line in
-            MeetingSessionController.shared.finalLine(line)
-        }
-        config.onLifecycle = { lifecycle in
-            MeetingSessionController.shared.engineLifecycle(lifecycle)
-        }
-        config.onUserRequest = { request in
-            MeetingSessionController.shared.userRequest(request)
-        }
-        config.rebuild = {
-            MeetingSessionController.shared.engineConfig()
-        }
-        return config
+            capture: type == .online ? .microphoneAndSystem : .microphone,
+            subtitles: subtitlesOn,
+            speakers: destination?.speakers == true,
+            // 引擎只在本场开始中 / 进行中取配置，这时 `destination` 总在；会议库根目录只是空闲时的兜底，用不到。
+            documentURL: destination?.fileURL ?? MeetingStore.shared.rootURL)
     }
 
     // MARK: - 会中
@@ -252,7 +242,7 @@ final class MeetingSessionController: ObservableObject {
     func pause() {
         guard phase == .recording else { return }
         phase = .paused
-        LiveTranslateController.shared.setPaused(true)
+        engine.setPaused(true)
         transcript?.note(L("livetranslate.record.doc.paused"), at: Date())
         refreshIndicators()
         controlBar.refreshSize()
@@ -261,7 +251,7 @@ final class MeetingSessionController: ObservableObject {
     func resume() {
         guard phase == .paused else { return }
         phase = .recording
-        LiveTranslateController.shared.setPaused(false)
+        engine.setPaused(false)
         transcript?.note(L("livetranslate.record.doc.resumed"), at: Date())
         refreshIndicators()
         controlBar.refreshSize()
@@ -275,7 +265,7 @@ final class MeetingSessionController: ObservableObject {
     func mark() {
         guard isRecording, let startedAt else { return }
         let now = Date()
-        let current = LiveTranslateController.shared.lines.last?.original ?? ""
+        let current = engine.currentText ?? ""
         marks.append(MeetingHighlight(t: now.timeIntervalSince(startedAt), text: String(current.prefix(200))))
         transcript?.mark(at: now)
         controlBar.refreshSize()
@@ -300,8 +290,8 @@ final class MeetingSessionController: ObservableObject {
     func setSubtitles(_ on: Bool) {
         guard isActive, phase != .finishing, subtitlesOn != on else { return }
         subtitlesOn = on
-        // 开始中引擎还没跑起来：开起来时按 subtitlesOn 同步（见 engineLifecycle）。
-        LiveTranslateController.shared.setBarVisible(on, translate: LiveTranslateSettings.translateEnabled)
+        // 开始中引擎还没跑起来：开起来时按 subtitlesOn 同步（见 engineStarted）。
+        engine.setSubtitles(on)
         controlBar.refreshSize()
     }
 
@@ -313,7 +303,7 @@ final class MeetingSessionController: ObservableObject {
     func toggleMicrophoneMuted() {
         guard isActive, phase != .finishing else { return }
         microphoneMuted.toggle()
-        LiveTranslateController.shared.setLaneMuted(microphoneMuted, lane: LiveTranslateMixerCore.microphoneLane)
+        engine.setMuted(microphoneMuted, lane: .microphone)
         transcript?.note(microphoneMuted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"),
                          at: Date())
     }
@@ -322,7 +312,7 @@ final class MeetingSessionController: ObservableObject {
     func toggleSystemMuted() {
         guard isActive, phase != .finishing, type == .online else { return }
         systemMuted.toggle()
-        LiveTranslateController.shared.setLaneMuted(systemMuted, lane: LiveTranslateMixerCore.systemLane)
+        engine.setMuted(systemMuted, lane: .system)
         transcript?.note(systemMuted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"),
                          at: Date())
     }
@@ -336,7 +326,7 @@ final class MeetingSessionController: ObservableObject {
             phase = .finishing
             refreshIndicators()
             controlBar.refreshSize()
-            Task { await LiveTranslateController.shared.finish() }
+            engine.finish()
         case .starting:
             finishWhenStarted = true
         case .idle, .finishing:
@@ -353,36 +343,46 @@ final class MeetingSessionController: ObservableObject {
             // 还没开起来就退出了：不留一条空会议。
             MeetingStore.shared.discard(id)
         } else if isActive {
-            LiveTranslateController.shared.terminate()
+            engine.terminate()
             if isActive { ended() }
         }
         MeetingStore.shared.flush()
     }
 
-    // MARK: - 引擎回调
+    // MARK: - 引擎事件（MeetingEngineHost）
 
-    private func engineLifecycle(_ lifecycle: LiveTranslateSessionConfig.Lifecycle) {
-        switch lifecycle {
+    /// 引擎报来的事件：主线程、按发生顺序；可能在这里调引擎方法的过程中同步到达（退出、字幕开关）。
+    /// 这一场的句子都报完才报 `.ended`（docs/meeting/ENGINE.md §4.3）。
+    func meetingEngine(didReport event: MeetingEngineEvent) {
+        switch event {
         case .started(let run):
-            guard phase == .starting else {
-                // 改设置引起的重启也会再报一次：同一份文档接着写（设置真变了才记「改为：…」），记录中 / 暂停中的不动。
-                transcript?.continueWith(run, at: Date())
-                return
-            }
-            phase = .recording
-            Self.log.notice("meeting recording")
-            openTranscript(run)
-            if subtitlesOn {
-                LiveTranslateController.shared.setBarVisible(true, translate: LiveTranslateSettings.translateEnabled)
-            }
-            refreshIndicators()
-            controlBar.refreshSize()
-            if finishWhenStarted {
-                finishWhenStarted = false
-                finish()
-            }
+            engineStarted(run)
+        case .line(let line):
+            finalLine(line)
         case .ended:
             ended()
+        case .userAction(let action):
+            userAction(action)
+        }
+    }
+
+    private func engineStarted(_ run: MeetingEngineRun) {
+        guard phase == .starting else {
+            // 改设置引起的重启也会再报一次：同一份文档接着写（设置真变了才记「改为：…」），记录中 / 暂停中的不动。
+            transcript?.continueWith(run, at: Date())
+            return
+        }
+        phase = .recording
+        Self.log.notice("meeting recording")
+        openTranscript(run)
+        if subtitlesOn {
+            engine.setSubtitles(true)
+        }
+        refreshIndicators()
+        controlBar.refreshSize()
+        if finishWhenStarted {
+            finishWhenStarted = false
+            finish()
         }
     }
 
@@ -392,8 +392,9 @@ final class MeetingSessionController: ObservableObject {
         guard transcript == nil, let destination else { return }
         let transcript = MeetingTranscript(start: Date(), config: run, destination: destination)
         // 写盘失败：提示（文档给的那一行，已本地化）放进字幕条，同一条文案、只提示一次（字幕条收着就看不到 —— 同以前）。
+        let engine = self.engine
         transcript.onWriteError = { message in
-            LiveTranslateController.shared.showNotice(message)
+            engine.showNotice(message)
         }
         self.transcript = transcript
         for line in finalLines.values.sorted(by: { $0.time != $1.time ? $0.time < $1.time : $0.key < $1.key }) {
@@ -446,11 +447,13 @@ final class MeetingSessionController: ObservableObject {
         levels.reset()
     }
 
-    private func userRequest(_ request: LiveTranslateSessionConfig.UserRequest) {
-        switch request {
-        case .closeBar: setSubtitles(false)
-        case .toggleRecording: togglePause()
-        case .toggle: toggleSubtitles()
+    /// 用户在引擎自己的界面上点的：字幕条 ✕ = 收起字幕（照常记录）；字幕条「记录」= 暂停 / 继续；
+    /// 「开始自由听译」开关（会议中）= 打开 / 收起字幕。
+    private func userAction(_ action: MeetingEngineUserAction) {
+        switch action {
+        case .subtitleBarClosed: setSubtitles(false)
+        case .recordButtonPressed: togglePause()
+        case .freeListeningTogglePressed: toggleSubtitles()
         }
     }
 
@@ -586,7 +589,7 @@ final class MeetingSessionController: ObservableObject {
 
     private func tick() {
         tickCount += 1
-        if let input = LiveTranslateController.shared.takeInputLevels() {
+        if let input = engine.takeInputLevels() {
             levels.update(input, paused: phase == .paused)
         }
         guard tickCount % 4 == 0 else { return }
@@ -633,8 +636,7 @@ final class MeetingSessionController: ObservableObject {
         case .paused: return L("meeting.statusLine.paused \(MeetingText.clock(elapsed())) \(kind)")
         case .finishing: return L("meeting.statusLine.finishing")
         case .idle:
-            let engine = LiveTranslateController.shared
-            if engine.isRunning, !engine.isHostedSession {
+            if engine.activity == .freeListening {
                 return L("meeting.statusLine.freeListening")
             }
             let now = Date()

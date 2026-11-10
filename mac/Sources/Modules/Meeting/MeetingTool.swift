@@ -71,14 +71,17 @@ final class MeetingTool: ToolModule {
                 subtitle: L("livetranslate.hotkey.toggle.subtitle"),
                 // 易冲突组合出厂不绑定（仓库惯例），在快捷键页自设。
                 defaultCombo: nil,
-                action: { LiveTranslateController.shared.toggle() },
+                action: { MeetingSessionController.shared.engine.toggleFreeListening() },
                 // 环形菜单的标题跟着开关走（与二级菜单同一套判断）；没开着时用环形菜单自己的「翻译」。
                 stateTitle: {
-                    let controller = LiveTranslateController.shared
-                    if controller.isHostedSession {
-                        return controller.barVisible ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
+                    switch MeetingSessionController.shared.engine.activity {
+                    case .hosted(let subtitlesVisible):
+                        return subtitlesVisible ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
+                    case .freeListening:
+                        return L("livetranslate.action.stop")
+                    case .idle:
+                        return nil
                     }
-                    return controller.isRunning ? L("livetranslate.action.stop") : nil
                 }
             ),
         ]
@@ -109,10 +112,11 @@ final class MeetingTool: ToolModule {
         MeetingDeviceTest.shared.cancel()
         // 顺序是显式的四步（docs/meeting/ENGINE.md §4.5.5）：
         // 1. 会议：引擎停 → 剩下的句子与结束同步报回 → meeting.md 同步写完（纪要标没整理完）→ meta 同步写。
-        MeetingSessionController.shared.terminate()
+        let session = MeetingSessionController.shared
+        session.terminate()
         // 2. 不在会议里的自由听译也要收尾（停音源、写完记录）：以前由独立的「字幕与同传」入口做（#106）。
         //    会议进行中上面已经调过一次，再调是空操作。
-        LiveTranslateController.shared.terminate()
+        session.engine.terminate()
         // 3. 还在整理的纪要（会议的、自由听译的）全部标「没整理完」，md 与 meta 同步写。
         MeetingTranscript.abortAllMinutes()
         // 4. 会议库排着的写盘做完。之后 AppDelegate 才 OfflineTranslator.shutdownAll() 结束推理进程（纪要已全部标掉，不会写一半）。
@@ -125,7 +129,6 @@ enum MeetingMenu {
     @MainActor
     static func items(includeSettings: Bool) -> [NSMenuItem] {
         let session = MeetingSessionController.shared
-        let engine = LiveTranslateController.shared
         let next = MeetingCalendar.shared.next()
         var items: [NSMenuItem] = [
             NSMenuItem(title: session.statusLine(), action: nil, keyEquivalent: ""),
@@ -160,12 +163,12 @@ enum MeetingMenu {
             items.append(NSMenuItem(title: L("meeting.menu.startOffline"), action: nil, keyEquivalent: ""))
         }
 
-        // 开始自由听译（记录中 = 打开 / 收起字幕），显示 `livetranslate.toggle` 的键位。
+        // 开始自由听译（记录中 = 打开 / 收起字幕），显示 `livetranslate.toggle` 的键位。会议空闲时引擎在跑只可能是自由听译。
         let freeTitle: String
         if session.isActive {
             freeTitle = session.subtitlesOn ? L("meeting.menu.subtitlesOff") : L("meeting.menu.subtitlesOn")
         } else {
-            freeTitle = engine.isRunning ? L("meeting.menu.stopFree") : L("meeting.menu.startFree")
+            freeTitle = session.engine.activity == .freeListening ? L("meeting.menu.stopFree") : L("meeting.menu.startFree")
         }
         if session.phase == .finishing {
             items.append(NSMenuItem(title: freeTitle, action: nil, keyEquivalent: ""))
