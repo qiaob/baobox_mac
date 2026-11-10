@@ -5,6 +5,9 @@ import os
 /// 记录中挂 `meeting` 勿扰、菜单栏录音指示、控制条、超时检查；暂停 / 标记 / 速记 / 字幕；结束 → 等最后一句 →
 /// 写 meta.json → 后台整理纪要 → 解析行动项、更新会议库、宠物通知。所有状态只在主线程读写。
 ///
+/// 本场的 meeting.md 由这里驱动（docs/meeting/ENGINE.md §4.5.2）：引擎只报「开起来 / 一句 / 结束」，第一次开起来时建文档，
+/// 句子、暂停 / 继续、单路静音、🔖、速记直接写，改设置重启时续写，`.ended` 里收尾。
+///
 /// 第二段（日历、提醒、检测、会议库窗口）只经这里开始 / 结束会议，并读这里发布的状态。
 @MainActor
 final class MeetingSessionController: ObservableObject {
@@ -64,9 +67,13 @@ final class MeetingSessionController: ObservableObject {
 
     /// 还在开始中就点了结束：开起来马上收尾。
     private var finishWhenStarted = false
-    /// 本场的转录去向（引擎重启时沿用同一份）。
+    /// 本场的转录去向（第一次开起来时用它建文档）。
     private var destination: LiveTranslateTranscript.Destination?
-    /// 定稿的句子（`onFinalLine`）：算重点那段说了什么。
+    /// 本场的 meeting.md：第一次 `.started` 时建，改设置重启时续写同一份，`.ended` 里收尾；引擎没开起来就始终没有。
+    private var transcript: LiveTranslateTranscript?
+    /// App 正在退出：文档同步写完、纪要标「没整理完」。
+    private var terminating = false
+    /// 定稿的句子（`onFinalLine`）：算重点那段说了什么；建文档时补写开起来之前就定稿的那几句。
     private var finalLines: [String: MeetingEngineLine] = [:]
     /// 已经记下内容（转录或速记）的会议：结束时一句都没有的作废。
     private var contentIDs: Set<String> = []
@@ -209,6 +216,7 @@ final class MeetingSessionController: ObservableObject {
 
     /// 引擎配置：线上 = 麦克风 + 系统声音混一路，线下 = 仅麦克风；语言、纠错沿用「字幕与同传」设置；
     /// 默认只转录原文、不翻译、不出字幕条，「字幕」打开后叠加字幕条与译文（同实时翻译）。改设置引起的重启也按这里重组。
+    /// 文档不交给引擎（会议自己写），只告诉它标不标说话人、字幕条上「打开本次记录」打开哪个文件。
     private func engineConfig() -> LiveTranslateSessionConfig {
         let type = self.type ?? .offline
         var config = LiveTranslateSessionConfig(
@@ -219,9 +227,10 @@ final class MeetingSessionController: ObservableObject {
             target: LiveTranslateSettings.target,
             translate: subtitlesOn && LiveTranslateSettings.translateEnabled,
             showsBar: subtitlesOn,
-            correction: LiveTranslateSettings.aiCorrection ? .always : .off,
-            transcript: destination)
+            correction: LiveTranslateSettings.aiCorrection ? .always : .off)
         config.usesMixer = true
+        config.speakers = destination?.speakers == true
+        config.documentURL = destination?.fileURL
         config.onFinalLine = { line in
             MeetingSessionController.shared.finalLine(line)
         }
@@ -239,10 +248,12 @@ final class MeetingSessionController: ObservableObject {
 
     // MARK: - 会中
 
+    /// 暂停 / 继续：引擎停 / 恢复送音频（字幕条「记录」按钮跟着变），文档里记一行「暂停 / 继续」。
     func pause() {
         guard phase == .recording else { return }
         phase = .paused
         LiveTranslateController.shared.setPaused(true)
+        transcript?.note(L("livetranslate.record.doc.paused"), at: Date())
         refreshIndicators()
         controlBar.refreshSize()
     }
@@ -251,6 +262,7 @@ final class MeetingSessionController: ObservableObject {
         guard phase == .paused else { return }
         phase = .recording
         LiveTranslateController.shared.setPaused(false)
+        transcript?.note(L("livetranslate.record.doc.resumed"), at: Date())
         refreshIndicators()
         controlBar.refreshSize()
     }
@@ -265,15 +277,15 @@ final class MeetingSessionController: ObservableObject {
         let now = Date()
         let current = LiveTranslateController.shared.lines.last?.original ?? ""
         marks.append(MeetingHighlight(t: now.timeIntervalSince(startedAt), text: String(current.prefix(200))))
-        LiveTranslateController.shared.addTranscriptMark(at: now)
+        transcript?.mark(at: now)
         controlBar.refreshSize()
     }
 
-    /// 速记（整份替换）：写进记录的「速记」一节，会后并入纪要的上下文。
+    /// 速记（整份替换）：写进记录的「速记」一节，会后并入纪要的上下文。开始中还没有文档：先存着，建文档时写进去。
     func setNotes(_ text: String) {
         guard isActive, text != notes else { return }
         notes = text
-        LiveTranslateController.shared.setTranscriptNotes(text)
+        transcript?.setNotes(text)
     }
 
     /// 展开 / 收起控制条的速记区（展开时控制条能接收键盘输入，收起后交还焦点）。
@@ -297,18 +309,22 @@ final class MeetingSessionController: ObservableObject {
         setSubtitles(!subtitlesOn)
     }
 
-    /// 点麦克风图标：不录 / 恢复录你的声音（对方的照录）。
+    /// 点麦克风图标：不录 / 恢复录你的声音（对方的照录），文档里记一行。开始中还没有文档，不记。
     func toggleMicrophoneMuted() {
         guard isActive, phase != .finishing else { return }
         microphoneMuted.toggle()
         LiveTranslateController.shared.setLaneMuted(microphoneMuted, lane: LiveTranslateMixerCore.microphoneLane)
+        transcript?.note(microphoneMuted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"),
+                         at: Date())
     }
 
-    /// 点喇叭图标：不录 / 恢复录对方的声音（你的照录）。只有线上会议有这一路。
+    /// 点喇叭图标：不录 / 恢复录对方的声音（你的照录），文档里记一行。只有线上会议有这一路。
     func toggleSystemMuted() {
         guard isActive, phase != .finishing, type == .online else { return }
         systemMuted.toggle()
         LiveTranslateController.shared.setLaneMuted(systemMuted, lane: LiveTranslateMixerCore.systemLane)
+        transcript?.note(systemMuted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"),
+                         at: Date())
     }
 
     // MARK: - 结束
@@ -328,13 +344,17 @@ final class MeetingSessionController: ObservableObject {
         }
     }
 
-    /// App 退出：转录同步写完（纪要标「没整理完」），会议库写盘也等它做完。
+    /// App 退出：转录同步写完（纪要标「没整理完」），会议库写盘也等它做完。先置 `terminating` 再让引擎停：
+    /// 引擎在 `terminate()` 返回前把剩下的句子和 `.ended` 同步报回来，`ended()` 里文档、meta 都同步写；
+    /// 引擎没报 `.ended`（比如正因为改设置在重启、还没开起来）就自己收尾。
     func terminate() {
+        terminating = true
         if phase == .starting, let id = meetingID, !contentIDs.contains(id) {
             // 还没开起来就退出了：不留一条空会议。
             MeetingStore.shared.discard(id)
         } else if isActive {
             LiveTranslateController.shared.terminate()
+            if isActive { ended() }
         }
         MeetingStore.shared.flush()
     }
@@ -343,14 +363,15 @@ final class MeetingSessionController: ObservableObject {
 
     private func engineLifecycle(_ lifecycle: LiveTranslateSessionConfig.Lifecycle) {
         switch lifecycle {
-        case .started:
-            // 改设置引起的重启也会再报一次：记录中 / 暂停中的不动。
-            guard phase == .starting else { return }
+        case .started(let run):
+            guard phase == .starting else {
+                // 改设置引起的重启也会再报一次：同一份文档接着写（设置真变了才记「改为：…」），记录中 / 暂停中的不动。
+                transcript?.continueWith(run, at: Date())
+                return
+            }
             phase = .recording
             Self.log.notice("meeting recording")
-            if !notes.isEmpty {
-                LiveTranslateController.shared.setTranscriptNotes(notes)
-            }
+            openTranscript(run)
             if subtitlesOn {
                 LiveTranslateController.shared.setBarVisible(true, translate: LiveTranslateSettings.translateEnabled)
             }
@@ -365,11 +386,36 @@ final class MeetingSessionController: ObservableObject {
         }
     }
 
-    /// 会话结束（结束按钮、识别出错停了、没开起来）：收起控制条与录音指示、撤勿扰。
+    /// 第一次开起来：建本场的 meeting.md（docs/meeting/ENGINE.md §4.5.2）。开起来之前就定稿的句子（音源还在开、先开的那一路
+    /// 已经出了字）与开始中写的速记一并写进去 —— 以前文档在引擎问完权限时就建了，这些当场就记下。
+    private func openTranscript(_ run: MeetingEngineRun) {
+        guard transcript == nil, let destination else { return }
+        let transcript = LiveTranslateTranscript(start: Date(), config: run, destination: destination)
+        // 写盘失败：提示放进字幕条，同一条文案、只提示一次（字幕条收着就看不到 —— 同以前）。
+        transcript.onWriteError = { message in
+            LiveTranslateController.shared.showNotice(L("livetranslate.record.writeFailed \(message)"))
+        }
+        self.transcript = transcript
+        for line in finalLines.values.sorted(by: { $0.time != $1.time ? $0.time < $1.time : $0.key < $1.key }) {
+            transcript.update(key: line.key, time: line.time, original: line.original,
+                              translation: line.translation, speaker: line.speaker)
+        }
+        if !notes.isEmpty {
+            transcript.setNotes(notes)
+        }
+    }
+
+    /// 会话结束（结束按钮、识别出错停了、没开起来）。先收尾文档 —— 这时这场的句子已经全到了（含停止时没定稿、强制记下的
+    /// 最后几句）—— 它同步报回的 `.finished` 写 meta 或作废；再收起控制条与录音指示、撤勿扰、复位。
+    /// 顺序不能反：先复位的话 `.finished` 就对不上这场，有内容的会被当成没开起来作废。
     private func ended() {
         guard phase != .idle else { return }
+        if let transcript {
+            self.transcript = nil
+            transcript.finish(at: Date(), terminating: terminating)
+        }
         if let id = meetingID, !transcriptFinished {
-            // 没开起来（权限被拒、识别不可用、音源打不开），什么也没记下：这一场作废。
+            // 没开起来（权限被拒、识别不可用、音源打不开），从没建过文档：这一场作废。
             MeetingStore.shared.discard(id)
         }
         Self.log.notice("meeting ended")
@@ -394,6 +440,7 @@ final class MeetingSessionController: ObservableObject {
         notes = ""
         notesExpanded = false
         destination = nil
+        transcript = nil
         finalLines = [:]
         finishWhenStarted = false
         levels.reset()
@@ -407,11 +454,14 @@ final class MeetingSessionController: ObservableObject {
         }
     }
 
+    /// 一句定稿（之后纠错 / 译文回来同一 `key` 再报，后到的覆盖先到的）：记下来算重点，写进文档。
     private func finalLine(_ line: MeetingEngineLine) {
         finalLines[line.key] = line
+        transcript?.update(key: line.key, time: line.time, original: line.original,
+                           translation: line.translation, speaker: line.speaker)
     }
 
-    /// 转录的进度（`meetingID` 是这份转录属于的那场 —— 纪要整理完时可能已经开了下一场）。
+    /// 转录的进度（`meetingID` 是这份转录属于的那场 —— 纪要整理完时可能已经开了下一场）。事件来自会议自己的文档。
     private func transcriptEvent(_ event: LiveTranslateTranscript.Event, meetingID id: String) {
         let store = MeetingStore.shared
         switch event {

@@ -107,10 +107,16 @@ final class MeetingTool: ToolModule {
         MeetingReminder.shared.stop()
         MeetingCalendar.shared.stop()
         MeetingDeviceTest.shared.cancel()
+        // 顺序是显式的四步（docs/meeting/ENGINE.md §4.5.5）：
+        // 1. 会议：引擎停 → 剩下的句子与结束同步报回 → meeting.md 同步写完（纪要标没整理完）→ meta 同步写。
         MeetingSessionController.shared.terminate()
-        // 不在会议里的自由听译也要收尾（停音源、写完记录）：以前由独立的「字幕与同传」入口做（#106）。
-        // 会议进行中上面已经调过一次，再调是空操作。推理进程由 AppDelegate 的 OfflineTranslator.shutdownAll() 统一结束。
+        // 2. 不在会议里的自由听译也要收尾（停音源、写完记录）：以前由独立的「字幕与同传」入口做（#106）。
+        //    会议进行中上面已经调过一次，再调是空操作。
         LiveTranslateController.shared.terminate()
+        // 3. 还在整理的纪要（会议的、自由听译的）全部标「没整理完」，md 与 meta 同步写。
+        LiveTranslateTranscript.abortAllMinutes()
+        // 4. 会议库排着的写盘做完。之后 AppDelegate 才 OfflineTranslator.shutdownAll() 结束推理进程（纪要已全部标掉，不会写一半）。
+        MeetingStore.shared.flush()
     }
 }
 
