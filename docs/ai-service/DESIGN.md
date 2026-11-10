@@ -291,6 +291,12 @@ struct Reply { text; route; usedFallback }
 一行三列：**功能名**（固定宽度）| **下拉框**（固定宽度、靠左，显示「模型 · 来源」）| **一句话**；右边最多一个按钮，各行的按钮都靠右对齐。
 2026-11-09 用户看了「每行下面再加一行建议」的设计图说「有些乱」，改成现在这样：一行只说一件事，没事的行保持干净。
 
+- **功能名用短名**（`AIFeatureDefinition.shortTitle`，#94）：行在工具的分组下面，分组标题已经写了是哪个工具。
+  中文只有「划词助手 AI 动作」→「AI 动作」；英文 Captions / Correction / Minutes / Weekly / Translation / AI Actions / Polish。
+  跨工具的列表（云端模型栏的「用在：…」、「用量上限与隐私」的发送清单）仍写全名，免得几个「翻译」分不清。
+- 英文建议压成「Try Qwen3-8B: best quality」（理由 best quality / fastest / fits this Mac / free / free, fast），
+  加上「Switch」一行放得下（按设置窗口 860 宽渲染核对过，中英文都不折行）。
+
 - 下拉框选项：翻译类先列「自动（系统翻译）」或「自动（本机 Hy-MT2-1.8B）」（写清这台 Mac 上实际用什么）和「系统翻译」；
   然后「本机」一组（「Qwen3-8B · 本机」，没下载的标「未下载」，docs/local-models/DESIGN.md §5）；后面每个账号一组（「Haiku · Anthropic Claude」，
   配置不完整的标「未配置」）。

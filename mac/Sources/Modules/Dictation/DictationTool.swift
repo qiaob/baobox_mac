@@ -10,7 +10,7 @@ extension AIFeatureDefinition {
     static var dictationPolish: AIFeatureDefinition {
         // 等着字上屏，最多等 8 秒（DictationPolisher）：建议最快的。
         AIFeatureDefinition(feature: .dictationPolish, title: L("dictation.ai.polish"), sends: L("dictation.ai.polishSends"),
-                            advice: .fastest)
+                            advice: .fastest, shortTitle: L("dictation.ai.polishShort"))
     }
 }
 

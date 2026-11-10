@@ -48,12 +48,13 @@ struct AIFeatureRow: View {
     var body: some View {
         let line = self.line
         HStack(spacing: 10) {
-            Text(verbatim: definition.title)
+            Text(verbatim: definition.rowTitle)
+                .lineLimit(1)
                 .frame(width: Self.titleWidth, alignment: .leading)
             Picker(selection: selection) {
                 options
             } label: {
-                Text(verbatim: definition.title)
+                Text(verbatim: definition.rowTitle)
             }
             .labelsHidden()
             // 平时按标签本身的宽度靠左；名字太长就截断成「…」，不压到第三列。外层固定宽度让各行第三列对齐。

@@ -13,13 +13,15 @@ extension AIFeature {
 extension AIFeatureDefinition {
     static var selectionTranslate: AIFeatureDefinition {
         AIFeatureDefinition(feature: .selectionTranslate, title: L("selectiontranslate.ai.translate"),
-                            sends: L("selectiontranslate.ai.translateSends"))
+                            sends: L("selectiontranslate.ai.translateSends"),
+                            shortTitle: L("selectiontranslate.ai.translateShort"))
     }
 
     static var selectionActions: AIFeatureDefinition {
         // 有人等着结果：建议最快的。
         AIFeatureDefinition(feature: .selectionActions, title: L("selectiontranslate.ai.actions"),
-                            sends: L("selectiontranslate.ai.actionsSends"), advice: .fastest)
+                            sends: L("selectiontranslate.ai.actionsSends"), advice: .fastest,
+                            shortTitle: L("selectiontranslate.ai.actionsShort"))
     }
 }
 
