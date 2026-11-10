@@ -1,6 +1,7 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "selectiontranslate.bar.tone" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Rewrite tone" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "改写语气" } } } },
     "ai.settings.sendsNone" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No feature uses a cloud model right now, so nothing is sent." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "现在没有功能用云端模型，什么都不会发出去。" } } } },
     "ai.settings.sendsLine %@ %@ %@" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "%1$@: sends %2$@ to “%3$@”." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%1$@：会把%2$@发给「%3$@」。" } } } },
     "ai.advice.onlyFitsDetail" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This Mac doesn't have enough memory for a larger model." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这台 Mac 的内存跑不动更大的模型。" } } } },
