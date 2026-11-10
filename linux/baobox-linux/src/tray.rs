@@ -172,7 +172,10 @@ impl MenuState {
     }
 
     /// 递归建出 dbusmenu 的布局结构 `(i, a{sv}, av)`。
-    fn layout(&self, id: i32, depth: i32) -> OwnedValue {
+    /// 一个节点 `(id, 属性, 子节点)`。`GetLayout` 的根节点要按这个**具体结构**返回（签名 `(ia{sv}av)`），
+    /// 只有子节点各自包成 variant（`av`）。根节点也包成 variant 的话整个回复是 `(uv)`，
+    /// libdbusmenu-glib（XFCE 等）按规范解析直接拒收，菜单弹不出来（#58）。
+    fn node(&self, id: i32, depth: i32) -> LayoutNode {
         let children: Vec<OwnedValue> = if depth == 0 {
             Vec::new()
         } else {
@@ -185,7 +188,12 @@ impl MenuState {
                 })
                 .unwrap_or_default()
         };
-        let structure = Value::from((id, self.properties(id), children));
+        (id, self.properties(id), children)
+    }
+
+    /// 子节点：包成 variant 的 `(ia{sv}av)`。
+    fn layout(&self, id: i32, depth: i32) -> OwnedValue {
+        let structure = Value::from(self.node(id, depth));
         OwnedValue::try_from(structure).unwrap_or_else(|_| {
             // 理论上不会失败；真失败了给一个空项，总好过让整个菜单拉取报错
             OwnedValue::try_from(Value::from((id, HashMap::<String, OwnedValue>::new(), Vec::<OwnedValue>::new())))
@@ -193,6 +201,9 @@ impl MenuState {
         })
     }
 }
+
+/// dbusmenu 布局里的一个节点：`(id, 属性, 子节点)`，签名 `(ia{sv}av)`。
+type LayoutNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
 
 fn insert(map: &mut HashMap<String, OwnedValue>, key: &str, value: Value<'_>) {
     if let Ok(owned) = OwnedValue::try_from(value) {
@@ -287,16 +298,17 @@ struct DBusMenu {
 #[interface(name = "com.canonical.dbusmenu")]
 impl DBusMenu {
     /// 桌面拉取菜单结构。`depth` 为 -1 表示要整棵树。
+    /// 回复签名必须是 `u(ia{sv}av)`：版本号 + 具体结构的根节点（见 `node`，#58）。
     fn get_layout(
         &self,
         parent_id: i32,
         recursion_depth: i32,
         _property_names: Vec<String>,
-    ) -> fdo::Result<(u32, OwnedValue)> {
+    ) -> fdo::Result<(u32, LayoutNode)> {
         let state = self.state.lock().map_err(|_| poisoned())?;
         // -1 = 全部；这里给一个足够深的值，菜单只有两层
         let depth = if recursion_depth < 0 { 8 } else { recursion_depth };
-        Ok((state.revision, state.layout(parent_id, depth)))
+        Ok((state.revision, state.node(parent_id, depth)))
     }
 
     /// 批量取属性。
@@ -711,13 +723,16 @@ mod protocol_tests {
         )
         .expect("连上菜单对象");
 
-        let (revision, layout): (u32, OwnedValue) = menu
+        // 按规范的签名 u(ia{sv}av) 解析，像 libdbusmenu 那样（#58）。以前这里用 OwnedValue 接，
+        // 根节点被包成 variant（(uv)）也照样能过，外部宿主却拒收 —— 这个 bug 就是这么溜进来的。
+        let (revision, (root_id, _root_properties, children)): (u32, LayoutNode) = menu
             .call("GetLayout", &(0i32, -1i32, Vec::<String>::new()))
-            .expect("GetLayout 应当返回一棵树");
+            .expect("GetLayout 的回复应当是 u(ia{sv}av)");
         assert!(revision >= 1);
+        assert_eq!(root_id, 0, "根节点就是请求的 parent_id");
+        assert!(!children.is_empty(), "根节点下应当有菜单项");
 
-        // 结构应当是 (i, a{sv}, av)，根节点有 4 个孩子
-        let text = format!("{layout:?}");
+        let text = format!("{children:?}");
         assert!(text.contains("截图"), "二级菜单的标题应当在树里：{text}");
         assert!(
             text.contains("Ctrl+Shift+S"),
