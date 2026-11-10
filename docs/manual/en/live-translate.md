@@ -8,8 +8,11 @@ English videos and courses, online meetings, or talking with colleagues in perso
 
 ## Start and stop
 
-- Menu bar → Live Translate → **Start Live Translate**; click again (or the × on the bar) to stop.
-- The global shortcut "Toggle Live Translate" is unbound by default; set one under Settings → Shortcuts.
+- Menu bar → Meeting → **Start Free Listening**; click again (or the × on the bar) to stop. While a meeting is
+  being recorded the item reads Show / Hide Subtitles. (The standalone Subtitles & Interpreting entry is now part
+  of Meeting, #106.)
+- The global shortcut "Toggle Live Translate" is unbound by default; set one under Settings → Shortcuts or
+  Settings → Meeting.
 
 ## Audio source
 
@@ -18,7 +21,7 @@ English videos and courses, online meetings, or talking with colleagues in perso
 | **System audio** (default) | Whatever your Mac plays: videos, courses, the other side of a call | Screen Recording (macOS delivers system audio through screen capture) |
 | **Microphone** | You or people in the room | Microphone |
 
-Switch from the menu; switching while running restarts recognition automatically. The microphone
+Switch under Settings → Meeting → Subtitles & Interpreting; switching while running restarts recognition automatically. The microphone
 is the system default input (System Settings › Sound › Input). Baobox's own sounds are never captured.
 
 ## Language

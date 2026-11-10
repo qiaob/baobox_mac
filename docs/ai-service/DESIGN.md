@@ -99,7 +99,7 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 | `meeting.weekly` | 会议 | 通用 | `MeetingWeeklyReporter` | 一周各场会议的纪要摘要 | `.best` |
 | `dictation.polish` | 听写 | 通用 | `DictationPolisher` | 听写出来的文字 | `.fastest` |
 
-字幕与同传的两个功能由会议模块声明：字幕与同传的设置区块嵌在会议页里，且下个版本这个入口就并进会议，不用再挪。
+字幕与同传的两个功能由会议模块声明：字幕与同传的设置区块嵌在会议页里；独立入口已删（#106），不用再挪。
 功能 id 沿用 `livetranslate.*`，跟着引擎走，与哪个模块声明无关。
 
 ### 3.4 模型列表（模型名的下拉框）
