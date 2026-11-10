@@ -2,13 +2,13 @@ import Foundation
 import XCTest
 
 /// 额度 80% 提醒的防重与窗口切换。
-final class AIUsageBudgetReminderTests: XCTestCase {
+final class CLIUsageBudgetReminderTests: XCTestCase {
 
     private let windowA = date("2026-11-02T10:00:00Z")
     private let windowB = date("2026-11-02T15:00:00Z")
 
     func testRemindsOnceWhenUsageCrosses80Percent() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
 
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 799, budget: 1_000), .init())
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 800, budget: 1_000), .init(reachedPercent: 80))
@@ -16,15 +16,15 @@ final class AIUsageBudgetReminderTests: XCTestCase {
     }
 
     func testPercentIsRounded() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 857, budget: 1_000), .init(reachedPercent: 86))
 
-        var over = AIUsageBudgetReminder()
+        var over = CLIUsageBudgetReminder()
         XCTAssertEqual(over.check(windowStart: windowA, totalTokens: 1_500, budget: 1_000), .init(reachedPercent: 150))
     }
 
     func testNewWindowAfterAReminderReportsTheSwitchAndCanRemindAgain() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 900, budget: 1_000), .init(reachedPercent: 90))
 
         XCTAssertEqual(reminder.check(windowStart: windowB, totalTokens: 100, budget: 1_000), .init(windowChanged: true))
@@ -34,7 +34,7 @@ final class AIUsageBudgetReminderTests: XCTestCase {
     }
 
     func testSwitchStraightIntoAnotherFullWindowReportsBoth() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
         _ = reminder.check(windowStart: windowA, totalTokens: 900, budget: 1_000)
         XCTAssertEqual(reminder.check(windowStart: windowB, totalTokens: 820, budget: 1_000),
                        .init(windowChanged: true, reachedPercent: 82))
@@ -42,13 +42,13 @@ final class AIUsageBudgetReminderTests: XCTestCase {
     }
 
     func testWindowSwitchWithoutAnEarlierReminderIsNotReported() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 100, budget: 1_000), .init())
         XCTAssertEqual(reminder.check(windowStart: windowB, totalTokens: 100, budget: 1_000), .init())
     }
 
     func testNoBudgetMeansNoReminderAndNoStateChange() {
-        var reminder = AIUsageBudgetReminder()
+        var reminder = CLIUsageBudgetReminder()
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 5_000, budget: 0), .init())
         XCTAssertEqual(reminder.check(windowStart: windowA, totalTokens: 5_000, budget: -1), .init())
         XCTAssertEqual(reminder.remindedStarts, [])

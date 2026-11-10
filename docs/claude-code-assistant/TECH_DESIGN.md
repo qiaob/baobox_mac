@@ -165,7 +165,7 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 - 额度提醒挂在 refresh 末尾:预算(UserDefaults,0=未设)>0 且 window tokens ≥ 80% 预算 → 经 ClaudeNotifier 通知一次(记录已提醒的 windowStart 防重);检测到窗口切换且旧窗口曾提醒 → 可选发"额度已恢复"。
 - refresh 触发:activate 后首次 + Timer 每 5 分钟 + 收到 hook 事件时(节流 ≥60s)。
 
-> 2026-11(#109)起,定价结构、`UsageTotals` 累加、5h / 周窗口、今日累计、报表分组与 80% 提醒防重的算法移到与 Codex 助手共用的 `mac/Sources/Core/AIUsage/`(纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeUsage.swift` 只留定价表 `ClaudePricingTable`、JSONL 解析、设置键与通知,`UsageTotals` / `UsageWindow` / `UsageBucket` / `ClaudeUsageReport` 成了共用类型的别名。
+> 2026-11(#109)起,定价结构、`UsageTotals` 累加、5h / 周窗口、今日累计、报表分组与 80% 提醒防重的算法移到与 Codex 助手共用的 `mac/Sources/Core/CLIUsage/`(纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeUsage.swift` 只留定价表 `ClaudePricingTable`、JSONL 解析、设置键与通知,`UsageTotals` / `UsageWindow` / `UsageBucket` / `ClaudeUsageReport` 成了共用类型的别名。
 
 ### 3.4 ClaudeLiveStatus(@MainActor 单例)
 

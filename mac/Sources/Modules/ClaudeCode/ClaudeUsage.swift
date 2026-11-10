@@ -6,7 +6,7 @@ import Foundation
 /// 用量去重：同一条 assistant 消息在续接/分叉文件里会重复，用 `message.id + requestId` 去重。
 /// 重 IO 后台，`@Published` 只在主线程写。
 ///
-/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法在共用层 `Core/AIUsage/`（与 Codex 助手共用，有单元测试）；
+/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法在共用层 `Core/CLIUsage/`（与 Codex 助手共用，有单元测试）；
 /// 这里只留 Claude 自己的部分：定价表、`~/.claude/projects` JSONL 的解析、设置键与提醒的发送。
 ///
 /// 本文件无独立用户可见文案（额度提醒文案在 ClaudeNotifier / ClaudeLiveStatus.swift 中定义）。
@@ -14,7 +14,7 @@ import Foundation
 // MARK: - 定价
 
 /// Claude 的定价表（每百万 token 美元单价）。Anthropic 口径：input 不含缓存，缓存写 / 缓存读单列。
-enum ClaudePricingTable: AIUsagePricingTable {
+enum ClaudePricingTable: CLIUsagePricingTable {
     static let inputIncludesCacheRead = false
 
     /// 按 model id 关键字匹配定价；未知返回 nil（共用层记 0 费用并标 unpriced）。
@@ -45,17 +45,17 @@ enum ClaudePricingTable: AIUsagePricingTable {
 // MARK: - 聚合模型（共用层套上 Claude 定价表；名字不变，UI 照旧引用）
 
 /// 一组 token 与估算费用的累计。
-typealias UsageTotals = AIUsageTotals<ClaudePricingTable>
+typealias UsageTotals = CLIUsageTotals<ClaudePricingTable>
 /// 一个额度窗口（5h 或周）。
-typealias UsageWindow = AIUsageWindow<ClaudePricingTable>
+typealias UsageWindow = CLIUsageWindow<ClaudePricingTable>
 /// 周窗口锚点配置。
-typealias WeeklyAnchor = AIUsageWeeklyAnchor
+typealias WeeklyAnchor = CLIUsageWeeklyAnchor
 /// 报表一行（按天 / 按项目 / 按模型通用）。
-typealias UsageBucket = AIUsageBucket<ClaudePricingTable>
+typealias UsageBucket = CLIUsageBucket<ClaudePricingTable>
 /// 三维度报表。
-typealias ClaudeUsageReport = AIUsageReport<ClaudePricingTable>
+typealias ClaudeUsageReport = CLIUsageReport<ClaudePricingTable>
 
-private typealias ClaudeUsageCalculator = AIUsageCalculator<ClaudePricingTable>
+private typealias ClaudeUsageCalculator = CLIUsageCalculator<ClaudePricingTable>
 
 /// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
 struct ClaudeMCPServerStat: Sendable {
@@ -100,9 +100,9 @@ final class ClaudeUsageStore: ObservableObject {
     /// 固定锚点：重置小时（0...23）。默认 0。
     static let weeklyHourKey = "claudecode.weeklyResetHour"
     /// 5h 窗口 80% 提醒的防重状态（防重复轰炸）。仅主线程访问。
-    private var budgetReminder = AIUsageBudgetReminder()
+    private var budgetReminder = CLIUsageBudgetReminder()
     /// 周窗口 80% 提醒的防重状态（与 5h 独立防重）。仅主线程访问。
-    private var weeklyBudgetReminder = AIUsageBudgetReminder()
+    private var weeklyBudgetReminder = CLIUsageBudgetReminder()
     private var refreshing = false
     private var lastHookRefresh: Date = .distantPast
     private var timer: Timer?
@@ -230,10 +230,10 @@ final class ClaudeUsageStore: ObservableObject {
 extension ClaudeUsageStore {
 
     /// 收集近 N 小时内 mtime 文件的去重用量条目。
-    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [AIUsageEntry] {
+    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
-        var entries: [AIUsageEntry] = []
+        var entries: [CLIUsageEntry] = []
         var seenKeys = Set<String>()
 
         guard let projectDirs = try? fm.contentsOfDirectory(
@@ -281,14 +281,14 @@ extension ClaudeUsageStore {
                     let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                         ?? ClaudeSessionIndex.demungeDirName(mungedName)
 
-                    entries.append(AIUsageEntry(
+                    entries.append(CLIUsageEntry(
                         timestamp: date,
                         modelID: modelID,
                         projectPath: projectPath,
-                        input: AIUsageEntry.tokenCount(usage["input_tokens"]),
-                        output: AIUsageEntry.tokenCount(usage["output_tokens"]),
-                        cacheWrite: AIUsageEntry.tokenCount(usage["cache_creation_input_tokens"]),
-                        cacheRead: AIUsageEntry.tokenCount(usage["cache_read_input_tokens"])
+                        input: CLIUsageEntry.tokenCount(usage["input_tokens"]),
+                        output: CLIUsageEntry.tokenCount(usage["output_tokens"]),
+                        cacheWrite: CLIUsageEntry.tokenCount(usage["cache_creation_input_tokens"]),
+                        cacheRead: CLIUsageEntry.tokenCount(usage["cache_read_input_tokens"])
                     ))
                 }
             }
@@ -297,7 +297,7 @@ extension ClaudeUsageStore {
     }
 
     /// 三维度报表：按项目 / 按模型两张表按估算费用从高到低排；项目显示名取路径最后一段（`ClaudeSessionIndex`）。
-    nonisolated fileprivate static func buildReport(from entries: [AIUsageEntry]) -> ClaudeUsageReport {
+    nonisolated fileprivate static func buildReport(from entries: [CLIUsageEntry]) -> ClaudeUsageReport {
         ClaudeUsageCalculator.buildReport(
             from: entries,
             order: .byCost,

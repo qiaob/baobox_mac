@@ -5,7 +5,7 @@ import XCTest
 // 这里按两种记账口径各备一张，单价抄真实价格，方便手算核对。
 
 /// Anthropic 口径：input 不含缓存，缓存写 / 缓存读单列。单价同 Claude Sonnet / Opus 4.5。
-enum AnthropicStyleTable: AIUsagePricingTable {
+enum AnthropicStyleTable: CLIUsagePricingTable {
     static let inputIncludesCacheRead = false
 
     static func pricing(for modelID: String) -> ModelPricing? {
@@ -18,7 +18,7 @@ enum AnthropicStyleTable: AIUsagePricingTable {
 }
 
 /// OpenAI 口径：input 已含缓存读，没有缓存写。单价同 gpt-5。
-enum OpenAIStyleTable: AIUsagePricingTable {
+enum OpenAIStyleTable: CLIUsagePricingTable {
     static let inputIncludesCacheRead = true
 
     static func pricing(for modelID: String) -> ModelPricing? {
@@ -28,8 +28,8 @@ enum OpenAIStyleTable: AIUsagePricingTable {
     }
 }
 
-typealias AnthropicCalc = AIUsageCalculator<AnthropicStyleTable>
-typealias OpenAICalc = AIUsageCalculator<OpenAIStyleTable>
+typealias AnthropicCalc = CLIUsageCalculator<AnthropicStyleTable>
+typealias OpenAICalc = CLIUsageCalculator<OpenAIStyleTable>
 
 /// 费用比较的容差（美元）。
 let costAccuracy = 1e-9
@@ -67,8 +67,8 @@ func entry(
     cacheRead: Int = 0,
     file: StaticString = #filePath,
     line: UInt = #line
-) -> AIUsageEntry {
-    AIUsageEntry(
+) -> CLIUsageEntry {
+    CLIUsageEntry(
         timestamp: date(iso, file: file, line: line),
         modelID: model,
         projectPath: project,

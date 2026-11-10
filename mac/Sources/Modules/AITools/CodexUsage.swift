@@ -2,7 +2,7 @@ import Foundation
 
 /// Codex 助手 —— 定价表、用量条目解析、5 小时 + 周额度窗口与报表。
 ///
-/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法与 Claude Code 助手共用 `Core/AIUsage/`（有单元测试，
+/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法与 Claude Code 助手共用 `Core/CLIUsage/`（有单元测试，
 /// 两个模块之间仍不互相依赖）；这里只留 Codex 自己的部分：定价表、rollout 文件的解析、设置键与提醒的发送。
 /// 费用为按公开定价的**估算**，UI 处处标「估算」；很多 Codex 用户走 ChatGPT 订阅（无按量计费），
 /// 故费用为次要信息、token 数为主（报表按 token 数排序）。
@@ -21,7 +21,7 @@ import Foundation
 
 /// Codex 的定价表（每百万 token 美元单价，估算常量，来源日期 2026-07，随时可能变）。
 /// OpenAI 口径：input 已含缓存读（cached input 是 input 里打折的那部分），没有「缓存写」。
-enum CodexPricingTable: AIUsagePricingTable {
+enum CodexPricingTable: CLIUsagePricingTable {
     static let inputIncludesCacheRead = true
 
     /// 按 model id 关键字匹配定价；未知返回 nil（共用层记 0 费用并标 unpriced）。
@@ -55,19 +55,19 @@ enum CodexPricingTable: AIUsagePricingTable {
 // MARK: - 聚合模型（共用层套上 Codex 定价表；名字不变，UI 照旧引用）
 
 /// 一组 token 与估算费用的累计。`totalTokens` = input + output（input 已含缓存输入）。
-typealias CodexUsageTotals = AIUsageTotals<CodexPricingTable>
+typealias CodexUsageTotals = CLIUsageTotals<CodexPricingTable>
 /// 一个额度窗口（5h 或周）。`end == start + span`。
-typealias CodexUsageWindow = AIUsageWindow<CodexPricingTable>
+typealias CodexUsageWindow = CLIUsageWindow<CodexPricingTable>
 /// 周窗口锚点配置。
-typealias CodexWeeklyAnchor = AIUsageWeeklyAnchor
+typealias CodexWeeklyAnchor = CLIUsageWeeklyAnchor
 /// 报表一行（按天 / 按项目 / 按模型通用）。
-typealias CodexUsageBucket = AIUsageBucket<CodexPricingTable>
+typealias CodexUsageBucket = CLIUsageBucket<CodexPricingTable>
 /// 三维度报表。
-typealias CodexUsageReport = AIUsageReport<CodexPricingTable>
+typealias CodexUsageReport = CLIUsageReport<CodexPricingTable>
 
-private typealias CodexUsageCalculator = AIUsageCalculator<CodexPricingTable>
+private typealias CodexUsageCalculator = CLIUsageCalculator<CodexPricingTable>
 
-extension AIUsageTotals where Table == CodexPricingTable {
+extension CLIUsageTotals where Table == CodexPricingTable {
     /// 缓存输入（Codex 的叫法）= 共用层的 `cacheRead`；`input` 已含这部分。
     var cachedInput: Int {
         get { cacheRead }
@@ -116,8 +116,8 @@ final class CodexUsageStore: ObservableObject {
     static let weeklyHourKey = "codex.weeklyResetHour"
 
     /// 5h / 周窗口 80% 提醒的防重状态（防重复轰炸，两者独立）。仅主线程访问。
-    private var budgetReminder = AIUsageBudgetReminder()
-    private var weeklyBudgetReminder = AIUsageBudgetReminder()
+    private var budgetReminder = CLIUsageBudgetReminder()
+    private var weeklyBudgetReminder = CLIUsageBudgetReminder()
     private var refreshing = false
     private var lastHookRefresh: Date = .distantPast
     private var timer: Timer?
@@ -237,10 +237,10 @@ final class CodexUsageStore: ObservableObject {
 extension CodexUsageStore {
 
     /// 收集近 N 小时内 mtime 文件的用量条目，按 §2 口径处理每文件的增量 / 累计。
-    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [AIUsageEntry] {
+    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
-        var entries: [AIUsageEntry] = []
+        var entries: [CLIUsageEntry] = []
 
         guard let enumerator = fm.enumerator(
             at: CodexEnv.sessionsDir,
@@ -260,7 +260,7 @@ extension CodexUsageStore {
     }
 
     /// 解析单个 rollout 文件为用量条目序列（按 §2 口径）。
-    nonisolated fileprivate static func parseFile(data: Data, fallbackDate: Date) -> [AIUsageEntry] {
+    nonisolated fileprivate static func parseFile(data: Data, fallbackDate: Date) -> [CLIUsageEntry] {
         // 会话级维度：cwd（项目）与最后可见 model。
         var cwd = ""
         var modelID = ""
@@ -292,22 +292,22 @@ extension CodexUsageStore {
 
             if let last = info?["last_token_usage"] as? [String: Any] {
                 lastEvents.append(Counts(ts: ts,
-                                         input: AIUsageEntry.tokenCount(last["input_tokens"]),
-                                         cachedInput: AIUsageEntry.tokenCount(last["cached_input_tokens"]),
-                                         output: AIUsageEntry.tokenCount(last["output_tokens"])))
+                                         input: CLIUsageEntry.tokenCount(last["input_tokens"]),
+                                         cachedInput: CLIUsageEntry.tokenCount(last["cached_input_tokens"]),
+                                         output: CLIUsageEntry.tokenCount(last["output_tokens"])))
             }
             if let total = info?["total_token_usage"] as? [String: Any] {
                 totalEvents.append(Counts(ts: ts,
-                                          input: AIUsageEntry.tokenCount(total["input_tokens"]),
-                                          cachedInput: AIUsageEntry.tokenCount(total["cached_input_tokens"]),
-                                          output: AIUsageEntry.tokenCount(total["output_tokens"])))
+                                          input: CLIUsageEntry.tokenCount(total["input_tokens"]),
+                                          cachedInput: CLIUsageEntry.tokenCount(total["cached_input_tokens"]),
+                                          output: CLIUsageEntry.tokenCount(total["output_tokens"])))
             }
             // payload 顶层计数（仅当无 info 时才作为增量来源，避免与 info 双计）。
             if info == nil, let payload, payload["input_tokens"] != nil || payload["output_tokens"] != nil {
                 topEvents.append(Counts(ts: ts,
-                                        input: AIUsageEntry.tokenCount(payload["input_tokens"]),
-                                        cachedInput: AIUsageEntry.tokenCount(payload["cached_input_tokens"]),
-                                        output: AIUsageEntry.tokenCount(payload["output_tokens"])))
+                                        input: CLIUsageEntry.tokenCount(payload["input_tokens"]),
+                                        cachedInput: CLIUsageEntry.tokenCount(payload["cached_input_tokens"]),
+                                        output: CLIUsageEntry.tokenCount(payload["output_tokens"])))
             }
         }
 
@@ -327,7 +327,7 @@ extension CodexUsageStore {
 
         // 缓存输入记作共用层的缓存读（input 已含这部分）；Codex 没有缓存写。
         return chosen.map { c in
-            AIUsageEntry(timestamp: c.ts, modelID: modelID, projectPath: cwd,
+            CLIUsageEntry(timestamp: c.ts, modelID: modelID, projectPath: cwd,
                          input: c.input, output: c.output, cacheRead: c.cachedInput)
         }
     }
@@ -354,13 +354,13 @@ extension CodexUsageStore {
 
     /// 周窗口。与 Claude 有一处原有差异，照旧保留：近 180h 一条用量都没有时，固定锚点口径也返回 nil
     /// （Claude 那边返回一个 0 用量、有起止的窗口）。
-    nonisolated fileprivate static func weeklyWindow(from entries: [AIUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
+    nonisolated fileprivate static func weeklyWindow(from entries: [CLIUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
         guard !entries.isEmpty else { return nil }
         return CodexUsageCalculator.weeklyWindow(from: entries, anchor: anchor)
     }
 
     /// 三维度报表：按项目 / 按模型两张表按 token 数从高到低排；取不到 cwd 的用量归到 "unknown" 项目。
-    nonisolated fileprivate static func buildReport(from entries: [AIUsageEntry]) -> CodexUsageReport {
+    nonisolated fileprivate static func buildReport(from entries: [CLIUsageEntry]) -> CodexUsageReport {
         CodexUsageCalculator.buildReport(
             from: entries,
             order: .byTokens,

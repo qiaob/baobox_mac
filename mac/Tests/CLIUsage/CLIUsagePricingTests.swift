@@ -2,10 +2,10 @@ import Foundation
 import XCTest
 
 /// 定价与累加：两种记账口径、缓存写 / 缓存读、未知模型。
-final class AIUsagePricingTests: XCTestCase {
+final class CLIUsagePricingTests: XCTestCase {
 
     func testAnthropicStyleBillsCacheWriteAndCacheReadSeparately() {
-        var totals = AIUsageTotals<AnthropicStyleTable>()
+        var totals = CLIUsageTotals<AnthropicStyleTable>()
         totals.add(entry("2026-11-02T10:00:00Z", model: "sonnet",
                          input: 1_000_000, output: 100_000, cacheWrite: 200_000, cacheRead: 3_000_000))
 
@@ -20,7 +20,7 @@ final class AIUsagePricingTests: XCTestCase {
     }
 
     func testOpenAIStyleBillsTheCachedPartOfInputAtTheCacheReadPrice() {
-        var totals = AIUsageTotals<OpenAIStyleTable>()
+        var totals = CLIUsageTotals<OpenAIStyleTable>()
         // input 1M 里有 0.4M 命中缓存。
         totals.add(entry("2026-11-02T10:00:00Z", model: "gpt-5", input: 1_000_000, output: 100_000, cacheRead: 400_000))
 
@@ -33,7 +33,7 @@ final class AIUsagePricingTests: XCTestCase {
     }
 
     func testCachedInputLargerThanInputIsNotBilledNegative() {
-        var totals = AIUsageTotals<OpenAIStyleTable>()
+        var totals = CLIUsageTotals<OpenAIStyleTable>()
         totals.add(entry("2026-11-02T10:00:00Z", model: "gpt-5", input: 100_000, cacheRead: 300_000))
 
         // 可计费输入扣到 0 为止，只剩缓存读：0.3M×$0.125
@@ -41,7 +41,7 @@ final class AIUsagePricingTests: XCTestCase {
     }
 
     func testUnknownModelCostsNothingButIsFlaggedAndStillCountsTokens() {
-        var totals = AIUsageTotals<AnthropicStyleTable>()
+        var totals = CLIUsageTotals<AnthropicStyleTable>()
         totals.add(entry("2026-11-02T10:00:00Z", model: "mystery-model", input: 1_000, output: 2_000))
 
         XCTAssertEqual(totals.costUSD, 0)
@@ -55,14 +55,14 @@ final class AIUsagePricingTests: XCTestCase {
     }
 
     func testEmptyModelIDIsUnpriced() {
-        var totals = AIUsageTotals<OpenAIStyleTable>()
+        var totals = CLIUsageTotals<OpenAIStyleTable>()
         totals.add(entry("2026-11-02T10:00:00Z", model: "", input: 500))
         XCTAssertTrue(totals.unpriced)
         XCTAssertEqual(totals.costUSD, 0)
     }
 
     func testCostAccumulatesAcrossEntriesAndModels() {
-        var totals = AIUsageTotals<AnthropicStyleTable>()
+        var totals = CLIUsageTotals<AnthropicStyleTable>()
         totals.add(entry("2026-11-02T10:00:00Z", model: "sonnet", input: 1_000_000))   // $3
         totals.add(entry("2026-11-02T10:01:00Z", model: "opus", output: 1_000_000))    // $25
         totals.add(entry("2026-11-02T10:02:00Z", model: "opus", cacheRead: 2_000_000)) // $1
@@ -80,30 +80,30 @@ final class AIUsagePricingTests: XCTestCase {
     }
 
     func testTokenCountToleratesJSONNumberShapes() {
-        XCTAssertEqual(AIUsageEntry.tokenCount(42), 42)
-        XCTAssertEqual(AIUsageEntry.tokenCount(42.9), 42)
-        XCTAssertEqual(AIUsageEntry.tokenCount(NSNumber(value: 7)), 7)
-        XCTAssertEqual(AIUsageEntry.tokenCount("13"), 13)
-        XCTAssertEqual(AIUsageEntry.tokenCount("13k"), 0)
-        XCTAssertEqual(AIUsageEntry.tokenCount(nil), 0)
-        XCTAssertEqual(AIUsageEntry.tokenCount(["input_tokens": 5]), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(42), 42)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(42.9), 42)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(NSNumber(value: 7)), 7)
+        XCTAssertEqual(CLIUsageEntry.tokenCount("13"), 13)
+        XCTAssertEqual(CLIUsageEntry.tokenCount("13k"), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(nil), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(["input_tokens": 5]), 0)
     }
 
     /// 损坏的日志不能让 App 崩：超出 Int 范围的小数、能累加溢出的大数都限到上限，负数记 0。
     func testTokenCountClampsCorruptValues() {
-        let cap = AIUsageEntry.maxTokenCount
-        XCTAssertEqual(AIUsageEntry.tokenCount(1e300), cap)
-        XCTAssertEqual(AIUsageEntry.tokenCount(-1e300), 0)
-        XCTAssertEqual(AIUsageEntry.tokenCount(Double.infinity), cap)
-        XCTAssertEqual(AIUsageEntry.tokenCount(Double.nan), 0)
-        XCTAssertEqual(AIUsageEntry.tokenCount(Int.max), cap)
-        XCTAssertEqual(AIUsageEntry.tokenCount(-5), 0)
-        XCTAssertEqual(AIUsageEntry.tokenCount("99999999999999999999"), 0)
+        let cap = CLIUsageEntry.maxTokenCount
+        XCTAssertEqual(CLIUsageEntry.tokenCount(1e300), cap)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(-1e300), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(Double.infinity), cap)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(Double.nan), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(Int.max), cap)
+        XCTAssertEqual(CLIUsageEntry.tokenCount(-5), 0)
+        XCTAssertEqual(CLIUsageEntry.tokenCount("99999999999999999999"), 0)
 
         // 两条到顶的记录累加也不溢出。
-        let entry = AIUsageEntry(timestamp: Date(timeIntervalSince1970: 0), modelID: "", projectPath: "/p",
-                                 input: AIUsageEntry.tokenCount(Int.max), output: AIUsageEntry.tokenCount(Int.max))
-        var totals = AIUsageTotals<AnthropicStyleTable>.zero
+        let entry = CLIUsageEntry(timestamp: Date(timeIntervalSince1970: 0), modelID: "", projectPath: "/p",
+                                 input: CLIUsageEntry.tokenCount(Int.max), output: CLIUsageEntry.tokenCount(Int.max))
+        var totals = CLIUsageTotals<AnthropicStyleTable>.zero
         totals.add(entry)
         totals.add(entry)
         XCTAssertEqual(totals.input, 2 * cap)

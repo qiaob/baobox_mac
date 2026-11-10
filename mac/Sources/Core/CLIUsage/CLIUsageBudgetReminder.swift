@@ -4,7 +4,7 @@ import Foundation
 /// 报一次「窗口已切换」（Claude 据此可选发「额度已恢复」，Codex 不发）。
 ///
 /// 只判断该不该提醒，不读设置也不发通知 —— 预算从哪读、通知怎么发留给各模块。5h 与周窗口各用一个实例，互不干扰。
-struct AIUsageBudgetReminder {
+struct CLIUsageBudgetReminder {
     /// 一次检查的结论。
     struct Outcome: Equatable {
         /// 之前提醒过的窗口已经过去（防重记录随之清空）。

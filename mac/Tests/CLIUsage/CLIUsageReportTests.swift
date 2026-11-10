@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 
 /// 今日累计与按天 / 项目 / 模型的报表。
-final class AIUsageReportTests: XCTestCase {
+final class CLIUsageReportTests: XCTestCase {
 
     private let posix = Locale(identifier: "en_US_POSIX")
 

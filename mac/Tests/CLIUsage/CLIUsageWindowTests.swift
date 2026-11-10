@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 
 /// 5 小时额度窗口与周窗口（滚动块 / 固定锚点）。2026-11-02 是星期一。
-final class AIUsageWindowTests: XCTestCase {
+final class CLIUsageWindowTests: XCTestCase {
 
     // MARK: - 5 小时窗口
 
@@ -64,7 +64,7 @@ final class AIUsageWindowTests: XCTestCase {
     // MARK: - 周窗口：滚动块
 
     func testRollingWeekUsesTheSameBlockingWithA168HourSpan() throws {
-        let rolling = AIUsageWeeklyAnchor(fixed: false, weekday: 2, hour: 0)
+        let rolling = CLIUsageWeeklyAnchor(fixed: false, weekday: 2, hour: 0)
         var entries = [
             entry("2026-11-02T10:30:00Z", input: 100),
             entry("2026-11-08T09:00:00Z", input: 200),
@@ -83,14 +83,14 @@ final class AIUsageWindowTests: XCTestCase {
     }
 
     func testRollingWeekWithoutEntriesIsNil() {
-        let rolling = AIUsageWeeklyAnchor(fixed: false, weekday: 2, hour: 0)
+        let rolling = CLIUsageWeeklyAnchor(fixed: false, weekday: 2, hour: 0)
         XCTAssertNil(AnthropicCalc.weeklyWindow(from: [], anchor: rolling, now: date("2026-11-04T12:00:00Z")))
     }
 
     // MARK: - 周窗口：固定锚点
 
     func testFixedAnchorSumsUsageSinceTheLastResetTime() throws {
-        let mondayNine = AIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
+        let mondayNine = CLIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
         let entries = [
             entry("2026-11-02T08:59:59Z", input: 1),     // 重置前一秒：不算
             entry("2026-11-02T09:00:00Z", input: 10),    // 正好重置：算
@@ -105,7 +105,7 @@ final class AIUsageWindowTests: XCTestCase {
     }
 
     func testFixedAnchorFollowsTheCalendarTimeZone() throws {
-        let mondayNine = AIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
+        let mondayNine = CLIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
         let entries = [entry("2026-11-02T08:59:59Z", input: 1)]   // = 上海周一 16:59:59
         let week = try XCTUnwrap(AnthropicCalc.weeklyWindow(
             from: entries, anchor: mondayNine, now: date("2026-11-04T12:00:00Z"), calendar: gregorian("Asia/Shanghai")))
@@ -115,7 +115,7 @@ final class AIUsageWindowTests: XCTestCase {
     }
 
     func testFixedAnchorWithoutUsageStillGivesAnEmptyWindow() throws {
-        let mondayNine = AIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
+        let mondayNine = CLIUsageWeeklyAnchor(fixed: true, weekday: 2, hour: 9)
         let week = try XCTUnwrap(AnthropicCalc.weeklyWindow(
             from: [], anchor: mondayNine, now: date("2026-11-04T12:00:00Z"), calendar: gregorian("UTC")))
 
@@ -125,11 +125,11 @@ final class AIUsageWindowTests: XCTestCase {
     }
 
     func testAnchorFromSettingsIsClamped() {
-        XCTAssertEqual(AIUsageWeeklyAnchor(fixed: true, clampingWeekday: 0, hour: 24),
-                       AIUsageWeeklyAnchor(fixed: true, weekday: 1, hour: 23))
-        XCTAssertEqual(AIUsageWeeklyAnchor(fixed: false, clampingWeekday: 9, hour: -1),
-                       AIUsageWeeklyAnchor(fixed: false, weekday: 7, hour: 0))
-        XCTAssertEqual(AIUsageWeeklyAnchor(fixed: true, clampingWeekday: 3, hour: 5),
-                       AIUsageWeeklyAnchor(fixed: true, weekday: 3, hour: 5))
+        XCTAssertEqual(CLIUsageWeeklyAnchor(fixed: true, clampingWeekday: 0, hour: 24),
+                       CLIUsageWeeklyAnchor(fixed: true, weekday: 1, hour: 23))
+        XCTAssertEqual(CLIUsageWeeklyAnchor(fixed: false, clampingWeekday: 9, hour: -1),
+                       CLIUsageWeeklyAnchor(fixed: false, weekday: 7, hour: 0))
+        XCTAssertEqual(CLIUsageWeeklyAnchor(fixed: true, clampingWeekday: 3, hour: 5),
+                       CLIUsageWeeklyAnchor(fixed: true, weekday: 3, hour: 5))
     }
 }
