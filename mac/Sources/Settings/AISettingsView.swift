@@ -13,6 +13,8 @@ struct AISettingsView: View {
     @ObservedObject private var navigation = AISettingsNavigation.shared
     @AppStorage(AICloudSettings.maxTokensKey) private var maxTokens = AICloudSettings.defaultMaxTokens
     @AppStorage(AICloudSettings.perMinuteKey) private var perMinute = AICloudSettings.defaultPerMinute
+    @AppStorage(AIUsageMeter.dailyLimitKey) private var dailyLimit = AIUsageMeter.defaultDailyLimit
+    @ObservedObject private var usage = AIUsageMeter.shared
     /// 刚加的账号默认展开。
     @State private var justAdded: String?
     /// 各账号 Key 输入框里正在输的（账号 id → 文字）；存完清空。
@@ -117,17 +119,32 @@ struct AISettingsView: View {
             }
             Section {
                 TappableDisclosure {
-                    Stepper(value: $maxTokens, in: AICloudSettings.maxTokensRange, step: 128) {
-                        Text(L("ai.settings.maxTokens \(maxTokens)"))
+                    Stepper(value: $dailyLimit, in: AIUsageMeter.dailyLimitRange, step: 100) {
+                        Text(L("ai.settings.dailyLimit \(dailyLimit)"))
+                    }
+                    if usage.isOverLimit {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            caption(L("ai.settings.overLimit"), warning: true)
+                            Button(L("ai.usage.more \(dailyLimit)")) { usage.extendToday() }
+                        }
                     }
                     Stepper(value: $perMinute, in: AICloudSettings.perMinuteRange, step: 10) {
                         Text(L("ai.settings.perMinute \(perMinute)"))
+                    }
+                    Stepper(value: $maxTokens, in: AICloudSettings.maxTokensRange, step: 128) {
+                        Text(L("ai.settings.maxTokens \(maxTokens)"))
                     }
                     caption(L("ai.settings.limitsHelp"))
                     caption(L("ai.settings.privacy"))
                     caption(cloudSends)
                 } label: {
-                    Text("ai.settings.advanced")
+                    // 收起时也看得到今天用了多少（#100）。
+                    HStack {
+                        Text("ai.settings.advanced")
+                        Spacer()
+                        Text(verbatim: usage.summary)
+                            .foregroundStyle(usage.isOverLimit ? Color.orange : Color.secondary)
+                    }
                 }
             }
         }
@@ -409,8 +426,12 @@ struct AISettingsView: View {
     }
 
     private func baseURLHelp(_ account: AICloudAccount) -> String {
-        if store.baseURL(of: account) == nil, !account.baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
-            return L("ai.settings.baseURLInvalid")
+        if !account.baseURL.trimmingCharacters(in: .whitespaces).isEmpty,
+           let problem = AICloudSettings.urlProblem(account.baseURL, fallback: account.kind.defaultBaseURL) {
+            switch problem {
+            case .invalid: return L("ai.settings.baseURLInvalid")
+            case .insecure: return L("ai.settings.baseURLInsecure")
+            }
         }
         return account.kind.defaultBaseURL.isEmpty
             ? L("ai.settings.baseURLHelpCustom")

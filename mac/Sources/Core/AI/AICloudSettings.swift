@@ -143,14 +143,33 @@ enum AICloudSettings {
     static let perMinuteRange = 10...600
     static let defaultPerMinute = 120
 
-    /// 实际用的地址：没填用 `fallback`（服务的默认地址）；填得不像网址（或自定义没填）返回 nil。
+    /// 地址为什么不能用（设置页提示用）。
+    enum URLProblem: Error {
+        /// 不像网址（或自定义没填）。
+        case invalid
+        /// 明文 http 指向别的机器：Key 和发出去的内容会明文经过网络（#100）。只有本机服务（Ollama 这类）能用 http。
+        case insecure
+    }
+
+    /// 实际用的地址：没填用 `fallback`（服务的默认地址）；不能用时返回 nil，原因见 `urlProblem`。
     static func validatedURL(_ stored: String, fallback: String) -> URL? {
+        try? parseURL(stored, fallback: fallback).get()
+    }
+
+    /// 地址不能用的原因；能用为 nil。
+    static func urlProblem(_ stored: String, fallback: String) -> URLProblem? {
+        if case .failure(let problem) = parseURL(stored, fallback: fallback) { return problem }
+        return nil
+    }
+
+    private static func parseURL(_ stored: String, fallback: String) -> Result<URL, URLProblem> {
         let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
         var text = trimmed.isEmpty ? fallback : trimmed
         while text.hasSuffix("/") { text.removeLast() }
         guard let url = URL(string: text), let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http", url.host != nil else { return nil }
-        return url
+              scheme == "https" || scheme == "http", url.host != nil else { return .failure(.invalid) }
+        if scheme == "http", !isLocalHost(url) { return .failure(.insecure) }
+        return .success(url)
     }
 
     /// 这个服务、这个地址可以不填 Key：OpenAI 兼容地址指向本机（Ollama 这类），内容也不出本机。
@@ -158,9 +177,12 @@ enum AICloudSettings {
         provider.api == .openAI && isLocalHost(baseURL)
     }
 
+    /// localhost、::1 和整段 127.0.0.0/8（都是本机回环，不出这台 Mac）。
     static func isLocalHost(_ url: URL) -> Bool {
-        let host = url.host?.lowercased() ?? ""
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+        let host = (url.host ?? "").lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if host == "localhost" || host == "::1" { return true }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
     }
 
     static var maxTokens: Int {
