@@ -2,8 +2,7 @@
 
 [简体中文](../README.md) · English
 
-For version **0.0.8**. This manual covers every tool and every feature currently in the app; tools without a manual
-page yet link to their requirements or design document.
+For version **0.0.8**. This manual covers every tool and every feature currently in the app.
 
 ## Contents
 
@@ -15,19 +14,19 @@ page yet link to their requirements or design document.
 | [Window manager](window-manager.md) | Halves, quarters, maximize, center, across displays, layout snapshots |
 | [Menu bar](menubar.md) | Show or hide each menu bar icon; hidden and squeezed-out icons one click away at the top of the Baobox menu; move the Baobox icon to the right |
 | [Keyboard clicking](keyboard-nav.md) | Letter-label clicking, continuous mode, keyboard scrolling |
-| [Meeting](../../meeting/REQUIREMENTS.md) (design doc) | Next-meeting countdown, one-click join, auto-detects meetings, local transcript, minutes and action items |
+| [Meeting](meeting.md) | Next-meeting countdown, one-click join, auto-detects meetings, local transcript, minutes and action items |
 | [Subtitles & Interpreting](live-translate.md) | Live captions and translation from the mic or system audio (21 languages), AI correction, spoken translation into a call; now part of Meeting |
-| [Selection assistant](../../selection-translate/ASSISTANT.md) (design doc) | Select text in any app → action bar: Translate, Learn, Polish, Rewrite, Natural English, Explain, Summarize |
-| [Voice dictation](../../dictation/REQUIREMENTS.md) (design doc) | Hold-to-talk, continuous or long dictation; the text lands at your cursor, optional AI polish, with history |
-| [Focus & health](../../focus-health/REQUIREMENTS.md) (design doc) | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
-| [Desktop pet](../../desktop-pet/DESIGN.md) (design doc) | A pet on your desktop that is also Baobox's unified notification center |
+| [Selection assistant](selection-assistant.md) | Select text in any app → action bar: Translate, Learn, Polish, Rewrite, Natural English, Explain, Summarize |
+| [Voice dictation](dictation.md) | Hold-to-talk, continuous or long dictation; the text lands at your cursor, optional AI polish, with history |
+| [Focus & health](focus-health.md) | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
+| [Desktop pet](desktop-pet.md) | A pet on your desktop that is also Baobox's unified notification center |
 | [Keep awake](caffeinate.md) | Timed sleep prevention, optional display-on |
 | [Phone Transfer](phone-transfer.md) | Scan to connect; send files and text between Mac and phone over LAN or the internet (direct P2P) |
 | [Claude Code assistant](claude-code.md) | Session resume, quota and usage, audit, notifications, visual config, statusline, MCP |
 | [Codex assistant](codex.md) | Session resume, quota and usage, visual config, turn notifications, maintenance |
 
-Settings also has an **[AI](../../ai-service/DESIGN.md)** page (design doc): pick a local or cloud model for each feature that
-uses one, manage local models, add cloud providers, and see today's usage and limits.
+Settings also has an **[AI](ai.md)** page: pick a local or cloud model for each feature that
+uses one, manage local models, add cloud providers, and set limits on cloud usage.
 
 Two general chapters:
 
