@@ -81,7 +81,12 @@
       noteLan: '局域网模式是明文传输。在咖啡馆等公共 Wi-Fi 上，建议在电脑上改用「公网」模式（端到端加密）。',
       noteBackground: '传输时请保持本页面在前台，切到后台可能导致连接断开。',
       lanLost: '与电脑的连接中断，正在重试…',
-      tooBig: '文件较大，手机浏览器可能内存不足'
+      tooBig: '文件较大，手机浏览器可能内存不足',
+      rejSize: '超过单个文件上限 {n}，电脑没收',
+      rejRoom: '电脑这次最多还能收 {n}，没收',
+      rejBusy: '电脑正忙，稍后再试',
+      errMacTitle: '电脑那边出错了',
+      errMac: '请在电脑上点「刷新二维码」，再重新扫码。'
     },
     en: {
       title: 'Baobox Transfer',
@@ -154,7 +159,12 @@
       noteLan: 'LAN mode is not encrypted. On public Wi-Fi (cafés etc.), switch your computer to Internet mode, which is end-to-end encrypted.',
       noteBackground: 'Keep this page in the foreground while transferring; switching away may drop the connection.',
       lanLost: 'Lost the connection to the computer. Retrying…',
-      tooBig: 'Large file — the phone browser may run out of memory'
+      tooBig: 'Large file — the phone browser may run out of memory',
+      rejSize: 'Over the {n} per-file limit; the computer didn’t take it',
+      rejRoom: 'The computer can take only {n} more this session; not sent',
+      rejBusy: 'The computer is busy; try again shortly',
+      errMacTitle: 'Something went wrong on the computer',
+      errMac: 'Click “Refresh QR Code” on the computer and scan again.'
     }
   };
   const lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en';
@@ -283,10 +293,19 @@
         fill.style.width = '100%';
         meta.textContent = [fmtSize(size), T('sent'), fmtTime(now), T('took') + fmtDuration(now - (started || now))].join(' · ');
       },
-      fail: function () {
-        meta.textContent = [fmtSize(size), T('failed'), fmtTime(Date.now())].join(' · ');
+      fail: function (why) {
+        meta.textContent = [fmtSize(size), why || T('failed'), fmtTime(Date.now())].join(' · ');
       }
     };
+  }
+
+  /** 电脑拒收（超过上限，#99）：抛给发送队列，那一行显示原因。 */
+  function rejection(why, limit) {
+    const e = new Error('rejected');
+    e.reason = why === 'size' ? T('rejSize').replace('{n}', fmtSize(limit))
+      : why === 'room' ? T('rejRoom').replace('{n}', fmtSize(limit))
+      : T('rejBusy');
+    return e;
   }
 
   // MARK: - 看大图（长按存相册）
@@ -405,7 +424,7 @@
         await transport.sendFile(job.file, job.row);
         job.row.done();
       } catch (e) {
-        job.row.fail();
+        job.row.fail(e && e.reason);
       }
     }
     sending = false;
@@ -485,6 +504,7 @@
     const knownFiles = {};
     let since = 0;
     let lostSince = 0;
+    let limits = null;   // 电脑报的上限 { file, room }（#99）：发之前先比一下
 
     function renderFiles(files) {
       files.forEach(function (f) {
@@ -513,6 +533,7 @@
           renderFiles(j.files || []);
           (j.texts || []).forEach(function (t) { addInText(t.text, t.ts); });
           if (typeof j.seq === 'number') since = j.seq;
+          if (j.limits && typeof j.limits.file === 'number' && typeof j.limits.room === 'number') limits = j.limits;
         } catch (e) {
           if (!lostSince) lostSince = Date.now();
           if (Date.now() - lostSince > 4000) setStatus(T('lanLost'), 'bad');
@@ -545,10 +566,22 @@
     transport = {
       sendFile: function (file, row) {
         return new Promise(function (resolve, reject) {
+          // 超了直接在这儿说清楚：传到一半被电脑断开的话，浏览器只会报「网络错误」。
+          if (limits && file.size > limits.file) { reject(rejection('size', limits.file)); return; }
+          if (limits && file.size > limits.room) { reject(rejection('room', limits.room)); return; }
           const xhr = new XMLHttpRequest();
           xhr.open('POST', api('upload', 'name=' + encodeURIComponent(uploadName(file))));
           xhr.upload.onprogress = function (e) { if (e.lengthComputable && e.total > 0) row.setProgress(e.loaded / e.total); };
-          xhr.onload = function () { (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error('http ' + xhr.status)); };
+          xhr.onload = function () {
+            if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+            if (xhr.status === 413 || xhr.status === 429) {
+              let j = {};
+              try { j = JSON.parse(xhr.responseText); } catch (e) { /* noop */ }
+              reject(rejection(xhr.status === 429 ? 'busy' : j.error, Number(j.limit) || 0));
+              return;
+            }
+            reject(new Error('http ' + xhr.status));
+          };
           xhr.onerror = function () { reject(new Error('network')); };
           xhr.send(file);
         });
@@ -590,6 +623,8 @@
     let pc = null;
     let link = null;
     let rx = null;
+    const rejected = {};   // 电脑拒收的文件 id → { why, limit }（#99）
+    let limits = null;     // 电脑报的上限 { file, room }：发之前先比一下
     const oid = PT.b64u(PT.random(9));
 
     function natText(n) {
@@ -614,7 +649,9 @@
       sid: sid, key: key, self: 'p', since: Math.floor(Date.now() / 1000) - 60,
       onMessage: async function (m) {
         if (finished || m.re !== oid) return;
-        if (m.t === 'deny') {
+        if (m.t === 'deny' && m.why === 'error') {
+          fail(T('errMacTitle'), T('errMac'));
+        } else if (m.t === 'deny') {
           fail(T('errDeniedTitle'), m.why === 'busy' ? T('errBusy') : T('errDenied'));
         } else if (m.t === 'answer' && !answered && typeof m.sdp === 'string') {
           answered = true;
@@ -707,6 +744,10 @@
           rx = null;
         } else if (m.t === 'text' && typeof m.text === 'string') {
           addInText(m.text);
+        } else if (m.t === 'reject' && typeof m.id === 'string') {
+          rejected[m.id] = { why: String(m.why || ''), limit: Number(m.limit) || 0 };
+        } else if (m.t === 'limits' && typeof m.file === 'number' && typeof m.room === 'number') {
+          limits = { file: m.file, room: m.room };
         }
       },
       binary: function (buf) {
@@ -724,11 +765,14 @@
     let nextID = 1;
     transport = {
       sendFile: async function (file, row) {
+        if (limits && file.size > limits.file) throw rejection('size', limits.file);
+        if (limits && file.size > limits.room) throw rejection('room', limits.room);
         const id = 'p' + (nextID++);
         link.sendJSON({ t: 'file', id: id, name: uploadName(file), size: file.size, mime: file.type || '' });
         const step = 1024 * 1024;
         try {
           for (let off = 0; off < file.size; off += step) {
+            if (rejected[id]) throw rejection(rejected[id].why, rejected[id].limit);
             const buf = new Uint8Array(await file.slice(off, Math.min(off + step, file.size)).arrayBuffer());
             await link.sendBytes(buf);
             row.setProgress(Math.min(1, (off + buf.length) / Math.max(1, file.size)));

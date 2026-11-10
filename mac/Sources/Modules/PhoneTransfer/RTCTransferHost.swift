@@ -57,16 +57,30 @@ final class RTCTransferHost: NSObject {
         }
     }
 
-    func start(sid: String, key: String, since: Int, macName: String) {
+    /// 连上信令服务。失败抛错（信令服务连不上、页面脚本出错），调用方据此报错（#102）。
+    func start(sid: String, key: String, since: Int, macName: String) async throws {
         let cfg: [String: Any] = ["sid": sid, "key": key, "since": since, "macName": macName]
+        try await call("await ptHost.start(cfg); return true;", ["cfg": cfg])
+    }
+
+    /// 答复手机：允许（建连接、发答复）或拒绝。失败抛错，调用方据此报错（#102）。
+    func approve(_ ok: Bool) async throws {
+        try await call("await ptHost.approve(ok); return true;", ["ok": ok])
+    }
+
+    /// 告诉手机现在的上限（单个文件、这次还能收多少），它发之前先比一下（#99）。
+    func sendLimits(file: Int64, room: Int64) {
         Task { @MainActor in
-            _ = try? await self.call("await ptHost.start(cfg); return true;", ["cfg": cfg])
+            _ = try? await self.call("return ptHost.limits(file, room);",
+                                     ["file": NSNumber(value: file), "room": NSNumber(value: room)])
         }
     }
 
-    func approve(_ ok: Bool) {
+    /// 拒收手机正在发的文件：告诉它别再发了，手机网页按 `why` / `limit` 显示原因（#99）。
+    func reject(id: String, why: String, limit: Int64) {
         Task { @MainActor in
-            _ = try? await self.call("await ptHost.approve(ok); return true;", ["ok": ok])
+            _ = try? await self.call("return ptHost.reject(id, why, limit);",
+                                     ["id": id, "why": why, "limit": NSNumber(value: limit)])
         }
     }
 
