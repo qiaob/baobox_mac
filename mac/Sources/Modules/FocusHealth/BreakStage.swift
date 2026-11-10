@@ -55,6 +55,7 @@ final class BreakStageModel: ObservableObject {
 
 /// 休息画面（docs/focus-health/TECH_DESIGN.md §5）：宠物从原位走到屏幕中央、边走边变大，
 /// 背景变暗、拦截键鼠（标准 / 严格档），倒计时走完起身伸懒腰再走回去。宠物没开时走回退画面。
+/// 宠物经 Core 的 `BreakCompanion` 借来（`PresentationHub.shared.breakCompanion`），这里只发意图，姿态归宠物模块。
 @MainActor
 final class BreakStageController {
     private static let log = Logger(subsystem: "com.baobox.app", category: "focushealth")
@@ -99,17 +100,14 @@ final class BreakStageController {
     private var backdrops: [BreakBackdropWindow] = []
     private var stageWindow: BreakStageWindow?
     private var infoView: NSView?
-    private var loan: PetController.Loan?
+    private var loan: BreakCompanionLoan?
     /// 到达中央后宠物视图在舞台窗里的位置。
     private var petRectInWindow = NSRect.zero
     private var targetScreen: NSScreen?
     private var endsAt = Date()
-    private var restingSince = Date()
     private var waitStarted = Date()
     private var lastNudge = Date.distantPast
-    private var pose = PetPose()
     private var tickTimer: Timer?
-    private var poseTimer: Timer?
     private var animTimer: Timer?
     private var deadlineTimer: Timer?
     private var screenObserver: NSObjectProtocol?
@@ -170,7 +168,7 @@ final class BreakStageController {
         previousApp = NSWorkspace.shared.frontmostApplication
         // 休息期间其他模块的非重要通知攒着，结束后合并补呈。
         NotifyDND.shared.setSuppressed(true, token: FocusHealthController.breakToken)
-        loan = PetController.shared.lendRenderView()
+        loan = PresentationHub.shared.breakCompanion?.lend()
         let blocking = request.style != .gentle
         if blocking { buildBackdrops(fadeIn: true) }
         buildStageWindow(blocking: blocking)
@@ -242,7 +240,7 @@ final class BreakStageController {
 
         if let loan {
             // 起点：宠物在桌面上的位置与大小，渲染视图铺满窗口。
-            window.setFrame(loan.frame, display: false)
+            window.setFrame(loan.homeFrame, display: false)
             loan.view.frame = content.bounds
             loan.view.autoresizingMask = [.width, .height]
             content.addSubview(loan.view)
@@ -259,8 +257,8 @@ final class BreakStageController {
     /// 中央大宠物 + 下方卡片的位置（屏幕坐标）。
     private func layout(on screen: NSScreen) -> (pet: NSRect, info: NSRect, union: NSRect) {
         let frame = screen.frame
-        // 3D 形象实时渲染，放大照样清晰；2D 帧图只有几十像素，超过原尺寸 3 倍就糊。
-        let maxSide: CGFloat = (loan?.is3D ?? true) ? 520 : (loan?.frame.height ?? 104) * 3
+        // 3D 形象实时渲染，放大照样清晰（maxUpscale 为 nil）；2D 帧图只有几十像素，超过原尺寸 3 倍就糊。
+        let maxSide: CGFloat = loan?.maxUpscale.map { (loan?.homeFrame.height ?? 104) * $0 } ?? 520
         let side = min(frame.height * 0.42, maxSide)
         let info = Self.infoSize
         let overlap: CGFloat = 12
@@ -297,15 +295,13 @@ final class BreakStageController {
         }
         let target = layout(on: screen).pet
         phase = .flyingIn
-        pose = PetPose()
-        pose.state = .wander
-        pose.facingLeft = target.midX < loan.frame.midX
+        loan.cue(.walking(facingLeft: target.midX < loan.homeFrame.midX))
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             window.setFrame(target, display: true)
             arrive()
             return
         }
-        animate(window, from: loan.frame, to: target, duration: Self.flightDuration) { [weak self] in
+        animate(window, from: loan.homeFrame, to: target, duration: Self.flightDuration) { [weak self] in
             self?.arrive()
         }
     }
@@ -332,7 +328,7 @@ final class BreakStageController {
     private func beginResting() {
         guard let request else { return }
         phase = .resting
-        restingSince = Date()
+        loan?.cue(.resting(lookAway: request.lookAway))
         endsAt = Date().addingTimeInterval(request.seconds)
         model.remaining = request.seconds
         model.infoVisible = true
@@ -348,6 +344,7 @@ final class BreakStageController {
     /// 倒计时走完：「休息好啦」。3D 形象从睡姿回待机时会自动播「起身 + 伸懒腰」。
     private func celebrate() {
         phase = .celebrating
+        loan?.cue(.attentive)
         model.remaining = 0
         model.finished = true
         let pause: TimeInterval = loan != nil ? 2.6 : 1.4
@@ -380,6 +377,8 @@ final class BreakStageController {
     /// 2026-11-08 探针实测）排到最上面。30 秒没人确认就锁屏。截止看门狗顺延，遮罩到点一定撤。
     private func startConfirm(_ outcome: BreakOutcome) {
         phase = .confirming
+        // 可能从「休息中」甚至「飞过去」直接进来（长按跳过、外面要撤）：这里也要发，宠物才会站起来面向你。
+        loan?.cue(.attentive)
         confirmOutcome = outcome
         confirmDeadline = Date().addingTimeInterval(Self.confirmWindow)
         model.confirming = true
@@ -531,12 +530,12 @@ final class BreakStageController {
         window.setFrame(current, display: false)
         loan.view.frame = window.contentView?.bounds ?? NSRect(origin: .zero, size: current.size)
         loan.view.autoresizingMask = [.width, .height]
-        pose.facingLeft = loan.frame.midX < current.midX
+        loan.cue(.walking(facingLeft: loan.homeFrame.midX < current.midX))
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             completeTeardown()
             return
         }
-        animate(window, from: current, to: loan.frame, duration: Self.flightDuration) { [weak self] in
+        animate(window, from: current, to: loan.homeFrame, duration: Self.flightDuration) { [weak self] in
             self?.completeTeardown()
         }
     }
@@ -598,8 +597,6 @@ final class BreakStageController {
         animTimer = nil
         tickTimer?.invalidate()
         tickTimer = nil
-        poseTimer?.invalidate()
-        poseTimer = nil
         deadlineTimer?.invalidate()
         deadlineTimer = nil
         watchdog.disarm()
@@ -607,10 +604,8 @@ final class BreakStageController {
         screenObserver = nil
         // 先撤勿扰再还宠物：否则引擎还按勿扰让它睡着，还回去先躺下再爬起来。
         NotifyDND.shared.setSuppressed(false, token: FocusHealthController.breakToken)
-        if let loan {
-            loan.view.removeFromSuperview()
-            PetController.shared.returnRenderView()
-        }
+        // giveBack 停掉姿态推送、把视图从舞台上摘下来、还给宠物窗。
+        loan?.giveBack()
         loan = nil
         infoView?.removeFromSuperview()
         infoView = nil
@@ -645,55 +640,12 @@ final class BreakStageController {
         }
     }
 
-    // MARK: - 姿态（30fps 推送；2D 帧动画靠它走）
-
-    private func pushPose() {
-        guard loan != nil else { return }
-        let now = Date()
-        pose.time = now.timeIntervalSinceReferenceDate
-        switch phase {
-        case .flyingIn, .flyingOut:
-            pose.state = .wander
-            pose.walkPhase += 9.0 / 30.0
-            pose.attentive = false
-            pose.lying = false
-            pose.eyesClosed = false
-            pose.bob = 0
-        case .resting:
-            if now.timeIntervalSince(restingSince) < 1.2 {
-                // 先转过来看你一眼。
-                pose.state = .idle
-                pose.attentive = true
-            } else if request?.lookAway == true {
-                // 护眼：侧过身去看远处。
-                pose.state = .idle
-                pose.attentive = false
-                pose.facingLeft = false
-            } else {
-                pose.state = .sleep
-            }
-            pose.lying = pose.state == .sleep
-            pose.eyesClosed = pose.state == .sleep
-            pose.bob = pose.state == .idle ? CGFloat(sin(pose.time * 1.7)) * 1.4 : 0
-        case .celebrating, .confirming:
-            // 休息好了 / 等你确认：站着面向你。
-            pose.state = .idle
-            pose.attentive = true
-            pose.lying = false
-            pose.eyesClosed = false
-            pose.bob = CGFloat(sin(pose.time * 1.7)) * 1.4
-        case .idle, .waiting:
-            return
-        }
-        PetController.shared.setLentPose(pose)
-    }
-
     // MARK: - 互动
 
     /// 点了大宠物：它动一下，告诉你还剩多久。
     private func poke() {
         guard phase == .resting else { return }
-        PetController.shared.performLent("poke")
+        loan?.poke()
         let left = model.remaining
         showNudge(left < 60 ? L("focus.break.almost") : L("focus.break.pokeLine \(FocusText.minutesLeft(left))"))
     }
@@ -708,7 +660,7 @@ final class BreakStageController {
         }
         guard phase == .resting, Date().timeIntervalSince(lastNudge) > 2.5 else { return }
         lastNudge = Date()
-        PetController.shared.performLent("poke")
+        loan?.poke()
         showNudge(L("focus.break.nudge"))
     }
 
@@ -731,13 +683,6 @@ final class BreakStageController {
         }
         RunLoop.main.add(tick, forMode: .common)
         tickTimer = tick
-        if loan != nil {
-            let poseTimer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.pushPose() }
-            }
-            RunLoop.main.add(poseTimer, forMode: .common)
-            self.poseTimer = poseTimer
-        }
     }
 
     /// 截止看门狗：到点还没撤（动画卡住等），强制撤下。

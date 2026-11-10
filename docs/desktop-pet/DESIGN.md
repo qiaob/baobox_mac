@@ -137,7 +137,13 @@ NotifyCenter.shared.post(_ n: PetNotification,
 ## 8. 窗口与层级
 
 - 宠物窗：borderless `NSPanel`，`canJoinAllSpaces + fullScreenAuxiliary`，`.floating` 级，高于普通窗口；`ignoresMouseEvents` 动态切换——仅命中区接收事件（2D 按 alpha、3D 按包围盒），其余穿透。
-- 休息画面（#43，2026-11-06 改）：**宠物本身就是休息画面的主角**——渲染视图借给休息画面的舞台窗（`.screenSaver + 1`，暗幕在 `.screenSaver`），走到屏幕中央变大，结束后飞回、还给宠物窗（`PetController.lendRenderView / returnRenderView`）。借出期间宠物窗留在原地但变空、不接鼠标，挂在它身上的气泡不受影响。见 `docs/focus-health/TECH_DESIGN.md` §5。
+- 休息画面（#43，2026-11-06 改）：**宠物本身就是休息画面的主角**——渲染视图借给休息画面的舞台窗（`.screenSaver + 1`，暗幕在 `.screenSaver`），走到屏幕中央变大，结束后飞回、还给宠物窗。借出期间宠物窗留在原地但变空、不接鼠标，挂在它身上的气泡不受影响。见 `docs/focus-health/TECH_DESIGN.md` §5。
+  - **怎么借**（#108）：休息画面不认识宠物，只认 Core 的 `BreakCompanion` 协议（`mac/Sources/Core/Presentation/BreakCompanion.swift`）。宠物模块用 `presentationRoles()` 交出 `PetController.shared` 当 `breakCompanion`，框架启动时装进 `PresentationHub`。
+    宠物关着、没就绪、正在换形象时 `lend()` 返回 nil，休息画面走回退画面；宠物模块没注册时同样走回退画面，也不会顺手把 `PetController.shared` 建出来。
+  - **意图与姿态**：休息画面只在阶段切换时发三种意图 —— `.walking(facingLeft:)`（飞过去 / 飞回来）、`.resting(lookAway:)`（先转过来看你 1.2 秒再躺下，护眼是侧身看远处）、`.attentive`（休息好了 / 等你确认本人）。
+    `PetBreakLoan`（`PetBreakCompanion.swift`）把意图换成 `PetPose`，用自己的 1/30 秒 `.common` 定时器推给 `setLentPose`（逐行搬自原来 BreakStage 的 `pushPose`），被戳一下转给 `performLent("poke")`，`giveBack()` 停定时器、摘视图、调 `returnRenderView()`。
+    `lendRenderView / setLentPose / performLent / returnRenderView` 都只在宠物模块内部用。
+  - **退出保险**：`stop()` 记一个 `stopped` 标记；之后再 `returnRenderView()` 只把视图放回宠物窗，不再 `applyVisibility()`、不打招呼。今天专注与健康先于宠物 `willTerminate`，走不到；顺序反过来时，它挡住「退出时宠物重新显示、播出场、黑洞窗冒出来」那一下闪烁（`docs/notify-core/DESIGN.md` §1.2）。
 - 气泡窗：独立小 `NSPanel`，不抢焦点；按钮可点但不激活 App（`nonactivatingPanel`)。
 
 ## 9. 设置（UserDefaults 键，前缀 `pet.` / `notify.`）

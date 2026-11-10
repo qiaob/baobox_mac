@@ -464,7 +464,7 @@ final class FocusHealthController: ObservableObject {
                                                  icon: first.icon))
         if let clips = due.compactMap(\.petClips).first {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                MainActor.assumeIsolated { _ = PetController.shared.act(clips: clips) }
+                MainActor.assumeIsolated { _ = NotifyCenter.shared.performGesture(clips) }
             }
         }
         changed(now)
@@ -513,7 +513,7 @@ final class FocusHealthController: ObservableObject {
         let clips = due.compactMap(\.petClips).flatMap { $0 }
         if !clips.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                MainActor.assumeIsolated { _ = PetController.shared.act(clips: clips) }
+                MainActor.assumeIsolated { _ = NotifyCenter.shared.performGesture(clips) }
             }
         }
         changed(now)
@@ -594,7 +594,7 @@ final class FocusHealthController: ObservableObject {
         }
         if let clips = item.restClips {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                MainActor.assumeIsolated { _ = PetController.shared.act(clips: clips) }
+                MainActor.assumeIsolated { _ = NotifyCenter.shared.performGesture(clips) }
             }
         }
     }
@@ -683,14 +683,14 @@ final class FocusHealthController: ObservableObject {
             // 宠物关着时轻松档的提醒是系统通知（带同样的按钮），文案别再说「宠物冒个气泡」。
             NotifyCenter.shared.post(PetNotification(
                 source: Self.source, level: .bubble, title: L("focus.preview.title"),
-                body: PetController.shared.isReady ? L("focus.preview.bubbleMessage")
-                                                   : L("focus.preview.notificationMessage"),
+                body: NotifyCenter.shared.presenterIsReady ? L("focus.preview.bubbleMessage")
+                                                           : L("focus.preview.notificationMessage"),
                 actions: [.init(id: "ok", label: L("focus.action.ok"), role: .primary),
                           .init(id: "snooze", label: L("focus.action.snooze5"))],
                 icon: "cup.and.saucer.fill"
             ))
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                MainActor.assumeIsolated { _ = PetController.shared.act(clips: ["yawn"]) }
+                MainActor.assumeIsolated { _ = NotifyCenter.shared.performGesture(["yawn"]) }
             }
             return
         }
