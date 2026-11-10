@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// 一条通知（内部模型，设计 §3）。来源模块先转成它，再由 NotifyCenter 分发呈现。
+/// 一条通知（内部模型，docs/desktop-pet/DESIGN.md §3）。来源模块先转成它，再由 NotifyCenter 分发呈现。
 struct PetNotification {
     enum Level {
         case ambient    // 轻提示：气泡数秒自消
@@ -90,7 +90,7 @@ final class NotifyCenter {
     private var systemCategories: [String: UNNotificationCategory] = [:]
 
     func post(_ n: PetNotification, onAction: ((String) -> Void)? = nil) {
-        guard PetSettings.sourceEnabled(n.source) else { return }
+        guard NotifySettings.sourceEnabled(n.source) else { return }
 
         // 去重：同来源同 key 30 秒内只呈现一次，其余合并进历史计数。
         if let key = n.dedupeKey {
@@ -129,12 +129,12 @@ final class NotifyCenter {
     }
 
     /// 投稿方自己的声音设置（Claude Code / Codex 的提示音开关，已折算进 playSound）照旧生效；
-    /// notify.sound 只给没要求发声的 alert 级补一声（设计 §9：alert 提示音，默认关）。
+    /// notify.sound 只给没要求发声的 alert 级补一声（docs/desktop-pet/DESIGN.md §9：alert 提示音，默认关）。
     private func wantsSound(_ n: PetNotification) -> Bool {
-        n.playSound || (n.level == .alert && PetSettings.soundEnabled)
+        n.playSound || (n.level == .alert && NotifySettings.soundEnabled)
     }
 
-    /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（设计 §2）。气泡上的按钮照样带上
+    /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（docs/desktop-pet/DESIGN.md §2）。气泡上的按钮照样带上
     /// （UNNotificationAction），用户点了经 SystemNotificationRouter 回到投稿方 —— 否则推迟、
     /// 「现在休息」「再来一轮」这些在宠物关着时全都点不了（2026-11-06 真机踩到）。
     private func postSystemNotification(_ n: PetNotification, onAction: ((String) -> Void)?) {
@@ -205,8 +205,8 @@ final class NotifyCenter {
             HistoryEntry(date: Date(), source: n.source, level: n.level, title: n.title, mergeCount: 1),
             at: 0
         )
-        if history.count > PetSettings.historyLimit {
-            history.removeLast(history.count - PetSettings.historyLimit)
+        if history.count > NotifySettings.historyLimit {
+            history.removeLast(history.count - NotifySettings.historyLimit)
         }
     }
 
