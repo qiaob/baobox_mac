@@ -49,8 +49,8 @@ enum MeetingSettings {
     }
 
     /// 会议纪要模板（默认 / 站会 / 1:1 / 面试）。
-    static var template: LiveTranslateMeetingStyle {
-        get { defaults.string(forKey: templateKey).flatMap(LiveTranslateMeetingStyle.init(rawValue:)) ?? .standard }
+    static var template: MeetingMinutesStyle {
+        get { defaults.string(forKey: templateKey).flatMap(MeetingMinutesStyle.init(rawValue:)) ?? .standard }
         set { defaults.set(newValue.rawValue, forKey: templateKey) }
     }
 

@@ -323,8 +323,9 @@ final class LiveTranslateController: ObservableObject {
     /// 字幕条保留的句数：拉高字幕条可以往上翻（完整的在本地记录里）。
     private static let historyLines = 200
 
-    /// 自由听译的本地记录（docs/live-translate/DESIGN.md §6）；没开记录为 nil。托管会话（会议）从不建：会议的文档由会议自己写。
-    private var transcript: LiveTranslateTranscript?
+    /// 自由听译的本地记录（docs/live-translate/DESIGN.md §6）：会议库开的一份（`FreeListeningLibrary`），写成什么样、写到哪由它定；
+    /// 没开记录为 nil。托管会话（会议）从不建：会议的文档由会议自己写。
+    private var transcript: FreeListeningRecord?
     /// 字幕条「记录」菜单里「打开本次记录」用；还没记下任何一句时为 nil（文件还没建）。托管会话是配置里的 `documentURL`。
     @Published private(set) var transcriptURL: URL?
     /// 这一次正在记录（字幕条「记录」按钮）：自由听译 = 在保存记录；托管会话 = 会议没暂停。
@@ -361,8 +362,9 @@ final class LiveTranslateController: ObservableObject {
     @Published private(set) var barVisible = false
     /// 运行中切字幕条：后来的切换让还在路上的那次作废。
     private var barGeneration = 0
-    /// 自由听译的新记录写进会议库（Meeting 模块启动时装上；没装 = 写到原来的 `livetranslate.record.folder`）。
-    static var recordLibrary: LiveTranslateRecordLibrary?
+    /// 自由听译的新记录写进会议库（会议模块启动时装上）。没装上就不记录、记一条 fault —— 现在的启动流程里总是装上的；
+    /// 写回 ~/Documents 的旧去处已删（docs/meeting/ENGINE.md §8 第 4 条）。之后改成装配时作为构造参数交进来（§4.6）。
+    static var recordLibrary: FreeListeningLibrary?
 
     private init() {
         translator.onResult = { [weak self] job, source, target, text in
@@ -460,7 +462,7 @@ final class LiveTranslateController: ObservableObject {
     var showsSourceMenu: Bool { sessionConfig.followsSettings }
 
     /// App 退出：停下来，自由听译的记录同步写完；托管会话剩下的句子与 `.ended` 在返回前同步报完。
-    /// 还在整理的纪要（会议的、自由听译的）由会议在退出时统一标「没整理完」（`LiveTranslateTranscript.abortAllMinutes()`）。
+    /// 还在整理的纪要（会议的、自由听译的）由会议在退出时统一标「没整理完」（docs/meeting/ENGINE.md §4.5.5）。
     func terminate() {
         terminating = true
         stop()
@@ -1080,13 +1082,16 @@ final class LiveTranslateController: ObservableObject {
             return
         }
         guard LiveTranslateRecordSettings.enabled else { return }
-        let start = Date()
-        // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3）；会议模块没装就写到原来的文件夹。
-        let destination = Self.recordLibrary?.freeListeningDestination(start: start) ?? .legacy(start: start)
-        let transcript = LiveTranslateTranscript(start: start, config: config, destination: destination)
+        // 自由听译：新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3），会议库定写到哪、写成什么样。
+        guard let library = Self.recordLibrary else {
+            LiveTranslateLog.recognition.fault("free listening record skipped: meeting library not installed")
+            return
+        }
+        let transcript = library.beginFreeListeningRecord(start: Date(), run: config,
+                                                          summarizes: LiveTranslateRecordSettings.summary)
         transcript.onWriteError = { [weak self] message in
             guard let self, self.isRunning else { return }
-            self.notice = L("livetranslate.record.writeFailed \(message)")
+            self.notice = message
         }
         self.transcript = transcript
         transcriptURL = nil
@@ -1106,7 +1111,7 @@ final class LiveTranslateController: ObservableObject {
         self.transcript = nil
         transcriptURL = nil
         recording = false
-        transcript.finish(at: Date(), terminating: terminating)
+        transcript.finish(at: Date(), terminating: terminating, summarizes: LiveTranslateRecordSettings.summary)
     }
 
     /// 手动开 / 关记录（字幕条「记录」菜单、设置页）：记住选择；正在实时翻译时立刻生效 ——
@@ -1148,15 +1153,15 @@ final class LiveTranslateController: ObservableObject {
         guard !original.isEmpty else { return }
         let key = "\(run)-\(line.id)"
         let translation = line.translates ? line.translation : ""
-        sessionConfig.onFinalLine?(MeetingEngineLine(
-            key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker))
+        let entry = MeetingEngineLine(
+            key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker)
+        sessionConfig.onFinalLine?(entry)
         if hostedRecording {
             if transcriptURL == nil, isRunning { transcriptURL = sessionConfig.documentURL }
             return
         }
         guard let transcript else { return }
-        transcript.update(key: key, time: line.startedAt, original: original, translation: translation,
-                          speaker: line.speaker)
+        transcript.update(entry)
         if transcriptURL == nil, isRunning { transcriptURL = transcript.fileURL }
     }
 

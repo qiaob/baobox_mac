@@ -5,7 +5,7 @@ import SwiftUI
 /// 记录（默认类型、自动开始、保留时长、纪要模板、设备自检）、快捷键、嵌入的「字幕与同传」（原实时翻译的全部设置，键名不变）。
 struct MeetingSettingsView: View {
     @AppStorage(MeetingSettings.defaultTypeKey) private var defaultType = MeetingType.online.rawValue
-    @AppStorage(MeetingSettings.templateKey) private var template = LiveTranslateMeetingStyle.standard.rawValue
+    @AppStorage(MeetingSettings.templateKey) private var template = MeetingMinutesStyle.standard.rawValue
     @AppStorage(MeetingSettings.retentionDaysKey) private var retentionDays = 0
     @AppStorage(MeetingSettings.calendarEnabledKey) private var calendarEnabled = false
     @AppStorage(MeetingSettings.reminderLeadKey) private var reminderLead = 1
@@ -64,7 +64,8 @@ struct MeetingSettingsView: View {
             } header: {
                 Text("meeting.settings.subtitlesSection")
             }
-            LiveTranslateSettingsSections()
+            // 「停止后整理纪要」那行提示问的是会议纪要生成器：纪要归会议，字幕与同传只拿结果（docs/meeting/ENGINE.md §4.5.4）。
+            LiveTranslateSettingsSections(minutesReady: { MeetingMinutesGenerator.isReady })
         }
         .formStyle(.grouped)
         .onAppear {
@@ -234,7 +235,7 @@ struct MeetingSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Picker("meeting.settings.template", selection: $template) {
-                ForEach(LiveTranslateMeetingStyle.allCases, id: \.self) { style in
+                ForEach(MeetingMinutesStyle.allCases, id: \.self) { style in
                     Text(verbatim: MeetingText.templateName(style)).tag(style.rawValue)
                 }
             }

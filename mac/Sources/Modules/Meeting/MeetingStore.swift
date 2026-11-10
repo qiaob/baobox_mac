@@ -209,7 +209,7 @@ final class MeetingStore: ObservableObject {
                 taken.insert(dir)
                 let meta = MeetingMeta(type: .free, title: title, start: item.start, end: item.end,
                                        status: item.summarized ? .summarized : .transcribed,
-                                       template: LiveTranslateMinutesTemplate.content.storageValue, legacyPath: item.path)
+                                       template: MeetingMinutesTemplate.content.storageValue, legacyPath: item.path)
                 guard let data = meta.encoded() else { continue }
                 write(data, to: root.appendingPathComponent(dir, isDirectory: true)
                     .appendingPathComponent(MeetingLibraryLayout.metaFileName))
@@ -459,7 +459,7 @@ final class MeetingStore: ObservableObject {
     }
 
     /// 纪要的结果 → 会议库里的状态。
-    nonisolated static func status(after outcome: LiveTranslateTranscript.MinutesOutcome) -> MeetingStatus {
+    nonisolated static func status(after outcome: MeetingMinutesOutcome) -> MeetingStatus {
         switch outcome {
         case .generating: return .summarizing
         case .done: return .summarized
@@ -469,34 +469,36 @@ final class MeetingStore: ObservableObject {
     }
 }
 
-// MARK: - 自由听译的新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3）
+// MARK: - 自由听译的新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3、ENGINE.md §4.5.3）
 
-extension MeetingStore: LiveTranslateRecordLibrary {
+extension MeetingStore: FreeListeningLibrary {
     var folderURL: URL { rootURL }
 
     /// 每份自由听译记录一条：目录「yyyy-MM-dd HH-mm 自由听译」，记下第一句时才进索引（一句没有就不留痕迹）。
-    func freeListeningDestination(start: Date) -> LiveTranslateTranscript.Destination {
+    /// 自由听译的版式（`.content` 模板、不标说话人），纪要整理好发「实时翻译纪要已整理好」。
+    func beginFreeListeningRecord(start: Date, run: MeetingEngineRun, summarizes: Bool) -> FreeListeningRecord {
         let title = L("meeting.type.free")
         let dir = reserveDirectory(start: start, title: title)
         let id = UUID().uuidString
-        var destination = LiveTranslateTranscript.Destination(
+        var destination = MeetingTranscript.Destination(
             fileURL: rootURL.appendingPathComponent(dir, isDirectory: true)
                 .appendingPathComponent(MeetingLibraryLayout.markdownFileName),
             displayName: (dir as NSString).lastPathComponent)
+        destination.summarizes = summarizes
         destination.onEvent = { event in
             MeetingStore.shared.freeListening(event, id: id, dir: dir, start: start, title: title)
         }
-        return destination
+        return MeetingTranscript(start: start, config: run, destination: destination)
     }
 
-    private func freeListening(_ event: LiveTranslateTranscript.Event, id: String, dir: String, start: Date,
+    private func freeListening(_ event: MeetingTranscriptEvent, id: String, dir: String, start: Date,
                                title: String) {
         switch event {
         case .created:
             activeIDs.insert(id)
             insert(MeetingRecord(dir: dir, meta: MeetingMeta(
                 id: id, type: .free, title: title, start: start, status: .recording,
-                template: LiveTranslateMinutesTemplate.content.storageValue)))
+                template: MeetingMinutesTemplate.content.storageValue)))
         case .finished(let end, let minutes, let terminating):
             update(id, sync: terminating) { meta in
                 meta.end = end

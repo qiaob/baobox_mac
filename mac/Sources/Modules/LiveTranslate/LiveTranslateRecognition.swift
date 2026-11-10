@@ -5,10 +5,10 @@ import Speech
 
 /// 实时翻译的诊断日志。排查：
 /// `/usr/bin/log show --last 1h --predicate 'subsystem == "com.baobox.app" AND category BEGINSWITH "livetranslate"'`
+/// 记录写盘与纪要的日志随写文档的代码搬进了会议（category `meeting.transcript`，#107）。
 enum LiveTranslateLog {
     static let recognition = Logger(subsystem: "com.baobox.app", category: "livetranslate.recognition")
     static let audio = Logger(subsystem: "com.baobox.app", category: "livetranslate.audio")
-    static let transcript = Logger(subsystem: "com.baobox.app", category: "livetranslate.transcript")
 }
 
 /// 识别看门狗的计时：只数「有人在说、音频也真的送进识别器了」的时间（音频路由在朗读暂停识别时不更新 lastVoice）。
