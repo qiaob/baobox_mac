@@ -214,24 +214,29 @@ struct SelectionActionBar: View {
     private func barItem(_ action: SelectionAction, index: Int) -> some View {
         let highlighted = session.keyboardMode && session.highlighted == index
         if action.builtin == .rewrite {
-            Menu {
-                ForEach(SelectionRewriteTone.allCases) { tone in
-                    Button(tone.title) {
-                        session.tone = tone
-                        SelectionActionStore.rewriteTone = tone
-                        controller.run(action.id)
-                    }
+            // 点「改写」照旧按上次的语气改写；点 ▾ 弹语气菜单（#95：不用 SwiftUI Menu，它在非当前窗口里变暗）。
+            HStack(spacing: 0) {
+                Button {
+                    controller.run(action.id)
+                } label: {
+                    itemLabel(action, index: index, highlighted: highlighted, drawsBackground: false)
                 }
-            } label: {
-                itemLabel(action, index: index, highlighted: highlighted)
-            } primaryAction: {
-                controller.run(action.id)
+                .buttonStyle(.plain)
+                .help(helpText(action, index: index))
+                SelectionMenuButton(items: { toneItems(runningAfterPick: action.id) }) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(highlighted ? Color.white : Color.primary)
+                        .frame(width: 14, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .help(L("selectiontranslate.bar.tone"))
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.visible)
-            .fixedSize()
             .padding(.trailing, 4)
-            .help(helpText(action, index: index))
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(highlighted ? Color.accentColor : Color.clear)
+            )
         } else {
             Button {
                 controller.run(action.id)
@@ -243,7 +248,19 @@ struct SelectionActionBar: View {
         }
     }
 
-    private func itemLabel(_ action: SelectionAction, index: Int, highlighted: Bool) -> some View {
+    /// 改写语气菜单的各项：选了就记住，再按它改写。
+    private func toneItems(runningAfterPick actionID: String) -> [SelectionMenuItem] {
+        SelectionRewriteTone.allCases.map { tone in
+            SelectionMenuItem(title: tone.title, checked: tone == session.tone) {
+                session.tone = tone
+                SelectionActionStore.rewriteTone = tone
+                controller.run(actionID)
+            }
+        }
+    }
+
+    private func itemLabel(_ action: SelectionAction, index: Int, highlighted: Bool,
+                           drawsBackground: Bool = true) -> some View {
         HStack(spacing: 4) {
             if let badge = badge(for: action, index: index) {
                 Text(verbatim: badge)
@@ -266,7 +283,7 @@ struct SelectionActionBar: View {
         .frame(height: 24)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(highlighted ? Color.accentColor : Color.clear)
+                .fill(highlighted && drawsBackground ? Color.accentColor : Color.clear)
         )
         .contentShape(Rectangle())
     }
@@ -382,26 +399,34 @@ struct SelectionTranslateBody: View {
     private var controller: SelectionTranslateController { .shared }
     private var target: TranslationLanguage { session.chosenTarget ?? session.translateTarget }
 
+    /// 目标语言菜单：当前的打勾，选了别的就重新翻译。
+    private var targetItems: [SelectionMenuItem] {
+        TranslationLanguage.all.map { language in
+            SelectionMenuItem(title: language.endonym, checked: language == target) {
+                guard language != target else { return }
+                translatedText = nil
+                copied = false
+                session.primaryText = nil
+                session.chosenTarget = language
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(session.source.endonym)
                 Image(systemName: "arrow.right")
                     .font(.system(size: 10))
-                Menu {
-                    ForEach(TranslationLanguage.all) { language in
-                        Button(language.endonym) {
-                            guard language != target else { return }
-                            translatedText = nil
-                            copied = false
-                            session.primaryText = nil
-                            session.chosenTarget = language
-                        }
+                SelectionMenuButton(items: { targetItems }) {
+                    HStack(spacing: 2) {
+                        Text(target.endonym)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7, weight: .bold))
                     }
-                } label: {
-                    Text(target.endonym)
+                    .foregroundStyle(Color.accentColor)
+                    .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help(L("selectiontranslate.panel.changeTarget"))
                 Spacer()
@@ -444,7 +469,7 @@ struct SelectionTranslateBody: View {
                 }
                 Spacer()
             }
-            .controlSize(.small)
+            .buttonStyle(SelectionSecondaryButtonStyle())
         }
         .onAppear {
             if let translatedText { session.primaryText = translatedText }
@@ -518,19 +543,7 @@ struct SelectionAIActionArea: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if action.builtin == .rewrite {
-                Picker("", selection: Binding(
-                    get: { session.tone },
-                    set: { tone in
-                        session.tone = tone
-                        SelectionActionStore.rewriteTone = tone
-                    })) {
-                    ForEach(SelectionRewriteTone.allCases) { tone in
-                        Text(tone.title).tag(tone)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
+                toneSegments
             }
 
             AdaptiveText(text: session.text, size: 12, weight: .regular, maxHeight: 80, color: .secondary)
@@ -557,6 +570,32 @@ struct SelectionAIActionArea: View {
         }
     }
 
+    /// 改写语气：自己画的分段（系统的分段控件在非当前窗口里选中段是灰的，#95）。
+    private var toneSegments: some View {
+        HStack(spacing: 2) {
+            ForEach(SelectionRewriteTone.allCases) { tone in
+                let selected = session.tone == tone
+                Button {
+                    session.tone = tone
+                    SelectionActionStore.rewriteTone = tone
+                } label: {
+                    Text(tone.title)
+                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .frame(maxWidth: .infinity, minHeight: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(selected ? Color.accentColor : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primary.opacity(0.07)))
+    }
+
     @ViewBuilder
     private var resultArea: some View {
         if let outcome {
@@ -579,7 +618,7 @@ struct SelectionAIActionArea: View {
                     self.failure = nil
                     runCount += 1
                 }
-                .controlSize(.small)
+                .buttonStyle(SelectionSecondaryButtonStyle())
             }
         } else if let blocker {
             blockerView(blocker)
@@ -618,7 +657,7 @@ struct SelectionAIActionArea: View {
                         controller.openSettings(tab: AISettingsView.tabID)
                     }
                 }
-                .controlSize(.small)
+                .buttonStyle(SelectionSecondaryButtonStyle())
             case .tooLong:
                 Text(L("selectiontranslate.result.tooLong \(session.text.count) \(SelectionTextBudget.localCharacterLimit(for: session.text, rewrite: action.isRewrite))"))
                     .font(.system(size: 12))
@@ -628,13 +667,12 @@ struct SelectionAIActionArea: View {
                     Button(L("selectiontranslate.result.useCloudOnce")) {
                         routeOverride = .cloud(id)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(SelectionPrimaryButtonStyle())
                 } else {
                     Button(L("selectiontranslate.result.aiSettings")) {
                         controller.openSettings(tab: AISettingsView.tabID)
                     }
-                    .controlSize(.small)
+                    .buttonStyle(SelectionSecondaryButtonStyle())
                 }
             }
         }
@@ -656,6 +694,7 @@ struct SelectionAIActionArea: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
+            .buttonStyle(SelectionSecondaryButtonStyle())
             .help(L("selectiontranslate.result.regenerate"))
             Button {
                 if let text = outcome?.text {
@@ -664,7 +703,9 @@ struct SelectionAIActionArea: View {
             } label: {
                 Image(systemName: "speaker.wave.2")
             }
+            .buttonStyle(SelectionSecondaryButtonStyle())
             .help(L("selectiontranslate.panel.speakTranslation"))
+            // 主按钮自己画：浮层不是当前窗口，系统的 .borderedProminent 不上强调色（#95）。
             if action.isRewrite, session.editTarget != nil {
                 Button {
                     if let text = outcome?.text { controller.copy(text) }
@@ -672,12 +713,13 @@ struct SelectionAIActionArea: View {
                 } label: {
                     Text(copied ? L("selectiontranslate.panel.copied") : L("selectiontranslate.result.copy"))
                 }
+                .buttonStyle(SelectionSecondaryButtonStyle())
                 Button {
                     if let text = outcome?.text { controller.replace(text, session: session) }
                 } label: {
                     Text(L("selectiontranslate.result.replace"))
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(SelectionPrimaryButtonStyle())
                 .help(L("selectiontranslate.result.replaceHelp"))
             } else {
                 Button {
@@ -686,10 +728,9 @@ struct SelectionAIActionArea: View {
                 } label: {
                     Text(copied ? L("selectiontranslate.panel.copied") : L("selectiontranslate.result.copy"))
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(SelectionPrimaryButtonStyle())
             }
         }
-        .controlSize(.small)
     }
 
     /// 页脚的模型名：内置本地 = Qwen3-1.7B，本机大模型 / 云端用各自的名字。

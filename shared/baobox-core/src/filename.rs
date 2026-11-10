@@ -100,10 +100,9 @@ fn truncate_utf8(name: &str, limit: usize) -> String {
 /// 拆成（主名, 扩展名）。没有扩展名时扩展名为空串。
 pub fn split_extension(name: &str) -> (String, String) {
     match name.rfind('.') {
-        Some(index) if index > 0 && index < name.len() - 1 => (
-            name[..index].to_string(),
-            name[index + 1..].to_string(),
-        ),
+        Some(index) if index > 0 && index < name.len() - 1 => {
+            (name[..index].to_string(), name[index + 1..].to_string())
+        }
         _ => (name.to_string(), String::new()),
     }
 }
@@ -200,7 +199,6 @@ impl DateParts {
     }
 }
 
-
 /// 按模板生成文件名主体（不含扩展名）。
 pub fn format_template(template: &str, date: DateParts) -> String {
     let mut out = String::with_capacity(template.len() + 8);
@@ -268,7 +266,6 @@ mod tests {
         let d = DateParts::from_unix(-86_400);
         assert_eq!((d.year, d.month, d.day), (1969, 12, 31));
     }
-
 
     #[test]
     fn path_traversal_is_impossible_on_every_platform() {

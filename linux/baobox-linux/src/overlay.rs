@@ -95,7 +95,9 @@ pub fn run(
         if let Some(outcome) = selection.outcome() {
             break outcome.clone();
         }
-        let event = conn.wait_for_event().map_err(|e| format!("事件循环出错：{e}"))?;
+        let event = conn
+            .wait_for_event()
+            .map_err(|e| format!("事件循环出错：{e}"))?;
         match event {
             Event::Expose(_) => draw(conn, window, gc, screen_rect, &selection, translucent)?,
             Event::MotionNotify(motion) => {

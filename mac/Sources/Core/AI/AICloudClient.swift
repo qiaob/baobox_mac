@@ -5,6 +5,8 @@ enum AICloudError: LocalizedError {
     case notConfigured
     /// 本机的每分钟次数上限到了（没发出去）。
     case rateLimited
+    /// 本机的每天请求上限到了（没发出去，见 `AIUsageMeter`）。
+    case dailyLimit
     case timeout
     case offline(String)
     /// 401 / 403：Key 不对或没权限。
@@ -21,6 +23,7 @@ enum AICloudError: LocalizedError {
         switch self {
         case .notConfigured: return L("ai.error.notConfigured")
         case .rateLimited: return L("ai.error.rateLimited")
+        case .dailyLimit: return L("ai.error.dailyLimit")
         case .timeout: return L("ai.error.timeout")
         case .offline(let detail):
             let base = L("ai.error.offline")
@@ -48,6 +51,13 @@ struct AICloudConfig {
     let accountID: String
 }
 
+/// 一次回复：文字 + 服务方报的 token 数（没报就是 0）。
+struct AICloudCompletion {
+    let text: String
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
 /// 云端 HTTP 客户端：Claude Messages API / OpenAI Chat Completions，一问一答、不流式（流式是 P1）。
 /// 只用 `URLSession` 的 async 接口，不在主线程同步等待；日志里不记 Key、不记内容。
 struct AICloudClient {
@@ -63,7 +73,8 @@ struct AICloudClient {
     }()
 
     /// `system` 可为空；`maxTokens` 已由调用方按用户上限截好。
-    func complete(system: String?, user: String, maxTokens: Int, timeout: TimeInterval) async throws -> String {
+    func complete(system: String?, user: String, maxTokens: Int, timeout: TimeInterval) async throws
+        -> AICloudCompletion {
         switch config.provider.api {
         case .anthropic:
             return try await anthropic(system: system, user: user, maxTokens: maxTokens, timeout: timeout,
@@ -89,7 +100,7 @@ struct AICloudClient {
     /// 模型不认关思考（400 里提到 thinking）→ 去掉 thinking、保留 effort 再发；不认 effort → 都去掉再发（docs/ai-service/DESIGN.md §4.2）。
     /// 采样参数（temperature 等）新版 API 一律不收，不发。
     private func anthropic(system: String?, user: String, maxTokens: Int, timeout: TimeInterval,
-                           tuning: ClaudeTuning) async throws -> String {
+                           tuning: ClaudeTuning) async throws -> AICloudCompletion {
         var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
@@ -141,14 +152,18 @@ struct AICloudClient {
         }.joined()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AICloudError.badResponse }
-        return trimmed
+        // 输入 = 普通 + 写缓存 + 读缓存（我们不用缓存，后两项一般没有）。
+        let usage = object["usage"] as? [String: Any] ?? [:]
+        let input = Self.count(usage["input_tokens"]) + Self.count(usage["cache_creation_input_tokens"])
+            + Self.count(usage["cache_read_input_tokens"])
+        return AICloudCompletion(text: trimmed, inputTokens: input, outputTokens: Self.count(usage["output_tokens"]))
     }
 
     // MARK: - OpenAI 兼容
 
     /// 新一些的 OpenAI 模型只认 `max_completion_tokens`：400 里提到 max_tokens 就换个字段再试一次。
     private func openAI(system: String?, user: String, maxTokens: Int, timeout: TimeInterval,
-                        tokenField: String) async throws -> String {
+                        tokenField: String) async throws -> AICloudCompletion {
         var request = URLRequest(url: config.baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
@@ -182,7 +197,10 @@ struct AICloudClient {
         if (choices.first?["finish_reason"] as? String) == "length" { throw AICloudError.truncated }
         let cleaned = OfflinePrompt.clean(content)
         guard !cleaned.isEmpty else { throw AICloudError.badResponse }
-        return cleaned
+        // 有的兼容服务不回 usage，那就记 0。
+        let usage = object["usage"] as? [String: Any] ?? [:]
+        return AICloudCompletion(text: cleaned, inputTokens: Self.count(usage["prompt_tokens"]),
+                                 outputTokens: Self.count(usage["completion_tokens"]))
     }
 
     // MARK: - 模型列表
@@ -273,6 +291,11 @@ struct AICloudClient {
         case 429: throw AICloudError.throttled
         default: throw AICloudError.http(status, String(errorMessage(data).prefix(200)))
         }
+    }
+
+    /// 回复里的 token 数；缺了或类型不对算 0。
+    private static func count(_ value: Any?) -> Int {
+        max(0, (value as? NSNumber)?.intValue ?? 0)
     }
 
     /// 两家的错误体都是 `{"error": {"message": "..."}}`（Ollama 是 `{"error": "..."}`）。

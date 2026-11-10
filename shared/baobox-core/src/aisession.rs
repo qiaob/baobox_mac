@@ -394,7 +394,10 @@ mod tests {
     #[test]
     fn an_empty_file_produces_no_session_at_all() {
         assert_eq!(parse_file("abc", "", Flavor::ClaudeCode), Parsed::default());
-        assert_eq!(parse_file("abc", "\n\n  \n", Flavor::ClaudeCode).session, None);
+        assert_eq!(
+            parse_file("abc", "\n\n  \n", Flavor::ClaudeCode).session,
+            None
+        );
     }
 
     #[test]
@@ -410,7 +413,9 @@ mod tests {
             "{}\n{CLAUDE_LINE}",
             r#"{"type":"user","timestamp":"2026-08-04T12:00:00Z","cwd":"/home/me/repo","message":{"content":"帮我看看这个 bug"}}"#
         );
-        let session = parse_file("abc", &text, Flavor::ClaudeCode).session.unwrap();
+        let session = parse_file("abc", &text, Flavor::ClaudeCode)
+            .session
+            .unwrap();
         assert_eq!(session.display_title(), "帮我看看这个 bug");
     }
 
@@ -444,7 +449,9 @@ mod tests {
         let text = format!(
             r#"{{"type":"user","timestamp":"2026-08-04T12:00:00Z","cwd":"/x","message":{{"content":"{long}\n第二行"}}}}"#
         );
-        let session = parse_file("abc", &text, Flavor::ClaudeCode).session.unwrap();
+        let session = parse_file("abc", &text, Flavor::ClaudeCode)
+            .session
+            .unwrap();
         let shown = session.display_title();
         assert!(!shown.contains('\n'));
         assert!(shown.chars().count() <= TITLE_CHARS + 1);
@@ -508,8 +515,13 @@ mod tests {
             CLAUDE_LINE,
             r#"{"type":"assistant","timestamp":"2026-08-05T01:00:00Z","message":{"model":"sonnet","usage":{"input_tokens":1}}}"#
         );
-        let session = parse_file("abc", &text, Flavor::ClaudeCode).session.unwrap();
-        assert_eq!(session.updated_at, parse_iso8601("2026-08-05T01:00:00Z").unwrap());
+        let session = parse_file("abc", &text, Flavor::ClaudeCode)
+            .session
+            .unwrap();
+        assert_eq!(
+            session.updated_at,
+            parse_iso8601("2026-08-05T01:00:00Z").unwrap()
+        );
         assert_eq!(session.messages, 2);
     }
 

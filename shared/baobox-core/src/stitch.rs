@@ -253,7 +253,7 @@ mod tests {
         let mut pixels = Vec::with_capacity(width * height);
         for row in 0..height {
             let value = ((base + row) % 256) as u8;
-            pixels.extend(std::iter::repeat(value).take(width));
+            pixels.extend(std::iter::repeat_n(value, width));
         }
         Frame::from_gray(width, height, &pixels).unwrap()
     }

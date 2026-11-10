@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SceneKit
 import simd
 
@@ -12,6 +13,10 @@ import simd
 /// 并按人形骨骼生成程序化动作（docs/desktop-pet/VRM.md）。
 /// 解析全程容错：字段缺失 / 越界只丢掉那一块，不 crash。可以在后台线程调用（只建节点树，不碰正在渲染的场景）。
 enum GLTFLoader {
+    /// 贴图最长边的上限（#93）。宠物平时在屏上约 400 像素高，休息画面放大到最多约 1040 像素；
+    /// VRoid 模型常带 4096 的图集，带 mipmap 一张就占约 85 MB 显存（2048 约 21 MB，1024 约 5 MB）。解码时缩到这么大。
+    static let maxTextureSize = 2048
+
     static func load(contentsOf url: URL) throws -> GLTFModel {
         let file = try Data(contentsOf: url)
         let (json, bin) = try split(file)
@@ -396,6 +401,16 @@ private struct GLTFSceneBuilder {
     let fileURL: URL
     /// 非 nil = VRM：建表情用到的形变目标、材质走卡通光影，最后生成人形动作。
     let vrm: VRMSpec?
+    /// 解码过的贴图（按 glTF image 下标）。好几个材质常共用一张图集，每次都新解码一张 NSImage 的话，
+    /// SceneKit 按对象各传一份进显存：VRoid 模型的 4 张 4096 图集曾被传了 9 份，宠物独占约 1 GB（#93）。
+    private let decoded = GLTFImageCache()
+
+    init(doc: GLTFDocument, reader: GLTFAccessorReader, fileURL: URL, vrm: VRMSpec?) {
+        self.doc = doc
+        self.reader = reader
+        self.fileURL = fileURL
+        self.vrm = vrm
+    }
 
     func build() -> GLTFModel {
         let specs = doc.nodes ?? []
@@ -738,11 +753,41 @@ private struct GLTFSceneBuilder {
         return NSColor(colorSpace: nsSpace, components: &components, count: 4)
     }
 
+    /// 同一张图只解码一次（见 `decoded`），超过 `GLTFLoader.maxTextureSize` 的缩小。
     private func image(forTexture index: Int) -> NSImage? {
         guard let source = doc.textures?[safe: index]?.source, let image = doc.images?[safe: source] else { return nil }
-        if let view = image.bufferView, let data = reader.bytes(view: view) { return NSImage(data: data) }
-        if let uri = image.uri, let data = try? GLTFLoader.loadURI(uri, relativeTo: fileURL) { return NSImage(data: data) }
-        return nil
+        if let cached = decoded.images[source] { return cached }
+        var data: Data?
+        if let view = image.bufferView {
+            data = reader.bytes(view: view)
+        } else if let uri = image.uri {
+            data = try? GLTFLoader.loadURI(uri, relativeTo: fileURL)
+        }
+        guard let data, let result = Self.decodeTexture(data, maxSize: GLTFLoader.maxTextureSize) else { return nil }
+        decoded.images[source] = result
+        return result
+    }
+
+    /// 解码一张贴图，最长边超过 `maxSize` 就按比例缩小（ImageIO 直接解出缩小后的图，不先解出整张）。
+    /// UV 是 0…1 的相对坐标，缩小不影响贴图位置。解不出缩略图时退回原样解码。
+    static func decodeTexture(_ data: Data, maxSize: Int) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return NSImage(data: data)
+        }
+        let width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
+        guard max(width, height) > maxSize else { return NSImage(data: data) }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxSize,
+            kCGImageSourceCreateThumbnailWithTransform: false,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let scaled = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return NSImage(data: data)
+        }
+        return NSImage(cgImage: scaled, size: NSSize(width: scaled.width, height: scaled.height))
     }
 
     // MARK: 动画
@@ -830,4 +875,9 @@ private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
+}
+
+/// `GLTFSceneBuilder` 的贴图缓存：构建器是值类型、方法不可变，缓存放在一个引用对象里。只在一次构建里用，不跨线程。
+private final class GLTFImageCache {
+    var images: [Int: NSImage] = [:]
 }

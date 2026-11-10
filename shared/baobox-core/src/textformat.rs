@@ -173,7 +173,7 @@ pub fn apply(action: &str, text: &str) -> Option<String> {
         "base64.encode" => Some(base64_encode(text.as_bytes())),
         "url.decode" => Some(percent_decode(text)),
         "url.encode" => Some(percent_encode(text)),
-        "time.iso" => timestamp_of(text).map(|s| format_utc(s)),
+        "time.iso" => timestamp_of(text).map(format_utc),
         "time.epoch" => timestamp_of(text).map(|s| s.to_string()),
         "case.upper" => Some(text.to_uppercase()),
         "case.lower" => Some(text.to_lowercase()),
@@ -346,25 +346,23 @@ fn detect_jwt(text: &str) -> Option<Match> {
     if let Some(Json::Str(alg)) = fields.iter().find(|(k, _)| k == "alg").map(|(_, v)| v) {
         rows.push(Row::new("算法", alg.clone()));
     }
-    if let Ok(payload_json) = json::parse(&payload).ok_or(()) {
-        if let Json::Object(claims) = payload_json {
-            for (key, value) in &claims {
-                let text = json_scalar(value);
-                match key.as_str() {
-                    // 三个时间类声明额外翻成人看得懂的时刻
-                    "exp" | "iat" | "nbf" => {
-                        let seconds = text.parse::<i64>().unwrap_or(0);
-                        let readable = format!("{text}（{}）", format_utc(seconds));
-                        let row = Row::new(key, readable);
-                        rows.push(if key == "exp" && seconds > 0 {
-                            // 过期与否交给调用方比对当前时间；这里只标出它是时间
-                            row
-                        } else {
-                            row
-                        });
-                    }
-                    _ => rows.push(Row::new(key, text)),
+    if let Ok(Json::Object(claims)) = json::parse(&payload).ok_or(()) {
+        for (key, value) in &claims {
+            let text = json_scalar(value);
+            match key.as_str() {
+                // 三个时间类声明额外翻成人看得懂的时刻
+                "exp" | "iat" | "nbf" => {
+                    let seconds = text.parse::<i64>().unwrap_or(0);
+                    let readable = format!("{text}（{}）", format_utc(seconds));
+                    let row = Row::new(key, readable);
+                    rows.push(if key == "exp" && seconds > 0 {
+                        // 过期与否交给调用方比对当前时间；这里只标出它是时间
+                        row
+                    } else {
+                        row
+                    });
                 }
+                _ => rows.push(Row::new(key, text)),
             }
         }
     }
@@ -439,7 +437,11 @@ fn detect_url(text: &str) -> Option<Match> {
         return None;
     }
     let (scheme, rest) = text.split_once("://")?;
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+') {
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+')
+    {
         return None;
     }
     let (authority, path_and_query) = match rest.find('/') {
@@ -495,7 +497,11 @@ fn timestamp_of(text: &str) -> Option<i64> {
 
 fn detect_timestamp(text: &str) -> Option<Match> {
     let seconds = timestamp_of(text)?;
-    let unit = if text.trim().len() == 13 { "毫秒" } else { "秒" };
+    let unit = if text.trim().len() == 13 {
+        "毫秒"
+    } else {
+        "秒"
+    };
     Some(Match {
         id: "timestamp",
         badge: "时间戳".to_string(),
@@ -541,7 +547,7 @@ pub fn format_utc(seconds: i64) -> String {
 
 fn detect_base64(text: &str) -> Option<Match> {
     // 太短的「Base64」几乎都是误认：四个字符的普通单词一抓一大把
-    if text.len() < 16 || text.len() % 4 != 0 {
+    if text.len() < 16 || !text.len().is_multiple_of(4) {
         return None;
     }
     if !text
@@ -726,10 +732,7 @@ fn common_actions(text: &str) -> Match {
 }
 
 fn trim_lines(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join("\n")
+    text.lines().map(str::trim).collect::<Vec<_>>().join("\n")
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -841,9 +844,16 @@ mod tests {
     fn jwt_shows_its_claims_and_turns_epochs_into_readable_times() {
         let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiZXhwIjoxNzAwMDAwMDAwfQ.abc";
         let m = detect(jwt).into_iter().find(|m| m.id == "jwt").unwrap();
-        assert!(m.rows.iter().any(|r| r.label == "算法" && r.value == "HS256"));
+        assert!(m
+            .rows
+            .iter()
+            .any(|r| r.label == "算法" && r.value == "HS256"));
         let exp = m.rows.iter().find(|r| r.label == "exp").unwrap();
-        assert!(exp.value.contains("2023-11-14"), "exp 应当同时给出可读时刻：{}", exp.value);
+        assert!(
+            exp.value.contains("2023-11-14"),
+            "exp 应当同时给出可读时刻：{}",
+            exp.value
+        );
         // JWT 是唯一一个替换预览的场合 —— 原文人根本读不了
         assert!(m.rendered.is_some());
     }
@@ -859,7 +869,10 @@ mod tests {
     fn base64_does_not_replace_the_preview() {
         // 曾经自动渲染成解码结果，导致预览显示的和粘出去的不是一个东西
         let text = base64_encode(b"hello world, this is long enough");
-        let m = detect(&text).into_iter().find(|m| m.id == "base64").unwrap();
+        let m = detect(&text)
+            .into_iter()
+            .find(|m| m.id == "base64")
+            .unwrap();
         assert!(m.rendered.is_none(), "解码是显式动作，不能自动替换预览");
         assert_eq!(
             apply("base64.decode", &text).unwrap(),
@@ -900,8 +913,14 @@ mod tests {
             .into_iter()
             .find(|m| m.id == "url")
             .unwrap();
-        assert!(m.rows.iter().any(|r| r.label == "主机" && r.value == "example.com"));
-        assert!(m.rows.iter().any(|r| r.label == "路径" && r.value == "/a/b"));
+        assert!(m
+            .rows
+            .iter()
+            .any(|r| r.label == "主机" && r.value == "example.com"));
+        assert!(m
+            .rows
+            .iter()
+            .any(|r| r.label == "路径" && r.value == "/a/b"));
         assert!(
             m.rows.iter().any(|r| r.label == "q" && r.value == "中文"),
             "query 的值应当解码后显示"
@@ -962,7 +981,10 @@ mod tests {
     #[test]
     fn unescaping_restores_real_characters_and_leaves_unknown_escapes_alone() {
         assert_eq!(apply("text.unescape", r"a\nb\tc").unwrap(), "a\nb\tc");
-        assert_eq!(apply("text.unescape", r#"say \"hi\""#).unwrap(), "say \"hi\"");
+        assert_eq!(
+            apply("text.unescape", r#"say \"hi\""#).unwrap(),
+            "say \"hi\""
+        );
         assert_eq!(apply("text.unescape", r"中文").unwrap(), "中文");
         // 认不出的转义原样留着，别把内容改坏
         assert_eq!(apply("text.unescape", r"\q").unwrap(), r"\q");
@@ -993,7 +1015,10 @@ mod tests {
         assert_eq!(percent_decode("a+b"), "a b");
         assert_eq!(percent_decode_path("a+b"), "a+b");
         // 百分号那部分两边一样
-        assert_eq!(percent_decode_path("/home/me/my%20file.txt"), "/home/me/my file.txt");
+        assert_eq!(
+            percent_decode_path("/home/me/my%20file.txt"),
+            "/home/me/my file.txt"
+        );
         assert_eq!(percent_decode_path("%E4%B8%AD"), "中");
     }
 

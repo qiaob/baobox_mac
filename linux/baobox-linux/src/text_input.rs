@@ -150,10 +150,9 @@ fn apply_font_size(entry: &gtk::Entry, size: f64) {
     if provider.load_from_data(css.as_bytes()).is_err() {
         return;
     }
-    entry.style_context().add_provider(
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    entry
+        .style_context()
+        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
 #[cfg(test)]
@@ -164,17 +163,16 @@ mod tests {
     fn an_empty_commit_is_still_a_commit_not_a_cancel() {
         // 「打了又删光再按⏎」与「按 Esc」是两件事：前者是空文字（调用方丢弃），
         // 后者要保留原有内容。混起来的话编辑已有文字时会莫名其妙
-        assert_ne!(
-            Outcome::Committed(String::new()),
-            Outcome::Cancelled
-        );
+        assert_ne!(Outcome::Committed(String::new()), Outcome::Cancelled);
     }
 
     #[test]
     fn the_font_size_never_goes_below_something_readable() {
         // 线宽可以细到 1，字号跟着算会小到看不见
         for width in [0.0, 1.0, 4.0, 40.0] {
-            let size = (width * baobox_core::editor::TEXT_SIZE_FACTOR).round().max(8.0);
+            let size = (width * baobox_core::editor::TEXT_SIZE_FACTOR)
+                .round()
+                .max(8.0);
             assert!(size >= 8.0, "线宽 {width} 算出来的字号太小");
         }
     }

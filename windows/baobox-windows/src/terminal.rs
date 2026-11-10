@@ -66,7 +66,10 @@ mod tests {
     #[test]
     fn cmd_is_the_last_candidate_because_it_is_always_there() {
         assert_eq!(CANDIDATES.last(), Some(&"cmd.exe"));
-        assert!(CANDIDATES.contains(&"wt.exe"), "有 Windows Terminal 时该优先用它");
+        assert!(
+            CANDIDATES.contains(&"wt.exe"),
+            "有 Windows Terminal 时该优先用它"
+        );
     }
 
     #[test]

@@ -21,8 +21,8 @@
 //! 要 TSV（带每个词的坐标）再用 `baobox_core::ocr::assemble` 拼，
 //! 三个平台的取字结果才会是同一种排版。
 
-use baobox_core::ocr::{assemble, TextBlock};
 use baobox_core::geometry::Rect;
+use baobox_core::ocr::{assemble, TextBlock};
 use std::path::Path;
 use std::process::Command;
 
@@ -58,7 +58,9 @@ pub fn recognize(png: &Path, langs: &str) -> Result<String, String> {
         }
         return Err(format!("tesseract 识别失败：{}", detail.trim()));
     }
-    Ok(assemble(&parse_tsv(&String::from_utf8_lossy(&output.stdout))))
+    Ok(assemble(&parse_tsv(&String::from_utf8_lossy(
+        &output.stdout,
+    ))))
 }
 
 /// tesseract 没装时给一句能照做的话。

@@ -215,7 +215,10 @@ mod tests {
         assert_eq!(KeyCombo::parse("F5").unwrap().key, KeyCode::F(5));
         assert_eq!(KeyCombo::parse("f12").unwrap().key, KeyCode::F(12));
         assert_eq!(KeyCombo::parse("Ctrl+Space").unwrap().key, KeyCode::Space);
-        assert_eq!(KeyCombo::parse("PrintScreen").unwrap().key, KeyCode::PrintScreen);
+        assert_eq!(
+            KeyCombo::parse("PrintScreen").unwrap().key,
+            KeyCode::PrintScreen
+        );
         assert_eq!(KeyCombo::parse("prtsc").unwrap().key, KeyCode::PrintScreen);
     }
 
@@ -223,7 +226,9 @@ mod tests {
     fn rejects_malformed_input_with_a_useful_message() {
         assert!(KeyCombo::parse("").is_err());
         assert!(KeyCombo::parse("Ctrl+").unwrap_err().contains("缺少主键"));
-        assert!(KeyCombo::parse("Ctrl+S+A").unwrap_err().contains("多个主键"));
+        assert!(KeyCombo::parse("Ctrl+S+A")
+            .unwrap_err()
+            .contains("多个主键"));
         assert!(KeyCombo::parse("F99").unwrap_err().contains("F1–F24"));
         assert!(KeyCombo::parse("Ctrl+抓").is_err());
     }

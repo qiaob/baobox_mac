@@ -151,6 +151,8 @@
       } catch (e) {
         log(e);
         fail('error');
+        // 告诉手机这边出错了，别让它等满三分钟（#102）。
+        if (sig && offer) sig.send({ t: 'deny', re: offer.oid, why: 'error' }).catch(function () { /* noop */ });
       }
     },
 
@@ -166,6 +168,18 @@
 
     endFile: function (id) {
       link.sendJSON({ t: 'end', id: id });
+      return true;
+    },
+
+    limits: function (file, room) {
+      // 告诉手机现在的上限（#99）：它发之前先比一下，超了直接在手机上说清楚。
+      try { if (link) link.sendJSON({ t: 'limits', file: Number(file) || 0, room: Number(room) || 0 }); } catch (e) { /* noop */ }
+      return true;
+    },
+
+    reject: function (id, why, limit) {
+      // 拒收手机正在发的文件（超过上限，#99）：手机收到后停下并显示原因。
+      try { if (link) link.sendJSON({ t: 'reject', id: id, why: String(why), limit: Number(limit) || 0 }); } catch (e) { /* noop */ }
       return true;
     },
 

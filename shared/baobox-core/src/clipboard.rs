@@ -196,7 +196,11 @@ impl Store {
     pub fn new(limit: usize) -> Self {
         Self {
             items: Vec::new(),
-            limit: if limit == 0 { Self::DEFAULT_LIMIT } else { limit },
+            limit: if limit == 0 {
+                Self::DEFAULT_LIMIT
+            } else {
+                limit
+            },
         }
     }
 
@@ -259,8 +263,9 @@ impl Store {
 
     /// 清空。**收藏与片段留着** —— 用户点「清空」想清的是历史，不是自己攒的东西。
     pub fn clear(&mut self) -> Vec<Item> {
-        let (kept, dropped): (Vec<Item>, Vec<Item>) =
-            std::mem::take(&mut self.items).into_iter().partition(|e| e.pinned);
+        let (kept, dropped): (Vec<Item>, Vec<Item>) = std::mem::take(&mut self.items)
+            .into_iter()
+            .partition(|e| e.pinned);
         self.items = kept;
         dropped
     }
@@ -289,7 +294,11 @@ impl Store {
 
     /// 调整上限，返回因缩小上限被淘汰的条目。
     pub fn set_limit(&mut self, limit: usize) -> Vec<Item> {
-        self.limit = if limit == 0 { Self::DEFAULT_LIMIT } else { limit };
+        self.limit = if limit == 0 {
+            Self::DEFAULT_LIMIT
+        } else {
+            limit
+        };
         self.enforce_limit()
     }
 
@@ -535,13 +544,22 @@ mod tests {
         for n in 0..10 {
             store.add(item(&format!("n{n}"), &format!("普通 {n}"), 200 + n));
         }
-        assert!(store.items().iter().any(|e| e.id == "keep"), "超限淘汰不该动收藏");
+        assert!(
+            store.items().iter().any(|e| e.id == "keep"),
+            "超限淘汰不该动收藏"
+        );
 
         store.prune_expired(1, 10_000_000);
-        assert!(store.items().iter().any(|e| e.id == "keep"), "过期清理不该动收藏");
+        assert!(
+            store.items().iter().any(|e| e.id == "keep"),
+            "过期清理不该动收藏"
+        );
 
         store.clear();
-        assert!(store.items().iter().any(|e| e.id == "keep"), "清空不该动收藏");
+        assert!(
+            store.items().iter().any(|e| e.id == "keep"),
+            "清空不该动收藏"
+        );
         assert_eq!(store.items().len(), 1);
     }
 
@@ -585,7 +603,10 @@ mod tests {
         assert_eq!(Item::text("1", "https://example.com", 0).kind, Kind::Link);
         assert_eq!(Item::text("2", "http://a.b/c?d=e", 0).kind, Kind::Link);
         // 带空格的不是链接，句子里提到网址也不该被归成链接
-        assert_eq!(Item::text("3", "见 https://example.com", 0).kind, Kind::Text);
+        assert_eq!(
+            Item::text("3", "见 https://example.com", 0).kind,
+            Kind::Text
+        );
         assert_eq!(Item::text("4", "note: 见下", 0).kind, Kind::Text);
         assert_eq!(Item::text("5", "ftp://x", 0).kind, Kind::Text);
     }
@@ -612,8 +633,16 @@ mod tests {
         secret.title = "密码管理器".into();
         store.add(secret);
 
-        assert_eq!(store.search("hunter", Filter::All).len(), 0, "不能按内容搜到");
-        assert_eq!(store.search("密码管理器", Filter::All).len(), 1, "标题仍可搜");
+        assert_eq!(
+            store.search("hunter", Filter::All).len(),
+            0,
+            "不能按内容搜到"
+        );
+        assert_eq!(
+            store.search("密码管理器", Filter::All).len(),
+            1,
+            "标题仍可搜"
+        );
     }
 
     #[test]
@@ -637,7 +666,11 @@ mod tests {
         assert_eq!(store.search("", Filter::Text).len(), 3);
         assert_eq!(store.search("", Filter::Link).len(), 1);
         assert_eq!(store.search("", Filter::Pinned).len(), 2, "片段也是收藏");
-        assert_eq!(store.search("", Filter::Snippet).len(), 1, "但只有一条是片段");
+        assert_eq!(
+            store.search("", Filter::Snippet).len(),
+            1,
+            "但只有一条是片段"
+        );
     }
 
     #[test]
@@ -692,7 +725,11 @@ mod tests {
     fn an_index_survives_a_round_trip_with_multiline_content() {
         // 剪贴板里什么都有：多行日志、带制表符的表格、Windows 的 \r\n
         let mut store = Store::new(10);
-        let mut messy = item("a", "第一行\n第二行\t带制表符\r\n还有反斜杠 \\ 与引号 \"", 100);
+        let mut messy = item(
+            "a",
+            "第一行\n第二行\t带制表符\r\n还有反斜杠 \\ 与引号 \"",
+            100,
+        );
         messy.source = "某个\t程序".into();
         store.add(messy.clone());
         store.add_snippet("s", "标\n题", "内容", "kw", 200);

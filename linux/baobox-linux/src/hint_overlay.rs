@@ -145,9 +145,9 @@ fn grab_keyboard(window: &gtk::Window) {
 fn draw(cr: &gtk::cairo::Context, session: &Session) {
     // 整屏压暗一点点：标签才看得清，而底下的内容还认得出
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.25);
-    let _ = cr.set_operator(gtk::cairo::Operator::Source);
+    cr.set_operator(gtk::cairo::Operator::Source);
     let _ = cr.paint();
-    let _ = cr.set_operator(gtk::cairo::Operator::Over);
+    cr.set_operator(gtk::cairo::Operator::Over);
 
     cr.select_font_face(
         "monospace",
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn the_label_padding_leaves_the_text_readable() {
-        assert!(PAD > 0.0);
-        assert!(FONT_SIZE >= 10.0, "太小的话密密麻麻一片看不清");
+        const { assert!(PAD > 0.0) };
+        const { assert!(FONT_SIZE >= 10.0, "太小的话密密麻麻一片看不清") };
     }
 }

@@ -147,12 +147,19 @@ final class ClipboardMonitor {
         // 持续堆积历史条目和磁盘 PNG。
         let filename = Self.sha256Hex(png) + ".png"
         let dir = ClipboardStore.imagesDir
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(filename)
         // 同内容已落盘则直接复用，不重复写。
         if FileManager.default.fileExists(atPath: url.path) { return filename }
         // 文件名仍取**明文** PNG 的哈希（内容寻址、去重靠它），落盘的是密文。
-        return ClipboardCrypto.write(png, to: url) ? filename : nil
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try ClipboardCrypto.write(png, to: url)
+            return filename
+        } catch {
+            // 没存上就不记这条（同以前），但要让用户知道（#101）。
+            StorageWriteFailure.report(L("storage.what.clipboardImages"), reason: error.localizedDescription)
+            return nil
+        }
     }
 
     private static func sha256Hex(_ data: Data) -> String {

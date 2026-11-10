@@ -150,9 +150,15 @@ mod tests {
         let roaming = PathBuf::from("C:/Users/me/AppData/Roaming");
         let expected = roaming.join("Baobox").join("screenshot");
 
-        assert_eq!(dir_from(Some("C:/Users/me/AppData/Roaming"), None), Some(expected.clone()));
+        assert_eq!(
+            dir_from(Some("C:/Users/me/AppData/Roaming"), None),
+            Some(expected.clone())
+        );
         // 空字符串不该被当成有效路径，否则会拼出一个根目录下的路径
-        assert_eq!(dir_from(Some(""), Some("C:/Users/me")), Some(expected.clone()));
+        assert_eq!(
+            dir_from(Some(""), Some("C:/Users/me")),
+            Some(expected.clone())
+        );
         assert_eq!(dir_from(None, Some("C:/Users/me")), Some(expected));
         // 两个都没有就只能放弃
         assert_eq!(dir_from(None, None), None);
@@ -165,7 +171,9 @@ mod tests {
         let config = config_path_from(&history).unwrap();
         assert_eq!(
             config,
-            PathBuf::from("C:/roaming").join("Baobox").join("config.ini")
+            PathBuf::from("C:/roaming")
+                .join("Baobox")
+                .join("config.ini")
         );
         assert!(history.starts_with(config.parent().unwrap()));
     }

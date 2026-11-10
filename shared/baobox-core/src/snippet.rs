@@ -110,7 +110,11 @@ impl Expander {
 
         for keyword in candidates {
             let trigger = format!("{}{}", self.prefix, keyword);
-            if self.buffer.to_lowercase().ends_with(&trigger.to_lowercase()) {
+            if self
+                .buffer
+                .to_lowercase()
+                .ends_with(&trigger.to_lowercase())
+            {
                 let length = trigger.chars().count();
                 return Some(Expansion {
                     keyword: keyword.to_string(),

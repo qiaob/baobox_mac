@@ -43,7 +43,12 @@ pub fn recognize(rgba: &[u8], width: u32, height: u32) -> Result<String, String>
 }
 
 #[cfg(windows)]
-pub fn recognize_language(rgba: &[u8], width: u32, height: u32, language: &str) -> Result<String, String> {
+pub fn recognize_language(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    language: &str,
+) -> Result<String, String> {
     check_size(width, height)?;
 
     let bgra = to_bgra(rgba);
@@ -69,7 +74,8 @@ pub fn recognize_language(rgba: &[u8], width: u32, height: u32, language: &str) 
     } else {
         windows::Globalization::Language::CreateLanguage(&windows::core::HSTRING::from(language))
             .and_then(|language| OcrEngine::TryCreateFromLanguage(&language))
-    }.map_err(|e| {
+    }
+    .map_err(|e| {
         format!(
             "系统里没有可用的 OCR 语言包（{e}）。\
              在「设置 → 时间和语言 → 语言和区域」里给中文或英文加上「文本识别」可选功能。"

@@ -307,12 +307,16 @@ final class ClipboardStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
+    /// 写失败（磁盘满、没权限）报给用户一次、记 fault 日志；内存里的历史不动，下次保存再试（#101）。
     private func saveNow() {
-        try? FileManager.default.createDirectory(at: Self.baseDir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(items) else { return }
-        ClipboardCrypto.write(data, to: Self.storeFile)
+        do {
+            try FileManager.default.createDirectory(at: Self.baseDir, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try ClipboardCrypto.write(try encoder.encode(items), to: Self.storeFile)
+        } catch {
+            StorageWriteFailure.report(L("storage.what.clipboard"), reason: error.localizedDescription)
+        }
     }
 
     private func load() {

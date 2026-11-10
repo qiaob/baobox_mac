@@ -191,71 +191,22 @@ final class DictationAudioPipe: @unchecked Sendable {
 // MARK: - 麦克风
 
 /// 默认输入设备，经 AVAudioEngine 的 inputNode tap 取 PCM。每次听写新建一个，结束即停（麦克风指示灯随之熄灭）。
+/// 换设备后的重启见 `MicrophoneTap`（与实时翻译共用）。
 @MainActor
 final class DictationMicrophone {
-    private let engine = AVAudioEngine()
-    private let pipe: DictationAudioPipe
-    private var tapInstalled = false
-    private var configObserver: NSObjectProtocol?
+    private let tap: MicrophoneTap
 
     init(pipe: DictationAudioPipe) {
-        self.pipe = pipe
+        tap = MicrophoneTap(log: DictationLog.recognition, noDeviceError: DictationError.noInputDevice,
+                            onBuffer: Self.makeTap(pipe: pipe))
     }
 
     func start() throws {
-        try installTapAndStart()
-        // 换输入设备 / 插拔耳机：系统停掉引擎、只发这个通知，不接住麦克风就此静音（同实时翻译）。
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.recoverFromConfigurationChange()
-            }
-        }
+        try tap.start()
     }
 
     func stop() {
-        if let configObserver {
-            NotificationCenter.default.removeObserver(configObserver)
-        }
-        configObserver = nil
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        engine.stop()
-    }
-
-    private func installTapAndStart() throws {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw DictationError.noInputDevice
-        }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.makeTap(pipe: pipe))
-        tapInstalled = true
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            stop()
-            throw error
-        }
-    }
-
-    private func recoverFromConfigurationChange() {
-        guard configObserver != nil else { return }
-        DictationLog.recognition.error("audio engine configuration changed, restarting microphone input")
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        engine.stop()
-        do {
-            try installTapAndStart()
-        } catch {
-            DictationLog.recognition.error("microphone restart failed: \(error.localizedDescription, privacy: .public)")
-        }
+        tap.stop()
     }
 
     /// tap 在音频线程回调：在 nonisolated 上下文里造闭包，免得被推断成主线程隔离。

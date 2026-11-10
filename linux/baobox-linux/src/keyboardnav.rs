@@ -106,7 +106,12 @@ fn active_window(
     apps: &[(String, OwnedObjectPath)],
 ) -> Option<(String, String)> {
     for (bus, path) in apps {
-        let Ok(app) = Proxy::new(conn, bus.as_str(), path.as_str(), "org.a11y.atspi.Accessible") else {
+        let Ok(app) = Proxy::new(
+            conn,
+            bus.as_str(),
+            path.as_str(),
+            "org.a11y.atspi.Accessible",
+        ) else {
             continue;
         };
         let Ok(windows) = app.call::<_, _, Vec<(String, OwnedObjectPath)>>("GetChildren", &())
@@ -114,9 +119,12 @@ fn active_window(
             continue;
         };
         for (window_bus, window_path) in windows {
-            let Ok(window) =
-                Proxy::new(conn, window_bus.as_str(), window_path.as_str(), "org.a11y.atspi.Accessible")
-            else {
+            let Ok(window) = Proxy::new(
+                conn,
+                window_bus.as_str(),
+                window_path.as_str(),
+                "org.a11y.atspi.Accessible",
+            ) else {
                 continue;
             };
             let Ok(states) = window.call::<_, _, Vec<u32>>("GetState", &()) else {
@@ -134,7 +142,10 @@ fn active_window(
 ///
 /// 低 32 位在 `states[0]`。数组短了就是没有 —— 不能索引越界。
 pub fn is_active(states: &[u32]) -> bool {
-    states.first().map(|low| low & (1 << STATE_ACTIVE) != 0).unwrap_or(false)
+    states
+        .first()
+        .map(|low| low & (1 << STATE_ACTIVE) != 0)
+        .unwrap_or(false)
 }
 
 /// 无障碍没开时说什么。
@@ -150,13 +161,8 @@ pub const NOT_ENABLED: &str = "读不到界面元素。多半是无障碍支持�
 /// 它是一根**独立**的总线，地址要先向会话总线要。
 fn accessibility_bus() -> Result<Connection, String> {
     let session = Connection::session().map_err(|e| format!("连不上会话总线：{e}"))?;
-    let bus = Proxy::new(
-        &session,
-        "org.a11y.Bus",
-        "/org/a11y/bus",
-        "org.a11y.Bus",
-    )
-    .map_err(|e| format!("找不到无障碍总线服务：{e}"))?;
+    let bus = Proxy::new(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")
+        .map_err(|e| format!("找不到无障碍总线服务：{e}"))?;
     let address: String = bus
         .call("GetAddress", &())
         .map_err(|_| NOT_ENABLED.to_string())?;
@@ -177,7 +183,7 @@ fn collect(conn: &Connection, bus: &str, path: &str, depth: usize, out: &mut Vec
         return;
     };
     // 看不见的整棵子树都不用下探 —— 那是最省时间的一刀
-    if let Some(role) = node.call::<_, _, u32>("GetRole", &()).ok() {
+    if let Ok(role) = node.call::<_, _, u32>("GetRole", &()) {
         if CLICKABLE_ROLES.contains(&role) {
             if let Some(target) = target_of(conn, bus, path) {
                 out.push(target);
@@ -226,13 +232,27 @@ fn target_of(conn: &Connection, bus: &str, path: &str) -> Option<Target> {
 ///
 /// 用合成的鼠标事件而不是 AT-SPI 的 `Action` 接口：很多程序只实现了
 /// 「报告」没实现「执行」，调了毫无反应且不报错。
-pub fn click(conn: &x11rb::rust_connection::RustConnection, root: u32, x: f64, y: f64) -> Result<(), String> {
+pub fn click(
+    conn: &x11rb::rust_connection::RustConnection,
+    root: u32,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::ConnectionExt as _;
     use x11rb::protocol::xtest::ConnectionExt as _;
 
-    conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x.round() as i16, y.round() as i16)
-        .map_err(|e| format!("挪不动指针：{e}"))?;
+    conn.warp_pointer(
+        x11rb::NONE,
+        root,
+        0,
+        0,
+        0,
+        0,
+        x.round() as i16,
+        y.round() as i16,
+    )
+    .map_err(|e| format!("挪不动指针：{e}"))?;
     // 4 = ButtonPress，5 = ButtonRelease；按钮 1 是左键
     conn.xtest_fake_input(4, 1, 0, x11rb::NONE, 0, 0, 0)
         .map_err(|e| format!("合成点击失败（XTEST 可用吗？）：{e}"))?;
@@ -261,8 +281,14 @@ mod tests {
     fn the_hint_tells_the_user_exactly_what_to_run() {
         // 「这个窗口里没有可点的东西」会让用户以为是自己找错了地方
         assert!(NOT_ENABLED.contains("无障碍"));
-        assert!(NOT_ENABLED.contains("toolkit-accessibility"), "要给能照做的命令");
-        assert!(NOT_ENABLED.contains("QT_ACCESSIBILITY"), "Qt 程序也要覆盖到");
+        assert!(
+            NOT_ENABLED.contains("toolkit-accessibility"),
+            "要给能照做的命令"
+        );
+        assert!(
+            NOT_ENABLED.contains("QT_ACCESSIBILITY"),
+            "Qt 程序也要覆盖到"
+        );
     }
 
     #[test]
@@ -278,8 +304,7 @@ mod tests {
     #[test]
     fn the_depth_limit_keeps_a_deep_tree_from_taking_forever() {
         // 每下一层都是一轮 DBus 往返，Electron 的树能有几十层
-        assert!(MAX_DEPTH >= 8);
-        assert!(MAX_DEPTH <= 20);
+        const { assert!(MAX_DEPTH >= 8) };
+        const { assert!(MAX_DEPTH <= 20) };
     }
-
 }

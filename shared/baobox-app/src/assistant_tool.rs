@@ -146,11 +146,7 @@ impl AssistantTool {
 
     /// 当前的 5 小时窗口。
     fn five_hour(&self) -> Option<Window> {
-        aiusage::last_active_block(
-            &self.snapshot.entries,
-            aiusage::FIVE_HOUR,
-            now_seconds(),
-        )
+        aiusage::last_active_block(&self.snapshot.entries, aiusage::FIVE_HOUR, now_seconds())
     }
 
     /// 当前的周窗口。固定锚点与滚动块是两条路。
@@ -236,7 +232,9 @@ impl ToolModule for AssistantTool {
     fn menu_items(&self) -> Vec<MenuItem> {
         // 只读内存里的快照，零磁盘 IO
         if !self.installed {
-            return vec![MenuItem::disabled(&assistant::not_installed_hint(self.flavor))];
+            return vec![MenuItem::disabled(&assistant::not_installed_hint(
+                self.flavor,
+            ))];
         }
         let mut items = vec![
             MenuItem::disabled(&self.window_line(
@@ -321,10 +319,7 @@ impl ToolModule for AssistantTool {
             }
         }
         // 到点了再扫一遍
-        if self.installed
-            && !self.scanning
-            && now_seconds() - self.scanned_at >= RESCAN_SECONDS
-        {
+        if self.installed && !self.scanning && now_seconds() - self.scanned_at >= RESCAN_SECONDS {
             self.start_scan();
         }
         changed
@@ -371,7 +366,10 @@ impl AssistantTool {
             ("按模型", aiusage::GroupBy::Model),
         ] {
             out.push_str(&format!("\n{title}\n"));
-            for bucket in aiusage::report(&self.snapshot.entries, group).iter().take(10) {
+            for bucket in aiusage::report(&self.snapshot.entries, group)
+                .iter()
+                .take(10)
+            {
                 out.push_str(&format!(
                     "  {:<28} {:>8}  ${:.2}{}\n",
                     bucket.label,
@@ -465,7 +463,10 @@ mod tests {
     #[test]
     fn refreshing_a_tool_that_is_not_installed_explains_instead_of_pretending() {
         let mut t = tool(Flavor::ClaudeCode);
-        assert!(t.perform("claudecode.refresh").unwrap_err().contains(".claude"));
+        assert!(t
+            .perform("claudecode.refresh")
+            .unwrap_err()
+            .contains(".claude"));
     }
 
     #[test]
@@ -502,7 +503,9 @@ mod tests {
             model_id: "还没发布的模型".into(),
             project: "p".into(),
         }];
-        assert!(t.window_line("5 小时", t.five_hour().as_ref(), 0).contains("+"));
+        assert!(t
+            .window_line("5 小时", t.five_hour().as_ref(), 0)
+            .contains("+"));
     }
 
     #[test]
@@ -549,7 +552,7 @@ mod tests {
 
     #[test]
     fn the_rescan_interval_is_slow_enough_not_to_keep_the_disk_spinning() {
-        assert!(RESCAN_SECONDS >= 30);
-        assert!(RESCAN_SECONDS <= 600);
+        const { assert!(RESCAN_SECONDS >= 30) };
+        const { assert!(RESCAN_SECONDS <= 600) };
     }
 }

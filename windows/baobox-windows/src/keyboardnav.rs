@@ -23,16 +23,16 @@
 #![cfg(windows)]
 
 use baobox_core::hints::Target;
+use windows::core::VARIANT;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
-use windows::core::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
-    TreeScope_Descendants, UIA_ButtonControlTypeId,
-    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_EditControlTypeId,
-    UIA_HyperlinkControlTypeId, UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId,
-    UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TreeItemControlTypeId,
+    TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
+    UIA_ComboBoxControlTypeId, UIA_EditControlTypeId, UIA_HyperlinkControlTypeId,
+    UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId, UIA_RadioButtonControlTypeId,
+    UIA_TabItemControlTypeId, UIA_TreeItemControlTypeId,
 };
 
 /// 视为「可点」的控件类型。
@@ -244,13 +244,13 @@ mod tests {
     #[test]
     fn the_target_cap_keeps_labels_short_enough_to_be_worth_it() {
         // 超过这个数标签会长到三四个字符，找一个的时间早超过伸手够鼠标了
-        assert!(MAX_TARGETS >= 50);
-        assert!(MAX_TARGETS <= 500);
+        const { assert!(MAX_TARGETS >= 50) };
+        const { assert!(MAX_TARGETS <= 500) };
     }
 
     #[test]
     fn tiny_elements_are_skipped_because_they_are_usually_separators() {
-        assert!(MIN_SIZE > 1.0);
-        assert!(MIN_SIZE < 20.0);
+        const { assert!(MIN_SIZE > 1.0) };
+        const { assert!(MIN_SIZE < 20.0) };
     }
 }

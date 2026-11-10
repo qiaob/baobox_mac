@@ -448,18 +448,21 @@ struct BubbleCard: View {
         case "meeting": return "video.fill"
         case "digest": return "tray.full.fill"
         case "pet": return "pawprint.fill"
+        case "ai": return "sparkles"
         default: return "bell.fill"
         }
     }
 
     private var sourceName: String {
         switch notification.source {
+        case "storage": return "Baobox"
         case "claudecode": return "Claude Code"
         case "codex": return "Codex"
         case "livetranslate": return L("pet.source.livetranslate")
         case "meeting": return L("pet.source.meeting")
         case "digest": return L("pet.source.digest")
         case "pet": return L("pet.name")
+        case "ai": return "AI"
         default: return notification.source
         }
     }

@@ -51,6 +51,8 @@
   .empty { color: var(--sub); font-size: 14px; }
   .note { font-size: 13px; color: var(--warn); background: var(--warn-bg); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
   .center { text-align: center; padding: 28px 16px; }
+  .code { margin-top: 14px; font-size: 13px; color: var(--sub, #888); }
+  .code b { display: block; margin-top: 4px; font-size: 30px; letter-spacing: 6px; font-variant-numeric: tabular-nums; color: inherit; }
   .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%;
     margin: 0 auto 14px; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -80,6 +82,7 @@
   <section id="wait" class="card center">
     <div class="spinner"></div>
     <div id="wait-text"></div>
+    <div id="wait-code" class="code hidden"></div>
   </section>
 
   <section id="error" class="card hidden">

@@ -117,6 +117,13 @@
     第一拍就被判成卡死、重启识别器，刚说的头几个字跟着被扔掉（2026-11-05 用户「选中文偶尔识别不到」，日志里每次长停顿后
     都有一次 streak 1 重启）。
 - 麦克风：监听 `AVAudioEngineConfigurationChange`（换设备 / 耳机切模式），自动重新挂 tap 重启引擎。
+  会议 / 字幕与听写共用 `Core/MicrophoneTap.swift`。2026-11-10 开着会议连上蓝牙耳机，整个 App 崩溃：
+  通知比系统选好新麦克风早 0.12 秒，旧代码立刻按旧设备的格式（48 kHz）重新挂 tap，蓝牙耳机通话模式是 16 kHz，
+  AVFAudio 抛出 Objective-C 异常 `format.sampleRate == hwFormat.sampleRate`，Swift 接不住。现在的做法：
+  - 通知一来先拆掉引擎，0.5 秒后再重启；起不来隔 1 / 2 / 4 秒再试，都不行就停着；
+  - 每次重启换一个新的 `AVAudioEngine`，按 `inputNode.inputFormat`（设备此刻的实际格式）挂 tap，不用会过时的 `outputFormat`；
+  - 挂 tap、prepare、start 包在 `BBXObjC.catchException` 里（项目里唯一的 Objective-C，`Core/ObjC/`），异常转成错误，
+    宁可这一次没接上也不崩。
 - 诊断日志：`subsystem == "com.baobox.app"`，category `livetranslate.recognition` / `livetranslate.audio` /
   `livetranslate.transcript`。单语言识别器每段结束记一行「segment N done (pause / max length / error … / watchdog restart):
   K results, first text X.Xs, Ns」；朗读暂停识别时记「read-aloud paused recognition for X.Xs」；运行中每 10 秒一行**心跳**

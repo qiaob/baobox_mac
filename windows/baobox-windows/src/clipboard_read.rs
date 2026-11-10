@@ -113,22 +113,32 @@ unsafe fn read_opened() -> Content {
 }
 
 /// 读一段 UTF-16 文本。
+///
+/// 按 `GlobalSize` 给出的分配大小限界：`CF_UNICODETEXT` 按约定以 NUL 结尾，
+/// 但数据是别的程序放的，不以 NUL 结尾时一路数下去会读出分配之外（#105）。
 unsafe fn text() -> Option<String> {
     let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
     let global = HGLOBAL(handle.0);
+    let units = GlobalSize(global) / std::mem::size_of::<u16>();
+    if units == 0 {
+        return None;
+    }
     let pointer = GlobalLock(global) as *const u16;
     if pointer.is_null() {
         return None;
     }
-    // 以 NUL 结尾，长度得自己数
-    let mut length = 0usize;
-    while *pointer.add(length) != 0 {
-        length += 1;
-    }
-    let slice = std::slice::from_raw_parts(pointer, length);
-    let text = String::from_utf16_lossy(slice);
+    let text = utf16_until_nul(std::slice::from_raw_parts(pointer, units));
     let _ = GlobalUnlock(global);
     Some(text)
+}
+
+/// 取到第一个 NUL 为止；整段都没有 NUL 就全取。
+fn utf16_until_nul(units: &[u16]) -> String {
+    let length = units
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(units.len());
+    String::from_utf16_lossy(&units[..length])
 }
 
 /// 把某个格式的原始字节拷出来。
@@ -185,9 +195,8 @@ pub fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if dib.len() < 40 {
         return None;
     }
-    let read_i32 = |at: usize| -> i32 {
-        i32::from_le_bytes([dib[at], dib[at + 1], dib[at + 2], dib[at + 3]])
-    };
+    let read_i32 =
+        |at: usize| -> i32 { i32::from_le_bytes([dib[at], dib[at + 1], dib[at + 2], dib[at + 3]]) };
     let header_size = read_i32(0) as usize;
     let width = read_i32(4);
     let height_raw = read_i32(8);
@@ -219,7 +228,7 @@ pub fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             rgba.push(dib[at + 2]); // R
             rgba.push(dib[at + 1]); // G
             rgba.push(dib[at]); // B
-            // alpha 不可信：很多程序填 0，直接用的话整张图透明
+                                // alpha 不可信：很多程序填 0，直接用的话整张图透明
             rgba.push(255);
         }
     }
@@ -238,8 +247,8 @@ mod tests {
         let height: i32 = if bottom_up { 2 } else { -2 };
         dib[8..12].copy_from_slice(&height.to_le_bytes());
         dib[14] = 24; // biBitCount
-        // 两行像素，每行 2 个 BGR = 6 字节，补齐到 8
-        // 第一行（内存里的）：红、绿
+                      // 两行像素，每行 2 个 BGR = 6 字节，补齐到 8
+                      // 第一行（内存里的）：红、绿
         dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
         // 第二行：蓝、白
         dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
@@ -296,9 +305,33 @@ mod tests {
         assert_eq!(rgba, vec![30, 20, 10, 255]);
     }
 
+    fn utf16(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
+
+    #[test]
+    fn text_stops_at_the_first_nul() {
+        let mut units = utf16("你好 hi");
+        units.push(0);
+        // NUL 之后的是分配里的残留，不能当文字
+        units.extend(utf16("junk"));
+        assert_eq!(utf16_until_nul(&units), "你好 hi");
+    }
+
+    #[test]
+    fn text_without_a_nul_ends_at_the_allocation_instead_of_reading_past_it() {
+        // 别的程序放进来的数据不一定以 NUL 结尾（#105）：只取分配里的那么多
+        assert_eq!(utf16_until_nul(&utf16("no terminator")), "no terminator");
+        assert_eq!(utf16_until_nul(&[]), "");
+        assert_eq!(utf16_until_nul(&[0, 65]), "");
+    }
+
     #[test]
     fn opening_is_retried_because_another_app_may_hold_the_clipboard() {
-        assert!(OPEN_ATTEMPTS > 1, "剪贴板是全局独占的，一次打不开很正常");
-        assert!(OPEN_ATTEMPTS * OPEN_RETRY.as_millis() as u32 <= 500, "重试总时长不该让界面卡顿");
+        const { assert!(OPEN_ATTEMPTS > 1, "剪贴板是全局独占的，一次打不开很正常") };
+        assert!(
+            OPEN_ATTEMPTS * OPEN_RETRY.as_millis() as u32 <= 500,
+            "重试总时长不该让界面卡顿"
+        );
     }
 }

@@ -172,74 +172,22 @@ protocol LiveTranslateAudioSource: AnyObject {
 
 // MARK: - 麦克风
 
-/// 默认输入设备，经 AVAudioEngine 的 inputNode tap 取 PCM。
+/// 默认输入设备，经 AVAudioEngine 的 inputNode tap 取 PCM。换设备后的重启见 `MicrophoneTap`。
 @MainActor
 final class LiveTranslateMicSource: LiveTranslateAudioSource {
-    private let engine = AVAudioEngine()
-    private let router: LiveTranslateAudioRouter
-    private var tapInstalled = false
-    private var configObserver: NSObjectProtocol?
+    private let tap: MicrophoneTap
 
     init(router: LiveTranslateAudioRouter) {
-        self.router = router
+        tap = MicrophoneTap(log: LiveTranslateLog.audio, noDeviceError: LiveTranslateError.noInputDevice,
+                            onBuffer: Self.makeTap(router: router))
     }
 
     func start() async throws {
-        try installTapAndStart()
-        // 换输入设备 / 耳机切模式 / 别的 App 改了采样率：系统会停掉引擎、只发这个通知。
-        // 不接住的话麦克风就此静音，字幕看起来「暂停」了。
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.recoverFromConfigurationChange()
-            }
-        }
+        try tap.start()
     }
 
     func stop() {
-        if let configObserver {
-            NotificationCenter.default.removeObserver(configObserver)
-        }
-        configObserver = nil
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        engine.stop()
-    }
-
-    private func installTapAndStart() throws {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw LiveTranslateError.noInputDevice
-        }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.makeTap(router: router))
-        tapInstalled = true
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            stop()
-            throw error
-        }
-    }
-
-    /// 按新的输入格式重新挂 tap、重启引擎；失败就保持停止（看门狗不会误判：没有声音进来）。
-    private func recoverFromConfigurationChange() {
-        guard configObserver != nil else { return }
-        LiveTranslateLog.audio.error("audio engine configuration changed, restarting microphone input")
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        engine.stop()
-        do {
-            try installTapAndStart()
-        } catch {
-            LiveTranslateLog.audio.error("microphone restart failed: \(error.localizedDescription, privacy: .public)")
-        }
+        tap.stop()
     }
 
     /// tap 在音频线程回调：在 nonisolated 上下文里造闭包，避免被推断成主线程隔离。
