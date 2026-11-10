@@ -79,6 +79,23 @@ enum DictationHistoryCodec {
         return result
     }
 
+    /// 导入备份（docs/data-export/DESIGN.md §3）：按 id 去重后合并，新的在前，按上限截断。
+    /// `added` = 真正留下来的新条数；`capped` = 合并后超过上限、最旧的被截掉了。
+    static func importing(_ incoming: [DictationRecord], into records: [DictationRecord],
+                          limit: Int) -> (records: [DictationRecord], added: Int, capped: Bool) {
+        let known = Set(records.map(\.id))
+        var seen = known
+        let fresh = incoming.filter { seen.insert($0.id).inserted }
+        guard !fresh.isEmpty else { return (records, 0, false) }
+        var result = (records + fresh).enumerated().sorted { lhs, rhs in
+            lhs.element.date != rhs.element.date ? lhs.element.date > rhs.element.date : lhs.offset < rhs.offset
+        }.map(\.element)
+        let cap = clampLimit(limit)
+        let capped = result.count > cap
+        if capped { result.removeLast(result.count - cap) }
+        return (result, result.filter { !known.contains($0.id) }.count, capped)
+    }
+
     static func clampLimit(_ limit: Int) -> Int {
         min(max(limit, limitRange.lowerBound), limitRange.upperBound)
     }

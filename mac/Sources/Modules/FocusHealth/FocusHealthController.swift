@@ -28,6 +28,13 @@ final class FocusHealthController: ObservableObject {
     @Published private(set) var session = FocusSession()
     @Published private(set) var pausedUntil: Date?
     @Published private(set) var offDay: String?
+    /// 专注统计（设置页顶部、菜单一行，docs/focus-health/HISTORY.md §3）：从内存里的历史算好放着，菜单构建不碰磁盘。
+    @Published private(set) var historySummary = FocusHistorySummary()
+    /// 专注历史（内存一份，启动时后台读进来；导出读它）。
+    private(set) var history: [FocusHistoryRecord] = []
+    private var historyLoaded = false
+    /// historySummary 是按哪天算的：翻日重算（「今天」「本周」「连续」都跟着变）。
+    private var historyDay = ""
     private var runtime: [String: ReminderRuntime] = [:]
 
     let stage = BreakStageController()
@@ -73,6 +80,12 @@ final class FocusHealthController: ObservableObject {
         for item in items where runtime[item.id] == nil { runtime[item.id] = ReminderRuntime(anchor: now) }
         let ids = Set(items.map(\.id))
         runtime = runtime.filter { ids.contains($0.key) }
+        // 专注历史可能有几千行：后台读，读完回主线程。
+        store.loadHistory(now: now) { records in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { FocusHealthController.shared.finishLoadingHistory(records) }
+            }
+        }
 
         lastTick = now
         statusItem.menuItems = { FocusHealthMenu.items(includeSettings: true) }
@@ -128,6 +141,7 @@ final class FocusHealthController: ObservableObject {
 
         let today = FocusDay.key(now)
         if session.roundsDay != today { session.rollDay(today) }
+        if historyDay != today { refreshHistorySummary(now) }
         if let until = pausedUntil, until <= now { pausedUntil = nil }
         if let day = offDay, day != today { offDay = nil }
 
@@ -182,7 +196,11 @@ final class FocusHealthController: ObservableObject {
     func startFocus(minutes: Int? = nil) {
         let now = Date()
         let length = max(1, minutes ?? FocusHealthSettings.defaultFocusMinutes)
-        if session.inBreak { session.endBreak() }
+        if session.inBreak {
+            // 休息没完就开始下一轮 = 这段休息被跳过。
+            recordBreakEnd(completed: false, at: now)
+            session.endBreak()
+        }
         if stage.isBusy { stage.end(.skipped) }
         // 先说一声再挂勿扰（挂上之后这条轻提示会被攒起来）。
         NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient,
@@ -237,6 +255,7 @@ final class FocusHealthController: ObservableObject {
         if countAsDone {
             finishFocus(at: Date(), byUser: true)
         } else {
+            recordFocusEnd(.discarded, at: Date())
             session.discard()
             NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
             deferredDuringFocus = []
@@ -272,6 +291,7 @@ final class FocusHealthController: ObservableObject {
     private func finishFocus(at now: Date, byUser: Bool = false) {
         let overdue = session.plannedEnd.map { now.timeIntervalSince($0) } ?? 0
         NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
+        recordFocusEnd(byUser ? .doneEarly : .done, at: now)
         let kind = session.complete(day: FocusDay.key(now), longEvery: FocusHealthSettings.longEvery)
         let extras = foldDeferred(now: now)
         let round = session.roundsToday
@@ -355,6 +375,7 @@ final class FocusHealthController: ObservableObject {
     func finishBreak(completed: Bool) {
         guard session.inBreak else { return }
         let now = Date()
+        recordBreakEnd(completed: completed, at: now)
         session.endBreak()
         if completed { ReminderScheduler.resetAwayItems(items, runtime: &runtime, now: now) }
         if FocusHealthSettings.autoNextRound {
@@ -375,6 +396,7 @@ final class FocusHealthController: ObservableObject {
     /// 结束这一轮循环（短休息卡片的「结束」、菜单「结束休息」）：不再追问下一轮。
     func endCycle() {
         guard session.inBreak else { return }
+        recordBreakEnd(completed: false, at: Date())
         session.endBreak()
         if stage.isBusy { stage.end(.skipped) }
         changed()
@@ -684,6 +706,53 @@ final class FocusHealthController: ObservableObject {
         FocusHealthSettings.confirmIdentity && style != .gentle
     }
 
+    // MARK: - 专注历史（docs/focus-health/HISTORY.md）
+
+    /// 一轮专注结束：记一条（在 session.complete / discard 之前调）。
+    private func recordFocusEnd(_ outcome: FocusHistoryRecord.Outcome, at now: Date) {
+        guard let record = FocusHistoryRecord.focusEnded(session, outcome: outcome, at: now) else { return }
+        appendHistory(record)
+    }
+
+    /// 一段专注后的休息结束：记一条（在 session.endBreak 之前调）。
+    private func recordBreakEnd(completed: Bool, at now: Date) {
+        guard let record = FocusHistoryRecord.breakEnded(session, completed: completed, at: now) else { return }
+        appendHistory(record)
+    }
+
+    private func appendHistory(_ record: FocusHistoryRecord) {
+        history.append(record)
+        store.appendHistory(record)
+        if record.countsAsFocus { refreshHistorySummary() }
+    }
+
+    /// 启动时后台读完：读盘前已经记下的几条（刚启动就到点的专注）接上；它们已经排在读盘后面追加进文件，
+    /// 这里只在内存里多出东西时整份重写一次，保证文件和内存一致。
+    private func finishLoadingHistory(_ loaded: [FocusHistoryRecord]) {
+        let merged = FocusHistoryCodec.merged(loaded, history, now: Date())
+        let extra = merged.count != loaded.count
+        history = merged
+        historyLoaded = true
+        if extra { store.rewriteHistory(merged) }
+        refreshHistorySummary()
+    }
+
+    /// 导入备份里的专注记录（docs/data-export/DESIGN.md §3）：按起止去重合并、按时间排好、裁掉 400 天前的，整份重写。
+    func importHistory(_ records: [FocusHistoryRecord]) {
+        let merged = FocusHistoryCodec.merged(history, records, now: Date())
+        guard merged != history else { return }
+        history = merged
+        // 还没读完盘就先只改内存：读完时 finishLoadingHistory 会发现内存里多了东西，整份重写。
+        if historyLoaded { store.rewriteHistory(merged) }
+        refreshHistorySummary()
+    }
+
+    private func refreshHistorySummary(_ now: Date = Date()) {
+        historyDay = FocusDay.key(now)
+        let summary = FocusHistoryStats.summary(history, now: now)
+        if summary != historySummary { historySummary = summary }
+    }
+
     // MARK: - 暂停提醒
 
     func remindersActive(at now: Date) -> Bool {
@@ -751,6 +820,20 @@ final class FocusHealthController: ObservableObject {
         items.removeAll { $0.id == id }
         runtime[id] = nil
         itemsChanged()
+    }
+
+    /// 导入备份里的提醒项（docs/data-export/DESIGN.md §3）：同 id 的跳过，新的加在后面、从现在开始计时。
+    func importItems(_ imported: [ReminderItem]) {
+        let now = Date()
+        var known = Set(items.map(\.id))
+        var added = false
+        for var item in imported where known.insert(item.id).inserted {
+            item.normalize()
+            items.append(item)
+            runtime[item.id] = ReminderRuntime(anchor: now)
+            added = true
+        }
+        if added { itemsChanged() }
     }
 
     /// 补回被删掉的预置项（不动自建项与已有预置项的修改）。

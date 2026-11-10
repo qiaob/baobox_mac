@@ -59,6 +59,13 @@ final class DictationHistoryStore: ObservableObject {
         save()
     }
 
+    /// 导入备份：合并好的整份列表（新的在前、已按上限截断，见 `DictationHistoryCodec.importing`）。
+    /// 还没读完盘时，读完会照常把盘上的接在后面（`finishLoading`）。
+    func replace(with records: [DictationRecord]) {
+        self.records = records
+        save()
+    }
+
     /// 改了条数上限：多出来的旧记录删掉。
     func trim(to limit: Int) {
         let cap = DictationHistoryCodec.clampLimit(limit)
@@ -105,8 +112,14 @@ final class DictationHistoryStore: ObservableObject {
         return []
     }
 
+    /// 写失败报给用户一次、记 fault 日志（#101）；内存里的历史不动，下次保存再试。
     nonisolated private static func write(_ data: Data, to url: URL) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            StorageWriteFailure.report(L("storage.what.dictation"), reason: error.localizedDescription)
+        }
     }
 }

@@ -8,7 +8,8 @@ final class ClipboardTool: ToolModule {
     let name = L("clipboard.name")
     let symbolName = "doc.on.clipboard"
 
-    private let store = ClipboardStore()
+    /// 设置 → 通用 → 数据的导出 / 导入要读写片段（docs/data-export/DESIGN.md），所以不是 private。
+    let store = ClipboardStore()
     private lazy var monitor = ClipboardMonitor(store: store)
     private lazy var panelController = ClipboardPanelController(store: store, monitor: monitor)
 

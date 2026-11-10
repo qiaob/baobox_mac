@@ -223,6 +223,9 @@ struct FocusSession: Codable, Equatable {
     var roundsToday: Int = 0
     /// roundsToday 记的是哪天（yyyy-MM-dd），翻日清零。
     var roundsDay: String = ""
+    /// 这一轮是什么时候开始的（按下「开始」那一刻，暂停不变）：专注历史的 start（docs/focus-health/HISTORY.md §2）。
+    /// 旧版本的 state.json 里没有它，解出来是 nil。
+    var roundStartedAt: Date?
 
     init() {}
 
@@ -253,6 +256,7 @@ struct FocusSession: Codable, Equatable {
         phase = .focusing
         plannedSeconds = max(60, seconds)
         segmentStart = now
+        roundStartedAt = now
         elapsedBefore = 0
         breakSeconds = 0
         breakEndsAt = nil
@@ -286,6 +290,7 @@ struct FocusSession: Codable, Equatable {
         let planned = plannedSeconds
         phase = .idle
         segmentStart = nil
+        roundStartedAt = nil
         elapsedBefore = 0
         let every = max(longEvery, 1)
         return (planned >= Self.longFocusSeconds || roundsToday % every == 0) ? .long : .short
@@ -294,6 +299,7 @@ struct FocusSession: Codable, Equatable {
     mutating func discard() {
         phase = .idle
         segmentStart = nil
+        roundStartedAt = nil
         elapsedBefore = 0
         plannedSeconds = 0
     }
@@ -311,7 +317,8 @@ struct FocusSession: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case phase, plannedSeconds, segmentStart, elapsedBefore, breakSeconds, breakEndsAt, roundsToday, roundsDay
+        case phase, plannedSeconds, segmentStart, elapsedBefore, breakSeconds, breakEndsAt, roundsToday, roundsDay,
+             roundStartedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -327,6 +334,7 @@ struct FocusSession: Codable, Equatable {
         breakEndsAt = get(.breakEndsAt, Date.self)
         roundsToday = max(get(.roundsToday, Int.self) ?? 0, 0)
         roundsDay = get(.roundsDay, String.self) ?? ""
+        roundStartedAt = get(.roundStartedAt, Date.self)
         // 数据不自洽（专注中却没有开始时刻、休息中却没有结束时刻）就当空闲，别卡在半截状态里。
         if phase == .focusing, segmentStart == nil { phase = .idle }
         if inBreak, breakEndsAt == nil { phase = .idle }

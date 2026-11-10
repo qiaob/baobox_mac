@@ -2,7 +2,7 @@ import SwiftUI
 import ServiceManagement
 import AppKit
 
-/// 通用设置：开机自启 + 语言 + 权限状态。
+/// 通用设置：开机自启 + 语言 + 权限状态 + 数据（导出 / 导入，docs/data-export/DESIGN.md）。
 struct GeneralSettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     /// 辅助功能状态是实时的；屏幕录制用三态（启动缓存 + TCC 实时探测），见 `Permissions.screenRecordingState`。
@@ -11,6 +11,8 @@ struct GeneralSettingsView: View {
     @State private var language = L10n.current
     @State private var showRestartForLanguage = false
     @State private var errorMessage: String?
+    /// 刚做完的导出 / 导入的结果（一句话，显示在按钮下面）。
+    @State private var dataStatus: String?
 
     private var alertPresented: Binding<Bool> {
         Binding(get: { errorMessage != nil },
@@ -45,6 +47,21 @@ struct GeneralSettingsView: View {
             Section("settings.general.permissionSection") {
                 screenRecordingRow
                 accessibilityRow
+            }
+
+            Section("settings.general.data.section") {
+                HStack {
+                    Button("settings.general.data.export") {
+                        PersonalDataTransfer.export { dataStatus = $0 }
+                    }
+                    Button("settings.general.data.import") {
+                        PersonalDataTransfer.importBackup { dataStatus = $0 }
+                    }
+                    Spacer()
+                }
+                Text(verbatim: dataStatus ?? L("settings.general.data.help"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

@@ -147,4 +147,27 @@ enum FocusText {
         formatter.timeStyle = .short
         return formatter.string(from: date)
     }
+
+    /// 专注时长「75 分钟」「6.5 小时」：两小时以内按分钟，再长按小时（最多一位小数）。
+    static func focusTotal(_ seconds: Int) -> String {
+        let minutes = Int((Double(max(seconds, 0)) / 60).rounded())
+        if minutes < 120 { return L("focus.history.minutes \(minutes)") }
+        let hours = Double(seconds) / 3600
+        let formatter = NumberFormatter()
+        formatter.locale = L10n.locale
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 1
+        let text = formatter.string(from: NSNumber(value: hours)) ?? String(format: "%.1f", hours)
+        return L("focus.history.hours \(text)")
+    }
+
+    /// 设置页顶部一行（docs/focus-health/HISTORY.md §3）：「今天 75 分钟 · 本周 6.5 小时 · 连续 4 天」；
+    /// 还没完成过一轮专注时是一句引导。
+    static func historyLine(_ summary: FocusHistorySummary) -> String {
+        guard summary.hasCompletedFocus else { return L("focus.history.empty") }
+        let today = focusTotal(summary.todaySeconds)
+        let week = focusTotal(summary.weekSeconds)
+        return L("focus.history.summary \(today) \(week) \(summary.streakDays)")
+    }
 }
