@@ -66,13 +66,6 @@ protocol LiveTranslateRecordLibrary: AnyObject {
 /// 一句都没有就不建文件。改设置引起的重启接着写同一份，并记一行「改为：…」。
 @MainActor
 final class LiveTranslateTranscript {
-    struct Config: Equatable {
-        let source: String
-        let speech: String
-        /// nil = 不翻译。
-        let target: String?
-    }
-
     /// 会议的文件头；nil（实时翻译）= 原来的版式。
     struct Header: Equatable {
         var title: String
@@ -143,8 +136,8 @@ final class LiveTranslateTranscript {
     }
 
     private enum Item {
-        case line(time: Date, original: String, translation: String, speaker: LiveTranslateSpeaker?)
-        case change(time: Date, config: Config)
+        case line(time: Date, original: String, translation: String, speaker: MeetingSpeaker?)
+        case change(time: Date, config: MeetingEngineRun)
         /// 🔖 标记重点（会议）。
         case mark(time: Date)
         /// 一行说明（会议的暂停 / 继续）。
@@ -188,9 +181,9 @@ final class LiveTranslateTranscript {
     var onWriteError: ((String) -> Void)?
 
     private let start: Date
-    private let config: Config
+    private let config: MeetingEngineRun
     private let destination: Destination
-    private var lastConfig: Config
+    private var lastConfig: MeetingEngineRun
     private var end: Date?
     private var items: [Item] = []
     /// 句子键 → `items` 下标。
@@ -205,7 +198,7 @@ final class LiveTranslateTranscript {
 
     private static let ioQueue = DispatchQueue(label: "com.baobox.app.livetranslate.transcript", qos: .utility)
 
-    init(start: Date, config: Config, destination: Destination) {
+    init(start: Date, config: MeetingEngineRun, destination: Destination) {
         self.start = start
         self.config = config
         self.destination = destination
@@ -215,7 +208,7 @@ final class LiveTranslateTranscript {
     }
 
     /// 写到实时翻译原来的文件夹。
-    convenience init(start: Date, config: Config) {
+    convenience init(start: Date, config: MeetingEngineRun) {
         self.init(start: start, config: config, destination: .legacy(start: start))
     }
 
@@ -224,7 +217,7 @@ final class LiveTranslateTranscript {
 
     /// 记下 / 更新一句。`key` 在这份记录里唯一（重启后句子 id 会从头编，调用方带上第几次运行）。
     /// `speaker` 只在会议标说话人时写进记录。
-    func update(key: String, time: Date, original: String, translation: String, speaker: LiveTranslateSpeaker? = nil) {
+    func update(key: String, time: Date, original: String, translation: String, speaker: MeetingSpeaker? = nil) {
         let hadContent = hasContent
         if let index = lineIndex[key] {
             if case .line(_, let oldOriginal, let oldTranslation, let oldSpeaker) = items[index],
@@ -262,7 +255,7 @@ final class LiveTranslateTranscript {
     }
 
     /// 改设置后的重启接着写：设置确实变了就记一行「改为：…」。
-    func continueWith(_ config: Config, at time: Date) {
+    func continueWith(_ config: MeetingEngineRun, at time: Date) {
         guard config != lastConfig else { return }
         lastConfig = config
         items.append(.change(time: time, config: config))
@@ -493,7 +486,7 @@ final class LiveTranslateTranscript {
     }
 
     /// 「我」/「对方」。
-    static func speakerLabel(_ speaker: LiveTranslateSpeaker) -> String {
+    static func speakerLabel(_ speaker: MeetingSpeaker) -> String {
         switch speaker {
         case .me: return L("livetranslate.speaker.me")
         case .them: return L("livetranslate.speaker.them")
@@ -515,7 +508,7 @@ final class LiveTranslateTranscript {
         }
     }
 
-    private static func languages(_ config: Config) -> String {
+    private static func languages(_ config: MeetingEngineRun) -> String {
         let target = config.target ?? L("livetranslate.record.doc.noTranslation")
         return L("livetranslate.record.doc.languages \(config.speech) \(target)")
     }

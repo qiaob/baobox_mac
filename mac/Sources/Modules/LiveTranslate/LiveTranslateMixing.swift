@@ -228,12 +228,6 @@ struct LiveTranslateMixClock {
     }
 }
 
-/// 说话人：线上会议里的「我」（麦克风）/「对方」（系统声音）。
-enum LiveTranslateSpeaker: String, Codable, Equatable {
-    case me
-    case them
-}
-
 /// 两路有人声的累计时长（秒）：每个 20 ms 块里 RMS 过阈值的那一路记上这一块的时长。
 /// 混音线程一直往上累计；判一句的说话人时取这句开始到定稿之间的差（`-`）。
 struct LiveTranslateLaneStats: Equatable {
@@ -268,7 +262,7 @@ enum LiveTranslateSpeakerJudge {
     static let significant: TimeInterval = 0.3
     static let systemShare: Double = 0.35
 
-    static func decide(_ stats: LiveTranslateLaneStats) -> LiveTranslateSpeaker? {
+    static func decide(_ stats: LiveTranslateLaneStats) -> MeetingSpeaker? {
         if stats.systemVoiced >= significant, stats.systemVoiced >= systemShare * stats.microphoneVoiced {
             return .them
         }

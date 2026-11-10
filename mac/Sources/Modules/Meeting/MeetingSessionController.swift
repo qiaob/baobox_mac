@@ -67,7 +67,7 @@ final class MeetingSessionController: ObservableObject {
     /// 本场的转录去向（引擎重启时沿用同一份）。
     private var destination: LiveTranslateTranscript.Destination?
     /// 定稿的句子（`onFinalLine`）：算重点那段说了什么。
-    private var finalLines: [String: LiveTranslateSessionConfig.FinalLine] = [:]
+    private var finalLines: [String: MeetingEngineLine] = [:]
     /// 已经记下内容（转录或速记）的会议：结束时一句都没有的作废。
     private var contentIDs: Set<String> = []
     /// 本场的转录收尾了（`.finished` 到过）。
@@ -407,7 +407,7 @@ final class MeetingSessionController: ObservableObject {
         }
     }
 
-    private func finalLine(_ line: LiveTranslateSessionConfig.FinalLine) {
+    private func finalLine(_ line: MeetingEngineLine) {
         finalLines[line.key] = line
     }
 
@@ -609,7 +609,7 @@ final class MeetingLevelMeter: ObservableObject {
     /// 比判「有人在说话」的阈值低一点：小声说话、远一点的麦克风也亮。
     private static let threshold: Float = 0.006
 
-    func update(_ levels: LiveTranslateInputLevels, paused: Bool) {
+    func update(_ levels: MeetingInputLevels, paused: Bool) {
         let microphone = levels.microphone.map { !paused && $0 > Self.threshold }
         let system = levels.system.map { !paused && $0 > Self.threshold }
         if microphone != microphoneActive { microphoneActive = microphone }

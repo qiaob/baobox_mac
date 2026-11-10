@@ -69,20 +69,14 @@ final class LiveTranslateMixedSource: LiveTranslateAudioSource {
     }
 
     /// 上次取走以来两路的峰值 RMS（控制条的电平点）；没开的那一路为 nil。
-    func takeLevels() -> LiveTranslateInputLevels {
+    func takeLevels() -> MeetingInputLevels {
         let peaks = core.takePeaks()
-        return LiveTranslateInputLevels(microphone: includesMicrophone ? peaks.microphone : nil,
-                                        system: includesSystem ? peaks.system : nil)
+        return MeetingInputLevels(microphone: includesMicrophone ? peaks.microphone : nil,
+                                  system: includesSystem ? peaks.system : nil)
     }
 
     /// 两路有人声的累计时长（一直往上累计；判一句的说话人时取差）。
     var laneTotals: LiveTranslateLaneStats { core.totals }
-}
-
-/// 两路此刻的电平（0…1 的 RMS 峰值）；nil = 没有这一路。
-struct LiveTranslateInputLevels: Equatable {
-    var microphone: Float?
-    var system: Float?
 }
 
 /// 混音的线程部分：两路的采集回调线程往环形缓冲里写，混音队列每 20 ms 取。
