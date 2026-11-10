@@ -62,6 +62,12 @@ struct PetNotification {
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
     func present(_ n: PetNotification, onAction: @escaping (String) -> Void)
+    /// 配合提醒做个动作（喝水、伸懒腰、远眺），按片段名播；做不了返回 false。默认做不了。
+    func performGesture(_ clips: [String]) -> Bool
+}
+
+extension NotifyPresenting {
+    func performGesture(_ clips: [String]) -> Bool { false }
 }
 
 /// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史、启动期间先攒着。
@@ -121,6 +127,17 @@ final class NotifyCenter {
             return
         }
         deliver(n, onAction: onAction)
+    }
+
+    /// 现在发一条会不会由呈现端（宠物气泡）呈现；false = 走系统通知（宠物关着、宠物模块没注册）。设置页预览文案用。
+    var presenterIsReady: Bool {
+        PresentationHub.shared.notifications?.isReady ?? false
+    }
+
+    /// 配合提醒做个动作（喝水、伸懒腰、远眺），转给呈现端；没有呈现端或做不了返回 false。
+    @discardableResult
+    func performGesture(_ clips: [String]) -> Bool {
+        PresentationHub.shared.notifications?.performGesture(clips) ?? false
     }
 
     private func deliver(_ n: PetNotification, onAction: ((String) -> Void)?) {

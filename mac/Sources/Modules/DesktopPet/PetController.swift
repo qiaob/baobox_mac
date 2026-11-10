@@ -1,6 +1,7 @@
 import AppKit
 
-/// 宠物控制器：拥有窗口、引擎、气泡、环形菜单，并实现通知呈现端与浮窗挂靠点（设计 §2；交互见 docs/desktop-pet/INTERACTION.md）。
+/// 宠物控制器：拥有窗口、引擎、气泡、环形菜单，并实现通知呈现端、浮窗挂靠点与休息画面主角（主角在 PetBreakCompanion.swift）
+/// （设计 §2；交互见 docs/desktop-pet/INTERACTION.md）。
 @MainActor
 final class PetController: ObservableObject, NotifyPresenting {
     static let shared = PetController()
@@ -353,8 +354,12 @@ final class PetController: ObservableObject, NotifyPresenting {
         }
     }
 
+    /// 退出流程已经 stop() 过：之后谁再把渲染视图还回来，只放回去，不再出场、不打招呼（见 returnRenderView）。
+    private var stopped = false
+
     /// 退出 Baobox：宠物开着就先播一个短退场（只掉下去那段），最多等 0.5 秒，不拖慢退出 / 重启。
     func stop() {
+        stopped = true
         saveOrigin(choreographyHome ?? engine.origin)
         radial.close(animated: false)
         bubble.dismissAll()
@@ -839,7 +844,16 @@ final class PetController: ObservableObject, NotifyPresenting {
         return true
     }
 
+    /// 通知呈现端的「配合提醒做个动作」（NotifyPresenting）：就是 `act(clips:)`。
+    /// 专注与健康经 `NotifyCenter.shared.performGesture` 调到这里，不直接认识宠物。
+    func performGesture(_ clips: [String]) -> Bool {
+        act(clips: clips)
+    }
+
     // MARK: - 借给休息画面（#43，docs/focus-health/TECH_DESIGN.md §5.3）
+    //
+    // 休息画面不直接调下面这几个方法：它经 Core 的 BreakCompanion 借，宠物这边由 PetBreakLoan（PetBreakCompanion.swift）
+    // 把休息画面给的意图换成姿态、转到这里（docs/notify-core/DESIGN.md §3.5）。
 
     /// 借出的渲染视图与它此刻在屏幕上的位置。
     struct Loan {
@@ -869,7 +883,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         return Loan(view: view, frame: panel.frame, is3D: shownModelID != nil)
     }
 
-    /// 借出期间由休息画面驱动姿态（走过去、躺下、起身）。
+    /// 借出期间由 PetBreakLoan 按休息画面的意图驱动姿态（走过去、躺下、起身）。
     func setLentPose(_ pose: PetPose) {
         guard isLent else { return }
         if shownModelID != nil {
@@ -890,6 +904,14 @@ final class PetController: ObservableObject, NotifyPresenting {
     func returnRenderView() {
         guard isLent else { return }
         isLent = false
+        if stopped {
+            // 宠物已经 stop() 了才还回来（退出时模块收尾的顺序反了：宠物先 willTerminate）：只把视图放回去。
+            // 再走下面的 applyVisibility 会发现宠物窗没显示，重新显示它、播出场，黑洞窗也出来 —— 退出时闪一下
+            // （docs/notify-core/DESIGN.md §1.2）。今天的注册顺序是专注与健康先收尾，走不到这里。
+            let view: NSView = shownModelID != nil ? modelView : petView
+            stage.show(view)
+            return
+        }
         updateAccessory()
         panel?.ignoresMouseEvents = false
         let view: NSView = shownModelID != nil ? modelView : petView

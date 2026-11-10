@@ -13,7 +13,7 @@
 | `FocusHistory.swift` | 专注历史的记录、一行一条的编解码、去重合并、400 天裁剪（纯 Foundation，见 `HISTORY.md`） |
 | `FocusHistoryStats.swift` | 今天 / 本周 / 连续天数（纯函数，见 `HISTORY.md` §3） |
 | `FocusHealthSettings.swift` | 标量设置（UserDefaults，前缀 `focus.`） |
-| `BreakStage.swift` | 休息画面：暗幕窗、舞台窗、借宠物、飞行动画、拦截输入、看门狗 |
+| `BreakStage.swift` | 休息画面：暗幕窗、舞台窗、借主角（Core 的 `BreakCompanion`，目前是桌面宠物）并发意图、飞行动画、拦截输入、看门狗 |
 | `BreakStageViews.swift` | 休息画面里的 SwiftUI 界面（倒计时卡片、副屏小字、长按跳过） |
 | `FocusStatusItem.swift` | 专注 / 休息时的菜单栏倒计时项 |
 | `FocusHealthTool.swift` | ToolModule：菜单、快捷键、设置 Tab |
@@ -111,16 +111,33 @@ focusing / paused ──作废──► idle
 - `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`；`isReleasedWhenClosed = false`，撤下时 `orderOut` 后丢引用。
 - 屏幕参数变化（插拔显示器）时重建暗幕；舞台所在的屏没了就挪到主屏中央。
 
-### 5.3 借宠物（PetController 新增）
+### 5.3 借主角（Core 的 `BreakCompanion`）
 
-- `lendRenderView() -> Loan?`：把当前渲染视图（3D `PetModelView` / 2D `SpritePetView`）从宠物窗取出交给舞台。宠物窗留在原地但变空、`ignoresMouseEvents = true`，引擎站住（不溜达），姿态不再写到这个视图上；挂在宠物窗上的气泡不受影响，休息结束后照常可见。宠物关闭 / 没就绪返回 nil → 走回退画面。
-- `setLentPose(_:)` / `performLent(_:)`：舞台直接驱动姿态与互动动作。
-- `returnRenderView()`：放回宠物窗。借出期间的换形象请求延到归还后执行。
+本工具不认识宠物（#108，`docs/notify-core/DESIGN.md` §3.5）。主角经 `mac/Sources/Core/Presentation/BreakCompanion.swift` 的协议借：
+
+- `PresentationHub.shared.breakCompanion?.lend() -> BreakCompanionLoan?`：桌面宠物模块在启动时交出主角（`presentationRoles()`）。
+  - 借到时，宠物把当前渲染视图（3D / 2D）从宠物窗取出交给舞台。宠物窗留在原地但变空、不接鼠标，引擎站住（不溜达）；挂在宠物窗上的气泡不受影响，休息结束后照常可见。
+  - 宠物关闭、没就绪、正在换形象，或宠物模块没注册：返回 nil → 走回退画面。
+- `loan.view` / `homeFrame` / `maxUpscale`：舞台装进窗口的视图、飞出去的起点兼飞回来的终点、最多放大几倍（nil = 不限，3D；2D 是 3 倍）。
+- `loan.cue(_:)`：只说意图，姿态由宠物模块换算，每秒推 30 次（2D 帧动画靠它走）。意图在阶段切换的那一刻发：
+
+  | 休息画面阶段 | 本工具发的意图 | 宠物摆的姿态 |
+  |---|---|---|
+  | 等待出场 / 闲着 | 不发 | 借出后、收到第一个意图前不推 |
+  | 飞过去（`flyIn`） | `.walking(facingLeft: 目标在原位左边)` | `wander`，朝目标侧身走；每次借出都是一份新姿态 |
+  | 休息中（`beginResting`） | `.resting(lookAway:)` | 收到后 1.2 秒内 `idle` + 正对你；之后护眼 `idle` 侧身看远处、轻微上下浮，否则 `sleep` 躺下闭眼 |
+  | 休息好了（`celebrate`） | `.attentive` | `idle` + 正对你、上下浮 |
+  | 确认本人（`startConfirm`） | `.attentive`（可能从休息中、甚至飞过去时直接进来，所以这里也发） | 同上 |
+  | 飞回去（`finish`） | `.walking(facingLeft: 原位在当前位置左边)` | `wander`，不重置，接着上一帧的步子 |
+
+  开了「减弱动态效果」时，飞过去那一下 `.walking` 后紧接着 `.resting`，两个都发（朝向来自前一个）。
+- `loan.poke()`：点大宠物 / 点暗处时戳一下，宠物做个小动作；做不了就算了。
+- `loan.giveBack()`：结束时还回去（停推姿态、摘视图、放回宠物窗；借出期间的换形象请求延到归还后执行）。**先摘 `break` 勿扰令牌再 giveBack**：顺序反了，引擎还按勿扰让宠物睡着，还回去会先躺下再爬起来。
 
 ### 5.4 动画
 
 - 飞行：舞台窗从宠物窗的屏幕位置与大小，60Hz 手动插值（ease-in-out，0.9 秒）到中央大尺寸（屏高 42%，上限 520pt；2D 形象上限为原尺寸 3 倍，再大就糊），期间姿态 `wander`（侧身走）；到达后窗口扩成「宠物 + 卡片」，卡片淡入，倒计时从这一刻开始。系统开了「减少动态效果」时直接出现在中央。
-- 休息中：普通休息 `sleep`（躺下，片段播完 SceneKit 场景暂停，零渲染）；护眼 `idle` 侧身（看远处）。姿态 30fps 推送（2D 帧动画靠它走）。
+- 休息中：普通休息 `sleep`（躺下，片段播完 SceneKit 场景暂停，零渲染）；护眼 `idle` 侧身（看远处）。姿态由宠物模块按意图 30fps 推送（2D 帧动画靠它走，§5.3）。
 - 结束：姿态回 `idle` 并正对用户（`PetModelView` 从睡姿回待机会自动播「起身 + 伸懒腰」），2.5 秒后飞回原位、归还视图。跳过 / 推迟直接飞回。
 
 ### 5.5 安全
@@ -197,7 +214,9 @@ focusing / paused ──作废──► idle
   - 麦克风占用只进 `reasons` 给本工具避让用，不改变宠物与其他通知的现有行为（Baobox 自己的实时翻译也会占用麦克风，分不清是谁在用）。
   - 麦克风状态在后台队列读 CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`，每 5 秒刷新一次缓存，不在主线程直接调 HAL。
 - 录屏：`RecordingController` 开始 / 停止录制时挂 / 摘 `recording` 令牌——录屏期间宠物气泡不出来（免得被录进视频），本工具的提醒也顺延。用户刚点的操作的回执（`isUserFeedback`，如暂停专注的卡片）除外，照常出来。
-- `PetController.act(clips:)`：按片段名播一串动作，不冒话（喝水 `sit_down → sit_hold_drink → stand_up`，站立 `stretch`）；形象没有这些片段返回 false。`PetModelView.performClips(_:)` 为其底层。
+- 提醒时的宠物动作：本工具调 `NotifyCenter.shared.performGesture(clips)`（原来那几个 0.6 秒、1.0 秒的延时留在本工具里），通知内核转给呈现端的 `NotifyPresenting.performGesture`，没有呈现端返回 false（#108）。
+  宠物的实现就是 `PetController.act(clips:)`：按片段名播一串动作，不冒话（喝水 `sit_down → sit_hold_drink → stand_up`，站立 `stretch`）；宠物关着、借给休息画面、形象没有这些片段时返回 false。`PetModelView.performClips(_:)` 为其底层。
+  设置页「预览效果」轻松档的文案按 `NotifyCenter.shared.presenterIsReady`（这一条会不会由宠物气泡呈现）换说法。
 - 环形菜单外圈加「专注」（快捷键 id `focushealth.focus`）；宠物设置的逐来源开关加「专注与健康」（来源 id `focus`）。
   - 2026-11-08：`focushealth.focus` 带 `stateTitle`（专注中「暂停专注」、暂停中「继续专注」）。`pauseFocus` 发 bubble 级卡片 [继续][结束这一轮]，「结束」= `endFocusEarly(countAsDone: true)`；`resumeFocus`、`breakNow` 被拒（专注中 / 休息中）发 ambient 回执。这些都标 `isUserFeedback`，勿扰（含专注自己的令牌）时照常出来；提前结束算完成后的「第 N 轮专注完成」卡片同样标上（`finishFocus(byUser:)`）。
 - `PetEngine` 的空闲秒数改用 `Core/UserActivity`，两处共用一份。
