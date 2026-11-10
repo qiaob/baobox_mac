@@ -139,8 +139,8 @@ struct SelectionTranslateSettingsView: View {
                  : L("selectiontranslate.settings.kindAnswer"))
                 .font(.caption)
                 .foregroundStyle(action.isRewrite ? Color.accentColor : Color.secondary)
-            if index < 9 {
-                Text(verbatim: "⌥\(index + 1)")
+            if optionDigits, let digit = optionDigit(at: index) {
+                Text(verbatim: "⌥\(digit)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 26)
@@ -222,6 +222,13 @@ struct SelectionTranslateSettingsView: View {
             }
         }
         .padding(.leading, 24)
+    }
+
+    /// 这一行在动作条上的 ⌥ 编号：按条上的顺序数，关掉的动作不在条上、不占号；第 10 个起没有编号。
+    private func optionDigit(at index: Int) -> Int? {
+        guard actions.indices.contains(index), SelectionActionStore.isVisible(actions[index]) else { return nil }
+        let position = actions[..<index].filter(SelectionActionStore.isVisible).count
+        return position < 9 ? position + 1 : nil
     }
 
     private func move(_ index: Int, by delta: Int) {
