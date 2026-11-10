@@ -729,7 +729,7 @@ private struct LiveTranslateBarView: View {
     }
 
     /// 记录开关（2026-11-05 用户：菜单里操作不方便，放在字幕条上一点就切）：点一下开始 / 停止保存记录，立刻生效并记住；
-    /// 旁边的小按钮打开本次记录（还没有就打开记录文件夹）。
+    /// 旁边的小按钮打开本次记录（还没有就打开记录文件夹 = 这次会话配置里的会议库目录）。
     private var recordToggle: some View {
         let on = controller.recording
         let url = controller.transcriptURL
@@ -747,8 +747,8 @@ private struct LiveTranslateBarView: View {
             Button {
                 if let url {
                     NSWorkspace.shared.open(url)
-                } else {
-                    LiveTranslateRecordSettings.openFolder()
+                } else if let folder = controller.recordFolder {
+                    LiveTranslateRecordSettings.openFolder(folder)
                 }
             } label: {
                 Image(systemName: url != nil ? "doc.text" : "folder")

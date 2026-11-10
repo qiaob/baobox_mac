@@ -7,12 +7,17 @@ import Foundation
 /// 不让控制器直接实现协议：它还管自由听译与字幕条，接口形状也不同（配置结构体 + 闭包）；包一层不动它的逻辑。
 /// 事件一律在控制器的回调里同步转发，不包 `Task`、不隔一拍：退出时剩下的句子与 `.ended` 要在 `terminate()` 返回前
 /// 到达托管方（ENGINE.md §4.3 I5），其余的顺序约定也就原样是控制器的。
+///
+/// 会议库（自由听译的记录写进去）在装配时作为构造参数交进来（ENGINE.md §4.6）：这里开的每个会话（自由听译、托管）
+/// 都把它放进会话配置，控制器只从当前会话的配置里读。只有这里开会话，所以「记录写到哪」没有第二条路。
 @MainActor
 final class LiveTranslateMeetingEngine: MeetingEngine {
     private let controller: LiveTranslateController
+    private let recordLibrary: FreeListeningLibrary
 
-    init(controller: LiveTranslateController) {
+    init(controller: LiveTranslateController, recordLibrary: FreeListeningLibrary) {
         self.controller = controller
+        self.recordLibrary = recordLibrary
     }
 
     // MARK: - 托管会话（线上 / 线下会议）
@@ -61,9 +66,10 @@ final class LiveTranslateMeetingEngine: MeetingEngine {
         return controller.isRunning ? .freeListening : .idle
     }
 
-    /// 托管会话中由控制器转成 `.userAction(.freeListeningTogglePressed)` 报给托管方。
+    /// 没在跑 → 按字幕与同传的设置开一次自由听译，记录写进会议库；托管会话中由控制器转成
+    /// `.userAction(.freeListeningTogglePressed)` 报给托管方。
     func toggleFreeListening() {
-        controller.toggle()
+        controller.toggle(startingWith: .fromSettings(recordLibrary: recordLibrary))
     }
 
     // MARK: - 退出
@@ -91,6 +97,8 @@ final class LiveTranslateMeetingEngine: MeetingEngine {
         config.usesMixer = true
         config.speakers = meeting.speakers
         config.documentURL = meeting.documentURL
+        // 字幕条上还没记下句子时，「记录」旁的文件夹按钮打开会议库。
+        config.recordLibrary = recordLibrary
         config.onFinalLine = { [weak host] line in
             host?.meetingEngine(didReport: .line(line))
         }

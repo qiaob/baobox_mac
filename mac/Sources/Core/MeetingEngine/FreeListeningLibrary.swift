@@ -2,8 +2,7 @@ import Foundation
 
 /// 自由听译的记录进会议库（docs/meeting/ENGINE.md §4.5.3、docs/meeting/TECH_DESIGN.md §2.3）。
 /// 引擎决定记不记、什么时候记；会议库决定写到哪、写成什么样、整理不整理纪要。
-/// MeetingStore 实现；现在经静态 `LiveTranslateController.recordLibrary` 交给引擎（会议模块启动时装上），
-/// 以后改成装配时作为构造参数交给引擎（ENGINE.md §4.6）。
+/// MeetingStore 实现；装配时（`AppDelegate.meetingEngine`）作为构造参数交给引擎，引擎开的每个会话都带着它（ENGINE.md §4.6）。
 ///
 /// **纯 Foundation**：同目录的约定（见 MeetingEngineTypes.swift）。
 @MainActor
