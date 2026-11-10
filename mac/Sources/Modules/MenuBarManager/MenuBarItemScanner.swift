@@ -241,8 +241,11 @@ final class MenuBarItemScanner: ObservableObject {
         let description: String?
     }
 
-    /// 时间和控制中心图标系统不让挪，不列出来。
-    nonisolated private static let unmovable: Set<String> = ["com.apple.menuextra.clock", "com.apple.menuextra.controlcenter"]
+    /// 时间、控制中心图标和麦克风 / 摄像头的录音指示（隐私提示，用着才出现）系统不让挪，不列出来。
+    /// 录音指示以前列着：它的窗口和别的图标不在同一条线上，录音期间每次扫描都判成「正在换屏」丢掉
+    /// （每 3 秒连扫 5 次，会议多长就扫多久），停止录音它一消失又判成「图标丢了」再丢一轮。
+    nonisolated private static let unmovable: Set<String> = ["com.apple.menuextra.clock", "com.apple.menuextra.controlcenter",
+                                                             "com.apple.menuextra.audiovideo"]
 
     nonisolated static func scan(_ input: ScanInput) -> ScanResult {
         let level = Int(CGWindowLevelForKey(.statusWindow))
