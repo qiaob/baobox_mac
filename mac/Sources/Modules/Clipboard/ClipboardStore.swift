@@ -162,6 +162,15 @@ final class ClipboardStore: ObservableObject {
         return item.id
     }
 
+    /// 导入备份里的片段（docs/data-export/DESIGN.md §3）：调用方已经去过重、去掉了撞车的关键字。
+    /// 同 `addSnippet`，不走 `add(_:)` 的「与最近一条同内容就合并」。
+    func importSnippets(_ snippets: [ClipboardItem]) {
+        guard !snippets.isEmpty else { return }
+        items.append(contentsOf: snippets)
+        sortItems()
+        scheduleSave()
+    }
+
     func setSnippetTitle(_ id: UUID, _ title: String) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)

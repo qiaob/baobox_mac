@@ -34,6 +34,8 @@ Per tool:
 | Clipboard | History entries (text, images), favorites, snippets | Support directory, **AES-GCM encrypted by default** |
 | Window manager | Layout snapshots | Support directory |
 | Keep awake | Settings only | UserDefaults |
+| Focus & Health | Reminders, the current round, focus records (last 400 days) | Support directory |
+| Dictation | Dictation history (text only, no audio) | Support directory |
 | Keyboard clicking | Settings only | UserDefaults |
 | Claude Code assistant | **Nothing** — reads `~/.claude` live | — |
 | Codex assistant | **Nothing** — reads `~/.codex` live | — |
@@ -59,6 +61,17 @@ The clipboard is the only tool that retains content long-term, so it gets its ow
 
 Turning encryption off asks for confirmation, because existing history is **rewritten to disk
 in plaintext**.
+
+## Export and import (moving to a new Mac)
+
+**Settings → General → Data**: "Export Personal Data…" saves your snippets, dictation history, and focus & health
+reminders, settings and focus records to one JSON file. On the new Mac, "Import…" first shows a summary (how many of
+each, how many are new, which keywords clash), then **merges** after you confirm — nothing already there is overwritten.
+
+- The exported file is **not encrypted** and contains your snippets and dictation text. Keep it somewhere safe
+- Not included: clipboard history (other than snippets), sensitive entries copied from password managers, screenshots,
+  meeting notes, API keys (nothing from the keychain ever leaves), local models
+- A setting takes the imported value only if it's still at its default on the new Mac; anything you've changed there stays
 
 ## Keystroke watching for keyword expansion
 

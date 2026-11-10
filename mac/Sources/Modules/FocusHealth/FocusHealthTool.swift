@@ -60,8 +60,11 @@ enum FocusHealthMenu {
     static func items(includeSettings: Bool) -> [NSMenuItem] {
         let controller = FocusHealthController.shared
         let session = controller.session
+        // 状态行下面一行置灰的「今天专注 N 分钟」（docs/focus-health/HISTORY.md §3）：读内存里算好的统计。
+        let today = FocusText.focusTotal(controller.historySummary.todaySeconds)
         var items: [NSMenuItem] = [
             NSMenuItem(title: controller.statusLine(), action: nil, keyEquivalent: ""),
+            NSMenuItem(title: L("focus.menu.today \(today)"), action: nil, keyEquivalent: ""),
             .separator(),
         ]
 

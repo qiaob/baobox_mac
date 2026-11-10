@@ -9,7 +9,9 @@
 | `FocusHealthModels.swift` | 提醒项、预置、各项计时进度、专注会话、工作时间、强度（纯 Foundation，可单测） |
 | `ReminderScheduler.swift` | 计时推进、到点 / 预告判定、自然休息、推迟（纯函数，可单测） |
 | `FocusHealthController.swift` | 主线程编排：1 秒心跳、人在不在、睡眠唤醒、避让、发提醒、专注—休息循环、落盘 |
-| `FocusHealthStore.swift` | `items.json` / `state.json` 读写（后台串行队列，退出时同步写） |
+| `FocusHealthStore.swift` | `items.json` / `state.json` / `history.jsonl` 读写（后台串行队列，退出时同步写） |
+| `FocusHistory.swift` | 专注历史的记录、一行一条的编解码、去重合并、400 天裁剪（纯 Foundation，见 `HISTORY.md`） |
+| `FocusHistoryStats.swift` | 今天 / 本周 / 连续天数（纯函数，见 `HISTORY.md` §3） |
 | `FocusHealthSettings.swift` | 标量设置（UserDefaults，前缀 `focus.`） |
 | `BreakStage.swift` | 休息画面：暗幕窗、舞台窗、借宠物、飞行动画、拦截输入、看门狗 |
 | `BreakStageViews.swift` | 休息画面里的 SwiftUI 界面（倒计时卡片、副屏小字、长按跳过） |
@@ -208,7 +210,9 @@ focusing / paused ──作废──► idle
 
 - `items.json`：提醒项数组。解析容错——字段缺失用默认值，枚举值不认识用默认值；整个文件坏了回落预置，并把坏文件改名 `.bad` 留底。
 - `state.json`：专注会话、各项进度、暂停状态。有变化时最多 30 秒写一次，睡眠前与退出时同步写。
+- `history.jsonl`：专注历史，每结束一段专注 / 休息追加一行，只留 400 天（`HISTORY.md`）。
 - 标量设置走 UserDefaults，前缀 `focus.`。
+- 提醒项、设置键、专注历史能导出 / 导入（设置 → 通用 → 数据，`docs/data-export/DESIGN.md`）。
 
 ## 9. 验证
 
@@ -219,4 +223,4 @@ focusing / paused ──作废──► idle
 
 ## 10. 不在本版
 
-统计（今日 / 本周休息与专注）、语音提醒与自定义提示音、浮动间隔、逐项强度、#42 会议状态接入（届时会议模块挂 `meeting` 令牌即可，本工具不用改）。
+休息统计（专注的今天 / 本周 / 连续天数已在 2026-11-10 做了，见 `HISTORY.md`）、语音提醒与自定义提示音、浮动间隔、逐项强度、#42 会议状态接入（届时会议模块挂 `meeting` 令牌即可，本工具不用改）。

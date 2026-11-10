@@ -27,6 +27,13 @@ struct FocusHealthSettingsView: View {
     var body: some View {
         Form {
             Section {
+                // 最上面一行：今天 / 本周 / 连续天数（docs/focus-health/HISTORY.md §3）。
+                Label {
+                    Text(verbatim: FocusText.historyLine(controller.historySummary))
+                } icon: {
+                    Image(systemName: "chart.bar.fill")
+                        .foregroundStyle(Color.accentColor)
+                }
                 Text("focus.settings.intro")
                     .font(.callout)
                     .foregroundStyle(.secondary)
