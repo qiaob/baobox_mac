@@ -115,7 +115,7 @@ final class LiveTranslateTranslator {
                 do {
                     // 专有名词表每句现读：设置里改完，下一句翻译就用上。
                     let reply = try await AIService.shared.translate(
-                        job.text, to: target, glossary: LiveTranslateSettings.glossary, route: route,
+                        job.text, to: target, glossary: SpeechSettings.glossary, route: route,
                         timeout: isFinal ? Self.cloudFinalTimeout : Self.cloudPartialTimeout)
                     if Task.isCancelled { return }
                     if reply.usedFallback { onFallback?() }

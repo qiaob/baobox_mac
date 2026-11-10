@@ -73,7 +73,7 @@ final class LiveTranslateCorrector {
         if let modelID = route.modelID, let target = job.translateTo {
             do {
                 let result = try await AIService.shared.correctAndTranslate(
-                    job.text, context: job.context, to: target, glossary: LiveTranslateSettings.glossary,
+                    job.text, context: job.context, to: target, glossary: SpeechSettings.glossary,
                     modelID: modelID, timeout: 4)
                 let corrected = accept(result.corrected, original: job.text)
                 // 纠正被判成「在改写」没采用：译文是照改写后的句子翻的，不要，交给翻译队列按原文翻。

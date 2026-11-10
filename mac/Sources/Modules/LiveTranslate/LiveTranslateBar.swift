@@ -552,8 +552,8 @@ private struct LiveTranslateBarView: View {
 
     /// 说话语言：自动（两种之间逐句判别）+ 常用几种 + 当前选中的（完整列表在设置页）。
     private var speechMenu: some View {
-        let current = LiveTranslateSettings.speech
-        let auto = LiveTranslateSpeech.auto(LiveTranslateSettings.autoA, LiveTranslateSettings.autoB)
+        let current = SpeechSettings.speech
+        let auto = SpeechLanguages.auto(SpeechSettings.autoA, SpeechSettings.autoB)
         var languages = TranslationLanguage.common.filter { LiveTranslateSettings.speechLanguages.contains($0) }
         if case .fixed(let language) = current, !languages.contains(language) {
             languages.append(language)
@@ -562,18 +562,18 @@ private struct LiveTranslateBarView: View {
             Picker("", selection: Binding(
                 get: { Self.tag(for: current) },
                 set: { tag in
-                    if tag == LiveTranslateSettings.autoValue {
+                    if tag == SpeechSettings.autoValue {
                         guard current != auto else { return }
-                        LiveTranslateSettings.setAutoSpeech()
+                        SpeechSettings.setAutoSpeech()
                     } else {
                         guard let language = TranslationLanguage.from(code: tag),
                               current != .fixed(language) else { return }
-                        LiveTranslateSettings.setSpeech(language)
+                        SpeechSettings.setSpeech(language)
                     }
                     controller.restartIfRunning()
                 }
             )) {
-                Text(auto.title).tag(LiveTranslateSettings.autoValue)
+                Text(auto.title).tag(SpeechSettings.autoValue)
                 ForEach(languages) { language in
                     Text(language.endonym).tag(language.code)
                 }
@@ -761,9 +761,9 @@ private struct LiveTranslateBarView: View {
         .fixedSize()
     }
 
-    private static func tag(for speech: LiveTranslateSpeech) -> String {
+    private static func tag(for speech: SpeechLanguages) -> String {
         switch speech {
-        case .auto: return LiveTranslateSettings.autoValue
+        case .auto: return SpeechSettings.autoValue
         case .fixed(let language): return language.code
         }
     }

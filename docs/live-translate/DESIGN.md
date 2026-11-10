@@ -208,6 +208,10 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `livetranslate.record.folder` | 保存位置路径；空 = 默认 | 空 | 下次开始 |
 | `livetranslate.record.summary` | Bool：停止后整理纪要 | `true` | 下次停止 |
 
+`livetranslate.language`、`livetranslate.autoA` / `autoB`、`livetranslate.vocabulary`（说话语言与专有名词表）会议、听写也在用，
+键与读写定义在 `mac/Sources/Core/Translation/SpeechSettings.swift`（`SpeechSettings`；#107 从 `LiveTranslateSettings` 搬过去，键名不变）。
+其余键仍在 `LiveTranslateSettings`（`LiveTranslateController.swift`）。
+
 ## 8. 文件
 
 | 文件 | 内容 |

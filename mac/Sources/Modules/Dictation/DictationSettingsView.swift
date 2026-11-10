@@ -18,7 +18,7 @@ struct DictationSettingsView: View {
     @AppStorage(DictationSettings.soundsKey) private var sounds = false
     @AppStorage(DictationSettings.historyEnabledKey) private var historyEnabled = true
     @AppStorage(DictationSettings.historyLimitKey) private var historyLimit = DictationHistoryCodec.defaultLimit
-    @AppStorage(LiveTranslateSettings.vocabularyKey) private var vocabulary = ""
+    @AppStorage(SpeechSettings.vocabularyKey) private var vocabulary = ""
     @ObservedObject private var history = DictationController.shared.history
     @State private var confirmingClear = false
 

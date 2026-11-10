@@ -75,7 +75,7 @@ struct LiveTranslateSessionConfig {
     /// 走混音链路采集（两路各转 16 kHz 单声道，能读电平、按两路能量判说话人）：会议总是 true（线下会议也要麦克风电平）；
     /// 实时翻译 false —— 沿用原来的单路音源，一行不改。`.mixed` 总是走混音链路。
     var usesMixer = false
-    var speech: LiveTranslateSpeech
+    var speech: SpeechLanguages
     var target: TranslationLanguage
     var translate: Bool
     /// 显示字幕条。系统翻译的会话挂在字幕条视图上，不显示字幕条时只能用离线模型翻（或不翻）。
@@ -94,7 +94,7 @@ struct LiveTranslateSessionConfig {
     /// nil = 实时翻译原来的行为（✕ 停止、记录按钮开关保存记录、开关就是开 / 停）。
     var onUserRequest: ((UserRequest) -> Void)?
 
-    init(owner: String, label: String, sources: Sources, speech: LiveTranslateSpeech, target: TranslationLanguage,
+    init(owner: String, label: String, sources: Sources, speech: SpeechLanguages, target: TranslationLanguage,
          translate: Bool, showsBar: Bool, correction: Correction,
          transcript: LiveTranslateTranscript.Destination? = nil) {
         self.owner = owner
@@ -114,7 +114,7 @@ struct LiveTranslateSessionConfig {
             owner: "livetranslate",
             label: L("livetranslate.name"),
             sources: Sources(LiveTranslateSettings.source),
-            speech: LiveTranslateSettings.speech,
+            speech: SpeechSettings.speech,
             target: LiveTranslateSettings.target,
             translate: LiveTranslateSettings.translateEnabled,
             showsBar: true,

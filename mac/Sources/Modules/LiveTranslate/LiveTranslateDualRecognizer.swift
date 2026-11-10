@@ -177,7 +177,7 @@ final class LiveTranslateDualRecognizer: LiveTranslateRecognizer {
 
         var segment = Segment(expected: Set(channels.indices.filter { channels[$0].alive }))
         // 专有名词每段现读：设置里改完，下一句起生效。
-        let hints = LiveTranslateSettings.vocabulary
+        let hints = SpeechSettings.vocabulary
         let onDeviceIndex = onDeviceChannel()
         logRouting(onDeviceIndex: onDeviceIndex)
         for index in channels.indices where channels[index].alive {
