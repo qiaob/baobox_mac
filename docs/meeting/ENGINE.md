@@ -1,6 +1,6 @@
 # 会议引擎接口（MeetingEngine）· 技术设计
 
-> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，还没有代码改动。
+> issue #107「会议与实时翻译实现焊死，没有引擎接口」。状态：**已拍板（§8，2026-11-10）**，实现中：PR1–PR3 已合入（#143、#142、#148），PR4 见本 PR。
 > 基线：main `50103fe`（#106 已合并）。下文路径都相对 `mac/Sources/`，行号以这个提交为准。之后 main 到 `a3cadcd` 只动了两处相关的：
 > #134 加了测试 target `BaoboxTests`（§5.1）；#137 改了 `LiveTranslateSettingsView.swift` 里纪要提示的判断（`:251` 起的行号 +2，见 §1.3）。
 > 相关：`TECH_DESIGN.md` §2–§3、§9（引擎改造与会议会话的落地记录），`../live-translate/DESIGN.md` §6–§7，
@@ -441,6 +441,7 @@ enum MeetingAudioLane: Equatable, CaseIterable {
 | I7 | `userAction` 只在托管会话运行中报 | 只有托管配置有 `onUserRequest` |
 | I8 | 重入：事件可能在托管方调引擎方法的过程中同步到达（`terminate`、`toggleFreeListening`、`finish` 里的停止） | 现在就是这样，会议的处理已经容得下 |
 | I9 | 改设置重启：引擎重新取 `host.engineConfig`，带新 `run` 再报 `.started`；句子键带运行次数、不撞；暂停 / 单路不录的状态保留 | 引擎 `restartIfRunning` + `sessionOpen` |
+| I10 | 第一个 `.started` 之前可能已经报过 `.line`：`.started` 等音源全开好才报，这期间先开的那一路（麦克风）就可能出字定稿 | 会议先记进 `finalLines`，第一次 `.started` 建文档时按时间补写（PR3 的 `openTranscript`）；假引擎也要能这样喂 |
 
 这些写进协议的文档注释；假引擎（§5.3）默认按它们的顺序报。
 
@@ -569,13 +570,15 @@ protocol FreeListeningRecord: AnyObject {
 }
 ```
 
-- 引擎（PR4）：`transcript: LiveTranslateTranscript?` 换成 `record: FreeListeningRecord?`；开记录时 `beginFreeListeningRecord(start:run:summarizes: LiveTranslateRecordSettings.summary)`，
-  重启 `continueWith(run)`，每句 `update(line)`，停止 `finish(…, summarizes: LiveTranslateRecordSettings.summary)`；`transcriptURL` 取 `record.fileURL`；
-  写失败提示照旧进字幕条。`lastTranscript` 删掉。
+- 引擎（PR4）：`transcript: LiveTranslateTranscript?` 换成 `transcript: FreeListeningRecord?`（变量名没改成 `record`：控制器已有方法 `record(_:force:)`）；
+  开记录时 `beginFreeListeningRecord(start:run:summarizes: LiveTranslateRecordSettings.summary)`，
+  重启 `continueWith(run)`，每句 `update(line)`，停止 `finish(…, summarizes: LiveTranslateRecordSettings.summary)`；`transcriptURL` 取 `fileURL`；
+  写失败提示照旧进字幕条（那一行由 `MeetingTranscript` 组好、已本地化，引擎原样显示；会议那边同样原样交给 `showNotice`）。`lastTranscript` 删掉（PR3）。
 - 会议库（PR4）：`MeetingStore` 实现 `FreeListeningLibrary` —— 分目录（「yyyy-MM-dd HH-mm 自由听译」）、建一个自由听译版式的 `MeetingTranscript`
   （`.content` 模板、不标说话人、整理完发「实时翻译纪要已整理好」），把文档事件接到原来的 `freeListening(_:id:dir:start:title:)`（第一句进索引、收尾与纪要更新 meta），
   逻辑与 `MeetingStore.swift:474–515` 相同。
-- `MeetingStore` 从此不引用任何 LiveTranslate 类型；`LiveTranslateRecordLibrary`、`Destination.legacy`（写回 ~/Documents）删掉（§8 第 4 条）。
+- `MeetingStore` 从此不引用 LiveTranslate 的记录类型（旧记录迁移读的 `LiveTranslateRecordSettings` 两个键 PR6 换成会议自己的常量）；
+  `LiveTranslateRecordLibrary`、`Destination.legacy`（写回 ~/Documents）删掉（§8 第 4 条）。
 
 #### 4.5.4 纪要生成器与 `.meetingMinutes` 的判断
 
@@ -594,8 +597,8 @@ enum MeetingMinutesGenerator {
 
 - 调用方：`MeetingTranscript` 收尾时问 `isReady`（没模型 → `.noModel`），整理时调 `generate`；`MeetingMinutesRegenerator`（重新生成）问 `isReady`、调 `generate`；
   周报只借 `clip`（它的概述走 `.meetingWeekly`，不变）。
-- 字幕与同传设置页「停止后用本地 AI 整理纪要」下面那行提示（#137）现在直接问 `.meetingMinutes`；PR6 起改由会议设置页传进来一个
-  `minutesReady: () -> Bool`（`{ MeetingMinutesGenerator.isReady }`），实时翻译那边就不再认识 `.meetingMinutes`。
+- 字幕与同传设置页「停止后用本地 AI 整理纪要」下面那行提示（#137）原来直接问 `.meetingMinutes`；PR4 起改由会议设置页传进来一个
+  `minutesReady: () -> Bool`（`{ MeetingMinutesGenerator.isReady }`），实时翻译那边就不再认识 `.meetingMinutes`（原稿排在 PR6，挪到 PR4 一起做）。
 - PR7 起纯逻辑的文档模型只拿「能不能整理」这个结果当参数（`ready: Bool`），决策本身可测。
 
 #### 4.5.5 退出顺序
@@ -650,7 +653,7 @@ static let shared = MeetingSessionController(engine: AppDelegate.meetingEngine)
    旧记录迁移要读的 `livetranslate.record.folder` / `.enabled` 两个键改由会议自己的常量读（字面量不变，要看的旧文件夹清单不变）。
 4. 设置页：`LiveTranslateSettingsSections(recordFolder: URL, minutesReady: @escaping () -> Bool)`。「记录与纪要」一节固定显示会议库目录（现在就是这样，
    因为静态总是装上的），删掉到不了的「更改…」与 `folder` 的 `@AppStorage`，以及只有它用的两条文案（`livetranslate.record.choose`、`.choosePrompt`）；
-   纪要提示改问 `minutesReady()`。`MeetingSettingsView` 传 `MeetingStore.shared.rootURL` 和 `{ MeetingMinutesGenerator.isReady }`。
+   `MeetingSettingsView` 传 `MeetingStore.shared.rootURL`。纪要提示的 `minutesReady`（`{ MeetingMinutesGenerator.isReady }`）PR4 已经加上，这一步只加 `recordFolder`。
 5. `MeetingTool.activate()` 删掉赋值那一行，`MeetingTool.swift:26` 的过时注释一起改。
 
 改完后「自由听译写到哪」只取决于开会话时谁把会议库递进来 —— 只有适配器开会话，适配器是带着会议库建出来的，没有第二条路。
@@ -1003,7 +1006,9 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
 - 改：`LiveTranslateController` 自由听译改用 `FreeListeningRecord`（§4.5.3）；静态 `recordLibrary` 的类型换成 `FreeListeningLibrary?`（PR6 删）；
   删 `LiveTranslateRecordLibrary`、`Destination.legacy` 与 `convenience init(start:config:)`（写回 ~/Documents 的路径；静态为空时不记录、记一条 fault 日志，
   到不了）。`MeetingStore` 实现 `FreeListeningLibrary`；`MeetingSessionController`、`MeetingReports`、`MeetingSettings`、`MeetingText`、`MeetingSettingsView`、
-  `MeetingTool` 换成会议这边的类型名。日志 category 换成 `meeting.transcript`。
+  `MeetingTool` 换成会议这边的类型名。日志 category 换成 `meeting.transcript`（`LiveTranslateLog.transcript` 删掉；引擎那条「会议库没装上」的 fault 记在
+  `livetranslate.recognition`）。`LiveTranslateSettingsSections` 加 `minutesReady` 参数（§4.5.4），实时翻译目录里不再出现 `.meetingMinutes` 与会议模块的类型。
+- 提交分两个：先纯搬家（`git mv` + 把原文件按类型拆成三个文件，一行不改），再改名与改引用，`git diff -M --color-moved=zebra` 各看各的。
 - 行为不变：类与生成器整块搬，版式、文案、纪要逻辑一字不改；自由听译的记录照旧进会议库、照旧发「实时翻译纪要已整理好」。
 - 验证：§7.3 自由听译与会议库几项（17–22）、会议 7、9；`git diff --color-moved` 核对整块搬家。
 - 文档：`live-translate/DESIGN.md` §6（记录由会议库写）、§8（文件表）；`translation-engine/DESIGN.md` §3.3（日志 category）；`TECH_DESIGN.md` §2.3。
@@ -1029,8 +1034,8 @@ func testEndedWithoutStartedDiscardsTheMeeting() throws {
 `refactor(livetranslate): hand the meeting library to the engine at construction (#107)`
 
 - 改：`LiveTranslateSessionConfig`、`LiveTranslateController`（`toggle(startingWith:)`、`restartIfRunning`、开记录、`recordFolder`）、`LiveTranslateRecordSettings`、
-  `LiveTranslateSettingsView`（`recordFolder`、`minutesReady` 两个参数；删「更改…」）、`LiveTranslateBar`、`LiveTranslateMeetingEngine`、`AppDelegate`（传 `MeetingStore.shared`）、
-  `MeetingStore`（迁移用自己的旧键常量）、`MeetingTool`（删 `:98`、改 `:26`）、`MeetingSettingsView`（传目录与 `minutesReady`）、
+  `LiveTranslateSettingsView`（加 `recordFolder` 参数，`minutesReady` PR4 已有；删「更改…」）、`LiveTranslateBar`、`LiveTranslateMeetingEngine`、`AppDelegate`（传 `MeetingStore.shared`）、
+  `MeetingStore`（迁移用自己的旧键常量）、`MeetingTool`（删 `:98`、改 `:26`）、`MeetingSettingsView`（传目录）、
   `Localizable.xcstrings`（删 `livetranslate.record.choose`、`.choosePrompt`）。细节见 §4.6。
 - 行为不变：静态在现在的启动流程里总是装上的，「有会议库」一直是唯一走得到的分支；删掉的都是到不了的分支。
 - 验证：§7.3 自由听译几项（含「启动后第一个动作就开自由听译」）；用一份有旧记录文件夹、`meeting.migratedLegacy` 为 false 的配置启动，迁移照常。

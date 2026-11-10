@@ -68,9 +68,9 @@ final class MeetingSessionController: ObservableObject {
     /// 还在开始中就点了结束：开起来马上收尾。
     private var finishWhenStarted = false
     /// 本场的转录去向（第一次开起来时用它建文档）。
-    private var destination: LiveTranslateTranscript.Destination?
+    private var destination: MeetingTranscript.Destination?
     /// 本场的 meeting.md：第一次 `.started` 时建，改设置重启时续写同一份，`.ended` 里收尾；引擎没开起来就始终没有。
-    private var transcript: LiveTranslateTranscript?
+    private var transcript: MeetingTranscript?
     /// App 正在退出：文档同步写完、纪要标「没整理完」。
     private var terminating = false
     /// 定稿的句子（`onFinalLine`）：算重点那段说了什么；建文档时补写开起来之前就定稿的那几句。
@@ -160,7 +160,7 @@ final class MeetingSessionController: ObservableObject {
         let style = MeetingSettings.template
         let record = MeetingStore.shared.createMeeting(
             type: type, title: title, start: now, event: event,
-            template: LiveTranslateMinutesTemplate.meeting(style).storageValue)
+            template: MeetingMinutesTemplate.meeting(style).storageValue)
         self.type = type
         self.event = event
         meetingID = record.id
@@ -195,17 +195,17 @@ final class MeetingSessionController: ObservableObject {
     /// 本场的转录：写到会议库这场会议的 meeting.md，带会议头信息；线上会议标说话人；总是整理纪要（会议模板），
     /// 纪要好了由这里发通知。
     private func makeDestination(record: MeetingRecord, type: MeetingType, title: String, start: Date,
-                                 event: MeetingEventInfo?, style: LiveTranslateMeetingStyle)
-        -> LiveTranslateTranscript.Destination {
+                                 event: MeetingEventInfo?, style: MeetingMinutesStyle)
+        -> MeetingTranscript.Destination {
         let store = MeetingStore.shared
-        var destination = LiveTranslateTranscript.Destination(
+        var destination = MeetingTranscript.Destination(
             fileURL: store.markdownURL(for: record),
             displayName: (record.dir as NSString).lastPathComponent,
-            header: LiveTranslateTranscript.Header(title: title, kind: MeetingText.typeName(type), start: start,
-                                                   attendees: event?.attendees ?? [], calendar: event?.calendarTitle))
+            header: MeetingTranscript.Header(title: title, kind: MeetingText.typeName(type), start: start,
+                                             attendees: event?.attendees ?? [], calendar: event?.calendarTitle))
         destination.speakers = type == .online
         destination.template = .meeting(style)
-        destination.summaryFollowsSetting = false
+        destination.summarizes = true
         destination.notifiesMinutes = false
         let id = record.id
         destination.onEvent = { event in
@@ -390,10 +390,10 @@ final class MeetingSessionController: ObservableObject {
     /// 已经出了字）与开始中写的速记一并写进去 —— 以前文档在引擎问完权限时就建了，这些当场就记下。
     private func openTranscript(_ run: MeetingEngineRun) {
         guard transcript == nil, let destination else { return }
-        let transcript = LiveTranslateTranscript(start: Date(), config: run, destination: destination)
-        // 写盘失败：提示放进字幕条，同一条文案、只提示一次（字幕条收着就看不到 —— 同以前）。
+        let transcript = MeetingTranscript(start: Date(), config: run, destination: destination)
+        // 写盘失败：提示（文档给的那一行，已本地化）放进字幕条，同一条文案、只提示一次（字幕条收着就看不到 —— 同以前）。
         transcript.onWriteError = { message in
-            LiveTranslateController.shared.showNotice(L("livetranslate.record.writeFailed \(message)"))
+            LiveTranslateController.shared.showNotice(message)
         }
         self.transcript = transcript
         for line in finalLines.values.sorted(by: { $0.time != $1.time ? $0.time < $1.time : $0.key < $1.key }) {
@@ -462,7 +462,7 @@ final class MeetingSessionController: ObservableObject {
     }
 
     /// 转录的进度（`meetingID` 是这份转录属于的那场 —— 纪要整理完时可能已经开了下一场）。事件来自会议自己的文档。
-    private func transcriptEvent(_ event: LiveTranslateTranscript.Event, meetingID id: String) {
+    private func transcriptEvent(_ event: MeetingTranscriptEvent, meetingID id: String) {
         let store = MeetingStore.shared
         switch event {
         case .created:
@@ -491,7 +491,7 @@ final class MeetingSessionController: ObservableObject {
         case .minutes(let outcome):
             var items: [MeetingActionItem]?
             if case .done(let text) = outcome {
-                items = LiveTranslateMeetingMinutes.parseActionItems(text).map {
+                items = MeetingMinutesFormat.parseActionItems(text).map {
                     MeetingActionItem(text: $0.text, owner: $0.owner, due: $0.due, done: $0.done)
                 }
             }
@@ -511,7 +511,7 @@ final class MeetingSessionController: ObservableObject {
         let lines = finalLines.values.sorted { $0.time < $1.time }
         return marks.map { mark in
             let time = startedAt.addingTimeInterval(mark.t)
-            let text = lines.filter { LiveTranslateMeetingMinutes.isHighlighted($0.time, marks: [time]) }
+            let text = lines.filter { MeetingMinutesFormat.isHighlighted($0.time, marks: [time]) }
                 .map(\.original).joined(separator: " ")
             return MeetingHighlight(t: mark.t, text: text.isEmpty ? mark.text : String(text.prefix(200)))
         }
@@ -520,7 +520,7 @@ final class MeetingSessionController: ObservableObject {
     // MARK: - 通知
 
     /// 纪要好了 / 没整理成 / 只存了转录：宠物通知，[打开] 打开这场的记录。
-    private func postSaved(_ id: String, outcome: LiveTranslateTranscript.MinutesOutcome) {
+    private func postSaved(_ id: String, outcome: MeetingMinutesOutcome) {
         guard let record = MeetingStore.shared.record(id) else { return }
         let title: String
         switch outcome {

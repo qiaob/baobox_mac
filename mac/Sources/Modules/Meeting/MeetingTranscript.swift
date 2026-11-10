@@ -1,5 +1,8 @@
-import AppKit
 import Foundation
+import os
+
+/// 转录与纪要的诊断日志（#107 之前在字幕与同传那边，category `livetranslate.transcript`）。
+private let transcriptLog = Logger(subsystem: "com.baobox.app", category: "meeting.transcript")
 
 /// 一次实时翻译的本地记录（Markdown）：开头是时间、音源、语言，然后「纪要」（停止后由本地 AI 整理），
 /// 最后逐句的时间 + 原文 + 译文。会议记录（`Destination.header`）另有标题与参会人、「速记」一节、每句的说话人与 🔖 标记。
@@ -7,7 +10,7 @@ import Foundation
 /// 说完（定稿）的句子就记下；内存里留整份，有变化时至多 1 秒后整份重写一次（原子写），中途崩溃最多丢最后 1 秒。
 /// 一句都没有就不建文件。改设置引起的重启接着写同一份，并记一行「改为：…」。
 @MainActor
-final class LiveTranslateTranscript {
+final class MeetingTranscript {
     /// 会议的文件头；nil（实时翻译）= 原来的版式。
     struct Header: Equatable {
         var title: String
@@ -28,53 +31,19 @@ final class LiveTranslateTranscript {
         var header: Header?
         /// 每句标说话人（线上会议）。
         var speakers = false
-        var template: LiveTranslateMinutesTemplate = .content
-        /// 停止后整理纪要跟着 `livetranslate.record.summary` 开关走（自由听译）；false = 总是整理（会议）。
-        var summaryFollowsSetting = true
+        var template: MeetingMinutesTemplate = .content
+        /// 停止后整理纪要：会议总是整理；自由听译按开记录时、收尾时「停止后整理纪要」开关的值（引擎交进来，`FreeListeningRecord`）。
+        var summarizes = true
         /// 纪要整理好后发「实时翻译纪要已整理好」（自由听译原来的行为）；会议自己发。
         var notifiesMinutes = true
         /// 进度：记下第一句、收尾、纪要结果（会议库据此更新 meta.json 与索引）。
-        var onEvent: ((Event) -> Void)?
+        var onEvent: ((MeetingTranscriptEvent) -> Void)?
 
         init(fileURL: URL, displayName: String, header: Header? = nil) {
             self.fileURL = fileURL
             self.displayName = displayName
             self.header = header
         }
-
-        /// 实时翻译原来的去处：`livetranslate.record.folder` 下的「yyyy-MM-dd HH-mm-ss.md」。
-        @MainActor
-        static func legacy(start: Date) -> Destination {
-            let fileName = LiveTranslateTranscript.fileName(for: start)
-            return Destination(fileURL: LiveTranslateRecordSettings.folder.appendingPathComponent(fileName),
-                               displayName: fileName)
-        }
-
-        var summaryEnabled: Bool {
-            summaryFollowsSetting ? LiveTranslateRecordSettings.summary : true
-        }
-    }
-
-    /// 纪要怎么样了（给会议库更新状态）。
-    enum MinutesOutcome: Equatable {
-        /// 没开纪要。
-        case off
-        case generating
-        case done(String)
-        case failed(String)
-        case noModel
-        case tooShort
-        /// App 退出了，没整理完。
-        case interrupted
-    }
-
-    enum Event {
-        /// 记下了第一句（或第一笔速记）：文件马上就要建起来了。
-        case created
-        /// 停止：结束时间、纪要怎么处理；`terminating` = App 正在退出（调用方要同步写完）。
-        case finished(end: Date, minutes: MinutesOutcome, terminating: Bool)
-        /// 纪要整理完 / 失败 / 没整理完（只在 `.finished` 报了 `.generating` 之后）。
-        case minutes(MinutesOutcome)
     }
 
     private enum Item {
@@ -105,7 +74,7 @@ final class LiveTranslateTranscript {
         /// App 退出了，没整理完。
         case interrupted
 
-        var outcome: MinutesOutcome {
+        var outcome: MeetingMinutesOutcome {
             switch self {
             case .off: return .off
             case .later, .generating: return .generating
@@ -119,12 +88,12 @@ final class LiveTranslateTranscript {
     }
 
     let fileURL: URL
-    /// 写盘失败（没授权「文稿」、磁盘满…）时回调一次，字幕条提示。
+    /// 写盘失败（磁盘满、目录不可写…）时回调一次，参数是给用户看的一行提示（已本地化），字幕条提示。
     var onWriteError: ((String) -> Void)?
 
     private let start: Date
     private let config: MeetingEngineRun
-    private let destination: Destination
+    private var destination: Destination
     private var lastConfig: MeetingEngineRun
     private var end: Date?
     private var items: [Item] = []
@@ -138,11 +107,11 @@ final class LiveTranslateTranscript {
     private var writeScheduled = false
     private var writeErrorShown = false
 
-    private static let ioQueue = DispatchQueue(label: "com.baobox.app.livetranslate.transcript", qos: .utility)
+    private static let ioQueue = DispatchQueue(label: "com.baobox.app.meeting.transcript", qos: .utility)
 
     /// 正在整理纪要的记录（会议的、自由听译的）：开始整理时登记、整理完注销。登记表和纪要任务都持有它们，
     /// 会话复位、开了下一场也照样写得回去；App 退出时 `abortAllMinutes()` 把它们全部标成「没整理完」。
-    private static var summarizing: [LiveTranslateTranscript] = []
+    private static var summarizing: [MeetingTranscript] = []
 
     /// App 退出：还在整理的纪要全部标成「没整理完」，md 与 meta.json 都同步写完（docs/meeting/ENGINE.md §4.5.5）。
     /// 在会议与自由听译都停下之后、`OfflineTranslator.shutdownAll()` 之前调。
@@ -159,13 +128,8 @@ final class LiveTranslateTranscript {
         self.config = config
         self.destination = destination
         lastConfig = config
-        minutes = destination.summaryEnabled ? .later : .off
+        minutes = destination.summarizes ? .later : .off
         fileURL = destination.fileURL
-    }
-
-    /// 写到实时翻译原来的文件夹。
-    convenience init(start: Date, config: MeetingEngineRun) {
-        self.init(start: start, config: config, destination: .legacy(start: start))
     }
 
     /// 至少记下了一句（或会议记了速记）才有文件。
@@ -187,7 +151,7 @@ final class LiveTranslateTranscript {
         scheduleWrite()
     }
 
-    /// 🔖 标记重点：记一行，整理纪要时这一刻前后的句子加「【重点】」（`LiveTranslateMeetingMinutes.isHighlighted`）。
+    /// 🔖 标记重点：记一行，整理纪要时这一刻前后的句子加「【重点】」（`MeetingMinutesFormat.isHighlighted`）。
     func mark(at time: Date) {
         marks.append(time)
         items.append(.mark(time: time))
@@ -221,11 +185,11 @@ final class LiveTranslateTranscript {
     /// 停止：记下结束时间、决定纪要怎么处理，写一次。`terminating` = App 正在退出：同步写，不整理纪要。
     func finish(at time: Date, terminating: Bool) {
         end = time
-        if !destination.summaryEnabled {
+        if !destination.summarizes {
             minutes = .off
         } else if terminating {
             minutes = .interrupted
-        } else if !AIService.shared.isReady(AIService.shared.route(for: .meetingMinutes), local: .generation) {
+        } else if !MeetingMinutesGenerator.isReady {
             minutes = .noModel
         } else if minutesInput.reduce(0, { $0 + $1.text.count }) + notes.count < 40 {
             minutes = .tooShort
@@ -251,14 +215,14 @@ final class LiveTranslateTranscript {
 
     // MARK: - 纪要
 
-    private var minutesInput: [LiveTranslateMinutes.Line] {
+    private var minutesInput: [MeetingMinutesGenerator.Line] {
         let speakers = destination.speakers
         let marks = self.marks
         return items.compactMap { item in
             guard case .line(let time, let original, _, let speaker) = item else { return nil }
-            return LiveTranslateMinutes.Line(time: time, text: original,
-                                             speaker: speakers ? speaker.map(Self.speakerLabel) : nil,
-                                             highlighted: LiveTranslateMeetingMinutes.isHighlighted(time, marks: marks))
+            return MeetingMinutesGenerator.Line(time: time, text: original,
+                                                speaker: speakers ? speaker.map(Self.speakerLabel) : nil,
+                                                highlighted: MeetingMinutesFormat.isHighlighted(time, marks: marks))
         }
         .sorted { $0.time < $1.time }
     }
@@ -269,22 +233,19 @@ final class LiveTranslateTranscript {
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let template = destination.template
         let notes = self.notes
-        // 走本地（内置或本机大模型）时那个模型常驻到写完；给纪要选了云端模型就不加载本地模型（出错退回时才现加载）。
-        let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
-        kept?.beginKeepAlive()
+        // 走本地时那个模型常驻到写完：`MeetingMinutesGenerator.generate` 里自己管。
         Self.summarizing.append(self)
         minutesTask = Task {
             let result: Minutes
             do {
-                result = .done(try await LiveTranslateMinutes.generate(lines: lines, chinese: chinese,
-                                                                       template: template, notes: notes))
+                result = .done(try await MeetingMinutesGenerator.generate(lines: lines, chinese: chinese,
+                                                                          template: template, notes: notes))
             } catch is CancellationError {
                 result = .interrupted
             } catch {
-                LiveTranslateLog.transcript.error("minutes failed: \(error.localizedDescription, privacy: .public)")
+                transcriptLog.error("minutes failed: \(error.localizedDescription, privacy: .public)")
                 result = .failed(error.localizedDescription)
             }
-            kept?.endKeepAlive()
             minutesTask = nil
             Self.summarizing.removeAll { $0 === self }
             guard case .generating = minutes else { return }
@@ -354,10 +315,10 @@ final class LiveTranslateTranscript {
     }
 
     private func reportWriteError(_ message: String) {
-        LiveTranslateLog.transcript.error("write failed: \(message, privacy: .public)")
+        transcriptLog.error("write failed: \(message, privacy: .public)")
         guard !writeErrorShown else { return }
         writeErrorShown = true
-        onWriteError?(message)
+        onWriteError?(L("livetranslate.record.writeFailed \(message)"))
     }
 
     // MARK: - 排版
@@ -472,10 +433,6 @@ final class LiveTranslateTranscript {
         return L("livetranslate.record.doc.languages \(config.speech) \(target)")
     }
 
-    private static func fileName(for date: Date) -> String {
-        format(date, "yyyy-MM-dd HH-mm-ss") + ".md"
-    }
-
     private static func format(_ date: Date, _ pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -492,5 +449,20 @@ final class LiveTranslateTranscript {
         formatter.unitsStyle = .abbreviated
         formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute, .second]
         return formatter.string(from: seconds) ?? ""
+    }
+}
+
+// MARK: - 自由听译的记录（会议库经 FreeListeningLibrary 开出来交给引擎，docs/meeting/ENGINE.md §4.5.3）
+
+extension MeetingTranscript: FreeListeningRecord {
+    func update(_ line: MeetingEngineLine) {
+        update(key: line.key, time: line.time, original: line.original, translation: line.translation,
+               speaker: line.speaker)
+    }
+
+    /// 「停止后整理纪要」由引擎在收尾时现读、交进来（原来是这里自己读 `livetranslate.record.summary`）。
+    func finish(at time: Date, terminating: Bool, summarizes: Bool) {
+        destination.summarizes = summarizes
+        finish(at: time, terminating: terminating)
     }
 }

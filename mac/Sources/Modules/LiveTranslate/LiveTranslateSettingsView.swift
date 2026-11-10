@@ -20,6 +20,14 @@ struct LiveTranslateSettingsSections: View {
 
     @ObservedObject private var controller = LiveTranslateController.shared
 
+    /// 「停止后整理纪要」下面那行提示用：纪要此刻整理得了吗（看「会议纪要」选的模型）。纪要归会议，由会议设置页传进来，
+    /// 字幕与同传不认识会议声明的 AI 功能（docs/meeting/ENGINE.md §4.5.4）。
+    private let minutesReady: () -> Bool
+
+    init(minutesReady: @escaping () -> Bool) {
+        self.minutesReady = minutesReady
+    }
+
     /// 朗读会读到的语言：只读译文，译文都是「译成」的那种（本来就是这种语言的句子不翻、不读）。
     private var voiceLanguages: [TranslationLanguage] {
         [TranslationLanguage.from(code: target) ?? LiveTranslateSettings.target]
@@ -121,7 +129,7 @@ struct LiveTranslateSettingsSections: View {
             controller.restartIfRunning()
         }
 
-        LiveTranslateRecordSection()
+        LiveTranslateRecordSection(minutesReady: minutesReady)
 
         Section("livetranslate.settings.barSection") {
             Picker("livetranslate.settings.display", selection: $display) {
@@ -216,6 +224,11 @@ private struct LiveTranslateRecordSection: View {
     @AppStorage(LiveTranslateRecordSettings.folderKey) private var folder = ""
     @AppStorage(LiveTranslateRecordSettings.summaryKey) private var summary = true
     @ObservedObject private var corrector = OfflineTranslator.corrector
+    private let minutesReady: () -> Bool
+
+    init(minutesReady: @escaping () -> Bool) {
+        self.minutesReady = minutesReady
+    }
 
     var body: some View {
         Section("livetranslate.record.section") {
@@ -248,9 +261,9 @@ private struct LiveTranslateRecordSection: View {
                 }
                 Toggle("livetranslate.record.summary", isOn: $summary)
                 Group {
-                    // 和结束时决定整不整理纪要的判断是同一条（LiveTranslateTranscript.finish）：看「会议纪要」选的模型，
+                    // 和结束时决定整不整理纪要的判断是同一条（会议那边纪要生成器的 isReady）：看「会议纪要」选的模型，
                     // 不只是内置的 Qwen3-1.7B。`corrector` 仍然观察着，它下载完这一行会跟着变。
-                    if AIService.shared.isReady(AIService.shared.route(for: .meetingMinutes), local: .generation) {
+                    if minutesReady() {
                         Text("livetranslate.record.summaryHelp")
                     } else {
                         Text("livetranslate.record.summaryNeedsModel")

@@ -30,7 +30,8 @@ enum LiveTranslateRecordSettings {
         return path.isEmpty ? defaultFolder : URL(fileURLWithPath: path, isDirectory: true)
     }
 
-    /// 新记录实际写到哪：会议模块装上了就是会议库（docs/meeting/TECH_DESIGN.md §2.3），否则是上面这个文件夹。
+    /// 设置页「保存位置」、「打开记录文件夹」指向哪：会议库（新记录都由它写，docs/meeting/TECH_DESIGN.md §2.3）；
+    /// 会议库没装上时退回上面这个文件夹（那时也不记录，见 `LiveTranslateController.startTranscript`）。
     /// `folder` 设置保留，只用于首次启动把旧记录迁进会议库。
     @MainActor
     static var effectiveFolder: URL {
@@ -48,13 +49,4 @@ enum LiveTranslateRecordSettings {
             }
         }
     }
-}
-
-/// 会议库（Meeting 模块）接管自由听译的新记录（docs/meeting/TECH_DESIGN.md §2.3）。
-@MainActor
-protocol LiveTranslateRecordLibrary: AnyObject {
-    /// 会议库根目录（设置页「保存位置」、字幕条「打开记录文件夹」）。
-    var folderURL: URL { get }
-    /// 新开一份自由听译记录写到哪（会议库里新的一条；记下第一句时才登记进索引）。
-    func freeListeningDestination(start: Date) -> LiveTranslateTranscript.Destination
 }

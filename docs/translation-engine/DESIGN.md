@@ -124,14 +124,14 @@
   - 每次重启换一个新的 `AVAudioEngine`，按 `inputNode.inputFormat`（设备此刻的实际格式）挂 tap，不用会过时的 `outputFormat`；
   - 挂 tap、prepare、start 包在 `BBXObjC.catchException` 里（项目里唯一的 Objective-C，`Core/ObjC/`），异常转成错误，
     宁可这一次没接上也不崩。
-- 诊断日志：`subsystem == "com.baobox.app"`，category `livetranslate.recognition` / `livetranslate.audio` /
-  `livetranslate.transcript`。单语言识别器每段结束记一行「segment N done (pause / max length / error … / watchdog restart):
+- 诊断日志：`subsystem == "com.baobox.app"`，category `livetranslate.recognition` / `livetranslate.audio`；记录写盘与纪要的日志
+  随写文档的代码搬进了会议，category `meeting.transcript`（#107 PR4，之前是 `livetranslate.transcript`）。单语言识别器每段结束记一行「segment N done (pause / max length / error … / watchdog restart):
   K results, first text X.Xs, Ns」；朗读暂停识别时记「read-aloud paused recognition for X.Xs」；运行中每 10 秒一行**心跳**
   「heartbeat: audio N buffers Xs (voiced, paused for read-aloud) | recognition N updates, N new lines | corrected, translated,
   waiting (oldest) | read-aloud backlog」——「卡住了」时按它判断是哪一环停了：音频秒数为 0 = 采集断了；有人声却没有识别更新 =
   识别卡了；waiting 只增不减 = 翻译卡了；backlog 越来越多 = 朗读卡了。查看：
   `/usr/bin/log show --last 30m --style compact --predicate 'subsystem == "com.baobox.app" AND category BEGINSWITH "livetranslate"'`
-  （zsh 里 `log` 是内建命令，要写全路径）。
+  （zsh 里 `log` 是内建命令，要写全路径；要连记录 / 纪要一起看，谓词里再加 `OR category == "meeting.transcript"`，注意括号）。
 - **只让一路走本机识别**（2026-11-05 实测）：系统的本机识别同一时间只能跑一种语言。装好英文本机模型后两路都在本机，
   英文模型一加载，中文那一路每段一开就被 `1110` 结束，连续三段后被停用（字幕条提示「简体中文识别不可用」）。
   而且**只要装了本机模型，不要求本机也会走本机**：把英文那路改成 `requiresOnDeviceRecognition = false` 后照样被挤

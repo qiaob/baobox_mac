@@ -114,7 +114,7 @@ final class MeetingTool: ToolModule {
         //    会议进行中上面已经调过一次，再调是空操作。
         LiveTranslateController.shared.terminate()
         // 3. 还在整理的纪要（会议的、自由听译的）全部标「没整理完」，md 与 meta 同步写。
-        LiveTranslateTranscript.abortAllMinutes()
+        MeetingTranscript.abortAllMinutes()
         // 4. 会议库排着的写盘做完。之后 AppDelegate 才 OfflineTranslator.shutdownAll() 结束推理进程（纪要已全部标掉，不会写一半）。
         MeetingStore.shared.flush()
     }

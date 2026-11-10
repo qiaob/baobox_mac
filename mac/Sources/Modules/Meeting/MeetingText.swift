@@ -31,7 +31,7 @@ enum MeetingText {
         }
     }
 
-    static func templateName(_ style: LiveTranslateMeetingStyle) -> String {
+    static func templateName(_ style: MeetingMinutesStyle) -> String {
         switch style {
         case .standard: return L("meeting.template.standard")
         case .standup: return L("meeting.template.standup")

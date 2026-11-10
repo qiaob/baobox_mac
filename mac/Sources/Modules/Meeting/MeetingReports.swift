@@ -22,8 +22,7 @@ final class MeetingMinutesRegenerator: ObservableObject {
     func regenerate(_ id: String) {
         let store = MeetingStore.shared
         guard let record = store.record(id), canRegenerate(record) else { return }
-        let route = AIService.shared.route(for: .meetingMinutes)
-        guard AIService.shared.isReady(route, local: .generation) else {
+        guard MeetingMinutesGenerator.isReady else {
             MeetingLibraryModel.shared.flash(L("meeting.regenerate.noModel"))
             return
         }
@@ -45,20 +44,17 @@ final class MeetingMinutesRegenerator: ObservableObject {
             return
         }
         let lines = transcript.lines.map {
-            LiveTranslateMinutes.Line(time: $0.time, text: $0.text, speaker: $0.speaker,
-                                      highlighted: LiveTranslateMeetingMinutes.isHighlighted($0.time, marks: transcript.marks))
+            MeetingMinutesGenerator.Line(time: $0.time, text: $0.text, speaker: $0.speaker,
+                                         highlighted: MeetingMinutesFormat.isHighlighted($0.time, marks: transcript.marks))
         }
-        let template = LiveTranslateMinutesTemplate(storageValue: record.meta.template)
+        let template = MeetingMinutesTemplate(storageValue: record.meta.template)
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         let notes = transcript.notes
-        // 走本地（内置或本机大模型）时那个模型常驻到写完；选了云端模型就不加载本地模型。
-        let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
+        // 走本地时那个模型常驻到写完：`MeetingMinutesGenerator.generate` 里自己管。
         Task {
-            kept?.beginKeepAlive()
-            defer { kept?.endKeepAlive() }
             do {
-                let minutes = try await LiveTranslateMinutes.generate(lines: lines, chinese: chinese, template: template,
-                                                                      notes: notes)
+                let minutes = try await MeetingMinutesGenerator.generate(lines: lines, chinese: chinese, template: template,
+                                                                         notes: notes)
                 let updated = MeetingMarkdown.replacingMinutes(in: markdown, with: minutes,
                                                                heading: L("livetranslate.record.doc.minutes"))
                 MeetingStore.shared.writeMarkdown(id, text: updated) { succeeded in
@@ -73,7 +69,7 @@ final class MeetingMinutesRegenerator: ObservableObject {
     }
 
     private func written(_ id: String, succeeded: Bool, minutes: String, markdown: String,
-                         template: LiveTranslateMinutesTemplate) {
+                         template: MeetingMinutesTemplate) {
         guard succeeded else {
             fail(id, message: L("meeting.regenerate.writeFailed"))
             return
@@ -83,7 +79,7 @@ final class MeetingMinutesRegenerator: ObservableObject {
             meta.status = .summarized
             guard case .meeting = template else { return }
             let done = Set(meta.actionItems.filter(\.done).map(\.text))
-            meta.actionItems = LiveTranslateMeetingMinutes.parseActionItems(minutes).map {
+            meta.actionItems = MeetingMinutesFormat.parseActionItems(minutes).map {
                 MeetingActionItem(text: $0.text, owner: $0.owner, due: $0.due, done: $0.done || done.contains($0.text))
             }
         }
@@ -174,7 +170,7 @@ final class MeetingWeeklyReporter {
     /// 让本地模型（Qwen3-1.7B）写一段 2–4 句的本周概述。材料超出上下文就截断。
     private static func overview(_ entries: [MeetingWeeklyReport.Entry],
                                  labels: MeetingWeeklyReport.Labels, route: AIRoute) async throws -> String? {
-        let material = LiveTranslateMinutes.clip(MeetingWeeklyReport.overviewInput(entries, labels: labels), budget: 2400)
+        let material = MeetingMinutesGenerator.clip(MeetingWeeklyReport.overviewInput(entries, labels: labels), budget: 2400)
         guard !material.isEmpty else { return nil }
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         // 提示词是给模型看的，不是界面文案：按语言写死两套。末尾 /no_think 关掉 Qwen3 的「思考」。

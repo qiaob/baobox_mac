@@ -1,14 +1,14 @@
 import Foundation
 
 // 纪要模板与会议纪要固定格式的纯逻辑（docs/meeting/TECH_DESIGN.md §2.3）：模板、输入行的排版（说话人、【重点】）、
-// 行动项的宽松解析。本文件只依赖 Foundation，可脱离 App 单独编译测试；提示词与生成在 LiveTranslateTranscript.swift。
+// 行动项的宽松解析。本文件只依赖 Foundation，可脱离 App 单独编译测试；提示词与生成在 MeetingMinutesGenerator.swift。
 
 /// 纪要模板。
-enum LiveTranslateMinutesTemplate: Equatable {
+enum MeetingMinutesTemplate: Equatable {
     /// 自由听译：要点 / 结论 / 待办（实时翻译原来的纪要，一字不改）。
     case content
     /// 会议纪要：摘要 / 决议 / 行动项 / 重点，输出格式固定；按会议类型换各节的侧重。
-    case meeting(LiveTranslateMeetingStyle)
+    case meeting(MeetingMinutesStyle)
 
     /// 存进会议库 meta.json 的 `template`：content / standard / standup / oneOnOne / interview。
     var storageValue: String {
@@ -19,7 +19,7 @@ enum LiveTranslateMinutesTemplate: Equatable {
     }
 
     init(storageValue: String?) {
-        if let value = storageValue, let style = LiveTranslateMeetingStyle(rawValue: value) {
+        if let value = storageValue, let style = MeetingMinutesStyle(rawValue: value) {
             self = .meeting(style)
         } else if storageValue == "content" {
             self = .content
@@ -30,7 +30,7 @@ enum LiveTranslateMinutesTemplate: Equatable {
 }
 
 /// 会议纪要的类型：默认 / 站会 / 1:1 / 面试。
-enum LiveTranslateMeetingStyle: String, CaseIterable, Codable {
+enum MeetingMinutesStyle: String, CaseIterable, Codable {
     case standard
     case standup
     case oneOnOne
@@ -38,7 +38,7 @@ enum LiveTranslateMeetingStyle: String, CaseIterable, Codable {
 }
 
 /// 会议纪要的固定格式：四节标题、喂给模型的一行怎么写、行动项怎么从输出里读回来。
-enum LiveTranslateMeetingMinutes {
+enum MeetingMinutesFormat {
     /// 「## 摘要 / ## 决议 / ## 行动项 / ## 重点」（英文界面用英文标题）。
     static func headings(chinese: Bool) -> [String] {
         chinese ? ["摘要", "决议", "行动项", "重点"] : ["Summary", "Decisions", "Action items", "Highlights"]

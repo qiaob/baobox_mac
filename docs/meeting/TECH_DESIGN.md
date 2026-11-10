@@ -48,12 +48,18 @@
 ### 2.3 转录与纪要
 
 > **谁驱动会议的 meeting.md**（2026-11，#107 PR3，详见 `ENGINE.md` §4.5）：会议会话自己驱动。引擎的托管会话只报「开起来（带这次怎么跑的 `MeetingEngineRun`）/ 一句 / 结束」，
-> 不建、不写会议的文档；`MeetingSessionController` 在第一次开起来时用 `LiveTranslateTranscript` 建文档，句子、暂停 / 继续、单路静音、🔖、速记直接写，
-> 改设置重启时续写同一份，`.ended` 里收尾。退出时还在整理的纪要（会议的、自由听译的）由 `LiveTranslateTranscript.abortAllMinutes()` 统一标「没整理完」。
-> 写文档的类这一步还在 `Modules/LiveTranslate/`，下一步（PR4）搬进会议；下面的版式与纪要规则不变。
+> 不建、不写会议的文档；`MeetingSessionController` 在第一次开起来时用 `MeetingTranscript` 建文档，句子、暂停 / 继续、单路静音、🔖、速记直接写，
+> 改设置重启时续写同一份，`.ended` 里收尾。退出时还在整理的纪要（会议的、自由听译的）由 `MeetingTranscript.abortAllMinutes()` 统一标「没整理完」。
+>
+> **写文档的类与纪要生成器归会议**（#107 PR4，`ENGINE.md` §4.5.3、§4.5.4、§4.8）：`MeetingTranscript`（`Modules/Meeting/MeetingTranscript.swift`，原 `LiveTranslateTranscript`）、
+> `MeetingMinutesGenerator`（原 `LiveTranslateMinutes`；纪要用哪个模型、此刻能不能整理只在它的 `route` / `isReady` 判断，本地模型的常驻也收在它的 `generate` 里）、
+> 纪要模板与格式 `Modules/Meeting/Logic/MeetingMinutesFormat.swift`（`MeetingMinutesTemplate` / `MeetingMinutesStyle` / `MeetingMinutesFormat`，rawValue 与 storageValue 不变）、
+> 纪要结果与文档进度 `Logic/MeetingTranscriptTypes.swift`（`MeetingMinutesOutcome` / `MeetingTranscriptEvent`）。自由听译的记录经 Core 协议 `FreeListeningLibrary`
+> 由会议库开（`MeetingStore` 实现，见 §4），引擎只决定记不记、什么时候记。字幕与同传设置页「停止后整理纪要」下的提示由会议设置页传进 `MeetingMinutesGenerator.isReady`。
+> 下面的版式与纪要规则不变。
 
-- `LiveTranslateTranscript` 支持：指定目录与文件名、头信息（标题、类型、时间、参会人、日历）、每行可选说话人（`**10:32:05 我**`）、🔖 标记行、速记段。实时翻译自己（自由听译）的新记录也写进会议库（见 §4），旧目录设置保留但只用于迁移。
-- `LiveTranslateMinutes.generate(lines:chinese:template:)`：模板 `.content`（自由听译：要点 / 结论 / 待办，即现状）、`.meeting(.standard / .standup / .oneOnOne / .interview)`。会议模板的输出格式固定：
+- `MeetingTranscript` 支持：指定目录与文件名、头信息（标题、类型、时间、参会人、日历）、每行可选说话人（`**10:32:05 我**`）、🔖 标记行、速记段。实时翻译自己（自由听译）的新记录也写进会议库（见 §4），旧目录设置保留但只用于迁移；写回旧目录的分支 PR4 删了（会议库没装上就不记录）。
+- `MeetingMinutesGenerator.generate(lines:chinese:template:notes:)`：模板 `.content`（自由听译：要点 / 结论 / 待办，即现状）、`.meeting(.standard / .standup / .oneOnOne / .interview)`。会议模板的输出格式固定：
   ```
   ## 摘要
   ## 决议
@@ -69,7 +75,7 @@
 - **本场的 meeting.md 归会话**（#107 PR3，`ENGINE.md` §4.5.2、§4.5.5）：第一次 `.started` 时建（开始中写的速记、开起来之前就定稿的句子一并写进去；引擎没开起来就没有文档，这场作废）；
   暂停 / 继续、单路静音、🔖、速记调完引擎就直接写；`.ended` 里先收尾文档（它同步报回的 `.finished` 写 meta 或作废）再撤勿扰、收控制条、复位。
   App 退出：先置 `terminating` 再让引擎停，引擎在返回前把剩下的句子和 `.ended` 同步报回来；没报 `.ended`（比如正因为改设置在重启）就自己收尾。
-  `MeetingTool.willTerminate` 的顺序是显式的四步：会话 `terminate()` → 引擎 `terminate()`（自由听译）→ `LiveTranslateTranscript.abortAllMinutes()` → `MeetingStore.shared.flush()`。
+  `MeetingTool.willTerminate` 的顺序是显式的四步：会话 `terminate()` → 引擎 `terminate()`（自由听译）→ `MeetingTranscript.abortAllMinutes()` → `MeetingStore.shared.flush()`。
 - **控制条** `MeetingControlBar`：nonactivating 面板，`.statusBar` 级，速记展开时可成为 key（输入用），收起后交还焦点。宠物在（开着、显示着、没借给休息画面）时经 `PetController.dockAccessory` 挂成宠物窗的子窗口，贴在宠物头顶，跟着宠物走，自己不能拖；宠物关着、中途被关掉或借出时回到屏幕顶部居中，可拖动（记住位置）。
 - **合规说明**：首次开始记录弹一次（宠物常驻气泡，[我已告知][取消]）。
 

@@ -95,7 +95,7 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 | `selectiontranslate.actions` | 划词助手 | 通用 | `SelectionAIActionArea`（润色、改写、地道英文、解释、总结、自定义动作，#85） | 点了动作的那段选中文字 | `.fastest` |
 | `livetranslate.translate` | 会议 | 翻译 | `LiveTranslateTranslator`（字幕与同传、会议） | 识别出来的每一句话 | 自动 |
 | `livetranslate.correct` | 会议 | 通用 | `LiveTranslateCorrector` | 识别出来的中文句子连同上文 | `.fastest` |
-| `meeting.minutes` | 会议 | 通用 | `LiveTranslateMinutes`（会后纪要、重新生成） | 整场会议的转写和速记 | `.best` |
+| `meeting.minutes` | 会议 | 通用 | `MeetingMinutesGenerator`（会后纪要、重新生成） | 整场会议的转写和速记 | `.best` |
 | `meeting.weekly` | 会议 | 通用 | `MeetingWeeklyReporter` | 一周各场会议的纪要摘要 | `.best` |
 | `dictation.polish` | 听写 | 通用 | `DictationPolisher` | 听写出来的文字 | `.fastest` |
 

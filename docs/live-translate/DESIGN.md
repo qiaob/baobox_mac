@@ -172,19 +172,24 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 - **托管会话（会议）不写文档**（2026-11，#107 PR3，`docs/meeting/ENGINE.md` §4.5）：会议经引擎开的会话，引擎只报「开起来 / 一句 / 结束」，
   会议的 meeting.md 由会议自己建、自己写、自己收尾；引擎只管字幕条上的「记录」按钮（跟着会议的暂停走）和「打开本次记录」（记下第一句后指向会话配置里的 `documentURL`）。
   下面说的都是自由听译自己的记录。App 退出时还在整理的纪要（会议的、自由听译的）由会议统一标「没整理完」。
+- **自由听译的记录由会议库写**（2026-11，#107 PR4，`docs/meeting/ENGINE.md` §4.5.3）：记不记、什么时候记（开关、字幕条按钮、中途打开时补记已有的句子）
+  仍由引擎决定；开记录时经 `FreeListeningLibrary`（Core 协议，会议库 `MeetingStore` 实现）开一份 `FreeListeningRecord`，写成什么样、写到哪、整不整理纪要
+  由会议库定。写文档的类 `MeetingTranscript` 与纪要生成器 `MeetingMinutesGenerator` 都在会议模块（`Modules/Meeting/`）。「停止后整理纪要」开关在开记录、
+  收尾时由引擎现读、作为参数交过去。写回 `~/Documents/Baobox 实时翻译记录/` 的旧去处已删：会议库没装上就不记录（记一条 fault，现在的启动流程里总是装上的）。
 
 - **开关**：「保存记录」**默认关**（2026-11-05 用户要求），字幕条上的「记录」按钮一点就切（用户：菜单里操作不方便），
   设置页「记录与纪要」里也能开关，记住选择；
   正在实时翻译时**立刻生效**——开：从现在起记，字幕条上已有的几句也补进去；关：这一份就此收尾（写结束时间、整理纪要）。
-- **记录**（`LiveTranslateTranscript`）：开着时每次开始新建一份 Markdown，默认放 `~/Documents/Baobox 实时翻译记录/`，
-  文件名 `yyyy-MM-dd HH-mm-ss.md`。开头：开始 / 结束时间与时长、音源、说 / 译成；然后「## 纪要」；然后「## 记录」逐句
+- **记录**（会议模块的 `MeetingTranscript`）：开着时每次开始新建一份 Markdown，进会议库的「yyyy-MM-dd HH-mm 自由听译/meeting.md」
+  （会议模块之前放 `~/Documents/Baobox 实时翻译记录/yyyy-MM-dd HH-mm-ss.md`，这些旧记录首次启动时按引用迁进会议库）。
+  开头：开始 / 结束时间与时长、音源、说 / 译成；然后「## 纪要」；然后「## 记录」逐句
   `**时间** 原文` + `> 译文`（不翻的句子只有原文）。
 - 什么时候记：句子**定稿**时（含被下一句顶成定稿的）；之后译文 / AI 纠正回来再更新。停止时最后那句没定稿也记上。
   内存里留整份，有变化至多 1 秒后整份重写（串行队列、原子写），中途崩溃最多丢最后 1 秒；一句都没有就不建文件。
-  第一次写「文稿」时系统会弹授权框，所以建目录、写文件都在后台队列；写失败字幕条提示一次。
+  建目录、写文件都在后台串行队列（以前写进「文稿」时第一次会弹授权框）；写失败字幕条提示一次。
 - **改设置引起的重启**（`restartIfRunning`：改音源、语言、朗读输出…）接着写同一份，记一行「改为：…」；句子 id 会从头编，
   记录里按「第几次运行 + id」区分。用户停止、出错停止才收尾。App 退出时同步写完，纪要标「没整理完」。
-- **纪要**（`LiveTranslateMinutes`）：停止后用 AI 纠错的 Qwen3-1.7B 在后台整理（上下文为此从 2048 调到 4096；
+- **纪要**（会议模块的 `MeetingMinutesGenerator`）：停止后用 AI 纠错的 Qwen3-1.7B 在后台整理（上下文为此从 2048 调到 4096；
   2026-11 起（#86）按「设置 → AI」里「会议纪要」选的模型，Qwen3-1.7B 是默认），输出
   「### 要点 / ### 结论 / ### 待办」三节，替换「## 纪要」下的占位文字；语言跟随界面语言。记录按估算 token（中日韩一字约一个，
   其余约 3.5 字符一个）凑段，每段 ≤ 2200：一段就直接整理；多段就先逐段提要点（每段最多 10 条），再合并整理。
@@ -228,5 +233,5 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `LiveTranslateTranslator.swift` | 翻译节流队列（按方向分）+ `translationTask` 桥接 + 离线模型服务循环 |
 | `LiveTranslateDualRecognizer.swift` | 双识别器：两种语言同时听、共用切段、逐句打分定语种 |
 | `LiveTranslateBar.swift` | 字幕条 `NSPanel`（可拉伸、记位置大小）与 SwiftUI 视图（快捷菜单、延迟监控、可滚动历史） |
-| `LiveTranslateTranscript.swift` | 本地记录（Markdown，增量整份重写）+ 停止后整理纪要（分段提要点再合并） |
+| `LiveTranslateRecordSettings.swift` | 「保存记录」「停止后整理纪要」开关与保存位置（`LiveTranslateRecordSettings`）。记录本身由会议库写：`Modules/Meeting/MeetingTranscript.swift`（Markdown，增量整份重写）、`MeetingMinutesGenerator.swift`（停止后整理纪要，分段提要点再合并），#107 PR4 从这里搬过去 |
 | `LiveTranslateSettingsView.swift` | 设置页 |

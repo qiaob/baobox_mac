@@ -2,7 +2,7 @@ import Foundation
 
 /// 一次实时翻译会话怎么开（docs/meeting/TECH_DESIGN.md §2.1）：实时翻译（自由听译）与会议记录共用一个引擎，
 /// 区别都在这里。`LiveTranslateController.start()` 等价于 `start(config: .fromSettings())` —— 读的仍是原来那些
-/// `livetranslate.*` 设置，行为与改造前一样；会议记录由 `MeetingSessionController` 组一份自己的。
+/// `livetranslate.*` 设置，行为与改造前一样；会议记录由会议的会话组一份自己的。
 struct LiveTranslateSessionConfig {
     /// 音源。`.microphone` / `.system` 是实时翻译原来的两种；`.mixed` = 麦克风 + 系统声音混成一路（线上会议）。
     enum Sources: Equatable {
