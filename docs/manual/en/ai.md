@@ -58,13 +58,16 @@ Hover a suggestion to read the full reason.
 
 ### Usage Limits and Privacy
 
-At the bottom of the Features pane, collapsed by default:
+At the bottom of the Features pane, collapsed by default; even collapsed, its title shows today's usage, such as
+"Today: 123 requests · 4.5k tokens" (orange once the cap is reached):
 
+- **Max requests per day**: 500 by default (100–10000). Past it, cloud requests use the local model and the pet asks whether to
+  "Allow 500 More"; the same button appears in this section. Services on this Mac (like Ollama) cost nothing and don't count.
+- **Max requests per minute**: 120 by default (10–600).
 - **Max reply length**: 4096 tokens by default (128–8192). Longer replies are cut off; a cut-off reply falls back to the local
   model.
-- **Max requests per minute**: 120 by default (10–600).
 
-Both cover all cloud models combined, to avoid surprise bills; requests over the limit use the local model instead (if
+All of them cover all cloud models combined, to avoid surprise bills; requests over the limit use the local model instead (if
 downloaded). Below them is a list of what's being sent to whom right now, such as "Caption Translation: sends every recognized
 sentence to “Anthropic Claude”." With no feature on a cloud model it reads
 "No feature uses a cloud model right now, so nothing is sent."
@@ -114,7 +117,8 @@ Local, no key needed) and the number of models. Expanded:
 
 - **Name**: what the model menus show.
 - **Base URL**: leave it empty for the provider's default; change it for an international endpoint, a proxy or a self-hosted
-  gateway.
+  gateway. It must be `https://`; only services on this Mac (like Ollama) may use `http://`, since anything else would send your
+  key and text unencrypted.
 - **API key**: paste it and click "Save". It's kept in your Keychain and never shown again — the field just reads
   "Saved (type a new one to replace it)" — and can be deleted. Services with an official sign-up page get a "Get an API key" link.
 - **Models**: one row each, with "Display name (optional)" and "Model ID (pick or type)", "Test", and delete. Once the key is
@@ -163,6 +167,8 @@ error (the subtitle bar says translation failed, for example).
   on this Mac. Is Ollama running?", start it; a large model takes a while to load the first time.
 - **"The reply hit the length limit and was cut off"**: raise "Max reply length" under Usage Limits and Privacy.
 - **"Reached this Mac's per-minute request limit"**: raise "Max requests per minute" under Usage Limits and Privacy.
+- **"Reached today's cloud request limit"**: click "Allow 500 More" in the pet's bubble or under Usage Limits and Privacy, or raise
+  the daily cap.
 
 Technical details: [docs/ai-service/DESIGN.md](../../ai-service/DESIGN.md) and
 [docs/local-models/DESIGN.md](../../local-models/DESIGN.md).

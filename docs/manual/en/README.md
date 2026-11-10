@@ -26,7 +26,7 @@ For version **0.0.8**. This manual covers every tool and every feature currently
 | [Codex assistant](codex.md) | Session resume, quota and usage, visual config, turn notifications, maintenance |
 
 Settings also has an **[AI](ai.md)** page: pick a local or cloud model for each feature that
-uses one, manage local models, add cloud providers, and set limits on cloud usage.
+uses one, manage local models, add cloud providers, and see today's usage and limits.
 
 Two general chapters:
 

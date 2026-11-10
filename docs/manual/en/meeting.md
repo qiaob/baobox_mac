@@ -172,8 +172,8 @@ permission is missing.
 | Pause Meeting Reminders ▸ | For 1 Hour / For Today / Until Tomorrow |
 | Meeting Settings… | |
 
-The old "Subtitles & Interpreting" menu and settings page are still there in this version (their first line reads
-"Now part of Meeting"); from the next version they live only under Meeting.
+The separate "Subtitles & Interpreting" menu and settings page are gone (#106); everything lives under Meeting: "Start Free
+Listening" in the menu, and the settings under Settings → Meeting → Subtitles & Interpreting.
 
 ## Settings
 
