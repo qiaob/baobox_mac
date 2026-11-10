@@ -27,7 +27,8 @@ The settings page lists every icon currently in the menu bar: the icon, its name
 - When you change one, Baobox moves just that icon for you; the pointer disappears for an instant and the other icons
   stay put.
 - Your choices stick: after an app restarts or the Mac reboots, they're the same (macOS keeps the positions in each app).
-- The clock and Control Center can't be moved and aren't listed; Baobox's own icon isn't listed either.
+- The clock, Control Center and the microphone / camera recording indicator can't be moved and aren't listed; Baobox's
+  own icon isn't listed either.
 - **An icon that appears for the first time** (a newly installed app's first launch) is placed at the far left by
   macOS and starts out hidden. Set it to Show in Settings to keep it in the menu bar.
 
