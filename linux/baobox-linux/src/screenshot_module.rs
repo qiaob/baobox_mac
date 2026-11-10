@@ -16,17 +16,9 @@ use baobox_core::selection::Outcome;
 use std::path::PathBuf;
 use x11capture::X11Session;
 
-/// 工具 id，同时是配置里的节名。
-pub const ID: &str = "screenshot";
+/// 工具 id 与快捷键动作 id 写进用户配置，两个平台共用 `baobox_app` 里那一份。
+pub use baobox_app::tools::screenshot::{CAPTURE, CAPTURE_FULL, ID, OCR, RECORD};
 
-/// 动作 id。
-pub const CAPTURE: &str = "screenshot.capture";
-/// 动作 id。
-pub const CAPTURE_FULL: &str = "screenshot.full";
-/// 动作 id。
-pub const OCR: &str = "screenshot.ocr";
-/// 动作 id。
-pub const RECORD: &str = "screenshot.record";
 /// 动作 id。
 pub const HISTORY: &str = "screenshot.history";
 
