@@ -4,15 +4,16 @@
 [![Windows](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml)
 [![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
-**A menu-bar toolbox for macOS** — screenshots, clipboard, window management, keyboard
-clicking, sleep prevention, meeting notes, voice dictation, a desktop pet, focus and health
-reminders, selection translation, plus dashboards for the Claude Code and Codex CLIs. One app
-instead of five, with one shortcut system and one settings window.
+**A menu-bar toolbox for macOS** — screenshots, clipboard, window management, menu-bar
+tidying, keyboard clicking, sleep prevention, meeting notes and live subtitles, voice dictation,
+a selection assistant, phone transfer, a desktop pet, focus and health reminders, plus dashboards
+for the Claude Code and Codex CLIs. One app instead of five, with one shortcut system and one
+settings window; every AI feature can use a model on your Mac or a cloud model of your choice.
 
 [简体中文](README.zh-CN.md) · [User manual](docs/manual/en/README.md) · [Shortcuts](docs/manual/en/shortcuts.md)
 
 ```
-macOS 14+   ·   Swift 5.9   ·   Zero third-party dependencies   ·   Everything stays local
+macOS 14+   ·   Swift 5.9   ·   Zero third-party Swift dependencies   ·   Local by default
 ```
 
 ## Contents
@@ -35,11 +36,12 @@ screenshots, one for clipboard history, one for window management — each sitti
 background with its own settings and its own shortcuts. Baobox makes them **modules inside
 one native app**:
 
-- **Native, not Electron** — Swift 5.9 with SwiftUI and AppKit, **zero third-party
-  dependencies**, resident memory under ~50 MB
+- **Native, not Electron** — Swift 5.9 with SwiftUI and AppKit, **zero third-party Swift
+  dependencies** (local models run in a bundled llama.cpp process)
 - **Modular** — the app shell knows nothing about any specific tool; each module implements
   the `ToolModule` protocol and registers its own menu, shortcuts, and settings page
-- **Local only** — nothing is uploaded, nothing is collected, there is no account
+- **Local by default** — nothing is collected and there is no account. Cloud AI models are off
+  by default; text goes to a provider only when you pick a cloud model for a feature and use it
 
 No Dock icon (`LSUIElement`); everything lives in the menu bar.
 
@@ -47,14 +49,16 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
 
 | Tool | Default shortcut | In one line |
 |---|---|---|
-| [Screenshot & recording](docs/manual/en/screenshot.md) | ⌘⇧2 · ⌃⇧R | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, live drawing, history |
+| [Screenshot & recording](docs/manual/en/screenshot.md) | ⌘⇧2 · ⌃⇧R | Smart capture, annotation, pinning, scrolling capture, on-screen OCR, recording, history |
+| [Draw on Screen](docs/manual/en/screenshot.md#live-drawing) | unbound | Draw straight onto the screen; in pass-through mode the strokes stay while you keep working underneath |
 | [Clipboard](docs/manual/en/clipboard.md) | ⌘⇧V · ⌘⌥V | History, search, paste-back, favorites, format detection and conversion, text snippets, encrypted at rest |
 | [Window manager](docs/manual/en/window-manager.md) | ⌃⌥ family | Halves, quarters, maximize, center, across displays — 13 actions plus layout snapshots |
+| [Menu Bar](docs/manual/en/menubar.md) | unbound | Show or hide each menu-bar icon; hidden icons, and ones covered by the notch, open from the top of the Baobox menu |
 | [Keyboard clicking](docs/manual/en/keyboard-nav.md) | ⌘⇧Space | Two-letter labels on every clickable element; also keyboard scrolling |
-| [Live Translate](docs/manual/en/live-translate.md) | unbound | Live captions from the mic or system audio, English ⇄ Chinese translation, on-screen caption bar, transcripts; offline model fallback on macOS 14 |
+| [Meeting](docs/meeting/REQUIREMENTS.md) | unbound | Next-meeting countdown, one-click join, auto-detects meetings, local transcript, minutes and action items |
+| [Subtitles & Interpreting](docs/manual/en/live-translate.md) | unbound | Live captions and translation from the mic or system audio (21 languages), AI correction, spoken translation into a call; now part of Meeting |
 | [Selection assistant](docs/selection-translate/ASSISTANT.md) | unbound | Select text in any app → action bar: Translate, Learn, Polish, Rewrite, Natural English, Explain, Summarize |
-| [Meeting](docs/meeting/REQUIREMENTS.md) | unbound | Next-meeting countdown, one-click join, auto-detects meetings, local transcript and minutes, action items |
-| [Voice dictation](docs/dictation/REQUIREMENTS.md) | ⌥Space (start / stop) | Hold-to-talk, continuous (sentence by sentence) or long dictation; the text lands at your cursor in any app, with history |
+| [Voice dictation](docs/dictation/REQUIREMENTS.md) | ⌥Space (start / stop) | Hold-to-talk, continuous (sentence by sentence) or long dictation; the text lands at your cursor in any app, optional AI polish, with history |
 | [Focus & health](docs/focus-health/REQUIREMENTS.md) | unbound | Focus timer, water / stand / 20-20-20 reminders, break screen delivered by the desktop pet |
 | [Desktop pet](docs/desktop-pet/DESIGN.md) | unbound | A pet on your desktop that is also Baobox's unified notification center |
 | [Keep awake](docs/manual/en/caffeinate.md) | menu only | Timed sleep prevention, optional display-on |
@@ -68,7 +72,8 @@ No Dock icon (`LSUIElement`); everything lives in the menu bar.
   hover to open its submenu
 - Global hotkey center (Carbon): registration, **conflict detection**, customization,
   persistence, reset to default
-- One settings window: General / Shortcuts / one page per tool / About
+- One settings window: General / Shortcuts / AI / one page per tool / About
+- Every feature that uses a model picks it in Settings → AI (on this Mac or in the cloud) — see [AI models](#ai-models)
 - First-launch permission onboarding with live status
 - Optional launch at login (`SMAppService`)
 - English and Simplified Chinese, or follow the system
@@ -97,9 +102,10 @@ screen; **Esc** to cancel.
   and QR codes or barcodes in the frame are decoded alongside the text
 - **Recording**: the same selection flow, output as MP4 or GIF; system audio and microphone
   (a separate second track, optionally mixed down to one); pause, resume, or discard mid-recording
-- **Live drawing**: draw straight onto the screen. In **pass-through mode** the strokes stay
-  put while you keep using the app underneath
 - **History**: the last 20 shots by default — copy, pin, save, or delete any of them
+
+**Draw on Screen** has its own entry in the menu and shares the annotation tools: draw straight onto
+the live screen, and in **pass-through mode** the strokes stay put while you keep using the app underneath.
 
 ### Clipboard
 
@@ -148,28 +154,42 @@ clicks prefer `AXPress` — **your actual mouse never moves**.
 - **Keyboard scrolling**: j/k to scroll, Space to page — for pages like Chrome that don't
   expose a scrollbar element
 
-### Live Translate
+### Subtitles & Interpreting
 
-Pick the **microphone** or **system audio** as the source; speech becomes live captions translated
-**English ⇄ Chinese**, shown in a draggable translucent bar at the bottom of the screen (bilingual /
-translation only / original only). Recognition uses the system Speech framework (on-device when
-available); translation uses the built-in on-device Apple Translation (macOS 15+), with a
-downloadable offline model (Hy-MT2-1.8B) as the fallback on macOS 14 — so translation works
-there too. No third-party services. Sessions can be saved as **transcripts**, with read-aloud.
+Pick the **microphone** or **system audio** as the source; speech becomes live captions with a
+translation, shown in a draggable translucent bar at the bottom of the screen (bilingual /
+translation only / original only). 21 languages; the spoken language can be set to "Automatic",
+which decides between two languages sentence by sentence. Recognition uses the system Speech
+framework (on-device when available). Translation uses the built-in on-device Apple Translation
+(macOS 15+) by default, the offline model Hy-MT2-1.8B on macOS 14 or for languages Apple doesn't
+cover, or a cloud model you pick in Settings → AI.
 
-Live Translate is also the engine behind Meeting's free-listening sessions: start one from the
-Meeting menu and the same caption bar appears, with the transcript filed in the meeting library.
+- **AI correction**: the local Qwen3-1.7B fixes misrecognized Chinese words sentence by sentence
+  (or another model of your choice)
+- **Interpreting**: the translation is read aloud and can go into Zoom, Meet, and other calls as
+  your microphone through Baobox's own virtual microphone ("Baobox 同传", installed only when
+  you click Install in Settings), or just play in your headphones
+- Sessions can be saved as **transcripts**
+
+It is now part of Meeting (it used to be called Live Translate): online, in-person, and
+free-listening sessions all run on this engine and caption bar, with transcripts filed in the
+meeting library.
 
 ### Selection assistant
 
 Select text in **any app** and a small action bar appears above it: **Translate · Learn · Polish ·
 Rewrite · Natural English · Explain · Summarize**, plus your own actions (a name and a prompt).
 Nothing runs until you click; rewrites can **replace the original text** in editable fields.
+
+![Select a sentence and the action bar appears above it](docs/images/readme/selection-bar.en.png)
+
+![Left: a polished draft that can replace the original in an editable field. Right: Learn shows a dictionary card](docs/images/readme/selection-panels.en.png)
+
 Hold ⌥ to pick by number, use the Show Action Bar hotkey and a letter for keyboard-only use, or bind
 a direct hotkey per action. **Learn** follows your native / learning language (Chinese and English
 for now): a dictionary card (phonetics, US/UK pronunciation, meanings, word forms, from the offline
 ECDICT dictionary) or a sentence view (tap words, word-by-word highlight while reading, repeat-after
-scoring). AI actions run on the local Qwen3 model or your configured cloud service. Text is grabbed
+scoring). AI actions use the model picked in Settings → AI (the local Qwen3-1.7B out of the box). Text is grabbed
 via the accessibility tree, a clipboard fallback, or region OCR; translation shares Live Translate's engines.
 
 ### Meeting
@@ -187,10 +207,11 @@ a calendar event starting, or a meeting app holding the microphone — and offer
   mute either channel, pause, mark a highlight, jot a quick note that lands in the minutes).
   The menu bar shows a recording indicator; focus and health reminders are deferred while
   you record
-- **After**: local transcript → locally generated minutes (summary, decisions, action items
-  with owners and due dates, highlighted passages), kept in a searchable **meeting library**
-  with a cross-meeting action-item view, per-series timeline, and weekly report. If the
-  local model isn't downloaded, the transcript is still saved and marked "transcript only"
+- **After**: local transcript → minutes (summary, decisions, action items with owners and due
+  dates, highlighted passages; a local model by default, or a cloud model picked in
+  Settings → AI), kept in a searchable **meeting library** with a cross-meeting action-item view,
+  per-series timeline, and weekly report. If no model is usable (local not downloaded, cloud
+  unreachable), the transcript is still saved and marked "transcript only"
 
 Meetings, free listening, and dictation share one microphone, so only one of them records
 at a time.
@@ -211,6 +232,8 @@ by sentence in continuous mode), and shares Live Translate's glossary.
   simulated paste via a clipboard snapshot that never enters clipboard history → copy to
   clipboard with a prompt, if there's nowhere to type (e.g. a password field). Text is
   never lost: the recording bar offers one-click copy, and everything is in dictation history
+- **AI polish** (optional, per app): turns speech into written text with a local or cloud
+  model; it waits at most 8 seconds, then inserts the original
 - **History**: recent dictations (text only, never audio) — search, copy, re-insert, delete
 
 ### Desktop pet
@@ -246,8 +269,9 @@ and breaks run the gaps between them.
   (50 min) out of the box; add your own, by interval or by fixed time of day
 - **Breaks**: gentle (a pet bubble) or strong — the pet walks to the center of the screen,
   grows big, and keeps you company through the countdown, dimming and blurring the
-  background on the strict setting. If the pet is off, a full-screen break card is the
-  fallback
+  background on the strict setting. On the standard and strict settings a break ends with a
+  Touch ID check that it's really you (can be turned off). If the pet is off, a full-screen
+  break card is the fallback
 - **Smart about context**: reminders wait out meetings, full-screen apps, and recordings;
   time away from the computer counts as a natural break, so you don't get nagged for a
   break you already took; the menu bar shows the countdown
@@ -289,6 +313,27 @@ files — no AI API calls, no login.**
 > and comments are preserved, and a `.baobox.bak` backup is written first. When a value
 > can't be edited safely the control is disabled rather than risk corrupting the file.
 
+### AI models
+
+Every feature that uses a model — selection translation and AI actions, caption translation,
+AI correction, meeting minutes, the weekly overview, dictation polish — picks its own model in
+Settings → AI, configured in one place like shortcuts. Each tool's settings page shows the same row.
+
+![Settings → AI, Features pane](docs/images/readme/ai-features.en.png)
+
+- **Features**: one line per feature — the model it uses; a problem comes with a fix button
+  ("Download…", "Set Up…"); otherwise the line says which model is suggested for that feature
+  (the fastest for live work, the largest your Mac runs comfortably for minutes), with a
+  one-click Switch
+- **On This Mac**: free, and nothing leaves the Mac. A dozen common models (Qwen3, Gemma 3,
+  Llama 3.1, GLM-4, Phi-4-mini, DeepSeek-R1 distills) plus any GGUF file from a Hugging Face
+  link; grouped by this Mac's memory ("runs well" / "uses a lot of memory" / "not enough
+  memory"), with download, start / stop, and launch at login
+- **Cloud**: connect several providers (Claude, OpenAI, Gemini, DeepSeek, Qwen, Kimi, GLM,
+  OpenRouter, SiliconFlow, Groq, Ollama, or any OpenAI-compatible endpoint), one key per
+  provider with several named models; keys live in the Keychain. Cloud errors fall back to the
+  local model when it's downloaded, and all cloud models share a per-reply and per-minute cap
+
 ## Install
 
 ### Download a release
@@ -320,8 +365,9 @@ Onboarding asks for two permissions:
 > one-click restart.
 
 Skipping is fine — you can grant them later under Settings → General → Permissions.
-Microphone access is only requested when you use it: recording, live translation, meeting
-notes, or dictation.
+Microphone and speech recognition are only requested when you use them: recording, subtitles
+and interpreting, meeting notes, or dictation. Calendar access is only requested when you turn
+on the calendar in Meeting's settings.
 
 ## Shortcuts
 
@@ -339,14 +385,16 @@ Bound out of the box:
 | ⌃⌥ ← → ↑ ↓ / U I J K / ⏎ / C / ⌫ | The 13 window actions |
 | ⌃⌥⌘ ← → | Move window across displays |
 
-OCR, live drawing, QR code, keyboard scrolling, the Claude Code center, recent files,
-both Codex panels, every shortcut of the Meeting, desktop pet, focus & health, and
-selection assistant tools, and dictation's hold-to-talk and long dictation ship **unbound** — assign them under
-Settings → Shortcuts. Full list in [Shortcuts](docs/manual/en/shortcuts.md).
+Everything else — OCR, drawing on screen, QR code, keyboard scrolling, each tool's panels and
+toggles, the selection assistant's actions, dictation's hold-to-talk and long dictation, and so
+on — ships **unbound** so it can't clash with other apps. Assign them under Settings → Shortcuts.
+Full list in [Shortcuts](docs/manual/en/shortcuts.md).
 
 ## Data and privacy
 
-**Everything stays on this Mac. Nothing is uploaded, nothing is collected, there is no account.**
+**Everything stays on this Mac by default. Nothing is collected and there is no account.** Cloud
+AI models are off by default; text goes to a provider only when you pick a cloud model for a
+feature in Settings → AI and use that feature.
 
 ```
 ~/Library/Application Support/Baobox/<module>/   # one subdirectory per module
@@ -363,7 +411,12 @@ Settings → Shortcuts. Full list in [Shortcuts](docs/manual/en/shortcuts.md).
   text only, never audio
 - The desktop pet's socket for other local processes is same-user only (`0600`), opens no
   network port, and Baobox never executes commands on another process's behalf
-- The only network access is the version check you trigger yourself (an npm lookup)
+- Cloud AI keys live in the Keychain; Settings → AI → Usage Limits and Privacy lists what is
+  currently sent to which provider
+- Any other network access happens only when you ask for it: the version check (an npm lookup),
+  downloading local models (Hugging Face / ModelScope), the ECDICT dictionary for Learn, or pets
+  (GitHub / jsDelivr), and Phone Transfer (direct on the LAN; in internet mode, encrypted
+  connection details pass through public signaling servers and the transfer itself is peer-to-peer)
 
 See [Data and privacy](docs/manual/en/privacy-and-data.md).
 
@@ -373,7 +426,7 @@ See [Data and privacy](docs/manual/en/privacy-and-data.md).
 Three platform implementations live side by side:
 
 ```
-mac/       macOS (Swift + SwiftUI/AppKit) — the complete 0.0.7
+mac/       macOS (Swift + SwiftUI/AppKit) — every tool
 windows/   Windows (Rust + Win32/GDI) — tray app: screenshot, clipboard, caffeinate,
            window manager, both AI assistants, keyboard clicking
 linux/     Linux (Rust + X11) — tray app: same six tools as Windows
@@ -382,8 +435,8 @@ shared/    Rust core shared by all three (geometry, selection, annotation, stitc
 
 Windows and Linux run in the system tray. Windows also offers a Desktop Pet menu
 to show the pet and download characters. Put custom packs in `%APPDATA%\Baobox\Pets`
-and select them in Settings. Meeting, dictation, focus & health, live and selection
-translation are available on macOS. See
+and select them in Settings. Meeting, subtitles and interpreting, the selection assistant,
+dictation, focus & health, Menu Bar, Phone Transfer, and AI models are macOS-only for now. See
 [multi-platform architecture](docs/multiplatform/ARCHITECTURE.md) (Chinese).
 
 ## Build from source
@@ -403,6 +456,11 @@ open Baobox.xcodeproj          # or: xcodebuild -scheme Baobox build
 `mac/Baobox.xcodeproj` is not checked in — re-run `xcodegen generate` after pulling.
 Non-sandboxed with Hardened Runtime; bundle id `com.baobox.app`.
 
+The local-model server (llama.cpp's `llama-server`) and the "Baobox 同传" virtual microphone
+driver are not checked in: `make vendor` downloads and builds them at pinned versions,
+verified by SHA-256. The app builds without them; those two items then show as unavailable in
+Settings. `make build` generates the project, prepares the vendor files, and builds Release.
+
 Validate the localization catalog:
 
 ```bash
@@ -418,12 +476,14 @@ mac/Sources/
 │   ├── ToolModule.swift        # the tool protocol (the heart of the framework)
 │   ├── ToolRegistry.swift      # registration order = menu order
 │   ├── HotkeyCenter.swift      # Carbon global hotkeys
+│   ├── AI/                     # AI service layer: a model per feature, local models, cloud providers
+│   ├── Translation/            # shared translation engines: languages, Apple Translation / offline model
 │   ├── KeyCombo / Permissions / Geometry / L10n / QRCodeGenerator / TextRecognizer …
-├── Modules/                # one directory per tool
-│   ├── Screenshot/  Clipboard/  WindowManager/  KeyboardNav/
-│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/  LiveTranslate/
+├── Modules/                # one directory per tool (Draw on Screen lives in Screenshot/)
+│   ├── Screenshot/  Clipboard/  WindowManager/  MenuBarManager/  KeyboardNav/
+│   ├── Caffeinate/  ClaudeCode/  AITools/  NetCapture/  LiveTranslate/  PhoneTransfer/
 │   ├── SelectionTranslate/  Meeting/  Dictation/  FocusHealth/  DesktopPet/
-├── Settings/               # settings window
+├── Settings/               # settings window (General / Shortcuts / AI / per tool / About)
 ├── Onboarding/             # first-launch permission flow
 └── Resources/              # Localizable.xcstrings, Assets
 ```
