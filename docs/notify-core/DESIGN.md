@@ -232,8 +232,8 @@ final class PresentationHub {
 
 // ToolRegistry
 func activateAll() {
+    NotifyCenter.shared.holdDuringLaunch()   // 先攒再装：activateAll 一开始投递的就攒住，install 前后都一样
     PresentationHub.shared.install(from: tools)
-    NotifyCenter.shared.holdDuringLaunch()
     for tool in tools { /* 注册快捷键、activate()，原样 */ }
     NotifyCenter.shared.releaseAfterLaunch()
 }
@@ -442,7 +442,7 @@ PR 内分两个提交：第一个只做 `git mv`，第二个再改引用。这�
 
 - 新建 `Core/Presentation/PresentationRoles.swift`：`PresentationRoles`（这一步只有 `notifications`）和 `PresentationHub`。
 - `Core/ToolModule.swift`：加 `presentationRoles()` 及默认实现。
-- `Core/ToolRegistry.swift`：`activateAll()` 开头 `install`，前后包上 `holdDuringLaunch` / `releaseAfterLaunch`。
+- `Core/ToolRegistry.swift`：`activateAll()` 开头先 `holdDuringLaunch`、再 `install`（都在任何 `activate()` 之前），全部 `activate()` 跑完 `releaseAfterLaunch`。
 - `Core/Notify/NotifyCenter.swift`：删 `weak var presenter`，`deliver` 改读 `PresentationHub.shared.notifications`；加启动期间先攒着的逻辑。
 - `DesktopPet/DesktopPetTool.swift`：实现 `presentationRoles()`；`activate()` 删掉给 `presenter` 赋值那一行。
 - 文档：

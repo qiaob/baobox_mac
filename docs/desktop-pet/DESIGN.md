@@ -17,13 +17,23 @@
 ```
 模块 / 外部进程 ──► NotifyCore ──► PetPresenter ──► PetEngine ──► Renderer(2D | 3D)
                       │  └─ 勿扰聚合队列 ─┘                └─ 气泡 UI
-                      └─ 回退：UNUserNotificationCenter（宠物关/未就绪时；按钮转成通知操作，点了照样回调来源）
+                      └─ 回退：UNUserNotificationCenter（宠物关 / 未就绪 / 宠物模块没注册时；按钮转成通知操作，点了照样回调来源）
 外部进程 ──Unix socket / CLI / URL──► NotifyGateway ──► NotifyCore      （M2，未实现）
 ```
 
 - `NotifyCore`：通知数据模型、来源注册表、去重、勿扰聚合、动作回调用分发。与 UI 无关，可单测。
   代码不在本模块：2026-11-10（#108）起放在 `mac/Sources/Core/Notify/`（`NotifyCenter` / `NotifyDND` / `NotifySettings`），
   宠物模块只当呈现端、提供设置入口，见 `docs/notify-core/DESIGN.md`。
+- **呈现端怎么接上**（#108）：通知内核不认识宠物，只认 `NotifyPresenting` 协议（`isReady` + `present`）。
+  宠物模块用 `ToolModule.presentationRoles()` 交出 `PetController.shared`；框架在 `ToolRegistry.activateAll()` 里、
+  任何模块 `activate()` 之前把它装进 `PresentationHub`（`mac/Sources/Core/Presentation/`），只装一次、之后只读，与注册顺序无关。
+  - 投递时看呈现端：在且 `isReady`（宠物开着、窗口在屏上，或正在换形象）→ 宠物气泡；宠物关着（`isReady` 为假）→ 系统通知；
+    宠物模块没注册（没有呈现端）→ 也走系统通知。
+  - 启动期间先攒着：宠物要等自己的 `activate()` 里 `start()` 之后才就绪，所以 `activateAll()` 期间投递的通知先攒着
+    （`NotifyCenter.holdDuringLaunch` / `releaseAfterLaunch`），全部 `activate()` 跑完再按原顺序逐条投递 ——
+    排在宠物前面注册的模块发的通知，不会因为注册顺序掉到系统通知。
+  - 系统通知权限：有宠物模块时照旧由宠物申请（宠物关着启动时、刚关掉宠物时），宠物开着启动不弹；
+    宠物模块没注册时，框架装呈现端那一步就申请。
 - `NotifyGateway`（M2，未实现）：对外协议层（socket 监听、CLI 与 URL scheme 的参数解析），只做校验与转交，不持有呈现状态。
 - `PetEngine`：宠物状态机与行为（位置、移动、朝向、当前动画状态），只产出「渲染意图」（状态 + 位置 + 朝向），不关心 2D/3D。
 - `PetRenderer`（协议）：消费渲染意图。两个实现：`SpriteRenderer`（2D 帧序列）、`SceneRenderer`（SceneKit 3D）。

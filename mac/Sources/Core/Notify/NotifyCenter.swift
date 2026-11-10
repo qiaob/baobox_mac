@@ -57,19 +57,18 @@ struct PetNotification {
 }
 
 /// 呈现端（桌面宠物）。NotifyCenter 不持有窗口，只调这个协议，便于回退与测试。
+/// 模块用 `ToolModule.presentationRoles()` 交出来，框架在启动时装进 `PresentationHub`（docs/notify-core/DESIGN.md §3.3）。
 @MainActor
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
     func present(_ n: PetNotification, onAction: @escaping (String) -> Void)
 }
 
-/// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史。
+/// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史、启动期间先攒着。
 @MainActor
 final class NotifyCenter {
     static let shared = NotifyCenter()
     private init() {}
-
-    weak var presenter: NotifyPresenting?
 
     struct HistoryEntry {
         let date: Date
@@ -88,8 +87,15 @@ final class NotifyCenter {
     private var systemCallbacks: [String: (String) -> Void] = [:]
     private var systemCallbackOrder: [String] = []
     private var systemCategories: [String: UNNotificationCategory] = [:]
+    /// 启动期间攒着的通知，按投递顺序；nil = 没在攒（见 holdDuringLaunch）。
+    private var launchHeld: [(PetNotification, ((String) -> Void)?)]?
 
     func post(_ n: PetNotification, onAction: ((String) -> Void)? = nil) {
+        // 启动期间原样攒着：来源开关、去重、勿扰都等放行时再从头判一遍。
+        if launchHeld != nil {
+            launchHeld?.append((n, onAction))
+            return
+        }
         guard NotifySettings.sourceEnabled(n.source) else { return }
 
         // 去重：同来源同 key 30 秒内只呈现一次，其余合并进历史计数。
@@ -118,7 +124,7 @@ final class NotifyCenter {
     }
 
     private func deliver(_ n: PetNotification, onAction: ((String) -> Void)?) {
-        if let presenter, presenter.isReady {
+        if let presenter = PresentationHub.shared.notifications, presenter.isReady {
             if wantsSound(n) {
                 NSSound(named: "Glass")?.play()
             }
@@ -179,9 +185,10 @@ final class NotifyCenter {
         }
     }
 
-    /// 系统通知回退的准备（宠物模块自己判断什么时候会用上，功能模块不碰系统通知）：
-    /// 装上回调代理（不弹任何东西）；`requestPermission` 时顺带申请通知权限 —— 宠物关着启动、
-    /// 或用户刚把宠物关掉时就问，免得第一条回退通知因为弹授权框而丢掉。已授权 / 已拒绝时系统不会再弹。
+    /// 系统通知回退的准备（功能模块不碰系统通知）：装上回调代理（不弹任何东西）；`requestPermission` 时顺带申请通知权限，
+    /// 免得第一条回退通知因为弹授权框而丢掉。已授权 / 已拒绝时系统不会再弹。谁来调：
+    /// - 框架装呈现端时（`PresentationHub.install`，启动时、任何模块 activate() 之前）：没有呈现端（宠物模块没注册）就申请，有就只装代理；
+    /// - 宠物模块自己判断什么时候会用上：宠物关着启动、或用户刚把宠物关掉时申请。
     func prepareSystemFallback(requestPermission: Bool) {
         let center = UNUserNotificationCenter.current()
         if center.delegate !== SystemNotificationRouter.shared {
@@ -207,6 +214,26 @@ final class NotifyCenter {
         )
         if history.count > NotifySettings.historyLimit {
             history.removeLast(history.count - NotifySettings.historyLimit)
+        }
+    }
+
+    // MARK: - 启动期间先攒着
+
+    /// 只给 `ToolRegistry.activateAll()` 调：从现在起投递的通知先攒着，等 `releaseAfterLaunch()`。
+    /// 呈现端在所有模块 activate() 之前就装好了，但宠物要等它自己的 activate() 里 start() 之后才就绪；不攒的话，
+    /// 排在宠物前面注册的模块在 activate() 里发的通知会因为注册顺序掉到系统通知（docs/notify-core/DESIGN.md §3.3）。
+    func holdDuringLaunch() {
+        guard launchHeld == nil else { return }
+        launchHeld = []
+    }
+
+    /// 全部 activate() 跑完：攒着的按投递顺序逐条走 `post`（宠物开着进气泡；宠物关着、宠物模块没注册走系统通知），
+    /// 之后的通知照常直接走。先清掉再发，`post` 才不会把它们又攒回去。
+    func releaseAfterLaunch() {
+        guard let held = launchHeld else { return }
+        launchHeld = nil
+        for (n, onAction) in held {
+            post(n, onAction: onAction)
         }
     }
 
