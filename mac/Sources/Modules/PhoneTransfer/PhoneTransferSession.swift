@@ -27,6 +27,8 @@ final class PhoneTransferSession: ObservableObject {
     struct Request: Identifiable {
         let id: String
         let name: String
+        /// 局域网模式的 4 位设备码，手机网页上显示同一个（#98）；公网模式没有。
+        var code: String?
     }
 
     enum TransferState: Equatable {
@@ -84,8 +86,11 @@ final class PhoneTransferSession: ObservableObject {
     var isRunning: Bool { phase != .idle }
 
     private var lan: LANTransferServer?
-    /// 当前二维码里的地址。
+    /// 当前二维码里的地址与端口（批准设备后换令牌，二维码要重新拼）。
     private var lanIP: String?
+    private var lanPort: UInt16?
+    /// 局域网设备 id → 显示名（设备作废时从列表里去掉）。
+    private var lanDeviceNames: [String: String] = [:]
     private var pathMonitor: NWPathMonitor?
     private var interfaceKinds: [String: PhoneTransferInterface.Kind] = [:]
     private var expiryTimer: Timer?
@@ -120,6 +125,8 @@ final class PhoneTransferSession: ObservableObject {
         failureDetail = []
         qrText = nil
         lanIP = nil
+        lanPort = nil
+        lanDeviceNames = [:]
         rxSessionBytes = 0
         phase = .starting
         startInterfaceMonitor()
@@ -266,13 +273,23 @@ final class PhoneTransferSession: ObservableObject {
         switch event {
         case .ready(let port):
             guard let server = lan, let ip = lanIP else { return }
-            qrText = "http://\(ip):\(port)/?t=\(server.token)"
+            lanPort = port
+            qrText = Self.lanURL(ip: ip, port: port, token: server.token)
             if phase == .starting { phase = .waiting }
         case .failed(let message):
             phase = .failed(message)
-        case .deviceRequest(let clientID, let name):
-            requests.append(Request(id: clientID, name: name))
+        case .deviceRequest(let clientID, let name, let code):
+            requests.append(Request(id: clientID, name: name, code: code))
             PhoneTransferWindowController.shared.show()
+        case .tokenRotated(let token):
+            // 批准了一台设备：二维码换新令牌，再加设备要扫新的（旧二维码被拍走也没用，#98）。
+            if let ip = lanIP, let port = lanPort { qrText = Self.lanURL(ip: ip, port: port, token: token) }
+        case .deviceExpired(let clientID, _):
+            if let name = lanDeviceNames.removeValue(forKey: clientID),
+               let index = devices.firstIndex(of: name) {
+                devices.remove(at: index)
+            }
+            if mode == .lan, devices.isEmpty, phase == .connected { phase = .waiting }
         case .uploadBegan(let id, let name, let size):
             transfers.insert(Transfer(id: id, incoming: true, name: name, size: size, done: 0, state: .active,
                                       startedAt: Date()), at: 0)
@@ -571,6 +588,7 @@ final class PhoneTransferSession: ObservableObject {
         switch mode {
         case .lan:
             lan?.setDecision(clientID: request.id, approved: true)
+            lanDeviceNames[request.id] = request.name
             if !devices.contains(request.name) { devices.append(request.name) }
             phase = .connected
         case .internet:
@@ -660,6 +678,11 @@ final class PhoneTransferSession: ObservableObject {
     }
 
     // MARK: - 工具
+
+    /// 局域网二维码地址：令牌放在 # 后面，浏览器不会把它发给服务端（#98）。
+    private static func lanURL(ip: String, port: UInt16, token: String) -> String {
+        "http://\(ip):\(port)/#t=\(token)"
+    }
 
     private func receivedText(_ text: String) {
         texts.insert(TextItem(incoming: true, text: text), at: 0)
