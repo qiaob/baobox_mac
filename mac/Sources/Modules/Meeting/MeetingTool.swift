@@ -12,12 +12,12 @@ extension AIFeatureDefinition {
     static var meetingMinutes: AIFeatureDefinition {
         // 会后才写，慢几秒没关系：建议跑得动的最大的。
         AIFeatureDefinition(feature: .meetingMinutes, title: L("meeting.ai.minutes"), sends: L("meeting.ai.minutesSends"),
-                            advice: .best)
+                            advice: .best, shortTitle: L("meeting.ai.minutesShort"))
     }
 
     static var meetingWeekly: AIFeatureDefinition {
         AIFeatureDefinition(feature: .meetingWeekly, title: L("meeting.ai.weekly"), sends: L("meeting.ai.weeklySends"),
-                            advice: .best)
+                            advice: .best, shortTitle: L("meeting.ai.weeklyShort"))
     }
 }
 
