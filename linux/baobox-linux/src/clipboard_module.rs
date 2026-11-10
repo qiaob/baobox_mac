@@ -30,8 +30,8 @@ use baobox_core::config::Config;
 use baobox_core::hotkey::KeyCombo;
 use baobox_core::privacy;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use x11rb::connection::Connection;
 use std::sync::{Arc, Mutex};
+use x11rb::connection::Connection;
 
 /// 工具 id，同时是配置里的节名。
 pub const ID: &str = "clipboard";
@@ -105,7 +105,9 @@ impl ClipboardTool {
     ///
     /// 返回 `true` 表示真收进了东西（菜单里的计数得跟着变）。
     pub fn drain(&mut self) -> bool {
-        let Some(inbox) = &self.inbox else { return false };
+        let Some(inbox) = &self.inbox else {
+            return false;
+        };
         let caught: Vec<Caught> = inbox.try_iter().collect();
         if caught.is_empty() {
             return false;
@@ -226,8 +228,8 @@ impl ClipboardTool {
         let Some(item) = self.store.items().iter().find(|e| e.id == id).cloned() else {
             return Err("这一条已经不在了".to_string());
         };
-        let output = baobox_core::textformat::apply(action, &item.text)
-            .ok_or("这个动作对这段内容不适用")?;
+        let output =
+            baobox_core::textformat::apply(action, &item.text).ok_or("这个动作对这段内容不适用")?;
         self.deliver(clipboard::Payload::Text(output))
     }
 
@@ -341,12 +343,19 @@ impl ToolModule for ClipboardTool {
             ID,
             "剪贴板",
             vec![
-                Field::number("history_limit", "保留条数", Store::DEFAULT_LIMIT as i64, 10, 2000)
-                    .with_help("收藏与片段不占这个额度，也永远不会被挤掉"),
+                Field::number(
+                    "history_limit",
+                    "保留条数",
+                    Store::DEFAULT_LIMIT as i64,
+                    10,
+                    2000,
+                )
+                .with_help("收藏与片段不占这个额度，也永远不会被挤掉"),
                 Field::number("expire_days", "自动清理（天）", 0, 0, 365)
                     .with_help("0 = 不自动清理"),
-                Field::toggle("record_concealed", "记录敏感内容", false)
-                    .with_help("密码、私钥、银行卡号默认根本不入库；打开之后会记录，但在面板里打码显示"),
+                Field::toggle("record_concealed", "记录敏感内容", false).with_help(
+                    "密码、私钥、银行卡号默认根本不入库；打开之后会记录，但在面板里打码显示",
+                ),
                 Field::choice(
                     "paste_style",
                     "粘贴方式",
@@ -433,7 +442,13 @@ impl ToolModule for ClipboardTool {
                     return Err("先复制一段文字，再新建片段".to_string());
                 }
                 let id = fresh_id(crate::now_seconds());
-                let title: String = latest.lines().next().unwrap_or("片段").chars().take(20).collect();
+                let title: String = latest
+                    .lines()
+                    .next()
+                    .unwrap_or("片段")
+                    .chars()
+                    .take(20)
+                    .collect();
                 self.store
                     .add_snippet(&id, &title, &latest, "", crate::now_seconds());
                 self.persist();
@@ -463,7 +478,10 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused() {
         let mut tool = ClipboardTool::new();
-        assert!(tool.perform("clipboard.nope").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("clipboard.nope")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]
@@ -514,7 +532,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn a_tool_that_never_activated_refuses_to_write_to_disk() {
         // 没 activate 过时 Store 是空的，落盘等于把用户磁盘上那份历史清掉。
         // 命令行子命令与这些单元测试走的都是这条路

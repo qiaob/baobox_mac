@@ -160,14 +160,14 @@ impl ToolModule for ScreenshotTool {
                 Field::toggle("copy_to_clipboard", "复制到剪贴板", true),
                 Field::toggle("save_to_disk", "同时保存到文件", true)
                     .with_help("两个都关掉的话截图之后什么都不会发生"),
+                Field::text("save_dir", "保存到", "", "留空 = ~/Pictures/Baobox"),
                 Field::text(
-                    "save_dir",
-                    "保存到",
-                    "",
-                    "留空 = ~/Pictures/Baobox",
-                ),
-                Field::text("ocr_languages", "取字语言", ocr::DEFAULT_LANGS, "chi_sim+eng")
-                    .with_help("tesseract 的语言包名，用 + 连接"),
+                    "ocr_languages",
+                    "取字语言",
+                    ocr::DEFAULT_LANGS,
+                    "chi_sim+eng",
+                )
+                .with_help("tesseract 的语言包名，用 + 连接"),
                 Field::number("record_fps", "录屏帧率", record::DEFAULT_FPS as i64, 1, 60),
                 Field::number("history_limit", "历史保留张数", 20, 1, 200),
             ],
@@ -396,7 +396,10 @@ mod tests {
     #[test]
     fn an_unknown_action_is_refused_rather_than_silently_ignored() {
         let mut tool = ScreenshotTool::new();
-        assert!(tool.perform("screenshot.nope").unwrap_err().contains("不认识"));
+        assert!(tool
+            .perform("screenshot.nope")
+            .unwrap_err()
+            .contains("不认识"));
     }
 
     #[test]
@@ -459,7 +462,6 @@ mod tests {
         assert!(label(&tool).contains("停止"));
     }
 
-
     #[test]
     fn every_declared_setting_is_actually_read_somewhere() {
         // 声明了却没人读 = 用户在设置里改了却什么都不会发生，
@@ -509,5 +511,4 @@ mod tests {
         tool.config_changed(&config);
         assert!(!tool.settings.copy, "改了配置就该跟着变");
     }
-
 }

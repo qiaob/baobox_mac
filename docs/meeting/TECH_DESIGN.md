@@ -97,6 +97,11 @@
 
 - `LiveTranslateTool` 改名「字幕与同传」，菜单第一行「已并入「会议」」（置灰），其余不变；`livetranslate.toggle` 快捷键 id 不变，在会议菜单里显示为「开始自由听译」。
 - 会议模块注册在原实时翻译的位置之前（菜单顺序 = 注册顺序）。
+- **2026-11-10 删掉独立入口（#106）**：`LiveTranslateTool` 不再注册（文件删除），菜单里只剩会议的「开始自由听译」，
+  设置只剩会议页嵌入的「字幕与同传」（`LiveTranslateSettingsSections`，独立设置页删除）。`livetranslate.toggle`
+  快捷键改由 `MeetingTool.hotkeys()` 声明，id、标题、环形菜单的「翻译」都不变，已绑的键照常生效；
+  退出时 `MeetingTool.willTerminate` 也调 `LiveTranslateController.terminate()`，给会议之外的自由听译收尾
+  （推理进程照旧由 `AppDelegate` 的 `OfflineTranslator.shutdownAll()` 结束）。听写设置里「编辑术语表」改跳会议页。
 
 ## 8. 验证
 

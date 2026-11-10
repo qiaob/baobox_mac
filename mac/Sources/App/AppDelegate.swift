@@ -29,15 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(KeyboardNavTool())
-        // 会议在实时翻译前面：启动时先装好会议库，自由听译的新记录才写得进去（docs/meeting/TECH_DESIGN.md §7）。
+        // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），引擎（LiveTranslateController）照旧，菜单、设置、快捷键都在会议里。
         registry.register(MeetingTool())
-        registry.register(LiveTranslateTool())
         registry.register(SelectionTranslateTool())
         registry.register(DictationTool())
         registry.register(PhoneTransferTool())
         registry.register(DesktopPetTool())
-        // 0.0.2 暂不发布抓包工具（NetCapture 尚在完善）：模块代码保留在仓库，仅此版本不注册/不激活，
-        // 后续完善后取消下一行注释即可恢复。
+        // 网络抓包（NetCapture）暂缓发布（#103）：代码留在仓库，但不编译（project.yml 的 excludes）也不注册。
+        // 恢复步骤见 project.yml 里那条 excludes 的注释，最后取消下一行注释。
         // registry.register(NetCaptureTool())
         registry.activateAll()
         // 开了「开机自启」的本地模型：现在拉起来并常驻（docs/local-models/DESIGN.md §4）。

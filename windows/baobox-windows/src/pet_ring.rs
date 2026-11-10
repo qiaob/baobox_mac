@@ -25,7 +25,8 @@ pub const ITEMS: [(&str, &str); 8] = [
     (crate::screenshot_module::OCR, "取字"),
     (crate::pet_notify::QUIET, "安静"),
     (MORE, "更多"),
-];const CLASS: PCWSTR = w!("BaoboxPetRing");
+];
+const CLASS: PCWSTR = w!("BaoboxPetRing");
 const KEY: COLORREF = COLORREF(0xff00ff);
 const ICONS: [u16; 8] = [
     0xe722, 0xec32, 0xe8ab, 0xe77f, 0xeb51, 0xe8a5, 0xe708, 0xe712,
@@ -149,85 +150,6 @@ fn ring_positions(
         }
     }
     ((center.0.round() as i32, center.1.round() as i32), placed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn both_rings_fit_at_center_and_four_corners_on_a_secondary_monitor() {
-        let screen = RECT {
-            left: -1920,
-            top: -90,
-            right: 0,
-            bottom: 990,
-        };
-        for (left, top) in [
-            (-1050, 230),
-            (-1920, -90),
-            (-180, -90),
-            (-1920, 510),
-            (-180, 510),
-        ] {
-            let body = RECT {
-                left,
-                top,
-                right: left + 180,
-                bottom: top + 480,
-            };
-            let (_, points) = ring_positions(body, screen, 8, 8);
-            assert_eq!(points.len(), 16);
-            for (i, &(x, y)) in points.iter().enumerate() {
-                assert!(x - 43 >= screen.left && x + 43 <= screen.right);
-                assert!(y - 22 >= screen.top && y + 44 <= screen.bottom);
-                for &(other_x, other_y) in &points[..i] {
-                    assert!(
-                        (x - other_x).abs() >= 30 || (y - other_y).abs() >= 30,
-                        "icons overlap at {left},{top}: {x},{y} and {other_x},{other_y}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn more_and_escape_toggle_outer_without_dismissing_inner() {
-        unsafe {
-            let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
-            let pet = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                w!("STATIC"),
-                w!("test pet"),
-                WS_POPUP,
-                100,
-                120,
-                160,
-                230,
-                None,
-                None,
-                instance,
-                None,
-            )
-            .unwrap();
-            let inner = [(MORE, "更多")];
-            let outer = [(ADVANCED, "宠物动作")];
-            let ring = Ring::open(pet, pet, &inner, &outer).unwrap();
-            let outer_button = GetDlgItem(ring.window, 2).unwrap();
-            assert!(!IsWindowVisible(outer_button).as_bool());
-            SendMessageW(ring.window, WM_COMMAND, WPARAM(1), LPARAM(0));
-            ring.state
-                .outer_started
-                .set(Some(Instant::now() - std::time::Duration::from_secs(1)));
-            animate_ring(ring.window, &ring.state);
-            assert!(IsWindowVisible(outer_button).as_bool());
-            SendMessageW(ring.window, WM_KEYDOWN, WPARAM(0x1b), LPARAM(0));
-            assert!(ring.visible());
-            assert!(!IsWindowVisible(outer_button).as_bool());
-            drop(ring);
-            DestroyWindow(pet).unwrap();
-        }
-    }
 }
 
 impl Ring {
@@ -648,4 +570,83 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, hovered: bool, icon: u16) {
     SelectObject(dc, old_font);
     let _ = DeleteObject(label_font);
     let _ = DeleteObject(icon_font);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_rings_fit_at_center_and_four_corners_on_a_secondary_monitor() {
+        let screen = RECT {
+            left: -1920,
+            top: -90,
+            right: 0,
+            bottom: 990,
+        };
+        for (left, top) in [
+            (-1050, 230),
+            (-1920, -90),
+            (-180, -90),
+            (-1920, 510),
+            (-180, 510),
+        ] {
+            let body = RECT {
+                left,
+                top,
+                right: left + 180,
+                bottom: top + 480,
+            };
+            let (_, points) = ring_positions(body, screen, 8, 8);
+            assert_eq!(points.len(), 16);
+            for (i, &(x, y)) in points.iter().enumerate() {
+                assert!(x - 43 >= screen.left && x + 43 <= screen.right);
+                assert!(y - 22 >= screen.top && y + 44 <= screen.bottom);
+                for &(other_x, other_y) in &points[..i] {
+                    assert!(
+                        (x - other_x).abs() >= 30 || (y - other_y).abs() >= 30,
+                        "icons overlap at {left},{top}: {x},{y} and {other_x},{other_y}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn more_and_escape_toggle_outer_without_dismissing_inner() {
+        unsafe {
+            let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+            let pet = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("test pet"),
+                WS_POPUP,
+                100,
+                120,
+                160,
+                230,
+                None,
+                None,
+                instance,
+                None,
+            )
+            .unwrap();
+            let inner = [(MORE, "更多")];
+            let outer = [(ADVANCED, "宠物动作")];
+            let ring = Ring::open(pet, pet, &inner, &outer).unwrap();
+            let outer_button = GetDlgItem(ring.window, 2).unwrap();
+            assert!(!IsWindowVisible(outer_button).as_bool());
+            SendMessageW(ring.window, WM_COMMAND, WPARAM(1), LPARAM(0));
+            ring.state
+                .outer_started
+                .set(Some(Instant::now() - std::time::Duration::from_secs(1)));
+            animate_ring(ring.window, &ring.state);
+            assert!(IsWindowVisible(outer_button).as_bool());
+            SendMessageW(ring.window, WM_KEYDOWN, WPARAM(0x1b), LPARAM(0));
+            assert!(ring.visible());
+            assert!(!IsWindowVisible(outer_button).as_bool());
+            drop(ring);
+            DestroyWindow(pet).unwrap();
+        }
+    }
 }

@@ -448,6 +448,7 @@ struct BubbleCard: View {
         case "meeting": return "video.fill"
         case "digest": return "tray.full.fill"
         case "pet": return "pawprint.fill"
+        case "ai": return "sparkles"
         default: return "bell.fill"
         }
     }
@@ -461,6 +462,7 @@ struct BubbleCard: View {
         case "meeting": return L("pet.source.meeting")
         case "digest": return L("pet.source.digest")
         case "pet": return L("pet.name")
+        case "ai": return "AI"
         default: return notification.source
         }
     }

@@ -101,7 +101,11 @@ pub fn build_args(region: Rect, fps: u32, display: &str, output: &Path) -> Vec<S
         "-video_size".to_string(),
         format!("{width}x{height}"),
         "-i".to_string(),
-        format!("{display}+{},{}", region.x.round() as i64, region.y.round() as i64),
+        format!(
+            "{display}+{},{}",
+            region.x.round() as i64,
+            region.y.round() as i64
+        ),
         "-c:v".to_string(),
         "libx264".to_string(),
         "-preset".to_string(),
@@ -164,7 +168,9 @@ mod tests {
     fn the_pixel_format_is_the_widely_playable_one() {
         // 不指定的话会选 yuv444p，浏览器与很多播放器放不了
         let a = args(Rect::new(0.0, 0.0, 100.0, 100.0));
-        assert!(a.windows(2).any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"));
+        assert!(a
+            .windows(2)
+            .any(|w| w[0] == "-pix_fmt" && w[1] == "yuv420p"));
     }
 
     #[test]

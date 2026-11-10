@@ -169,7 +169,11 @@ pub fn active_window(conn: &RustConnection, root: Window) -> Option<Window> {
 }
 
 /// 一个窗口现在的**可见**矩形（含边框）与它的边框厚度。
-pub fn geometry(conn: &RustConnection, root: Window, window: Window) -> Option<(Rect, FrameExtents)> {
+pub fn geometry(
+    conn: &RustConnection,
+    root: Window,
+    window: Window,
+) -> Option<(Rect, FrameExtents)> {
     let geometry = conn.get_geometry(window).ok()?.reply().ok()?;
     // 窗口的 x/y 是相对父窗口的，要换算到根窗口坐标
     let point = conn

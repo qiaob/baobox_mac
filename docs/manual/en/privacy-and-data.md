@@ -96,8 +96,13 @@ API is called and no login is required.
 
 **Cloud AI models** (Settings → AI) are off by default. You can add providers and models there and pick a model
 for each feature (selection translation, caption translation, AI correction, meeting minutes, weekly overview,
-dictation polish). **Only a feature set to a cloud model** sends its text; each feature says what it sends and to
-which provider. Everything else stays on this Mac. API keys are stored in your Keychain.
+dictation polish). **Only a feature set to a cloud model** sends its text; Settings → AI → Usage Limits and Privacy
+lists what is sent to which provider. Everything else stays on this Mac. API keys are stored in your Keychain.
+
+- Base URLs must use `https://`; only services on this Mac (like Ollama) may use `http://`, since anything else would
+  send your key and text unencrypted.
+- The same section shows today's requests and tokens. There is a daily cap of 500 requests (adjustable): past it,
+  requests use the local model and the pet asks whether to allow 500 more.
 
 ## Does it modify my files
 

@@ -180,6 +180,8 @@ struct MenuRow {
 }
 
 struct MenuPaint {
+    // 每一行的地址作为 itemData 交给 Win32 的自绘菜单：装箱保证 Vec 扩容时地址不变。
+    #[allow(clippy::vec_box)]
     rows: Vec<Box<MenuRow>>,
     font: HFONT,
     icon_font: HFONT,
@@ -443,12 +445,12 @@ mod tests {
     #[test]
     fn menu_item_ids_start_clear_of_the_system_range() {
         // 0 是「没选」，小 id 又和 IDOK 之类撞，所以从一个大数开始编
-        assert!(FIRST_ITEM > 100);
+        const { assert!(FIRST_ITEM > 100) };
     }
 
     #[test]
     fn the_tray_callback_message_sits_above_wm_app() {
         // 落在 WM_APP 之下会与系统消息撞号
-        assert!(WM_TRAY > windows::Win32::UI::WindowsAndMessaging::WM_APP);
+        const { assert!(WM_TRAY > windows::Win32::UI::WindowsAndMessaging::WM_APP) };
     }
 }

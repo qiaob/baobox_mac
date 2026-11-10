@@ -125,7 +125,12 @@ fn build_page(page: &SettingsPage, config: Rc<RefCell<Config>>, on_change: OnCha
 
     for (index, field) in page.fields.iter().enumerate() {
         if index > 0 {
-            card.pack_start(&gtk::Separator::new(gtk::Orientation::Horizontal), false, false, 0);
+            card.pack_start(
+                &gtk::Separator::new(gtk::Orientation::Horizontal),
+                false,
+                false,
+                0,
+            );
         }
         let section = page.section.clone();
         let current = field.value(&config.borrow(), &section);
@@ -166,7 +171,9 @@ fn build_page(page: &SettingsPage, config: Rc<RefCell<Config>>, on_change: OnCha
                 let config = Rc::clone(&config);
                 let on_change = Rc::clone(&on_change);
                 combo.connect_changed(move |combo| {
-                    let Some(value) = combo.active_id() else { return };
+                    let Some(value) = combo.active_id() else {
+                        return;
+                    };
                     let mut config = config.borrow_mut();
                     field.store(&mut config, &section, &value);
                     on_change(&config);

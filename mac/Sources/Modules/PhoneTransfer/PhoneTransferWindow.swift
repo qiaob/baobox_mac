@@ -348,7 +348,12 @@ struct PhoneTransferMainPanel: View {
                 .font(.title2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(L("phonetransfer.request.title \(request.name)")).font(.headline)
-                Text("phonetransfer.request.subtitle").font(.caption).foregroundStyle(.secondary)
+                if let code = request.code {
+                    // 和手机上显示的设备码一致再允许（#98）。
+                    Text(L("phonetransfer.request.code \(code)")).font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("phonetransfer.request.subtitle").font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Button("phonetransfer.request.deny") { session.deny(request) }
@@ -533,7 +538,7 @@ struct PhoneTransferMainPanel: View {
             parts.append(item.incoming ? L("phonetransfer.state.received") : L("phonetransfer.state.sent"))
             parts.append(contentsOf: timing(item))
         case .failed:
-            parts.append(L("phonetransfer.state.failed"))
+            parts.append(item.note ?? L("phonetransfer.state.failed"))
             parts.append(PhoneTransferFormat.time(item.finishedAt ?? item.createdAt))
         case .shared(let downloads):
             if downloads == 0 {

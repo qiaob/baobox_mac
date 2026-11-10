@@ -226,9 +226,9 @@ final class AIService {
 
     // MARK: - 云端公共流程
 
-    /// 配置 → 本机限额 → 冷却期 → 请求；出错时有本地就退回本地。
+    /// 配置 → 冷却期 → 本机限额（每分钟、每天）→ 请求；出错时有本地就退回本地。
     private func withCloud(modelID: String, fallback: (() async throws -> String)?,
-                           request: (AICloudClient, Int) async throws -> String) async throws -> Reply {
+                           request: (AICloudClient, Int) async throws -> AICloudCompletion) async throws -> Reply {
         func fallBack(_ error: Error) async throws -> Reply {
             guard let fallback else { throw error }
             return Reply(text: try await fallback(), route: .local, usedFallback: true)
@@ -240,10 +240,14 @@ final class AIService {
             return try await fallBack(AICloudError.offline(""))
         }
         guard acquireRequestSlot() else { return try await fallBack(AICloudError.rateLimited) }
+        // 每天的上限只管花钱的：本机服务（Ollama）不算（#100）。
+        let metered = !AICloudSettings.isLocalHost(config.baseURL)
+        if metered, !AIUsageMeter.shared.admit() { return try await fallBack(AICloudError.dailyLimit) }
         do {
-            let text = try await request(AICloudClient(config: config), AICloudSettings.maxTokens)
+            let completion = try await request(AICloudClient(config: config), AICloudSettings.maxTokens)
+            if metered { AIUsageMeter.shared.record(completion) }
             unavailableUntil[config.accountID] = nil
-            return Reply(text: text, route: .cloud(modelID), usedFallback: false)
+            return Reply(text: completion.text, route: .cloud(modelID), usedFallback: false)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -262,7 +266,7 @@ final class AIService {
         switch error {
         case .timeout, .offline, .unauthorized, .throttled: return true
         case .http(let status, _): return status >= 500
-        case .notConfigured, .rateLimited, .refused, .badResponse, .truncated: return false
+        case .notConfigured, .rateLimited, .dailyLimit, .refused, .badResponse, .truncated: return false
         }
     }
 

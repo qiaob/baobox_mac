@@ -16,38 +16,38 @@
 //! ```
 
 mod app;
-mod terminal;
 mod caffeinate;
 mod caffeinate_module;
-mod hint_overlay;
-mod keyboardnav;
-mod keyboardnav_module;
-mod windowmanager;
-mod windowmanager_module;
 mod clipboard;
 mod clipboard_module;
 mod clipboard_panel;
 mod clipboard_read;
 mod clipboard_store;
-mod paste;
 mod editor;
+mod hint_overlay;
 mod hotkeys;
+mod keyboardnav;
+mod keyboardnav_module;
 mod ocr;
 mod overlay;
+mod paste;
 mod pin;
 mod record;
 mod screenshot_module;
 mod settings_window;
 mod store;
+mod terminal;
 mod text;
 mod text_input;
 mod theme;
 mod tray;
+mod windowmanager;
+mod windowmanager_module;
 mod x11capture;
 
+use baobox_core::editor::EditorOutcome;
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
-use baobox_core::editor::EditorOutcome;
 use baobox_core::selection::Outcome;
 use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
 use std::path::{Path, PathBuf};
@@ -154,12 +154,7 @@ fn list_windows() -> Result<String, String> {
     for w in windows {
         lines.push(format!(
             "0x{:08x}  {:>5}×{:<5} @ ({},{})  {}",
-            w.id,
-            w.frame.w as i64,
-            w.frame.h as i64,
-            w.frame.x as i64,
-            w.frame.y as i64,
-            w.title
+            w.id, w.frame.w as i64, w.frame.h as i64, w.frame.x as i64, w.frame.y as i64, w.title
         ));
     }
     Ok(lines.join("\n"))
@@ -215,12 +210,14 @@ fn capture(args: &[String]) -> Result<String, String> {
 
     let target = match (region, window) {
         (Some(rect), _) => rect,
-        (_, Some(id)) => session
-            .windows()?
-            .into_iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
-            .frame,
+        (_, Some(id)) => {
+            session
+                .windows()?
+                .into_iter()
+                .find(|w| w.id == id)
+                .ok_or_else(|| format!("找不到窗口 0x{id:08x}，用 `windows` 命令看可用的"))?
+                .frame
+        }
         // 什么都没指定 → 交互式覆盖层，这是默认的用法
         _ => interactive_target(&session)?,
     };
@@ -333,7 +330,6 @@ fn deliver(
     ))
 }
 
-
 /// 屏幕取字：框一块区域，把里面的文字识别出来。
 ///
 /// 结果同时**打印到标准输出**和**放进剪贴板** —— 取字的目的十有八九是拿去粘贴。
@@ -433,7 +429,12 @@ fn run_record(args: &[String]) -> Result<String, String> {
     }
 
     let recording = record::start(target, fps, &path)?;
-    println!("正在录制 {}×{} → {}，按 ⏎ 停止。", target.w as i64, target.h as i64, path.display());
+    println!(
+        "正在录制 {}×{} → {}，按 ⏎ 停止。",
+        target.w as i64,
+        target.h as i64,
+        path.display()
+    );
     let mut line = String::new();
     let _ = std::io::stdin().read_line(&mut line);
     recording.stop()?;

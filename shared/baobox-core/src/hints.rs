@@ -61,7 +61,7 @@ pub fn labels(count: usize, alphabet: &str) -> Vec<String> {
         // 实践中字符表恒 >1，但不挡的话这里会死循环
         let only = chars[0];
         return (1..=count)
-            .map(|n| std::iter::repeat(only).take(n).collect())
+            .map(|n| std::iter::repeat_n(only, n).collect())
             .collect();
     }
 
@@ -201,7 +201,11 @@ impl Scroll {
         match key {
             "j" | "Down" => Some(Scroll::Down),
             "k" | "Up" => Some(Scroll::Up),
-            "space" | "Page_Down" => Some(if shift { Scroll::PageUp } else { Scroll::PageDown }),
+            "space" | "Page_Down" => Some(if shift {
+                Scroll::PageUp
+            } else {
+                Scroll::PageDown
+            }),
             "Page_Up" => Some(Scroll::PageUp),
             "g" => Some(if shift { Scroll::Bottom } else { Scroll::Top }),
             "Home" => Some(Scroll::Top),
@@ -248,7 +252,10 @@ mod tests {
             for (i, a) in tags.iter().enumerate() {
                 for (j, b) in tags.iter().enumerate() {
                     if i != j {
-                        assert!(!b.starts_with(a.as_str()), "{a} 是 {b} 的前缀（共 {count} 个）");
+                        assert!(
+                            !b.starts_with(a.as_str()),
+                            "{a} 是 {b} 的前缀（共 {count} 个）"
+                        );
                     }
                 }
             }
@@ -360,7 +367,11 @@ mod tests {
     fn matching_narrows_as_the_user_types() {
         let hints = assign((0..20).map(target).collect(), "ab");
         let session = Session::new(hints.clone(), "ab", false);
-        assert_eq!(session.matching().len(), hints.len(), "还没打字时全都算匹配");
+        assert_eq!(
+            session.matching().len(),
+            hints.len(),
+            "还没打字时全都算匹配"
+        );
 
         let mut session = Session::new(hints, "ab", false);
         if let Outcome::Filtering(left) = session.push('a') {

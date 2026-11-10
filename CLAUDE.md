@@ -6,20 +6,23 @@
 
 **Baobox** —— macOS 菜单栏常驻的「效率工具集合」App（对标 CleanShot X + Paste，再加一组开发者工具）。一个 App 内置多个工具，统一入口 / 快捷键 / 设置。无 Dock 图标（`LSUIElement`），**非沙盒 + Hardened Runtime**，bundle id `com.baobox.app`。
 
-- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（例外三个：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书；离线翻译把 llama.cpp 官方预编译的 `llama-server` 作为子进程打进 App 包 —— `make vendor` 按固定构建号 + SHA-256 下载、不进 git，模型文件由用户在 App 里单独下载，见 `docs/translation-engine/DESIGN.md`；朗读译文的「Baobox 同传」虚拟麦克风是 BlackHole（GPL-3.0）源码改名编译的音频驱动 —— `make vendor` 按固定版本 + SHA-256 下载源码编译、打进 App 包，用户在设置里点安装才装进系统，见 `docs/live-translate-voice/DESIGN.md`）。
+- 技术栈：**Swift 5.9 · SwiftUI + AppKit 混合 · macOS 14+ · 零第三方依赖**（例外三个：网络抓包模块调用系统自带 `/usr/bin/openssl` 子进程签证书（该模块暂缓、不编译，#103）；离线翻译把 llama.cpp 官方预编译的 `llama-server` 作为子进程打进 App 包 —— `make vendor` 按固定构建号 + SHA-256 下载、不进 git，模型文件由用户在 App 里单独下载，见 `docs/translation-engine/DESIGN.md`；朗读译文的「Baobox 同传」虚拟麦克风是 BlackHole（GPL-3.0）源码改名编译的音频驱动 —— `make vendor` 按固定版本 + SHA-256 下载源码编译、打进 App 包，用户在设置里点安装才装进系统，见 `docs/live-translate-voice/DESIGN.md`）。
 - 工程用 **XcodeGen** 生成（见 `mac/project.yml`，`sources: - Sources`（相对 mac/） 全量 glob，新增 `.swift` 文件自动纳入，无需改 project.yml）。
 
 ## 构建与验证（重要）
 
 - **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；三个平台各有一条构建工作流（`.github/workflows/build-{macos,windows,linux}.yml`），手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。Windows 与 Linux 的 Rust 代码在本机就能编译与测试。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
 - Mac 上构建：`brew install xcodegen && xcodegen generate && open Baobox.xcodeproj`（或 `xcodebuild -scheme Baobox build`）。
+- Rust（`shared/`、`windows/`、`linux/`）：CI 卡 `cargo fmt --check` 和 `cargo clippy --all-targets -- -D warnings`，工具链固定 **1.90.0**（#115，升级时改两个工作流里的版本、顺手修掉新冒出来的警告）。
+  本机：`cargo +1.90.0 fmt`、`cargo +1.90.0 clippy --all-targets`；Windows 的 crate 在 Mac 上加 `--target x86_64-pc-windows-gnu` 检查；
+  Linux 的 crate 依赖 GTK，在 Mac 上用 Docker（`rust:1.90-bookworm` 里装 `libgtk-3-dev pkg-config`）。测试里的常量断言写成 `const { assert!(…) }`（clippy 不许运行期 `assert!(常量)`）。
 - 无法编译时的自查：① 只引用真实存在的类型/方法（先 grep 确认签名）；② 每个 `L()` / `Text()` 的 key 都已入 `Localizable.xcstrings`（可跑下方脚本校验）；③ 所有 `@Published` 只在主线程写；④ `Process` / `NWConnection` / `URLSession` 不在主线程同步等待。
 
 ## 仓库结构（2026-08 起三平台并列）
 
 ```
 mac/       macOS 实现（Swift + SwiftUI/AppKit）—— 下文说的一切都在这里
-windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击
+windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击 + 桌面宠物
 linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击
 shared/    三平台共用的 Rust 库：baobox-core（纯逻辑）、baobox-image（PNG/灰度）
 docs/      产品文档与使用手册
@@ -58,11 +61,11 @@ BaoboxApp(@main, Settings scene)
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
 | Meeting | `meeting` | **会议**（#42）：线上会议（麦克风 + 系统声音混成一路进一个识别器，按两路音量标「我 / 对方」）/ 线下会议（仅麦克风）/ 自由听译（= 实时翻译）；控制条（暂停、🔖 标记、速记、字幕、结束）、菜单栏录音指示 / 下一场倒计时、`meeting` 勿扰、本地纪要模板（默认 / 站会 / 1:1 / 面试）与行动项、会议库（`Application Support/Baobox/Meetings/`，旧实时翻译记录按引用迁入）。日历（EventKit，设置里打开才申请权限）、会前提醒、一键入会、会议检测（会议 App + 麦克风占用 / 日历会议已开始）、会议库窗口（搜索、行动项、会前简报、系列时间线、周报）、设备自检。引擎就是实时翻译的 `LiveTranslateController.start(config:)`。`docs/meeting/` |
-| LiveTranslate | `livetranslate` | **实时翻译**（菜单与设置 Tab 已改名「字幕与同传」，注明已并入「会议」，下个版本删入口）：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
+| LiveTranslate | `livetranslate` | **实时翻译 / 字幕与同传**（独立入口已删，#106：不再注册成工具，菜单项「开始自由听译」、设置、`livetranslate.toggle` 快捷键都在「会议」里；这里是会议的引擎层）：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
 | SelectionTranslate | `selectiontranslate` | **划词助手**（#85，原划词翻译）：选中后先弹动作条（翻译 · 学习 · 润色 · 改写 · 地道英文 · 解释 · 总结 · 自定义动作），AI 动作走 `AIService`，改写类在可写输入框里可替换原文（替换前 AX 核对选区），⌥ + 数字 / 键盘模式 / 各动作直达快捷键（临时快捷键 `HotkeyCenter.registerTransient`）；「学习」= 离线 ECDICT 词典卡 + 整句点词 / 朗读高亮 / 跟读，见 `docs/selection-translate/ASSISTANT.md`。底层：全系统选中文字就地浮层翻译 + 朗读（AX 取词 / 借剪贴板兜底（App 自己的「拷贝」菜单项，终端等 AX 读不到的 App 自动弹出也能用）/ 框选 OCR；原文语种自动识别，译成可选语言；系统翻译 / 离线模型，macOS 14 也能翻）。`docs/selection-translate/` |
 | Dictation | `dictation` | **语音听写**（#45）：按住说话 / 连续听写（开始·结束听写，出厂快捷键 ⌥Space：一句定稿就上屏，可以一直说，安静 30 秒自动结束）/ 长听写（收集面板，可编辑再插入）；录音条不抢焦点，Esc 取消；识别走自己的 `SFSpeechRecognizer`（taskHint 听写、优先设备端、术语表共用），默认中英自动判别（低置信度时换语言重认；连续听写与长听写按停顿切段、逐句判）；后处理：语音指令、口头禅过滤、标点规整、可选本地 AI 润色（按 App）；插入按可靠性降级：AX 写入焦点（读回校验）→ 借剪贴板 ⌘V（不进剪贴板历史）→ 复制 + 提示（密码框 / 无权限）。听写历史只存文本。`docs/dictation/` |
 | PhoneTransfer | `phonetransfer` | **手机互传**：扫码连接，Mac ↔ 手机互传文件和文字，手机只用浏览器。局域网模式 = `NWListener` 极简 HTTP 服务（令牌 + Mac 端允许）；公网模式 = 隐藏 `WKWebView` 跑 WebRTC DataChannel（UDP 打洞，**不做中继**），信令 AES-GCM 加密后经公共 ntfy.sh / MQTT 中转。网页在 `Resources/PhoneTransfer/`（folder 资源，同一份由 `pages.yml` 发布到 GitHub Pages `/transfer/`）。`docs/phone-transfer/` |
-| NetCapture | `netcapture` | **网络抓包**：原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
+| NetCapture | `netcapture` | **网络抓包（暂缓，#103）**：代码在仓库，但 `project.yml` 的 excludes 把它排除在编译之外、AppDelegate 也不注册，发布包里没有；恢复步骤写在那条 excludes 的注释里。原生 Network.framework HTTP(S) MITM 代理，Mac+手机抓包、CA 证书、代理IP/二维码、ADB 一键、本地 MCP。`docs/packet-capture/` |
 
 ## 约定（写代码前必读）
 
@@ -117,7 +120,7 @@ BaoboxApp(@main, Settings scene)
 
 1. `project.yml` 里 **只有 `MARKETING_VERSION` 一处**版本号改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。（`CFBundleShortVersionString` / `CFBundleVersion` 现在写的是 `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`，跟着构建设置走 —— 以前写死字面量，导致工作流在命令行上覆盖版本号根本不起作用，v0.0.7 的包里仍写着上一版的号。）
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
-3. `.github/workflows/release.yml` 自动：Release 构建 → **ad-hoc 签名** → zip → 创建 GitHub Release（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。
+3. `.github/workflows/release.yml` 自动：三个平台并行构建（macOS Release + **ad-hoc 签名** → zip；Linux / Windows 按标签改 Cargo.toml 版本号 → `cargo rustc --release -D warnings` → tar.gz / zip），最后 `publish` 一次性创建 GitHub Release 挂上全部产物（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。Mac 包必须有，Linux / Windows 编不过就先不挂、不挡发版（#112）。想先验证打包：Actions 里手动跑 Release（填个试打包版本号），产物在那次运行的 Artifacts 里，不发布。
 
 背景与取舍：
 

@@ -24,7 +24,18 @@ jobs:
           workspaces: |
             shared/baobox-core
             shared/baobox-app
+            shared/baobox-render
+            shared/baobox-image
             windows/baobox-windows
+
+      # 共享层也在 Windows 上跑一遍（#115）：以前只在 Linux 上跑，路径分隔符、换行这类平台差异测不到。
+      - name: Test shared crates
+        shell: bash
+        run: |
+          for crate in shared/baobox-core shared/baobox-app shared/baobox-render shared/baobox-image; do
+            echo "== $crate"
+            (cd "$crate" && cargo test --all-targets)
+          done
 
       # 这一步是这条流水线最有价值的地方：覆盖层、标注编辑器、托盘、
       # 设置窗口那些测试都带 `cfg(windows)`，在开发机上只能类型检查，
@@ -45,3 +56,29 @@ jobs:
           name: baobox-windows-x86_64
           path: windows/baobox-windows/target/release/baobox-windows.exe
           if-no-files-found: error
+
+  # 风格与 lint（#115）：rustfmt 不合格、clippy 有任何警告都算失败。工具链固定版本，理由同 build-linux.yml。
+  lint:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+        working-directory: windows/baobox-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.90.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            windows/baobox-windows
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      - name: clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings

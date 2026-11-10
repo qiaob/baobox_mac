@@ -296,14 +296,7 @@ pub fn mosaic(canvas: &mut Canvas<'_>, shape: &Shape) {
     }
 }
 
-fn average_block(
-    canvas: &mut Canvas<'_>,
-    x0: i64,
-    y0: i64,
-    block: i64,
-    right: i64,
-    bottom: i64,
-) {
+fn average_block(canvas: &mut Canvas<'_>, x0: i64, y0: i64, block: i64, right: i64, bottom: i64) {
     let (mut r, mut g, mut b, mut count) = (0u64, 0u64, 0u64, 0u64);
     for y in y0..(y0 + block).min(bottom) {
         for x in x0..(x0 + block).min(right) {
@@ -363,9 +356,21 @@ mod tests {
         let mut pixels = blank(8, 8);
         let mut canvas = Canvas::new(8, 8, &mut pixels).unwrap();
         // 整条线都在画布外
-        line(&mut canvas, (-50.0, -50.0), (-10.0, -10.0), 4.0, Color::rgb(0, 0, 0));
+        line(
+            &mut canvas,
+            (-50.0, -50.0),
+            (-10.0, -10.0),
+            4.0,
+            Color::rgb(0, 0, 0),
+        );
         // 一半在外
-        line(&mut canvas, (-5.0, 4.0), (20.0, 4.0), 2.0, Color::rgb(0, 0, 0));
+        line(
+            &mut canvas,
+            (-5.0, 4.0),
+            (20.0, 4.0),
+            2.0,
+            Color::rgb(0, 0, 0),
+        );
         assert_eq!(canvas.get(0, 4).unwrap()[0], 0, "画布内的部分仍应画上");
     }
 
@@ -387,14 +392,20 @@ mod tests {
             },
         );
         let blended = canvas.get(1, 0).unwrap();
-        assert!(blended[0] > 100 && blended[0] < 160, "应是中灰，实得 {blended:?}");
+        assert!(
+            blended[0] > 100 && blended[0] < 160,
+            "应是中灰，实得 {blended:?}"
+        );
     }
 
     #[test]
     fn rectangle_is_hollow() {
         let mut pixels = blank(40, 40);
         let mut canvas = Canvas::new(40, 40, &mut pixels).unwrap();
-        render(&[shape(Tool::Rect, vec![(5.0, 5.0), (35.0, 35.0)], 2.0)], &mut canvas);
+        render(
+            &[shape(Tool::Rect, vec![(5.0, 5.0), (35.0, 35.0)], 2.0)],
+            &mut canvas,
+        );
         // 边框被画上
         assert_eq!(canvas.get(5, 20).unwrap()[1], 0, "左边框应有色");
         assert_eq!(canvas.get(35, 20).unwrap()[1], 0, "右边框应有色");
@@ -415,14 +426,21 @@ mod tests {
         assert_eq!(canvas.get(30, 50).unwrap()[1], 0, "底点");
         assert_eq!(canvas.get(10, 30).unwrap()[1], 0, "左点");
         assert_eq!(canvas.get(50, 30).unwrap()[1], 0, "右点");
-        assert_eq!(canvas.get(30, 30).unwrap(), [255, 255, 255, 255], "中心应为空");
+        assert_eq!(
+            canvas.get(30, 30).unwrap(),
+            [255, 255, 255, 255],
+            "中心应为空"
+        );
     }
 
     #[test]
     fn arrow_draws_a_head_near_the_tip() {
         let mut pixels = blank(60, 30);
         let mut canvas = Canvas::new(60, 30, &mut pixels).unwrap();
-        render(&[shape(Tool::Arrow, vec![(5.0, 15.0), (50.0, 15.0)], 2.0)], &mut canvas);
+        render(
+            &[shape(Tool::Arrow, vec![(5.0, 15.0), (50.0, 15.0)], 2.0)],
+            &mut canvas,
+        );
         // 主干
         assert_eq!(canvas.get(25, 15).unwrap()[1], 0);
         // 箭头回勾应当在末端上下方留下痕迹
@@ -435,7 +453,10 @@ mod tests {
     fn short_arrow_renders_during_drag() {
         let mut pixels = blank(20, 20);
         let mut canvas = Canvas::new(20, 20, &mut pixels).unwrap();
-        render(&[shape(Tool::Arrow, vec![(5.0, 5.0), (10.0, 8.0)], 3.0)], &mut canvas);
+        render(
+            &[shape(Tool::Arrow, vec![(5.0, 5.0), (10.0, 8.0)], 3.0)],
+            &mut canvas,
+        );
         assert_eq!(canvas.get(10, 8).unwrap()[1], 0);
     }
 
@@ -444,12 +465,19 @@ mod tests {
         let mut pixels = blank(20, 20);
         let mut canvas = Canvas::new(20, 20, &mut pixels).unwrap();
         render(
-            &[shape(Tool::Highlighter, vec![(2.0, 10.0), (18.0, 10.0)], 4.0)],
+            &[shape(
+                Tool::Highlighter,
+                vec![(2.0, 10.0), (18.0, 10.0)],
+                4.0,
+            )],
             &mut canvas,
         );
         let marked = canvas.get(10, 10).unwrap();
         // 半透明红压白底 → 绿蓝通道被拉低但不到 0
-        assert!(marked[1] > 0 && marked[1] < 255, "荧光笔应半透明，实得 {marked:?}");
+        assert!(
+            marked[1] > 0 && marked[1] < 255,
+            "荧光笔应半透明，实得 {marked:?}"
+        );
 
         let mut pen_pixels = blank(20, 20);
         let mut pen_canvas = Canvas::new(20, 20, &mut pen_pixels).unwrap();
@@ -471,7 +499,10 @@ mod tests {
             }
         }
         let mut canvas = Canvas::new(16, 16, &mut pixels).unwrap();
-        render(&[shape(Tool::Mosaic, vec![(0.0, 0.0), (16.0, 16.0)], 4.0)], &mut canvas);
+        render(
+            &[shape(Tool::Mosaic, vec![(0.0, 0.0), (16.0, 16.0)], 4.0)],
+            &mut canvas,
+        );
 
         let a = canvas.get(1, 1).unwrap();
         let b = canvas.get(2, 2).unwrap();
@@ -505,7 +536,10 @@ mod tests {
     fn eraser_draws_nothing() {
         let mut pixels = blank(10, 10);
         let mut canvas = Canvas::new(10, 10, &mut pixels).unwrap();
-        render(&[shape(Tool::Eraser, vec![(0.0, 0.0), (9.0, 9.0)], 4.0)], &mut canvas);
+        render(
+            &[shape(Tool::Eraser, vec![(0.0, 0.0), (9.0, 9.0)], 4.0)],
+            &mut canvas,
+        );
         assert_eq!(canvas.get(5, 5).unwrap(), [255, 255, 255, 255]);
     }
 }

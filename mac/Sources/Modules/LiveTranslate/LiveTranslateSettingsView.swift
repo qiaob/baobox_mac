@@ -1,32 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// 实时翻译设置：音源、语言、翻译开关、字幕样式。Tab 已改名「字幕与同传」，第一行注明已并入「会议」
-/// （docs/meeting/TECH_DESIGN.md §7），其余不变。
-struct LiveTranslateSettingsView: View {
-    var body: some View {
-        Form {
-            Section {
-                HStack {
-                    Text("livetranslate.settings.merged")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("livetranslate.settings.openMeeting") {
-                        SettingsTabSelection.shared.selectedTab = "meeting"
-                    }
-                }
-            }
-            LiveTranslateSettingsSections(embedded: false)
-        }
-        .formStyle(.grouped)
-    }
-}
-
-/// 实时翻译的全部设置分组。`embedded`：嵌在「会议」设置的「字幕与同传」里（docs/meeting/TECH_DESIGN.md §6）时，
-/// 不要开头那一组（介绍、开始按钮、快捷键 —— 会议设置有自己的快捷键分组）。
+/// 实时翻译（字幕与同传）的全部设置分组，嵌在「会议」设置里（docs/meeting/TECH_DESIGN.md §6）。
+/// 开关按钮和快捷键在会议页自己的分组里；独立的设置页已删（#106）。
 struct LiveTranslateSettingsSections: View {
-    let embedded: Bool
 
     @AppStorage(LiveTranslateSettings.sourceKey) private var source = LiveTranslateSource.system.rawValue
     /// `auto` 或识别 locale（`en-US`、`zh-CN`…）。
@@ -49,19 +26,6 @@ struct LiveTranslateSettingsSections: View {
     }
 
     var body: some View {
-        if !embedded {
-            Section {
-                Text("livetranslate.settings.intro")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Button(controller.isRunning ? L("livetranslate.menu.stop") : L("livetranslate.menu.start")) {
-                    controller.toggle()
-                }
-                // id 与 LiveTranslateTool.hotkeys() 一致。
-                ModuleHotkeyRows(ids: ["livetranslate.toggle"])
-            }
-        }
-
         Section("livetranslate.settings.audioSection") {
             Picker("livetranslate.settings.source", selection: $source) {
                 ForEach(LiveTranslateSource.allCases) { item in

@@ -188,7 +188,6 @@ impl HotkeyCenter {
         let cleaned = state & !(LOCK_BIT | NUM_BIT | SCROLL_BIT);
         self.bindings.get(&(keycode, cleaned)).map(String::as_str)
     }
-
 }
 
 /// 把平台无关的 `KeyCode` 映射成 X11 keysym。

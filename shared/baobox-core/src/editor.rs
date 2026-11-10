@@ -538,10 +538,7 @@ mod tests {
             e.mouse_moved((200.0 + step as f64 * 3.0, 200.0));
         }
         e.mouse_up((260.0, 200.0));
-        assert!(
-            e.visible_shapes()[0].points.len() > 5,
-            "画笔应记下整条轨迹"
-        );
+        assert!(e.visible_shapes()[0].points.len() > 5, "画笔应记下整条轨迹");
 
         let mut b = editor();
         b.activate(Item::Tool(Tool::Rect));
@@ -567,7 +564,10 @@ mod tests {
         draw(&mut e, (200.0, 200.0), (5000.0, 5000.0));
         let bounds = e.visible_shapes()[0].bounds();
         assert!(bounds.right() <= e.image().right() + 1e-9, "不能画出右边界");
-        assert!(bounds.bottom() <= e.image().bottom() + 1e-9, "不能画出下边界");
+        assert!(
+            bounds.bottom() <= e.image().bottom() + 1e-9,
+            "不能画出下边界"
+        );
     }
 
     #[test]
