@@ -7,6 +7,8 @@
 - 模块不再各自发系统通知，统一投递到通知内核，按级别经宠物呈现；宠物关闭时回退系统通知中心，提醒不丢失。
 - 通知三级：`ambient`（气泡数秒自消）/ `bubble`（气泡+动作按钮，点击回调来源）/ `alert`（气泡+提醒动作，可选提示音）。
 - 本机其他进程可经 Unix socket / CLI / URL scheme 投递通知；带动作的通知可把用户选择回传来源进程（轻量人机确认）。
+  **这一条是 M2，还没实现**（2026-11-10 核实：代码里没有 `NotifyGateway`、没有 `pet.sock`，见 #113）；
+  用户定了先在文档里标「计划中」，等真有外部程序要调用时再做。
 - 宠物常驻桌面：待机、散步、睡觉、提醒四种基本状态；可拖放；点击唤出 Baobox 菜单；形象渲染支持 2D 精灵与 3D 模型两种后端。
 - 勿扰统一判定：全屏 / 会议中 / 录屏 / 屏幕共享时非 `alert` 级通知攒批，事后一次补呈；判定逻辑与 #42、#43 共用一份。
 
@@ -16,11 +18,11 @@
 模块 / 外部进程 ──► NotifyCore ──► PetPresenter ──► PetEngine ──► Renderer(2D | 3D)
                       │  └─ 勿扰聚合队列 ─┘                └─ 气泡 UI
                       └─ 回退：UNUserNotificationCenter（宠物关/未就绪时；按钮转成通知操作，点了照样回调来源）
-外部进程 ──Unix socket / CLI / URL──► NotifyGateway ──► NotifyCore
+外部进程 ──Unix socket / CLI / URL──► NotifyGateway ──► NotifyCore      （M2，未实现）
 ```
 
 - `NotifyCore`：通知数据模型、来源注册表、去重、勿扰聚合、动作回调用分发。与 UI 无关，可单测。
-- `NotifyGateway`：对外协议层（socket 监听、CLI 与 URL scheme 的参数解析），只做校验与转交，不持有呈现状态。
+- `NotifyGateway`（M2，未实现）：对外协议层（socket 监听、CLI 与 URL scheme 的参数解析），只做校验与转交，不持有呈现状态。
 - `PetEngine`：宠物状态机与行为（位置、移动、朝向、当前动画状态），只产出「渲染意图」（状态 + 位置 + 朝向），不关心 2D/3D。
 - `PetRenderer`（协议）：消费渲染意图。两个实现：`SpriteRenderer`（2D 帧序列）、`SceneRenderer`（SceneKit 3D）。
 - `PetPresenter`：气泡队列与文案排版、按钮回调接线、通知历史。
@@ -52,7 +54,9 @@ NotifyCenter.shared.post(_ n: PetNotification,
 - 勿扰期间：`ambient` 直接进历史不弹；`bubble` 入队，勿扰解除后合并成一条摘要气泡（「3 条提醒：…」可展开）；`alert` 照常呈现但无声。
 - 宠物在勿扰期间进入睡觉状态，形象与行为一致，不出现「睡着了还弹气泡」的割裂。
 
-## 5. 对外协议（本机进程）
+## 5. 对外协议（本机进程）—— M2 计划，尚未实现
+
+> 2026-11-10：下面是计划中的设计，代码里还没有（#113）。实现前以这一节为准，实现后删掉这段说明。
 
 ### 5.1 Unix socket（主通道）
 
@@ -132,9 +136,9 @@ NotifyCenter.shared.post(_ n: PetNotification,
 
 ## 10. 文件
 
-- 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`NotifyCenter.swift`、`NotifyGateway.swift`（socket/CLI/URL)、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
+- 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`NotifyCenter.swift`、`NotifyGateway.swift`（socket/CLI/URL，M2 未实现）、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
 - 资源：`mac/Sources/Resources/Pets/`（内置形象目录）。
-- CLI 源码：`tools/baobox-pet/`（单文件 Swift，随包分发方式从待定项里定）。
+- CLI 源码：`tools/baobox-pet/`（单文件 Swift，随包分发方式从待定项里定；M2 未实现）。
 - 本地化：`pet.*` / `notify.*` 键入 `Localizable.xcstrings`，中英齐全。
 
 ## 11. 迁移
@@ -153,5 +157,5 @@ NotifyCenter.shared.post(_ n: PetNotification,
 ## 13. 分期
 
 - **M1 通知内核 + 2D 宠物**：内部 API、勿扰聚合、回退、精灵后端、AI 助手与 LiveTranslate 通知迁移。
-- **M2 对外开放**：socket 协议、来源授权、CLI、URL scheme。
+- **M2 对外开放**（未开始，#113）：socket 协议、来源授权、CLI、URL scheme。
 - **M3 3D 后端**：SceneKit 渲染、功耗节流、低电量降级；模型资产就绪后随版本开启。

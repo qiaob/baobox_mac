@@ -249,11 +249,11 @@ you can act on. Clicking a Claude Code / Codex notification jumps straight to it
 - **Notifications**: three levels (ambient / bubble / alert), do-not-disturb, de-duplication
   and batching. Meeting reminders, focus and health nudges, AI task completions, and
   minutes-ready all arrive here; with the pet off, they fall back to system notifications
-- **Open to other apps on this Mac**: local processes can send notifications through a
-  Unix socket (`~/Library/Application Support/Baobox/pet.sock`, JSON, one line per message)
-  with a small `baobox-pet` CLI wrapper, or a `baobox://notify` URL. Same-user only, no
-  network port, first-time sources need your approval, and Baobox never runs commands for
-  another process — a button click only reports the choice back
+- **Planned, not in this release: open to other apps on this Mac**. Local processes would send
+  notifications through a Unix socket (`~/Library/Application Support/Baobox/pet.sock`, JSON,
+  one line per message), a small `baobox-pet` CLI wrapper, or a `baobox://notify` URL.
+  Same-user only, no network port, first-time sources need your approval, and Baobox never runs
+  commands for another process: a button click only reports the choice back (#113)
 - **Radial menu**: click the pet for the Baobox menu; right-click for the pet menu
   (switch pet, size, quiet for a while, notification history, settings). The radial menu
   also holds shortcuts to the other tools
@@ -409,8 +409,6 @@ feature in Settings → AI and use that feature.
   `~/.codex` live
 - Meeting recordings, transcripts, and minutes stay on this Mac; dictation history stores
   text only, never audio
-- The desktop pet's socket for other local processes is same-user only (`0600`), opens no
-  network port, and Baobox never executes commands on another process's behalf
 - Cloud AI keys live in the Keychain; Settings → AI → Usage Limits and Privacy lists what is
   currently sent to which provider
 - Any other network access happens only when you ask for it: the version check (an npm lookup),
