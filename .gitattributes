@@ -1,0 +1,3 @@
+# 宠物素材按字节校验 SHA-256（windows/baobox-windows/src/pet_catalog.json，App 下载的也是仓库里的原始字节）：
+# 任何平台检出都不许改换行，否则 Windows runner（core.autocrlf=true）把 pet.json 换成 CRLF，校验对不上。
+assets/pets/** -text

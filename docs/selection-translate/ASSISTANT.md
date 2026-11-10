@@ -85,7 +85,10 @@ mac/Sources/Core/HotkeyCenter.swift    新增临时快捷键 registerTransient /
 
 一次取词 = 一个 `SelectionSession`（`@MainActor ObservableObject`）：原文、语种、取词路径、可写信息（焦点元素 + 原选区文字）、所在句子、当前形态（`bar` / `result(actionID)`）、键盘模式、⌥ 按住、键盘高亮位置、各动作结果缓存。
 
-浮层仍是一个不抢焦点的 `NSPanel`（`canBecomeKey = false`），根视图按形态切换：
+浮层仍是一个不抢焦点的 `NSPanel`（`canBecomeKey = false`）。它永远不是当前窗口，系统就按「非当前窗口」画里面的 AppKit 控件：
+`.borderedProminent` 不上强调色、`Menu` 和分段控件发灰，看起来像点不了（#95）。所以浮层里的按钮、菜单、分段都自己画
+（`SelectionButtons.swift`：主按钮 / 次要按钮 / 开关按钮样式，点了弹 NSMenu 的 `SelectionMenuButton`）；
+动作条上的「改写」点文字照旧按上次的语气改写，点 ▾ 弹语气菜单。根视图按形态切换：
 
 - 动作条：宽度跟内容走，贴在选区上方（放不下翻到下方）。
 - 结果面板：宽 400，高度跟内容走（沿用「超过上限才滚动」）；展开时按结果面板尺寸重新摆放（选区下方优先）。

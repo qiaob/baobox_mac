@@ -79,11 +79,17 @@ enum AIEngineChoice: Hashable {
 /// 「AI」页和模块页里的一行：功能 + 界面文案。模块的 `aiFeatures()` 每次现建，文案跟着当前语言。
 struct AIFeatureDefinition {
     let feature: AIFeature
+    /// 全名（「划词助手 AI 动作」）：跨工具的列表里用 ——「用在：…」「用量上限与隐私」的发送清单，免得几个「翻译」分不清。
     let title: String
     /// 选了云端模型时发出去的是什么（名词短语，如「选中的文字」）：「用量上限与隐私」里列成「会把…发给…」。
     let sends: String
     /// 建议用什么样的本地模型（`AIRecommendation`）；翻译类不看它，一律建议「自动」。
     var advice: AIModelAdvice = .fastest
+    /// 功能行里的短名（「AI 动作」，#94）：行在工具的分组下面，分组标题已经写了是哪个工具。没给就用全名。
+    var shortTitle: String? = nil
+
+    /// 功能行（`AIFeatureRow`）第一列显示的名字。
+    var rowTitle: String { shortTitle ?? title }
 }
 
 /// 一个功能要什么样的本地模型：功能栏第三列的「建议」按它和这台 Mac 的内存算（docs/ai-service/DESIGN.md §6.3）。

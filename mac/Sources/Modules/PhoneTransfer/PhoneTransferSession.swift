@@ -27,6 +27,8 @@ final class PhoneTransferSession: ObservableObject {
     struct Request: Identifiable {
         let id: String
         let name: String
+        /// 局域网模式的 4 位设备码，手机网页上显示同一个（#98）；公网模式没有。
+        var code: String?
     }
 
     enum TransferState: Equatable {
@@ -49,6 +51,8 @@ final class PhoneTransferSession: ObservableObject {
         var finishedAt: Date?
         /// 图片的缩略图，后台生成。
         var thumbnail: NSImage?
+        /// 失败时的原因（拒收超过上限的文件时写「已拒收：…」，#99）；nil = 只写「失败」。
+        var note: String?
 
         var isImage: Bool { PhoneTransferImage.isImage(URL(fileURLWithPath: name)) }
     }
@@ -82,8 +86,11 @@ final class PhoneTransferSession: ObservableObject {
     var isRunning: Bool { phase != .idle }
 
     private var lan: LANTransferServer?
-    /// 当前二维码里的地址。
+    /// 当前二维码里的地址与端口（批准设备后换令牌，二维码要重新拼）。
     private var lanIP: String?
+    private var lanPort: UInt16?
+    /// 局域网设备 id → 显示名（设备作废时从列表里去掉）。
+    private var lanDeviceNames: [String: String] = [:]
     private var pathMonitor: NWPathMonitor?
     private var interfaceKinds: [String: PhoneTransferInterface.Kind] = [:]
     private var expiryTimer: Timer?
@@ -97,6 +104,9 @@ final class PhoneTransferSession: ObservableObject {
     private var rxName = ""
     private var rxTemp: URL?
     private var rxHandle: FileHandle?
+    /// 公网模式：正在收的文件开头报的大小、这次会话已经收下（含正在收）的字节（#99）。
+    private var rxDeclared: Int64 = 0
+    private var rxSessionBytes: Int64 = 0
 
     private static let expiry: TimeInterval = 10 * 60
 
@@ -115,6 +125,9 @@ final class PhoneTransferSession: ObservableObject {
         failureDetail = []
         qrText = nil
         lanIP = nil
+        lanPort = nil
+        lanDeviceNames = [:]
+        rxSessionBytes = 0
         phase = .starting
         startInterfaceMonitor()
         switch mode {
@@ -260,13 +273,23 @@ final class PhoneTransferSession: ObservableObject {
         switch event {
         case .ready(let port):
             guard let server = lan, let ip = lanIP else { return }
-            qrText = "http://\(ip):\(port)/?t=\(server.token)"
+            lanPort = port
+            qrText = Self.lanURL(ip: ip, port: port, token: server.token)
             if phase == .starting { phase = .waiting }
         case .failed(let message):
             phase = .failed(message)
-        case .deviceRequest(let clientID, let name):
-            requests.append(Request(id: clientID, name: name))
+        case .deviceRequest(let clientID, let name, let code):
+            requests.append(Request(id: clientID, name: name, code: code))
             PhoneTransferWindowController.shared.show()
+        case .tokenRotated(let token):
+            // 批准了一台设备：二维码换新令牌，再加设备要扫新的（旧二维码被拍走也没用，#98）。
+            if let ip = lanIP, let port = lanPort { qrText = Self.lanURL(ip: ip, port: port, token: token) }
+        case .deviceExpired(let clientID, _):
+            if let name = lanDeviceNames.removeValue(forKey: clientID),
+               let index = devices.firstIndex(of: name) {
+                devices.remove(at: index)
+            }
+            if mode == .lan, devices.isEmpty, phase == .connected { phase = .waiting }
         case .uploadBegan(let id, let name, let size):
             transfers.insert(Transfer(id: id, incoming: true, name: name, size: size, done: 0, state: .active,
                                       startedAt: Date()), at: 0)
@@ -285,6 +308,8 @@ final class PhoneTransferSession: ObservableObject {
                 $0.state = .failed
                 $0.finishedAt = Date()
             }
+        case .uploadRefused(let name, let size, let refusal):
+            insertRefused(name: name, size: size, refusal: refusal)
         case .text(let text):
             receivedText(text)
         case .downloadFinished(let fileID, let started, let finished):
@@ -331,8 +356,18 @@ final class PhoneTransferSession: ObservableObject {
                 phase = .failed(L("phonetransfer.error.noWebRTC"))
             } else if (msg["crypto"] as? Bool) != true {
                 phase = .failed(L("phonetransfer.error.noCrypto"))
-            } else {
-                rtcHost?.start(sid: sid, key: key, since: since, macName: PhoneTransferSettings.macName)
+            } else if let host = rtcHost {
+                // 起不来（信令服务连不上、页面脚本出错）就马上说，不再干等 15 秒（#102）。
+                let gen = generation
+                Task { @MainActor in
+                    do {
+                        try await host.start(sid: sid, key: key, since: since, macName: PhoneTransferSettings.macName)
+                    } catch {
+                        guard self.generation == gen, self.phase == .starting else { return }
+                        NSLog("[PhoneTransfer] host start failed: %@", error.localizedDescription)
+                        self.phase = .failed(L("phonetransfer.error.signal"))
+                    }
+                }
             }
         case "signal":
             let state = msg["state"] as? String ?? ""
@@ -357,6 +392,13 @@ final class PhoneTransferSession: ObservableObject {
         case "rx-chunk":
             guard let id = msg["id"] as? String, id == rxID,
                   let b64 = msg["b64"] as? String, let data = Data(base64Encoded: b64) else { return }
+            // 比开头报的大小还多：不按约定来的一律作废，免得报 1 KB 实际塞几十 GB（#99）。
+            let done = transfers.first(where: { $0.id == id })?.done ?? 0
+            if done + Int64(data.count) > rxDeclared {
+                abortReceive()
+                rtcHost?.reject(id: id, why: "size", limit: rxDeclared)
+                return
+            }
             do {
                 try rxHandle?.write(contentsOf: data)
                 update(id) { $0.done += Int64(data.count) }
@@ -383,8 +425,16 @@ final class PhoneTransferSession: ObservableObject {
         case "connected":
             route = msg["route"] as? String
             phase = .connected
+            sendLimits()
             pumpRTC()
         case "failed":
+            // 宿主页自己出错（建连接、生成答复时抛异常）不是打洞失败，别显示 NAT 那套（#102）。
+            if (msg["reason"] as? String) == "error" {
+                failureDetail = []
+                devices = []
+                phase = .failed(L("phonetransfer.error.host"))
+                return
+            }
             failureDetail = [
                 L("phonetransfer.nat.phone") + natText(msg["phoneNat"] as? String),
                 L("phonetransfer.nat.mac") + natText(msg["macNat"] as? String)
@@ -415,6 +465,12 @@ final class PhoneTransferSession: ObservableObject {
         abortReceive()
         let dir = PhoneTransferSettings.receiveDir
         guard !id.isEmpty, PhoneTransferSettings.ensureDirectory(dir) else { return }
+        // 上限（#99）：超了不收，告诉手机停下（手机那边显示原因），列表里记一行「已拒收」。
+        if let refusal = PhoneTransferLimits.check(size: max(0, size), received: rxSessionBytes,
+                                                   freeSpace: PhoneTransferLimits.freeSpace(at: dir)) {
+            refuseIncoming(id: id, name: PhoneTransferSettings.sanitize(name), size: size, refusal: refusal)
+            return
+        }
         let temp = dir.appendingPathComponent(".\(UUID().uuidString).part")
         guard FileManager.default.createFile(atPath: temp.path, contents: nil),
               let handle = try? FileHandle(forWritingTo: temp) else { return }
@@ -422,6 +478,8 @@ final class PhoneTransferSession: ObservableObject {
         rxName = PhoneTransferSettings.sanitize(name)
         rxTemp = temp
         rxHandle = handle
+        rxDeclared = max(0, size)
+        rxSessionBytes += rxDeclared
         transfers.insert(Transfer(id: id, incoming: true, name: rxName, size: size, done: 0, state: .active,
                                   startedAt: Date()), at: 0)
     }
@@ -445,10 +503,21 @@ final class PhoneTransferSession: ObservableObject {
                 $0.state = .failed
                 $0.finishedAt = Date()
             }
+            rxSessionBytes = max(0, rxSessionBytes - rxDeclared)
         }
         rxID = nil
         rxTemp = nil
         rxHandle = nil
+        rxDeclared = 0
+        sendLimits()
+    }
+
+    /// 公网模式：把现在的上限告诉手机（连上时、每收完一个文件后）。
+    private func sendLimits() {
+        guard mode == .internet, phase == .connected else { return }
+        let room = PhoneTransferLimits.room(received: rxSessionBytes,
+                                            freeSpace: PhoneTransferLimits.freeSpace(at: PhoneTransferSettings.receiveDir))
+        rtcHost?.sendLimits(file: PhoneTransferLimits.maxFileBytes, room: room)
     }
 
     private func abortReceive() {
@@ -459,10 +528,26 @@ final class PhoneTransferSession: ObservableObject {
                 $0.state = .failed
                 $0.finishedAt = Date()
             }
+            // 没收下：把占的额度还回去。
+            rxSessionBytes = max(0, rxSessionBytes - rxDeclared)
         }
         rxID = nil
         rxTemp = nil
         rxHandle = nil
+        rxDeclared = 0
+    }
+
+    /// 公网模式拒收：告诉手机别再发了，列表里记一行。
+    private func refuseIncoming(id: String, name: String, size: Int64, refusal: PhoneTransferRefusal) {
+        let reason = refusal.phoneReason
+        rtcHost?.reject(id: id, why: reason.why, limit: reason.limit)
+        insertRefused(name: name, size: size, refusal: refusal)
+    }
+
+    private func insertRefused(name: String, size: Int64, refusal: PhoneTransferRefusal) {
+        let id = "r" + UUID().uuidString
+        transfers.insert(Transfer(id: id, incoming: true, name: name, size: max(0, size), done: 0, state: .failed,
+                                  finishedAt: Date(), note: refusal.note), at: 0)
     }
 
     private func pumpRTC() {
@@ -503,11 +588,24 @@ final class PhoneTransferSession: ObservableObject {
         switch mode {
         case .lan:
             lan?.setDecision(clientID: request.id, approved: true)
+            lanDeviceNames[request.id] = request.name
             if !devices.contains(request.name) { devices.append(request.name) }
             phase = .connected
         case .internet:
             devices = [request.name]
-            rtcHost?.approve(true)
+            guard let host = rtcHost else { return }
+            // 点了「允许」却没走下去（宿主页脚本出错）：Mac 这边说清楚，别让两边都干等（#102）。
+            let gen = generation
+            Task { @MainActor in
+                do {
+                    try await host.approve(true)
+                } catch {
+                    guard self.generation == gen else { return }
+                    NSLog("[PhoneTransfer] approve failed: %@", error.localizedDescription)
+                    self.devices = []
+                    self.phase = .failed(L("phonetransfer.error.host"))
+                }
+            }
         }
     }
 
@@ -517,8 +615,10 @@ final class PhoneTransferSession: ObservableObject {
         case .lan:
             lan?.setDecision(clientID: request.id, approved: false)
         case .internet:
-            // 公网会话一次只接一部手机；拒绝后告诉对方，再换一个新二维码。
-            rtcHost?.approve(false)
+            // 公网会话一次只接一部手机；拒绝后告诉对方，再换一个新二维码。拒绝没发出去也无妨：手机三分钟后自己放弃。
+            if let host = rtcHost {
+                Task { @MainActor in try? await host.approve(false) }
+            }
             let gen = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 MainActor.assumeIsolated {
@@ -578,6 +678,11 @@ final class PhoneTransferSession: ObservableObject {
     }
 
     // MARK: - 工具
+
+    /// 局域网二维码地址：令牌放在 # 后面，浏览器不会把它发给服务端（#98）。
+    private static func lanURL(ip: String, port: UInt16, token: String) -> String {
+        "http://\(ip):\(port)/#t=\(token)"
+    }
 
     private func receivedText(_ text: String) {
         texts.insert(TextItem(incoming: true, text: text), at: 0)

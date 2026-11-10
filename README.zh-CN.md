@@ -271,6 +271,10 @@ macOS 14+   ·   Swift 5.9   ·   零第三方 Swift 依赖   ·   默认数据�
 解压后把 `Baobox.app` 拖进「应用程序」。首次打开若被 Gatekeeper 拦下，
 在「系统设置 → 隐私与安全性」里点「仍要打开」。
 
+从 0.0.9 起同一个 Release 里也有 Linux 和 Windows 版：
+`Baobox-X.Y.Z-linux-x86_64.tar.gz`（解压后运行 `./baobox-linux`）、
+`Baobox-X.Y.Z-windows-x86_64.zip`（解压后运行 `baobox-windows.exe`）。
+
 ### 系统要求
 
 - macOS 14 (Sonoma) 或更新版本
@@ -395,7 +399,7 @@ mac/Sources/
 └── Resources/              # Localizable.xcstrings、Assets
 ```
 
-`NetCapture`（网络抓包）代码在仓库里但**当前版本未注册发布**。
+`NetCapture`（网络抓包）代码在仓库里但**暂缓**：既不编进 App，也不注册（#103）。
 
 ## 新增一个工具
 
