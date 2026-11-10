@@ -207,11 +207,16 @@ final class AIModelStore: ObservableObject {
 
     // MARK: - 持久化
 
+    /// 编码失败（理论上不会，字段都是字符串）也要说出来，别让配置悄悄没存上（#101）。
     private func persist() {
         let defaults = UserDefaults.standard
         let encoder = JSONEncoder()
-        if let data = try? encoder.encode(accounts) { defaults.set(data, forKey: Self.accountsKey) }
-        if let data = try? encoder.encode(models) { defaults.set(data, forKey: Self.modelsKey) }
+        do {
+            defaults.set(try encoder.encode(accounts), forKey: Self.accountsKey)
+            defaults.set(try encoder.encode(models), forKey: Self.modelsKey)
+        } catch {
+            StorageWriteFailure.report(L("storage.what.aiAccounts"), reason: error.localizedDescription)
+        }
     }
 
     /// 逐条解码：某一条字段不对只丢那一条，不至于整张表读不出来、下次保存时把别的也冲掉。

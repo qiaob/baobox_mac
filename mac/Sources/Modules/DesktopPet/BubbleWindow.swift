@@ -455,6 +455,7 @@ struct BubbleCard: View {
 
     private var sourceName: String {
         switch notification.source {
+        case "storage": return "Baobox"
         case "claudecode": return "Claude Code"
         case "codex": return "Codex"
         case "livetranslate": return L("pet.source.livetranslate")
