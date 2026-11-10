@@ -330,7 +330,7 @@ enum BackupMerge {
 
         plan.snippetsInFile = backup.snippets.count
         if local.snippetsAvailable {
-            let merged = snippets(backup.snippets, into: local.clipboardItems)
+            let merged = snippets(backup.snippets, into: local.clipboardItems, now: now)
             plan.newSnippets = merged.added
             plan.keywordConflicts = merged.conflicts
         }
@@ -355,10 +355,13 @@ enum BackupMerge {
         return plan
     }
 
-    /// 片段：id 相同（和剪贴板里任何一条）或内容相同（和本机的文本类收藏、和文件里前面的片段）的跳过，其余加进来、都是收藏；
-    /// 关键字和本机收藏撞了，导入的那条去掉关键字，撞了的关键字列出来。文件里自己重名的关键字照原样（匹配时取最新的一条）。
-    static func snippets(_ incoming: [BackupSnippet],
-                         into existing: [ClipboardItem]) -> (added: [ClipboardItem], conflicts: [String]) {
+    /// 片段：正文是空的、id 相同（和剪贴板里任何一条）或内容相同（和本机的文本类收藏、和文件里前面的片段）的跳过，
+    /// 其余加进来、都是收藏；关键字和本机收藏撞了，导入的那条去掉关键字，撞了的关键字列出来。
+    /// 文件里自己重名的关键字照原样（匹配时取最新的一条）。
+    /// 创建时间晚于 `now` 的（导出那台 Mac 的时钟快了、手改过的文件）记成 `now`：剪贴板按时间排，
+    /// 不然它会排到最近复制的前面，⌘⌥V「粘贴最近一条」就粘成了它。
+    static func snippets(_ incoming: [BackupSnippet], into existing: [ClipboardItem],
+                         now: Date) -> (added: [ClipboardItem], conflicts: [String]) {
         var ids = Set(existing.map(\.id))
         var contents = Set(existing.filter { $0.isPinned && ($0.type == .text || $0.type == .link) }
             .map { $0.text ?? "" })
@@ -366,7 +369,9 @@ enum BackupMerge {
         var added: [ClipboardItem] = []
         var conflicts: [String] = []
         for snippet in incoming {
-            guard !ids.contains(snippet.id), !contents.contains(snippet.content) else { continue }
+            guard !snippet.content.isEmpty, !ids.contains(snippet.id), !contents.contains(snippet.content) else {
+                continue
+            }
             ids.insert(snippet.id)
             contents.insert(snippet.content)
             var keyword = trimmed(snippet.keyword)
@@ -376,7 +381,7 @@ enum BackupMerge {
             }
             added.append(ClipboardItem(id: snippet.id, type: snippet.isLink ? .link : .text, text: snippet.content,
                                        imageFilename: nil, sourceAppName: nil, sourceBundleID: nil,
-                                       createdAt: snippet.createdAt, isPinned: true, isConcealed: false,
+                                       createdAt: min(snippet.createdAt, now), isPinned: true, isConcealed: false,
                                        title: trimmed(snippet.title), keyword: keyword))
         }
         return (added, conflicts)
