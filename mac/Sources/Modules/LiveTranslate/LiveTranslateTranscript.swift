@@ -198,6 +198,20 @@ final class LiveTranslateTranscript {
 
     private static let ioQueue = DispatchQueue(label: "com.baobox.app.livetranslate.transcript", qos: .utility)
 
+    /// 正在整理纪要的记录（会议的、自由听译的）：开始整理时登记、整理完注销。登记表和纪要任务都持有它们，
+    /// 会话复位、开了下一场也照样写得回去；App 退出时 `abortAllMinutes()` 把它们全部标成「没整理完」。
+    private static var summarizing: [LiveTranslateTranscript] = []
+
+    /// App 退出：还在整理的纪要全部标成「没整理完」，md 与 meta.json 都同步写完（docs/meeting/ENGINE.md §4.5.5）。
+    /// 在会议与自由听译都停下之后、`OfflineTranslator.shutdownAll()` 之前调。
+    static func abortAllMinutes() {
+        let pending = summarizing
+        summarizing = []
+        for transcript in pending {
+            transcript.abortMinutesIfRunning()
+        }
+    }
+
     init(start: Date, config: MeetingEngineRun, destination: Destination) {
         self.start = start
         self.config = config
@@ -284,7 +298,8 @@ final class LiveTranslateTranscript {
     }
 
     /// App 退出时还在整理纪要：标成「没整理完」，同步写一次。
-    func abortMinutesIfRunning() {
+    private func abortMinutesIfRunning() {
+        Self.summarizing.removeAll { $0 === self }
         guard case .generating = minutes else { return }
         minutesTask?.cancel()
         minutes = .interrupted
@@ -306,7 +321,7 @@ final class LiveTranslateTranscript {
         .sorted { $0.time < $1.time }
     }
 
-    /// 后台整理；任务强持有本对象，开了下一次实时翻译也照样写完。
+    /// 后台整理；任务与登记表强持有本对象，开了下一次实时翻译 / 下一场会议也照样写完。
     private func generateMinutes() {
         let lines = minutesInput
         let chinese = L10n.locale.identifier.hasPrefix("zh")
@@ -315,6 +330,7 @@ final class LiveTranslateTranscript {
         // 走本地（内置或本机大模型）时那个模型常驻到写完；给纪要选了云端模型就不加载本地模型（出错退回时才现加载）。
         let kept = AIService.shared.localBackend(for: AIService.shared.route(for: .meetingMinutes), local: .generation)
         kept?.beginKeepAlive()
+        Self.summarizing.append(self)
         minutesTask = Task {
             let result: Minutes
             do {
@@ -328,6 +344,7 @@ final class LiveTranslateTranscript {
             }
             kept?.endKeepAlive()
             minutesTask = nil
+            Self.summarizing.removeAll { $0 === self }
             guard case .generating = minutes else { return }
             minutes = result
             writeNow(sync: false)
