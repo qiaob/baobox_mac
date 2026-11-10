@@ -45,7 +45,11 @@ impl Config {
 
     /// 解析。**任何一行看不懂都当成注释保留**，绝不报错 ——
     /// 配置文件是用户的东西，读不懂的部分只能原样留着，不能丢。
+    ///
+    /// 开头的 UTF-8 BOM 先去掉（#157）：老版记事本存「UTF-8」会带上它，而 `trim` 不把它当空白，
+    /// 第一节的 `[节名]` 就认不出来，这一节的设置全被忽略。写回时不再带 BOM。
     pub fn parse(text: &str) -> Self {
+        let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
         let mut lines = Vec::new();
         for raw in text.lines() {
             let trimmed = raw.trim();
@@ -307,6 +311,14 @@ screenshot.capture = Ctrl+Shift+S
         // Base64、URL 里都可能有 =，只在第一个 = 处切
         let config = Config::parse("[s]\ntoken = a=b=c\n");
         assert_eq!(config.get("s", "token"), Some("a=b=c"));
+    }
+
+    #[test]
+    fn a_leading_utf8_bom_does_not_hide_the_first_section() {
+        let config = Config::parse("\u{FEFF}[screenshot]\nhotkey = Ctrl+Shift+A\n");
+        assert_eq!(config.get("screenshot", "hotkey"), Some("Ctrl+Shift+A"));
+        // 写回时不带 BOM，其余原样
+        assert_eq!(config.to_text(), "[screenshot]\nhotkey = Ctrl+Shift+A\n");
     }
 
     #[test]
