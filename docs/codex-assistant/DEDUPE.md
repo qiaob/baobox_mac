@@ -749,15 +749,26 @@ Tab 只有 Claude 吃掉（Codex 现在放行，保持）。
      两关的纯逻辑（连同从 `TerminalLauncher` 挪过来的 `isClaudeCommand`）在 `Modules/ClaudeCode/ClaudeRunningSession.swift`，加进了 `BaoboxTests`。
   3. 顺带扩大的：会话正开在终端偏好列表以外、但 hook 记下了 App 的终端里（Otty 之外还有 VS Code 这类），面板现在把那个 App 切到前台
      （定位不到标签页），不再开第二个窗口跑同一个会话。
-  4. **B1 的节流原样保留**（60 秒内只放行一次，被拦下的不顺延、不补刷），为了单测搬进 `Core/CLIUsage/CLIUsageRefreshThrottle.swift`；
-     Codex 的 `refreshThrottledFromEvent` 是同一条规则，没换过来（属于 §5.3「用量 Store 外壳」）。这条规则下，回合中途刚因 Notification 刷过、
-     60 秒内 Stop 的那次会被拦下，要等下一次事件或 5 分钟的定时器；想要「回合结束后 60 秒内一定刷到」得加尾随刷新（被拦下时在窗口末尾补一次），
-     那就改了节流，没做，待定。刷新不看通知开关，启动回放的旧事件不刷。
+  4. **B1 的节流加了补刷**（第二个提交，主会话拍板）：§9 D4 写的是「节流 60 秒不变」，但那样回合中途刚因 Notification 刷过、60 秒内 Stop 的那次会被拦下，
+     要等下一次事件或 5 分钟的定时器。现在 `Core/CLIUsage/CLIUsageRefreshThrottle.swift`：距上次 ≥ 60 秒马上刷，窗口里来的在窗口结束时补刷一次
+     （只补一次、不叠加；窗口已过时来了新请求就马上刷、取消补刷），每个回合结束后的用量最晚 60 秒后刷得到。补刷定时器的延迟夹在 0–60 秒（时钟往回拨过也不久等）。
+     顺带 `ClaudeUsageStore.refresh()` 进行中再来的请求合并成「这一轮结束后再刷一轮」（原来直接丢：启动时那轮全量解析还没完就结束的回合会漏刷）。
+     Codex 的 `refreshThrottledFromEvent` 还是只节流不补刷，没换过来（属于 §5.3「用量 Store 外壳」）。刷新不看通知开关，启动回放的旧事件不刷。
+  4a. **用量刷新改成增量**（第二个提交）：hook 接通后最快每分钟刷一次，而 `collectEntries(sinceHoursAgo: 180)` 每次都把近 180 小时改过的日志从头解析一遍 ——
+     主会话在用户数据上实测 144 个文件、1.3 GB，`-O` 下约 11 秒 CPU，干活时合起来约占一个核的 18%。新的 `Modules/ClaudeCode/ClaudeUsageCollector.swift`
+     （纯 Foundation，进 `BaoboxTests`）按文件缓存解析结果（只在内存）：路径 → 修改时间 + 大小 + 这个文件按行序的候选条目（带去重键；同一个文件里重复的键只留第一条 ——
+     后面那条合并时一定被去掉，提前丢不改变结果），修改时间或大小变了才重新解析；跨文件的去重每轮按原来的遍历顺序在合并时重做，结果与全量解析逐条相同。
+     缓存只留修改时间（按现在的）在 180 小时以内、目录里还在的文件；报表（30 天）共用缓存，更早的文件照旧每次解析、不进缓存；刷新与报表可能同时跑，缓存读写在锁里。
+     调用统计是另一套解析，没动。差分测试：测试里放了改动前 `collectEntries` 的原样拷贝当基准，脚本化改动（追加含跨文件重复、改写变小、同样大小改写、删除、过期又回来、
+     报表窗口长于 / 短于保留窗口、读不了的文件）加固定种子的 60 轮随机改动，每轮逐条比对；把「去重按文件重置」「只按大小判断变没变」放回去，随机差分 27 轮失败、另有 5 个用例失败。
+     合成数据实测（144 个文件 / 1.3 GB / 15.6 万条，`-O`，M3）：全量解析 13.4 秒 CPU；缓存命中 0.03 秒，加上窗口计算一次刷新 0.35 秒；60 MB 活跃文件写了一回合后 0.64 + 0.32 秒；
+     缓存约 28 MB。剩下的大头（没做）：计算里逐条按模型名查价约占 0.32 秒的一半（在共用的 `Core/CLIUsage`）；活跃大文件整份重新解析，可以只读追加部分（同 `ClaudeFileIndex`）。
+     Codex 的 `CodexUsageStore.collectEntries` 也是每次全量解析，这次没动（它的日志小得多）。
   5. C5 照 §5.2 做：两个 `submenuItems()` 在「未安装」判断之后各加一行 `refresh()`。`StatusItemController` 每次打开 Baobox 主菜单都重建全部子菜单，
      所以是「打开 Baobox 菜单」就刷（不用点进子菜单）；AX 在后台线程模拟打开菜单时整个重建都跳过，不会刷。App 启动时 `StatusItemController.init`
      也构建一次菜单，正撞上 `activate()` 发起的那一轮，按 PR4 合并成「这一轮结束后补扫一轮」（补扫复用刚扫出的记录，没变的文件只 stat），
      第一次发布列表因此晚一轮 stat 的工夫。
-  6. 单元测试新增 22 个（`ClaudeRunningSessionTests` 16、`CLIUsageRefreshThrottleTests` 6），`BaoboxTests` 共 329 个；改动的文件没有新告警。
+  6. 单元测试新增 42 个（`ClaudeRunningSessionTests` 16、`ClaudeUsageCollectorTests` 17、`CLIUsageRefreshThrottleTests` 9），`BaoboxTests` 共 349 个；改动的文件没有新告警。
 
 ## 7. 验证
 

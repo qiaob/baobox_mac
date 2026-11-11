@@ -7,7 +7,8 @@ import Foundation
 /// 重 IO 后台，`@Published` 只在主线程写。
 ///
 /// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法在共用层 `Core/CLIUsage/`（与 Codex 助手共用，有单元测试）；
-/// 这里只留 Claude 自己的部分：定价表、`~/.claude/projects` JSONL 的解析、设置键与提醒的发送。
+/// 这里只留 Claude 自己的部分：定价表、`~/.claude/projects` JSONL 的解析（`ClaudeUsageCollector`：按文件缓存、只重新解析改过的文件）、
+/// 设置键与提醒的发送。
 ///
 /// 本文件无独立用户可见文案（额度提醒文案在 ClaudeNotifier / ClaudeLiveStatus.swift 中定义）。
 
@@ -104,8 +105,13 @@ final class ClaudeUsageStore: ObservableObject {
     /// 周窗口 80% 提醒的防重状态（与 5h 独立防重）。仅主线程访问。
     private var weeklyBudgetReminder = CLIUsageBudgetReminder()
     private var refreshing = false
-    /// hook 事件触发的刷新：60 秒内只放行一次。
+    /// 刷新进行中又来了请求（定时器、hook、补刷、设置变化）：这一轮结束后再刷一轮（来几次都只补一轮）。
+    /// 否则刚好撞上的请求会被吞掉 —— 比如启动时那轮全量解析还没完，回合就结束了。
+    private var refreshAgain = false
+    /// hook 事件触发的刷新：60 秒内只马上放行一次，窗口里来的在窗口结束时补一次。
     private var hookRefreshThrottle = CLIUsageRefreshThrottle(interval: 60)
+    /// 排着的补刷（`hookRefreshThrottle` 说要补的那一次）。
+    private var trailingRefresh: DispatchWorkItem?
     private var timer: Timer?
 
     private init() {}
@@ -128,25 +134,56 @@ final class ClaudeUsageStore: ObservableObject {
     func stopAutoRefresh() {
         timer?.invalidate()
         timer = nil
+        trailingRefresh?.cancel()
+        trailingRefresh = nil
     }
 
-    /// 收到 hook 事件时的节流刷新（≥60s 才真正刷）。`ClaudeLiveStatus` 在回合结束（Stop）与等你确认（Notification）时调。
+    /// 收到 hook 事件时的节流刷新：距上次 ≥ 60 秒马上刷；60 秒内来的在窗口结束时补刷一次（只补一次，不叠加），
+    /// 所以每个回合结束后的用量都刷得到。`ClaudeLiveStatus` 在回合结束（Stop）与等你确认（Notification）时调。
     func refreshThrottledFromHook() {
-        guard hookRefreshThrottle.allow() else { return }
-        refresh()
+        let now = Date()
+        switch hookRefreshThrottle.request(at: now) {
+        case .now:
+            trailingRefresh?.cancel()
+            trailingRefresh = nil
+            refresh()
+        case .trailing(let fireDate):
+            trailingRefresh?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.trailingRefresh = nil
+                    if self.hookRefreshThrottle.fireTrailing(at: Date()) {
+                        self.refresh()
+                    }
+                }
+            }
+            trailingRefresh = work
+            // 延迟夹在 0...60 秒：系统时钟往回拨过也不会一等几个小时（补刷时窗口跟着新时钟重新起算）。
+            let delay = min(hookRefreshThrottle.interval, max(0, fireDate.timeIntervalSince(now)))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        case .alreadyScheduled:
+            break
+        }
     }
 
     // MARK: - 刷新
 
-    /// 后台解析近 180h 内 mtime 的文件，一次扫描算出 5h 窗口、今日累计与周窗口。
-    /// 5h / 今日只关心近 24h，是这批条目的天然子集；周窗口需近 7 天故采集窗口取 180h（168h + 余量）。
+    /// 菜单刷新的采集窗口（小时）：周窗口要近 7 天，取 180h（168h + 余量）。也是用量收集器缓存的保留窗口。
+    nonisolated static let refreshWindowHours = 180
+
+    /// 后台收集近 180h 内 mtime 的文件的用量（只重新解析改过的文件，见 `ClaudeUsageCollector`），一次算出 5h 窗口、今日累计与周窗口。
+    /// 5h / 今日只关心近 24h，是这批条目的天然子集。进行中再调只记一笔，这一轮结束后再刷一轮。
     func refresh() {
-        guard !refreshing else { return }
+        guard !refreshing else {
+            refreshAgain = true
+            return
+        }
         refreshing = true
         isRefreshing = true
         let anchor = Self.weeklyAnchorConfig()   // 主线程读 UserDefaults 后传入后台。
         DispatchQueue.global(qos: .utility).async {
-            let entries = Self.collectEntries(sinceHoursAgo: 180)
+            let entries = Self.collectEntries(sinceHoursAgo: Self.refreshWindowHours)
             let window = ClaudeUsageCalculator.activeWindow(from: entries)
             let today = ClaudeUsageCalculator.todayTotals(from: entries)
             let weekly = ClaudeUsageCalculator.weeklyWindow(from: entries, anchor: anchor)
@@ -156,9 +193,15 @@ final class ClaudeUsageStore: ObservableObject {
                     self.todayTotals = today
                     self.weeklyWindow = weekly
                     self.refreshing = false
-                    self.isRefreshing = false
                     self.checkBudgetReminder(window: window)
                     self.checkWeeklyBudgetReminder(window: weekly)
+                    if self.refreshAgain {
+                        // 转圈接着转：补的这一轮马上开始。
+                        self.refreshAgain = false
+                        self.refresh()
+                    } else {
+                        self.isRefreshing = false
+                    }
                 }
             }
         }
@@ -229,73 +272,17 @@ final class ClaudeUsageStore: ObservableObject {
 
 extension ClaudeUsageStore {
 
+    /// 用量条目的收集器：按文件缓存解析结果（只在内存），没变的文件不再读，结果与全量解析逐条相同（#109）。
+    /// 菜单刷新与报表共用一份缓存；缓存只留近 180h 改过的文件，报表要的更早的文件照旧每次解析。
+    nonisolated static let usageCollector = ClaudeUsageCollector(
+        projectsDir: ClaudeEnv.projectsDir,
+        retentionHours: refreshWindowHours,
+        fallbackProjectPath: { ClaudeSessionIndex.demungeDirName($0) }
+    )
+
     /// 收集近 N 小时内 mtime 文件的去重用量条目。
     nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
-        let fm = FileManager.default
-        let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
-        var entries: [CLIUsageEntry] = []
-        var seenKeys = Set<String>()
-
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        for projectDir in projectDirs {
-            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let files = try? fm.contentsOfDirectory(
-                at: projectDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-
-            let mungedName = projectDir.lastPathComponent
-            for file in files where file.pathExtension == "jsonl" {
-                let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                if let mtime, mtime < cutoff { continue }
-                autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
-                    guard let data = try? Data(contentsOf: file) else { return }
-
-                    for lineData in data.split(separator: 0x0A) {
-                        guard let object = CLIJSONL.parseObject(Data(lineData)),
-                              (object["type"] as? String) == "assistant",
-                              let message = object["message"] as? [String: Any],
-                              let usage = message["usage"] as? [String: Any] else { continue }
-
-                        // 去重键：message.id + requestId；两者都缺则不去重直接计入。
-                        let messageID = message["id"] as? String
-                        let requestID = object["requestId"] as? String
-                        if let messageID, let requestID {
-                            let key = messageID + "|" + requestID
-                            if seenKeys.contains(key) { continue }
-                            seenKeys.insert(key)
-                        } else if let messageID {
-                            if seenKeys.contains(messageID) { continue }
-                            seenKeys.insert(messageID)
-                        }
-
-                        let ts = object["timestamp"] as? String
-                        let date = ts.flatMap { CLIJSONL.parseDate($0) } ?? mtime ?? Date()
-                        let modelID = message["model"] as? String ?? ""
-                        let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                            ?? ClaudeSessionIndex.demungeDirName(mungedName)
-
-                        entries.append(CLIUsageEntry(
-                            timestamp: date,
-                            modelID: modelID,
-                            projectPath: projectPath,
-                            input: CLIUsageEntry.tokenCount(usage["input_tokens"]),
-                            output: CLIUsageEntry.tokenCount(usage["output_tokens"]),
-                            cacheWrite: CLIUsageEntry.tokenCount(usage["cache_creation_input_tokens"]),
-                            cacheRead: CLIUsageEntry.tokenCount(usage["cache_read_input_tokens"])
-                        ))
-                    }
-                }
-            }
-        }
-        return entries
+        usageCollector.collect(sinceHoursAgo: hours).entries
     }
 
     /// 三维度报表：按项目 / 按模型两张表按估算费用从高到低排；项目显示名取路径最后一段（`ClaudeSessionIndex`）。

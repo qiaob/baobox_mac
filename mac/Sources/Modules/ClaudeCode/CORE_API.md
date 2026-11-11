@@ -104,8 +104,9 @@
 | `@Published private(set) var isRefreshing: Bool` | |
 | `static let budgetKey = "claudecode.tokenBudget"` | 每窗口 token 预算（UserDefaults Int，0=未设） |
 | `func startAutoRefresh()` / `stopAutoRefresh()` | activate 时启动 5 分钟定时刷新 |
-| `func refresh()` | 后台解析近 24h 文件，算窗口+今日，末尾做 80% 额度提醒 |
-| `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新（≥60s，规则在共用的 `CLIUsageRefreshThrottle`）；`ClaudeLiveStatus` 在 Stop / Notification 时调（启动回放不调） |
+| `func refresh()` | 后台收集近 180h 改过的文件的用量（`usageCollector`：只重新解析改过的文件），算 5h 窗口 + 今日 + 周窗口，末尾做 80% 额度提醒；进行中再调合并成结束后补一轮 |
+| `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新：≥60s 马上刷，60s 内来的在窗口结束时补刷一次（只补一次，规则在共用的 `CLIUsageRefreshThrottle`）；`ClaudeLiveStatus` 在 Stop / Notification 时调（启动回放不调） |
+| `nonisolated static let usageCollector: ClaudeUsageCollector` | 用量条目的收集器（`ClaudeUsageCollector.swift`，纯 Foundation，`BaoboxTests` 有差分测试）：按文件缓存解析结果（只在内存，保留 180h），结果与全量解析逐条相同；刷新与报表共用 |
 | `func report(days:completion: @escaping (ClaudeUsageReport) -> Void)` | 三维度报表 |
 | `func invocationStats(days:completion: @escaping (ClaudeInvocationStats) -> Void)` | 调用统计(Skill/斜杠命令、MCP 两级、内置工具);后台算主线程回调，同 report 线程约定。**无新 L() key**(名称均为数据) |
 
