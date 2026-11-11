@@ -95,6 +95,12 @@ Sources/Resources/   Localizable.xcstrings
 就踩了：设置开着时在全屏 App 上截图，遮罩跑到设置所在的桌面）；显示后再切回 `.accessory` 又会把用户拽回原来的 App。
 浮条、贴图、气泡这类**有意叠在全屏 App 上**的窗口不要用它，照旧在 `.accessory` 下建 + `.fullScreenAuxiliary`。
 
+现在用 `DesktopSpaceWindow` 的：设置、手机互传、Claude Code / Codex 中心窗口、会议库与会前简报、听写历史（#75、#181）。
+有意留在当前空间（全屏 App 上就地用完）的带标题栏窗口（#181 逐个定的）：屏幕取字结果、图片预览（长截屏结果、剪贴板图片）、
+剪贴板大窗编辑、片段编辑（从剪贴板面板打开时）—— 都是从叠在全屏 App 上的面板 / 遮罩里接着做的事，改完复制就回原 App；
+长听写收集面板（`.nonactivatingPanel` + `.fullScreenAuxiliary`，边说边往全屏 App 里插字）；首次启动引导（`.floating`，开着系统设置授权时要看得见）。
+新加要拿焦点、会开很久的窗口，默认用 `DesktopSpaceWindow`。
+
 ## 无法本地编译时的自查清单
 
 1. 只引用真实存在的类型 / 方法 —— 先 grep 确认签名，别凭印象写。

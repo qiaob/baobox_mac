@@ -126,7 +126,8 @@ final class AIToolsCenterController {
 
         if window == nil {
             let hosting = NSHostingController(rootView: AIToolsCenterView())
-            let created = NSWindow(contentViewController: hosting)
+            // 要拿焦点的普通窗口：在桌面空间建，不叠进别的 App 的全屏空间（见 mac/CLAUDE.md「普通窗口与全屏空间」，#181）。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("aitools.center.title")
             created.styleMask = [.titled, .closable, .resizable]
             created.setContentSize(NSSize(width: 720, height: 480))
