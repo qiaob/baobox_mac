@@ -69,6 +69,8 @@
 1. `IsSecureEventInputEnabled()` 为真 → 复制 + 提示（密码框不粘贴）。没有辅助功能权限 → 复制 + 引导授权。
 2. 取前台 App 的焦点元素（`kAXFocusedUIElementAttribute`）。走 AX 的条件：角色是文本类、`kAXSelectedTextAttribute` 可写、`kAXValueAttribute` 可读、且 App 不在「只粘贴」名单（Electron：包里有 `Frameworks/Electron Framework.framework`；终端：Terminal / iTerm2 / Ghostty / Otty / Warp / kitty / Alacritty / WezTerm；浏览器内容区）。写入后读回值，**值变了才算成功**；读不回来就不走 AX（防止 AX 其实写进去了、又粘贴一遍变成两份）。
 3. 粘贴：`PasteboardBorrow.paste(text)`（新增的公开入口）：快照全部剪贴板条目 → 写入文本 → 等修饰键松开 → `⌘V`（`.combinedSessionState` 源、`.cghidEventTap` 投递，同 `PasteService`）→ 0.35 s 后恢复快照。整个过程置 `PasteboardBorrow.isActive`，剪贴板历史据此跳过两次写入（现有机制）。
+   浏览器回答「没有焦点元素」时也粘贴（2026-11-11）：Chrome 只在有辅助软件请求时才建网页的辅助功能树，
+   没建时焦点查询就这么回答，并不等于没有输入框。以前这里判成「焦点不在输入框」，往 Chrome 里连续听写一句都插不进去，只在结束时复制。
 4. 都不行 → 普通复制（这次进剪贴板历史，是用户要的复制）+ 提示。连续听写传 `copyOnFailure: false`：只返回原因，结束时由控制器一次复制（§3.1）。
 5. `deleteBackward(_:)`：连续听写的「删除上一句」用（§3.1）。
 

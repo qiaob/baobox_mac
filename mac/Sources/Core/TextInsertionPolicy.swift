@@ -102,6 +102,9 @@ enum TextInsertionPolicy {
         if focus?.subrole == secureSubrole { return .copy(.secureInput) }
         if pasteOnly { return .paste }
         guard let focus else { return .paste }
+        // 浏览器说「没有焦点元素」多半是网页辅助功能树没打开（Chrome 只在有辅助软件请求时才建），
+        // 不是真的没有输入框：照样粘贴（2026-11-11 用户真机：往 Chrome 里听写，一句都没插进去，只在结束时复制）。
+        if browser, focus.role == nil { return .paste }
         guard let role = focus.role else { return .copy(.noTextFocus) }
         if focus.inWebArea { return .paste }
         // 值读不回来就无法确认写没写进去：宁可粘贴，也不冒「写进去了又粘一遍」变两份的险。

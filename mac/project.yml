@@ -142,6 +142,7 @@ targets:
       - path: Tests
       - path: Sources/Core/CLIUsage
       - path: Sources/Core/CLISession
+      - path: Sources/Core/TextInsertionPolicy.swift
       - path: Sources/Core/EventFile
       - path: Sources/Core/MeetingEngine
       - path: Sources/Modules/Meeting/Logic
