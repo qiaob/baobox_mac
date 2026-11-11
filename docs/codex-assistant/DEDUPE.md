@@ -1,6 +1,6 @@
 # Claude / Codex 两套实现去重 · 第二步（会话索引、快速切换面板、事件文件监听）· 技术设计
 
-> issue #109「Claude 与 Codex 两套实现大面积重复」的第二步。状态：**已拍板（2026-11-10，§9）**：用户同意 D1–D8 全部按建议做。
+> issue #109「Claude 与 Codex 两套实现大面积重复」的第二步。状态：**已拍板（2026-11-10，§9）**：用户同意 D1–D8 全部按建议做。**PR1（会话索引共用层）已实现**（2026-11-11，分支 `refactor/cli-session-index`），与本文的出入记在 §6 PR1 末尾。
 > 第一步（用量层）已由 #134 合入：定价 / 窗口 / 报表 / 80% 提醒在 `mac/Sources/Core/CLIUsage/`，`BaoboxTests` 单元测试 target 已在 main，
 > issue 的两条验收（改一次定价两边一起变、用量计算有测试覆盖）已满足。本文只管 issue 范围里剩下的三件：`SessionIndex<Summary>` 泛型、
 > `QuickSwitchPanel` 数据源协议、`EventFileWatcher`。
@@ -638,6 +638,18 @@ Tab 只有 Claude 吃掉（Codex 现在放行，保持）。
 - 行为不变：差分测试（§7.2）逐字段一致；`index-cache-v2.json` 新旧互读。
 - 文档：`Modules/ClaudeCode/CORE_API.md` §2、`docs/claude-code-assistant/TECH_DESIGN.md` §3.2 加注（同 §3.3 #134 那条的写法）、`DESIGN.md` §9.1 加一条、
   根 `CLAUDE.md` 的 Core 清单、本文状态。
+
+- 落地（2026-11-11）：照上面做完，差分测试与单元测试结果在 PR 描述里。与 §4.1 的出入：
+  - `CLISessionSummary`、`CLISessionRecord`、`CLISessionFormat` 都加了 `Sendable`：摘要与记录在后台扫出来、回主线程发布，泛型版本编译器推断不出它们可以跨线程；
+    格式加 `Sendable` 是为了让后台闭包捕获泛型参数的元类型在 Xcode 26（Swift 6.2，`Sendable` 蕴含 `SendableMetatype`）下也不告警。
+    两个摘要结构体与两种记录的字段全是值类型，声明遵循即可，字段一个没动。
+  - `uuidFromFileName` 跟着快扫进了 `CodexSessionFormat`（没有别的调用方），Claude 的 `assistantModel` 进了 `ClaudeSessionFormat`（private）。
+  - `deleteSession` 只把 `url` 与 `id` 带进后台闭包（原来捕获整个摘要），行为相同。
+  - Codex 维护节清理后的两个后台任务换了先后：现在索引先发起刷新、回调里再 `reloadDisk()`（原来先 `reloadDisk()` 再 `refresh()`）。都是起后台任务，看不出差别。
+  - 一次刷新改成先列完全部文件再逐个快扫（`CLISessionScanner.refresh(files:…)` 的签名本来就是这样；原来是边列边扫）。只有文件恰好在那几百毫秒里被改时，
+    记下的修改时间会早一点，下次刷新照常重扫；稳定状态下结果逐字段相同。
+  - 两层列目录照旧会列出项目目录里名叫 `x.jsonl` 的**目录**（快扫打不开，跳过、不进缓存），单元测试把这一现状记了下来。
+  - 单元测试 30 个（估的是约 20 个）。
 
 ### PR2 事件文件共用层
 

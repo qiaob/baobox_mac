@@ -625,17 +625,14 @@ struct AIToolsMaintenanceSection: View {
         alert.addButton(withTitle: L("aitools.maint.cleanup \(cleanupDays)"))
         alert.addButton(withTitle: L("common.cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        DispatchQueue.global(qos: .utility).async {
-            let (count, bytes) = CodexEnv.cleanupSessions(olderThanDays: cleanupDays)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    reloadDisk()
-                    CodexSessionIndex.shared.refresh()
-                    let done = NSAlert()
-                    done.messageText = L("aitools.maint.cleanupResult \(count) \(AIToolsFormat.bytes(bytes))")
-                    done.addButton(withTitle: L("common.ok"))
-                    done.runModal()
-                }
+        // 删完索引自己先刷新，再回调（同 Claude 的维护节）。
+        CodexSessionIndex.shared.cleanup(olderThanDays: cleanupDays) { count, bytes in
+            MainActor.assumeIsolated {
+                reloadDisk()
+                let done = NSAlert()
+                done.messageText = L("aitools.maint.cleanupResult \(count) \(AIToolsFormat.bytes(bytes))")
+                done.addButton(withTitle: L("common.ok"))
+                done.runModal()
             }
         }
     }

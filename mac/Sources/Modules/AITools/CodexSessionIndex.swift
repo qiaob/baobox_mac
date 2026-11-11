@@ -6,34 +6,16 @@ import Foundation
 /// 首块含 SessionMeta（id / cwd），随后是逐行事件；标题取首条用户输入。所有解析都必须容错：
 /// 任何字段缺失 / 类型不符只跳过或降级，**决不 crash**（无 force unwrap、无 try!）。
 ///
-/// 模式照 `ClaudeSessionIndex`，但**简化**：只做内存缓存 + 后台刷新，不落磁盘缓存文件。
+/// 刷新、复用、排序、删除、导出外壳与清理旧会话在与 Claude Code 助手共用的 `Core/CLISession/`（#109）：
+/// 本文件只留 Codex 的「格式」`CodexSessionFormat`。与 Claude 不同（DESIGN 的「简化」）：只做内存缓存，
+/// 不落磁盘缓存文件（`cacheFileURL` 为 nil）。
 ///
 /// 用户可见文案：仅一处降级标题 `aitools.session.untitled`。
 
 // MARK: - 解析辅助
 
+/// rollout 行里 Codex 独有的解析辅助。逐行解析与时间戳用共用的 `CLIJSONL`。
 enum CodexJSONLParsing {
-
-    private static let iso8601Fractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    private static let iso8601Plain: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-
-    nonisolated static func parseDate(_ string: String) -> Date? {
-        if let date = iso8601Fractional.date(from: string) { return date }
-        return iso8601Plain.date(from: string)
-    }
-
-    nonisolated static func parseObject(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
 
     /// 从内容值提取首个可读文本。内容可能是纯字符串，或
     /// `[{type:text|input_text, text:...}]` 数组（Codex 与 Claude 的 content 略有差异）。
@@ -86,7 +68,7 @@ enum CodexJSONLParsing {
 // MARK: - 数据模型
 
 /// 一条 Codex 会话摘要（用于列表 / 菜单展示与续接）。
-struct CodexSessionSummary: Identifiable, Equatable {
+struct CodexSessionSummary: Identifiable, Equatable, CLISessionSummary {
     /// 会话 id（SessionMeta 优先，文件名 uuid 兜底）。
     let id: String
     let fileURL: URL
@@ -101,145 +83,70 @@ struct CodexSessionSummary: Identifiable, Equatable {
 
 // MARK: - 索引单例
 
+/// Codex 会话索引：内存缓存 + 后台刷新，都在共用的 `CLISessionIndex`；Codex 没有独有的功能，这里只放 `shared`。
 @MainActor
-final class CodexSessionIndex: ObservableObject {
+final class CodexSessionIndex: CLISessionIndex<CodexSessionFormat> {
     static let shared = CodexSessionIndex()
 
-    /// 新→旧排序。
-    @Published private(set) var sessions: [CodexSessionSummary] = []
-    @Published private(set) var isRefreshing = false
-
-    /// 内存快扫缓存（键 = 文件路径）；仅主线程读写，无磁盘持久化（DESIGN 简化）。
-    private var cache: [String: CacheRecord] = [:]
-    private var refreshing = false
-
-    private init() {}
-
-    // MARK: 刷新
-
-    /// 后台快扫全部 rollout jsonl → 回主线程发布。去抖，进行中不重入。
-    func refresh() {
-        guard !refreshing else { return }
-        refreshing = true
-        isRefreshing = true
-        let previousCache = cache
-        DispatchQueue.global(qos: .utility).async {
-            let (summaries, newCache) = Self.scanAll(previousCache: previousCache)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.sessions = summaries
-                    self.cache = newCache
-                    self.refreshing = false
-                    self.isRefreshing = false
-                }
-            }
-        }
-    }
-
-    /// 最近 N 条（已按新→旧排序）。主线程同步读内存。
-    func recentSessions(limit: Int) -> [CodexSessionSummary] {
-        Array(sessions.prefix(max(0, limit)))
-    }
-
-    /// 删除单个会话文件。回调是否成功，成功则从内存索引移除。
-    func deleteSession(_ summary: CodexSessionSummary, completion: @escaping (Bool) -> Void) {
-        let url = summary.fileURL
-        DispatchQueue.global(qos: .utility).async {
-            let ok = (try? FileManager.default.removeItem(at: url)) != nil
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if ok {
-                        self.sessions.removeAll { $0.id == summary.id }
-                        self.cache.removeValue(forKey: url.path)
-                    }
-                }
-                completion(ok)
-            }
-        }
-    }
-
-    /// 导出单个会话为 Markdown（后台解析整份 rollout，回主线程回调）。解析失败回调 nil。
-    func exportMarkdown(_ summary: CodexSessionSummary, completion: @escaping (String?) -> Void) {
-        let url = summary.fileURL
-        let title = summary.title
-        DispatchQueue.global(qos: .utility).async {
-            let markdown = Self.buildMarkdown(fileURL: url, title: title)
-            DispatchQueue.main.async { completion(markdown) }
-        }
+    private override init() {
+        super.init()
     }
 }
 
 // MARK: - 缓存记录
 
-extension CodexSessionIndex {
-    struct CacheRecord {
-        let modified: Double
-        let size: Int64
-        let id: String
-        let projectPath: String
-        let projectName: String
-        let title: String
-        let lastActivity: Double
+/// 一条内存缓存记录（原 `CodexSessionIndex.CacheRecord`）。Codable 只为满足共用层的约束 —— Codex 不落盘。
+struct CodexSessionRecord: CLISessionRecord {
+    let modified: Double
+    let size: Int64
+    let id: String
+    let projectPath: String
+    let projectName: String
+    let title: String
+    let lastActivity: Double
 
-        func toSummary(fileURL: URL) -> CodexSessionSummary {
-            CodexSessionSummary(
-                id: id,
-                fileURL: fileURL,
-                projectPath: projectPath,
-                projectName: projectName,
-                title: title,
-                lastActivity: Date(timeIntervalSince1970: lastActivity),
-                fileSize: size
-            )
-        }
+    func toSummary(fileURL: URL) -> CodexSessionSummary {
+        CodexSessionSummary(
+            id: id,
+            fileURL: fileURL,
+            projectPath: projectPath,
+            projectName: projectName,
+            title: title,
+            lastActivity: Date(timeIntervalSince1970: lastActivity),
+            fileSize: size
+        )
     }
 }
 
-// MARK: - 后台扫描（nonisolated static，可在后台线程调用）
+// MARK: - 格式（后台扫描 / 解析，全部静态，可在后台线程调用）
 
-extension CodexSessionIndex {
+/// Codex 会话日志的格式：`~/.codex/sessions/` 下递归的 rollout jsonl，只在内存里缓存。
+enum CodexSessionFormat: CLISessionFormat {
 
-    /// 递归枚举 `sessions/` 下全部 jsonl；mtime+size 未变的复用缓存，否则快扫。mtime 降序。
-    nonisolated static func scanAll(previousCache: [String: CacheRecord]) -> ([CodexSessionSummary], [String: CacheRecord]) {
-        let fm = FileManager.default
-        var summaries: [CodexSessionSummary] = []
-        var newCache: [String: CacheRecord] = [:]
-
-        guard let enumerator = fm.enumerator(
-            at: CodexEnv.sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return ([], [:])
-        }
-
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey])
-            guard values?.isRegularFile == true else { continue }
-            let mtime = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
-            let size = Int64(values?.fileSize ?? 0)
-            let path = url.path
-
-            if let record = previousCache[path],
-               abs(record.modified - mtime.timeIntervalSince1970) < 0.001,
-               record.size == size {
-                newCache[path] = record
-                summaries.append(record.toSummary(fileURL: url))
-                continue
-            }
-
-            if let scanned = scanFile(url, mtime: mtime, size: size) {
-                newCache[path] = scanned.record
-                summaries.append(scanned.summary)
-            }
-        }
-
-        summaries.sort { $0.lastActivity > $1.lastActivity }
-        return (summaries, newCache)
+    /// 不落磁盘缓存（DESIGN 简化）。
+    static var cacheFileURL: URL? {
+        nil
     }
 
-    /// 快扫单个 rollout 文件：只读头 64KB，取 SessionMeta 的 id / cwd 与首条用户输入作标题。
-    nonisolated static func scanFile(_ url: URL, mtime: Date, size: Int64) -> (summary: CodexSessionSummary, record: CacheRecord)? {
+    /// 清理旧会话的根目录。
+    static var logRoot: URL {
+        CodexEnv.sessionsDir
+    }
+
+    /// 递归枚举 `sessions/` 下全部 jsonl 普通文件。
+    static func sessionFiles() -> [CLISessionFile] {
+        CLISessionFiles.jsonlRecursively(under: CodexEnv.sessionsDir)
+    }
+
+    static func summary(of record: CodexSessionRecord, fileURL: URL) -> CodexSessionSummary {
+        record.toSummary(fileURL: fileURL)
+    }
+
+    /// 快扫单个 rollout 文件：只读头 64KB，取 SessionMeta 的 id / cwd 与首条用户输入作标题；最后活动时间 = 文件修改时间。
+    static func scan(_ file: CLISessionFile) -> CodexSessionRecord? {
+        let url = file.url
+        let mtime = file.modified
+        let size = file.size
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
@@ -254,7 +161,7 @@ extension CodexSessionIndex {
         var cwd: String?
         var firstUserText: String?
         for lineData in headData.split(separator: 0x0A) {
-            guard let object = CodexJSONLParsing.parseObject(Data(lineData)) else { continue }
+            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
             let meta = CodexJSONLParsing.extractMeta(from: object)
             if metaID == nil, let mid = meta.id, !mid.isEmpty { metaID = mid }
             if let mcwd = meta.cwd, !mcwd.isEmpty { cwd = mcwd }
@@ -268,12 +175,12 @@ extension CodexSessionIndex {
         }
 
         let resolvedPath = cwd ?? ""
-        let projectName = resolvedPath.isEmpty ? "" : self.projectName(fromPath: resolvedPath)
+        let projectName = resolvedPath.isEmpty ? "" : CLISessionPaths.projectName(fromPath: resolvedPath)
         let title = firstUserText.map { String($0.prefix(80)) } ?? L("aitools.session.untitled")
         // id 优先 SessionMeta，取不到再从文件名解析 uuid（rollout-<ts>-<uuid>.jsonl）。
         let id = metaID ?? uuidFromFileName(url) ?? url.deletingPathExtension().lastPathComponent
 
-        let record = CacheRecord(
+        return CodexSessionRecord(
             modified: mtime.timeIntervalSince1970,
             size: size,
             id: id,
@@ -282,11 +189,10 @@ extension CodexSessionIndex {
             title: title,
             lastActivity: mtime.timeIntervalSince1970
         )
-        return (record.toSummary(fileURL: url), record)
     }
 
     /// 从 `rollout-<时间戳>-<uuid>.jsonl` 文件名解析末段 uuid。
-    nonisolated static func uuidFromFileName(_ url: URL) -> String? {
+    static func uuidFromFileName(_ url: URL) -> String? {
         let base = url.deletingPathExtension().lastPathComponent
         // 标准 uuid 含 5 段 8-4-4-4-12，用 `-` 分隔；取末 5 段拼回。
         let parts = base.components(separatedBy: "-")
@@ -299,21 +205,15 @@ extension CodexSessionIndex {
         return candidate
     }
 
-    /// 从路径取展示名（末段）。
-    nonisolated static func projectName(fromPath path: String) -> String {
-        let name = URL(fileURLWithPath: path).lastPathComponent
-        return name.isEmpty ? path : name
-    }
-
     /// 遍历 rollout jsonl，把 user / assistant 的对话文本拼成 Markdown。
     /// 只取 `payload.type == "message"` 的 `response_item`（`event_msg` 的 user_message/agent_message
     /// 是镜像，取之会重复）；跳过 developer/system 角色与 `<...>` 系统注入块。整份读入（可能较大，
     /// 故只在后台线程调用）。全程容错，任何行解析失败只跳过。
-    nonisolated static func buildMarkdown(fileURL: URL, title: String) -> String? {
+    static func markdown(fileURL: URL, title: String) -> String? {
         guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
         var out = "# \(title)\n"
         for lineData in content.split(separator: "\n") {
-            guard let object = CodexJSONLParsing.parseObject(Data(lineData.utf8)),
+            guard let object = CLIJSONL.parseObject(Data(lineData.utf8)),
                   let payload = object["payload"] as? [String: Any],
                   (payload["type"] as? String) == "message",
                   let role = payload["role"] as? String,

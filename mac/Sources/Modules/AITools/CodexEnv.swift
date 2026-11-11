@@ -145,7 +145,7 @@ enum CodexEnv {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    // MARK: - 磁盘统计 / 清理（~/.codex/sessions）
+    // MARK: - 磁盘统计（~/.codex/sessions；清理旧会话在 `CodexSessionIndex.cleanup(olderThanDays:)`）
 
     /// 统计 `~/.codex/sessions` 占用字节数与 rollout 文件数。后台线程调用。
     static func sessionsDiskStats() -> (bytes: Int64, fileCount: Int) {
@@ -164,30 +164,6 @@ enum CodexEnv {
             count += 1
         }
         return (bytes, count)
-    }
-
-    /// 删除早于 N 天（按 mtime）的 rollout jsonl。返回 (删除文件数, 释放字节数)。后台线程调用。
-    static func cleanupSessions(olderThanDays days: Int) -> (Int, Int64) {
-        let fm = FileManager.default
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-        var count = 0
-        var bytes: Int64 = 0
-        guard let enumerator = fm.enumerator(
-            at: sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else { return (0, 0) }
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let mtime = values?.contentModificationDate ?? Date()
-            guard mtime < cutoff else { continue }
-            let size = Int64(values?.fileSize ?? 0)
-            if (try? fm.removeItem(at: url)) != nil {
-                count += 1
-                bytes += size
-            }
-        }
-        return (count, bytes)
     }
 
     // MARK: - MCP 服务器（config.toml [mcp_servers.*]，只读列出）

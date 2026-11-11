@@ -200,7 +200,7 @@ final class CodexNotify: ObservableObject {
     private func apply(line: String, notify: Bool) {
         guard notify,
               let data = line.data(using: .utf8),
-              let object = CodexJSONLParsing.parseObject(data) else { return }
+              let object = CLIJSONL.parseObject(data) else { return }
 
         // 兼容顶层与 payload 嵌套两种写法。
         let type = (object["type"] as? String)
