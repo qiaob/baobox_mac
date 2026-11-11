@@ -7,31 +7,14 @@ import Foundation
 ///
 /// 刷新、复用、排序、删除、导出外壳、磁盘缓存与清理旧会话在与 Codex 助手共用的 `Core/CLISession/`（#109）：
 /// 本文件只留 Claude Code 的「格式」`ClaudeSessionFormat`（会话文件在哪、怎么快扫、怎么导出、缓存放哪）
-/// 与独有的审计、`~/.claude` 磁盘分布。
+/// 与独有的审计、`~/.claude` 磁盘分布。逐行解析辅助 `ClaudeJSONLParsing` 与导出 Markdown 的拼法是纯逻辑，
+/// 在 `ClaudeSessionMarkdown.swift`（编进 `BaoboxTests`）。
 ///
-/// 用户可见文案：本文件仅一处降级标题用 L()：
+/// 用户可见文案（L()）：
 ///   - `claudecode.session.untitled` —— 无标题会话占位。
 ///     en: "(untitled session)" / zh-Hans: "(无标题会话)"
-
-// MARK: - 逐行 JSON 解析工具（本模块共享）
-
-/// 会话 / 事件 JSONL 里 Claude Code 独有的解析辅助。逐行解析与时间戳用共用的 `CLIJSONL`。
-enum ClaudeJSONLParsing {
-
-    /// 从 message.content 提取首个可读文本。
-    /// content 可能是纯字符串，或 `[{type:text,text:...}, {type:tool_use,...}]` 数组。
-    nonisolated static func extractText(fromContent content: Any) -> String? {
-        if let text = content as? String {
-            return text
-        }
-        if let blocks = content as? [[String: Any]] {
-            for block in blocks where (block["type"] as? String) == "text" {
-                if let text = block["text"] as? String { return text }
-            }
-        }
-        return nil
-    }
-}
+///   - `claudecode.export.user` / `claudecode.export.assistant` —— 导出 Markdown 的小标题。
+///     en: "User" / "Assistant"，zh-Hans: "用户" / "助手"
 
 // MARK: - 数据模型
 
@@ -278,37 +261,15 @@ enum ClaudeSessionFormat: CLISessionFormat {
         return m
     }
 
-    /// 逐行解析成 Markdown（## User / ## Assistant）。
+    /// 整份会话导出成 Markdown（`## 用户` / `## 助手`，小标题跟界面语言）。这里只读文件、取文案，
+    /// 拼法在 `ClaudeSessionMarkdown`（逐行读、跳过系统注入）。读不了文件返回 nil。
     static func markdown(fileURL: URL, title: String) -> String? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        var lines: [String] = ["# \(title)", ""]
-        for lineData in data.split(separator: 0x0A) {
-            guard let object = CLIJSONL.parseObject(Data(lineData)),
-                  let type = object["type"] as? String,
-                  type == "user" || type == "assistant",
-                  let message = object["message"] as? [String: Any] else { continue }
-
-            let text: String?
-            if type == "user" {
-                text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
-            } else {
-                // assistant.content 是数组，拼接全部 text 块。
-                if let blocks = message["content"] as? [[String: Any]] {
-                    let joined = blocks.compactMap { block -> String? in
-                        (block["type"] as? String) == "text" ? block["text"] as? String : nil
-                    }.joined(separator: "\n\n")
-                    text = joined.isEmpty ? nil : joined
-                } else {
-                    text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
-                }
-            }
-            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            lines.append(type == "user" ? "## User" : "## Assistant")
-            lines.append("")
-            lines.append(text)
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
+        let headings = CLISessionMarkdown.Headings(
+            user: L("claudecode.export.user"),
+            assistant: L("claudecode.export.assistant")
+        )
+        return ClaudeSessionMarkdown.markdown(from: data, title: title, headings: headings)
     }
 }
 
