@@ -47,7 +47,8 @@ final class MeetingWindowController {
     private func library() -> NSWindow {
         if let libraryWindow { return libraryWindow }
         let hosting = NSHostingController(rootView: MeetingLibraryView())
-        let window = NSWindow(contentViewController: hosting)
+        // 要拿焦点的普通窗口：在桌面空间建，不叠进别的 App 的全屏空间（见 mac/CLAUDE.md「普通窗口与全屏空间」，#181）。
+        let window = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
         window.title = L("meeting.library.title")
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 980, height: 640))
@@ -60,7 +61,8 @@ final class MeetingWindowController {
     private func brief() -> NSWindow {
         if let briefWindow { return briefWindow }
         let hosting = NSHostingController(rootView: MeetingBriefView(model: briefModel))
-        let window = NSWindow(contentViewController: hosting)
+        // 同会议库：普通窗口，在桌面空间建（#181）。
+        let window = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
         window.title = L("meeting.brief.title")
         window.styleMask = [.titled, .closable, .resizable]
         window.isReleasedWhenClosed = false

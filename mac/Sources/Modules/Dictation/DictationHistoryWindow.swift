@@ -23,7 +23,8 @@ final class DictationHistoryWindowController {
         }
         if window == nil {
             let hosting = NSHostingController(rootView: DictationHistoryView(store: store, actions: actions))
-            let created = NSWindow(contentViewController: hosting)
+            // 要拿焦点的普通窗口：在桌面空间建，不叠进别的 App 的全屏空间（见 mac/CLAUDE.md「普通窗口与全屏空间」，#181）。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("dictation.history.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
             created.setContentSize(NSSize(width: 560, height: 480))
