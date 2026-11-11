@@ -346,36 +346,38 @@ extension ClaudeSessionIndex {
                 let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
                 if let mtime, mtime < dayStart { continue }
 
-                guard let data = try? Data(contentsOf: file) else { continue }
-                let mungedName = projectDir.lastPathComponent
+                autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
+                    guard let data = try? Data(contentsOf: file) else { return }
+                    let mungedName = projectDir.lastPathComponent
 
-                for lineData in data.split(separator: 0x0A) {
-                    guard let object = CLIJSONL.parseObject(Data(lineData)),
-                          (object["type"] as? String) == "assistant",
-                          let ts = object["timestamp"] as? String,
-                          let date = CLIJSONL.parseDate(ts),
-                          date >= dayStart, date < dayEnd,
-                          let message = object["message"] as? [String: Any],
-                          let content = message["content"] as? [[String: Any]] else { continue }
+                    for lineData in data.split(separator: 0x0A) {
+                        guard let object = CLIJSONL.parseObject(Data(lineData)),
+                              (object["type"] as? String) == "assistant",
+                              let ts = object["timestamp"] as? String,
+                              let date = CLIJSONL.parseDate(ts),
+                              date >= dayStart, date < dayEnd,
+                              let message = object["message"] as? [String: Any],
+                              let content = message["content"] as? [[String: Any]] else { continue }
 
-                    let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                        ?? demungeDirName(mungedName)
+                        let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                            ?? demungeDirName(mungedName)
 
-                    for block in content where (block["type"] as? String) == "tool_use" {
-                        guard let name = block["name"] as? String, editToolNames.contains(name),
-                              let input = block["input"] as? [String: Any] else { continue }
-                        let filePath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
-                        guard let filePath, !filePath.isEmpty else { continue }
+                        for block in content where (block["type"] as? String) == "tool_use" {
+                            guard let name = block["name"] as? String, editToolNames.contains(name),
+                                  let input = block["input"] as? [String: Any] else { continue }
+                            let filePath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
+                            guard let filePath, !filePath.isEmpty else { continue }
 
-                        var bucket = grouped[projectPath] ?? (name: projectName(fromPath: projectPath), entries: [:])
-                        if var entry = bucket.entries[filePath] {
-                            entry.count += 1
-                            if date > entry.lastEdited { entry.lastEdited = date }
-                            bucket.entries[filePath] = entry
-                        } else {
-                            bucket.entries[filePath] = ClaudeAuditEntry(id: filePath, filePath: filePath, count: 1, lastEdited: date)
+                            var bucket = grouped[projectPath] ?? (name: projectName(fromPath: projectPath), entries: [:])
+                            if var entry = bucket.entries[filePath] {
+                                entry.count += 1
+                                if date > entry.lastEdited { entry.lastEdited = date }
+                                bucket.entries[filePath] = entry
+                            } else {
+                                bucket.entries[filePath] = ClaudeAuditEntry(id: filePath, filePath: filePath, count: 1, lastEdited: date)
+                            }
+                            grouped[projectPath] = bucket
                         }
-                        grouped[projectPath] = bucket
                     }
                 }
             }
