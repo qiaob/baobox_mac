@@ -128,8 +128,11 @@ targets:
               "${DEST}/BaoboxInterpreter.driver"
           fi
 
-  # 纯逻辑单元测试：只编 Tests/ 与被测的共用层源码（目前是 Core/CLIUsage/），不链接 App、不设 TEST_HOST，
-  # 由 xctest 直接加载，不启动 Baobox。要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
+  # 纯逻辑单元测试：只编 Tests/ 与被测的纯逻辑源码，不链接 App、不设 TEST_HOST，由 xctest 直接加载，不启动 Baobox。
+  # 要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
+  # - Core/CLIUsage：Claude Code / Codex 的用量统计
+  # - Core/MeetingEngine + Modules/Meeting/Logic：会议引擎接口、会话的决策、meeting.md 的模型与排版、纪要提示词（docs/meeting/ENGINE.md §5）
+  # - LiveTranslateMixing.swift：混音与说话人判定（本来就是纯的）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -137,6 +140,9 @@ targets:
       - path: Tests
       - path: Sources/Core/CLIUsage
       - path: Sources/Core/EventFile
+      - path: Sources/Core/MeetingEngine
+      - path: Sources/Modules/Meeting/Logic
+      - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

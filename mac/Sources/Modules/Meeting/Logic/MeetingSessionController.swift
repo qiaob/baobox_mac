@@ -1,4 +1,5 @@
-import AppKit
+import Combine
+import Foundation
 import os
 
 /// 一场会议记录的编排（docs/meeting/TECH_DESIGN.md §3）：经 `MeetingEngine` 协议驱动引擎（docs/meeting/ENGINE.md；
@@ -9,16 +10,22 @@ import os
 /// 本场的 meeting.md 由这里驱动（docs/meeting/ENGINE.md §4.5.2）：引擎只报「开起来 / 一句 / 结束」，第一次开起来时建文档，
 /// 句子、暂停 / 继续、单路静音、🔖、速记直接写，改设置重启时续写，`.ended` 里收尾。
 ///
+/// 这里只留决策（纯逻辑，docs/meeting/ENGINE.md §5.2）：会议库、文档、App 环境（勿扰、控制条、菜单栏、Timer、通知、合规对话框、
+/// 日历、设置、文案）都经 `MeetingSessionPorts.swift` 的端口，App 里的实现装配在 `MeetingSessionController.shared`
+/// （MeetingSessionShell.swift），测试里换成假的。
+///
 /// 第二段（日历、提醒、检测、会议库窗口）只经这里开始 / 结束会议，并读这里发布的状态。
 @MainActor
 final class MeetingSessionController: ObservableObject, MeetingEngineHost {
-    static let shared = MeetingSessionController(engine: AppDelegate.meetingEngine)
-
     /// 会议的引擎。会话只经它开始、暂停、结束；会议菜单、快捷键、退出收尾也经它（`MeetingSessionController.shared.engine`）。
     let engine: MeetingEngine
+    private let library: MeetingSessionLibrary
+    private let environment: MeetingSessionEnvironment
 
-    private init(engine: MeetingEngine) {
+    init(engine: MeetingEngine, library: MeetingSessionLibrary, environment: MeetingSessionEnvironment) {
         self.engine = engine
+        self.library = library
+        self.environment = environment
     }
 
     /// 通知来源、占用登记的 owner。
@@ -74,10 +81,10 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
 
     /// 还在开始中就点了结束：开起来马上收尾。
     private var finishWhenStarted = false
-    /// 本场的转录去向（第一次开起来时用它建文档）。
-    private var destination: MeetingTranscript.Destination?
+    /// 本场的文档写成什么样（开始时定好，第一次开起来时用它建文档）。
+    private var spec: MeetingTranscriptSpec?
     /// 本场的 meeting.md：第一次 `.started` 时建，改设置重启时续写同一份，`.ended` 里收尾；引擎没开起来就始终没有。
-    private var transcript: MeetingTranscript?
+    private var transcript: MeetingTranscriptWriting?
     /// App 正在退出：文档同步写完、纪要标「没整理完」。
     private var terminating = false
     /// 定稿的句子（引擎报来的 `.line`）：算重点那段说了什么；建文档时补写开起来之前就定稿的那几句。
@@ -87,10 +94,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     /// 本场的转录收尾了（`.finished` 到过）。
     private var transcriptFinished = false
     private var overtimeNotified = false
-    private var timer: Timer?
     private var tickCount = 0
-    private let controlBar = MeetingControlBarController()
-    private let statusItem = MeetingStatusItem()
 
     // MARK: - 开始
 
@@ -99,24 +103,25 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     /// `.free` = 自由听译（就是实时翻译）。正在记录时再开只提示一句。第一次用先弹合规说明，确认后才开。
     func start(type: MeetingType, event: MeetingEventInfo? = nil) {
         guard phase == .idle else {
-            postToast(L("meeting.toast.alreadyRecording"))
+            environment.toast(.alreadyRecording)
             return
         }
         if type == .free {
             startFreeListening()
             return
         }
-        let event = event ?? (type == .online ? MeetingCalendar.shared.bindingCandidate()?.info : nil)
+        let event = event ?? (type == .online ? environment.calendarBindingCandidate() : nil)
         // 自由听译 / 听写正占着麦克风（设备端识别一次只能跑一个）：先说清楚，不弹合规说明。
-        if let busy = AudioCaptureCoordinator.shared.busyMessage() {
-            postToast(busy)
+        if let busy = environment.captureBusyMessage() {
+            environment.toast(.busy(busy))
             return
         }
-        guard MeetingSettings.consentAcknowledged || askConsent() else { return }
+        // 合规说明：告知参会人是用户自己的事，这里只提醒、不代为通知（需求 §3）。确认一次后不再问。
+        guard environment.confirmConsent() else { return }
         // 对话框期间可能已经别处开了一场 / 占了麦克风。
         guard phase == .idle else { return }
-        if let busy = AudioCaptureCoordinator.shared.busyMessage() {
-            postToast(busy)
+        if let busy = environment.captureBusyMessage() {
+            environment.toast(.busy(busy))
             return
         }
         begin(type: type, event: event)
@@ -124,7 +129,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
 
     /// 手动开始时的默认类型（设置里选）。
     func startDefault(event: MeetingEventInfo? = nil) {
-        start(type: MeetingSettings.defaultType, event: event)
+        start(type: environment.defaultType, event: event)
     }
 
     /// 「开始自由听译」：空闲时开实时翻译；会议记录中 = 打开 / 收起字幕（不另开一个会话）。
@@ -137,35 +142,12 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         engine.toggleFreeListening()
     }
 
-    /// 合规说明：告知参会人是用户自己的事，这里只提醒、不代为通知（需求 §3）。确认一次后不再问；返回是否确认。
-    ///
-    /// 用模态对话框、不走通知：这是点了「开始」之后必须先回答的一步。宠物关着时通知会退成系统横幅，
-    /// 按钮藏在「选项」里、一闪就没，看起来就像点了没反应（2026-11-06 真机）。
-    private func askConsent() -> Bool {
-        let previous = NSWorkspace.shared.frontmostApplication
-        // LSUIElement 应用不先激活，对话框会排在别的 App 窗口后面，主线程却已进了模态循环（见 CaffeinateController）。
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = L("meeting.consent.title")
-        alert.informativeText = L("meeting.consent.body")
-        alert.addButton(withTitle: L("meeting.consent.ack"))
-        alert.addButton(withTitle: L("meeting.consent.cancel"))
-        let confirmed = alert.runModal() == .alertFirstButtonReturn
-        // 焦点还给原来的 App（多半是会议软件）。
-        if let previous, previous.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-           !previous.isTerminated {
-            previous.activate()
-        }
-        if confirmed { MeetingSettings.consentAcknowledged = true }
-        return confirmed
-    }
-
     private func begin(type: MeetingType, event: MeetingEventInfo?) {
-        let now = Date()
+        let now = environment.now()
         let eventTitle = event?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let title = eventTitle.isEmpty ? MeetingText.typeName(type) : eventTitle
-        let style = MeetingSettings.template
-        let record = MeetingStore.shared.createMeeting(
+        let title = eventTitle.isEmpty ? environment.typeName(type) : eventTitle
+        let style = environment.minutesStyle
+        let record = library.createMeeting(
             type: type, title: title, start: now, event: event,
             template: MeetingMinutesTemplate.meeting(style).storageValue)
         self.type = type
@@ -183,42 +165,37 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         transcriptFinished = false
         overtimeNotified = false
         finishWhenStarted = false
-        destination = makeDestination(record: record, type: type, title: title, start: now, event: event, style: style)
+        spec = makeSpec(record: record, type: type, title: title, start: now, event: event, style: style)
         phase = .starting
         guard engine.start(host: self) else {
             // 麦克风被实时翻译 / 听写占着：引擎已经发了「正在 XX，先停止再开始」。
             Self.log.notice("meeting start refused: capture busy")
-            MeetingStore.shared.discard(record.id)
+            library.discard(record.id)
             reset()
             return
         }
         Self.log.notice("meeting started: \(type.rawValue, privacy: .public)")
-        NotifyDND.shared.setSuppressed(true, token: Self.dndToken)
-        startTimer()
-        controlBar.show()
-        refreshIndicators()
+        environment.setDoNotDisturb(true)
+        tickCount = 0
+        environment.setHeartbeat(true)
+        environment.controlBar(.show)
+        environment.refreshIndicators()
     }
 
-    /// 本场的转录：写到会议库这场会议的 meeting.md，带会议头信息；线上会议标说话人；总是整理纪要（会议模板），
+    /// 本场的文档：写到会议库这场会议的 meeting.md，带会议头信息；线上会议标说话人；总是整理纪要（会议模板），
     /// 纪要好了由这里发通知。
-    private func makeDestination(record: MeetingRecord, type: MeetingType, title: String, start: Date,
-                                 event: MeetingEventInfo?, style: MeetingMinutesStyle)
-        -> MeetingTranscript.Destination {
-        let store = MeetingStore.shared
-        var destination = MeetingTranscript.Destination(
-            fileURL: store.markdownURL(for: record),
+    private func makeSpec(record: MeetingRecord, type: MeetingType, title: String, start: Date,
+                          event: MeetingEventInfo?, style: MeetingMinutesStyle) -> MeetingTranscriptSpec {
+        var spec = MeetingTranscriptSpec(
+            fileURL: library.markdownURL(for: record),
             displayName: (record.dir as NSString).lastPathComponent,
-            header: MeetingTranscript.Header(title: title, kind: MeetingText.typeName(type), start: start,
-                                             attendees: event?.attendees ?? [], calendar: event?.calendarTitle))
-        destination.speakers = type == .online
-        destination.template = .meeting(style)
-        destination.summarizes = true
-        destination.notifiesMinutes = false
-        let id = record.id
-        destination.onEvent = { event in
-            MeetingSessionController.shared.transcriptEvent(event, meetingID: id)
-        }
-        return destination
+            header: MeetingTranscriptSpec.Header(title: title, kind: environment.typeName(type), start: start,
+                                                 attendees: event?.attendees ?? [], calendar: event?.calendarTitle))
+        spec.speakers = type == .online
+        spec.template = .meeting(style)
+        spec.summarizes = true
+        spec.notifiesMinutes = false
+        return spec
     }
 
     /// 交给引擎的配置（`MeetingEngineHost`）：线上 = 麦克风 + 系统声音混一路，线下 = 仅麦克风；字幕默认关，「字幕」打开后
@@ -228,12 +205,12 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         let type = self.type ?? .offline
         return MeetingEngineConfig(
             owner: Self.source,
-            label: L("meeting.captureLabel"),
+            label: environment.captureLabel,
             capture: type == .online ? .microphoneAndSystem : .microphone,
             subtitles: subtitlesOn,
-            speakers: destination?.speakers == true,
-            // 引擎只在本场开始中 / 进行中取配置，这时 `destination` 总在；会议库根目录只是空闲时的兜底，用不到。
-            documentURL: destination?.fileURL ?? MeetingStore.shared.rootURL)
+            speakers: spec?.speakers == true,
+            // 引擎只在本场开始中 / 进行中取配置，这时 `spec` 总在；会议库根目录只是空闲时的兜底，用不到。
+            documentURL: spec?.fileURL ?? library.rootURL)
     }
 
     // MARK: - 会中
@@ -243,18 +220,18 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         guard phase == .recording else { return }
         phase = .paused
         engine.setPaused(true)
-        transcript?.note(L("livetranslate.record.doc.paused"), at: Date())
-        refreshIndicators()
-        controlBar.refreshSize()
+        transcript?.note(.paused, at: environment.now())
+        environment.refreshIndicators()
+        environment.controlBar(.refreshSize)
     }
 
     func resume() {
         guard phase == .paused else { return }
         phase = .recording
         engine.setPaused(false)
-        transcript?.note(L("livetranslate.record.doc.resumed"), at: Date())
-        refreshIndicators()
-        controlBar.refreshSize()
+        transcript?.note(.resumed, at: environment.now())
+        environment.refreshIndicators()
+        environment.controlBar(.refreshSize)
     }
 
     func togglePause() {
@@ -264,11 +241,11 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     /// 🔖 标记重点：记录里记一行；整理纪要时这一刻前 20 秒、后 5 秒开始的句子加「【重点】」。
     func mark() {
         guard isRecording, let startedAt else { return }
-        let now = Date()
+        let now = environment.now()
         let current = engine.currentText ?? ""
         marks.append(MeetingHighlight(t: now.timeIntervalSince(startedAt), text: String(current.prefix(200))))
         transcript?.mark(at: now)
-        controlBar.refreshSize()
+        environment.controlBar(.refreshSize)
     }
 
     /// 速记（整份替换）：写进记录的「速记」一节，会后并入纪要的上下文。开始中还没有文档：先存着，建文档时写进去。
@@ -282,8 +259,8 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     func toggleNotes() {
         guard isActive else { return }
         notesExpanded.toggle()
-        controlBar.setNotesExpanded(notesExpanded)
-        controlBar.refreshSize()
+        environment.controlBar(.notesExpanded(notesExpanded))
+        environment.controlBar(.refreshSize)
     }
 
     /// 字幕开关：打开 = 字幕条 + 译文（语言、朗读等沿用「字幕与同传」设置）。
@@ -292,7 +269,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         subtitlesOn = on
         // 开始中引擎还没跑起来：开起来时按 subtitlesOn 同步（见 engineStarted）。
         engine.setSubtitles(on)
-        controlBar.refreshSize()
+        environment.controlBar(.refreshSize)
     }
 
     func toggleSubtitles() {
@@ -304,8 +281,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         guard isActive, phase != .finishing else { return }
         microphoneMuted.toggle()
         engine.setMuted(microphoneMuted, lane: .microphone)
-        transcript?.note(microphoneMuted ? L("livetranslate.record.doc.micMuted") : L("livetranslate.record.doc.micUnmuted"),
-                         at: Date())
+        transcript?.note(microphoneMuted ? .microphoneMuted : .microphoneUnmuted, at: environment.now())
     }
 
     /// 点喇叭图标：不录 / 恢复录对方的声音（你的照录），文档里记一行。只有线上会议有这一路。
@@ -313,8 +289,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         guard isActive, phase != .finishing, type == .online else { return }
         systemMuted.toggle()
         engine.setMuted(systemMuted, lane: .system)
-        transcript?.note(systemMuted ? L("livetranslate.record.doc.systemMuted") : L("livetranslate.record.doc.systemUnmuted"),
-                         at: Date())
+        transcript?.note(systemMuted ? .systemMuted : .systemUnmuted, at: environment.now())
     }
 
     // MARK: - 结束
@@ -324,8 +299,8 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         switch phase {
         case .recording, .paused:
             phase = .finishing
-            refreshIndicators()
-            controlBar.refreshSize()
+            environment.refreshIndicators()
+            environment.controlBar(.refreshSize)
             engine.finish()
         case .starting:
             finishWhenStarted = true
@@ -341,12 +316,12 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         terminating = true
         if phase == .starting, let id = meetingID, !contentIDs.contains(id) {
             // 还没开起来就退出了：不留一条空会议。
-            MeetingStore.shared.discard(id)
+            library.discard(id)
         } else if isActive {
             engine.terminate()
             if isActive { ended() }
         }
-        MeetingStore.shared.flush()
+        library.flush()
     }
 
     // MARK: - 引擎事件（MeetingEngineHost）
@@ -369,7 +344,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     private func engineStarted(_ run: MeetingEngineRun) {
         guard phase == .starting else {
             // 改设置引起的重启也会再报一次：同一份文档接着写（设置真变了才记「改为：…」），记录中 / 暂停中的不动。
-            transcript?.continueWith(run, at: Date())
+            transcript?.continueWith(run, at: environment.now())
             return
         }
         phase = .recording
@@ -378,8 +353,8 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         if subtitlesOn {
             engine.setSubtitles(true)
         }
-        refreshIndicators()
-        controlBar.refreshSize()
+        environment.refreshIndicators()
+        environment.controlBar(.refreshSize)
         if finishWhenStarted {
             finishWhenStarted = false
             finish()
@@ -389,8 +364,12 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     /// 第一次开起来：建本场的 meeting.md（docs/meeting/ENGINE.md §4.5.2）。开起来之前就定稿的句子（音源还在开、先开的那一路
     /// 已经出了字）与开始中写的速记一并写进去 —— 以前文档在引擎问完权限时就建了，这些当场就记下。
     private func openTranscript(_ run: MeetingEngineRun) {
-        guard transcript == nil, let destination else { return }
-        let transcript = MeetingTranscript(start: Date(), config: run, destination: destination)
+        guard transcript == nil, let spec, let id = meetingID else { return }
+        let transcript = library.makeTranscript(spec, start: environment.now(), run: run)
+        // 文档的进度（`id` 是这份文档属于的那场 —— 纪要整理完时可能已经开了下一场）。
+        transcript.onEvent = { [weak self] event in
+            self?.transcriptEvent(event, meetingID: id)
+        }
         // 写盘失败：提示（文档给的那一行，已本地化）放进字幕条，同一条文案、只提示一次（字幕条收着就看不到 —— 同以前）。
         let engine = self.engine
         transcript.onWriteError = { message in
@@ -398,8 +377,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         }
         self.transcript = transcript
         for line in finalLines.values.sorted(by: { $0.time != $1.time ? $0.time < $1.time : $0.key < $1.key }) {
-            transcript.update(key: line.key, time: line.time, original: line.original,
-                              translation: line.translation, speaker: line.speaker)
+            transcript.update(line)
         }
         if !notes.isEmpty {
             transcript.setNotes(notes)
@@ -407,24 +385,24 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     }
 
     /// 会话结束（结束按钮、识别出错停了、没开起来）。先收尾文档 —— 这时这场的句子已经全到了（含停止时没定稿、强制记下的
-    /// 最后几句）—— 它同步报回的 `.finished` 写 meta 或作废；再收起控制条与录音指示、撤勿扰、复位。
+    /// 最后几句）—— 它同步报回的 `.finished` 写 meta 或作废；再撤勿扰、停心跳、收起控制条、复位、收起录音指示。
     /// 顺序不能反：先复位的话 `.finished` 就对不上这场，有内容的会被当成没开起来作废。
     private func ended() {
         guard phase != .idle else { return }
         if let transcript {
             self.transcript = nil
-            transcript.finish(at: Date(), terminating: terminating)
+            transcript.finish(at: environment.now(), terminating: terminating)
         }
         if let id = meetingID, !transcriptFinished {
             // 没开起来（权限被拒、识别不可用、音源打不开），从没建过文档：这一场作废。
-            MeetingStore.shared.discard(id)
+            library.discard(id)
         }
         Self.log.notice("meeting ended")
-        NotifyDND.shared.setSuppressed(false, token: Self.dndToken)
-        stopTimer()
-        controlBar.hide()
-        statusItem.update(text: nil, paused: false)
+        environment.setDoNotDisturb(false)
+        environment.setHeartbeat(false)
+        environment.controlBar(.hide)
         reset()
+        environment.refreshIndicators()
     }
 
     private func reset() {
@@ -440,7 +418,7 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         marks = []
         notes = ""
         notesExpanded = false
-        destination = nil
+        spec = nil
         transcript = nil
         finalLines = [:]
         finishWhenStarted = false
@@ -460,13 +438,11 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
     /// 一句定稿（之后纠错 / 译文回来同一 `key` 再报，后到的覆盖先到的）：记下来算重点，写进文档。
     private func finalLine(_ line: MeetingEngineLine) {
         finalLines[line.key] = line
-        transcript?.update(key: line.key, time: line.time, original: line.original,
-                           translation: line.translation, speaker: line.speaker)
+        transcript?.update(line)
     }
 
     /// 转录的进度（`meetingID` 是这份转录属于的那场 —— 纪要整理完时可能已经开了下一场）。事件来自会议自己的文档。
     private func transcriptEvent(_ event: MeetingTranscriptEvent, meetingID id: String) {
-        let store = MeetingStore.shared
         switch event {
         case .created:
             contentIDs.insert(id)
@@ -475,19 +451,19 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
             if current { transcriptFinished = true }
             guard contentIDs.contains(id) else {
                 // 一句都没记下：不留一条空会议。
-                store.discard(id)
-                if !terminating { postLater(toast: L("meeting.toast.nothingRecorded")) }
+                library.discard(id)
+                if !terminating { environment.toast(.nothingRecorded) }
                 return
             }
             let highlights = current ? resolvedHighlights() : nil
-            store.update(id, sync: terminating) { meta in
+            library.update(id, sync: terminating) { meta in
                 meta.end = end
-                meta.status = MeetingStore.status(after: minutes)
+                meta.status = MeetingStatus.after(minutes)
                 if let highlights { meta.highlights = highlights }
             }
             if current { lastMeetingID = id }
             if minutes != .generating {
-                store.finishWriting(id)
+                library.finishWriting(id)
                 contentIDs.remove(id)
                 if !terminating { postSaved(id, outcome: minutes) }
             }
@@ -498,11 +474,11 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
                     MeetingActionItem(text: $0.text, owner: $0.owner, due: $0.due, done: $0.done)
                 }
             }
-            store.update(id, sync: outcome == .interrupted) { meta in
-                meta.status = MeetingStore.status(after: outcome)
+            library.update(id, sync: outcome == .interrupted) { meta in
+                meta.status = MeetingStatus.after(outcome)
                 if let items { meta.actionItems = items }
             }
-            store.finishWriting(id)
+            library.finishWriting(id)
             contentIDs.remove(id)
             if outcome != .interrupted { postSaved(id, outcome: outcome) }
         }
@@ -520,134 +496,31 @@ final class MeetingSessionController: ObservableObject, MeetingEngineHost {
         }
     }
 
-    // MARK: - 通知
-
-    /// 纪要好了 / 没整理成 / 只存了转录：宠物通知，[打开] 打开这场的记录。
+    /// 纪要好了 / 没整理成 / 只存了转录：宠物通知，[打开] 打开这场的记录（会议库里已经没有这一条就不发）。
     private func postSaved(_ id: String, outcome: MeetingMinutesOutcome) {
-        guard let record = MeetingStore.shared.record(id) else { return }
-        let title: String
-        switch outcome {
-        case .done: title = L("meeting.notify.minutesReady")
-        case .failed: title = L("meeting.notify.minutesFailed")
-        case .generating, .interrupted: return
-        case .off, .noModel, .tooShort: title = L("meeting.notify.transcriptOnly")
-        }
-        var body = record.meta.title
-        if let duration = record.meta.duration {
-            body += " · " + MeetingText.duration(duration)
-        }
-        if outcome == .noModel {
-            body += "\n" + L("meeting.notify.noModelHint")
-        }
-        var summarized = false
-        if case .done = outcome { summarized = true }
-        let notification = PetNotification(
-            source: Self.source, level: .bubble, title: title, body: body,
-            actions: [.init(id: "open", label: L("meeting.notify.open"), role: .primary)],
-            dedupeKey: "saved.\(id)", icon: summarized ? "doc.text" : "waveform")
-        // 结束时转录收尾在撤勿扰之前：晚一拍再发，免得被会议自己的勿扰攒起来。
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                NotifyCenter.shared.post(notification) { action in
-                    guard action == "open" else { return }
-                    MeetingWindowController.shared.showLibrary(select: id)
-                }
-            }
-        }
-    }
-
-    private func postLater(toast text: String) {
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                MeetingSessionController.shared.postToast(text)
-            }
-        }
-    }
-
-    /// 一行轻提示。记录中挂着会议自己的勿扰，普通提示会被攒起来，所以用 alert 级、toast 样式（宠物不会出声）。
-    private func postToast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .alert, title: text, style: .toast,
-                                                 icon: "waveform"))
+        guard let record = library.record(id) else { return }
+        environment.notifySaved(record, outcome: outcome)
     }
 
     // MARK: - 心跳（电平、录音指示、超时）
 
-    private func startTimer() {
-        stopTimer()
-        tickCount = 0
-        let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
-            MainActor.assumeIsolated { MeetingSessionController.shared.tick() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    private func tick() {
+    /// 外壳的 Timer 每 0.25 秒调一次（`setHeartbeat`）：电平点；每秒刷新菜单栏指示、查超时。
+    func tick() {
         tickCount += 1
         if let input = engine.takeInputLevels() {
             levels.update(input, paused: phase == .paused)
         }
         guard tickCount % 4 == 0 else { return }
-        refreshIndicators()
+        environment.refreshIndicators()
         checkOvertime()
-    }
-
-    /// 菜单栏的下一场倒计时（MeetingReminder 每 15 秒给一次；nil = 不显示）。记录中录音指示优先。
-    func setCountdown(_ text: String?) {
-        statusItem.menuItems = { MeetingMenu.items(includeSettings: true) }
-        statusItem.setCountdown(text)
-    }
-
-    /// 菜单栏「● 32:15」。
-    private func refreshIndicators() {
-        switch phase {
-        case .recording, .paused, .finishing:
-            statusItem.menuItems = { MeetingMenu.items(includeSettings: true) }
-            statusItem.update(text: MeetingText.clock(elapsed()), paused: phase == .paused)
-        case .starting:
-            statusItem.menuItems = { MeetingMenu.items(includeSettings: true) }
-            statusItem.update(text: "…", paused: false)
-        case .idle:
-            statusItem.update(text: nil, paused: false)
-        }
     }
 
     /// 绑了日历事件：超过预定结束时间 5 分钟，轻提示一次。
     private func checkOvertime() {
         guard isRecording, !overtimeNotified, let end = event?.end,
-              Date().timeIntervalSince(end) > Self.overtimeGrace else { return }
+              environment.now().timeIntervalSince(end) > Self.overtimeGrace else { return }
         overtimeNotified = true
-        postToast(L("meeting.toast.overtime"))
-    }
-
-    // MARK: - 菜单状态行
-
-    /// 「● 记录中 32:15 · 线上会议」「正在开始记录…」；空闲时「下一场：设计评审 · 25 分钟后」（读着日历、接下来有会时）。
-    func statusLine() -> String {
-        let kind = type.map(MeetingText.typeName) ?? ""
-        switch phase {
-        case .starting: return L("meeting.statusLine.starting")
-        case .recording: return L("meeting.statusLine.recording \(MeetingText.clock(elapsed())) \(kind)")
-        case .paused: return L("meeting.statusLine.paused \(MeetingText.clock(elapsed())) \(kind)")
-        case .finishing: return L("meeting.statusLine.finishing")
-        case .idle:
-            if engine.activity == .freeListening {
-                return L("meeting.statusLine.freeListening")
-            }
-            let now = Date()
-            if let next = MeetingCalendar.shared.next(at: now) {
-                return L("meeting.statusLine.next \(next.info.title) \(MeetingText.relative(next.info.start, now: now))")
-            }
-            if let summarizing = MeetingStore.shared.records.first(where: { $0.meta.status == .summarizing }) {
-                return L("meeting.statusLine.summarizing \(summarizing.meta.title)")
-            }
-            return L("meeting.statusLine.idle")
-        }
+        environment.toast(.overtime)
     }
 }
 

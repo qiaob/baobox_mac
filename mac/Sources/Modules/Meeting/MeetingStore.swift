@@ -464,16 +464,6 @@ final class MeetingStore: ObservableObject {
             return false
         }
     }
-
-    /// 纪要的结果 → 会议库里的状态。
-    nonisolated static func status(after outcome: MeetingMinutesOutcome) -> MeetingStatus {
-        switch outcome {
-        case .generating: return .summarizing
-        case .done: return .summarized
-        case .failed: return .failed
-        case .off, .noModel, .tooShort, .interrupted: return .transcribed
-        }
-    }
 }
 
 // MARK: - 自由听译的新记录写进会议库（docs/meeting/TECH_DESIGN.md §2.3、ENGINE.md §4.5.3）
@@ -487,15 +477,16 @@ extension MeetingStore: FreeListeningLibrary {
         let title = L("meeting.type.free")
         let dir = reserveDirectory(start: start, title: title)
         let id = UUID().uuidString
-        var destination = MeetingTranscript.Destination(
+        var spec = MeetingTranscriptSpec(
             fileURL: rootURL.appendingPathComponent(dir, isDirectory: true)
                 .appendingPathComponent(MeetingLibraryLayout.markdownFileName),
             displayName: (dir as NSString).lastPathComponent)
-        destination.summarizes = summarizes
-        destination.onEvent = { event in
+        spec.summarizes = summarizes
+        let transcript = MeetingTranscript(start: start, run: run, spec: spec)
+        transcript.onEvent = { event in
             MeetingStore.shared.freeListening(event, id: id, dir: dir, start: start, title: title)
         }
-        return MeetingTranscript(start: start, config: run, destination: destination)
+        return transcript
     }
 
     private func freeListening(_ event: MeetingTranscriptEvent, id: String, dir: String, start: Date,
@@ -509,16 +500,25 @@ extension MeetingStore: FreeListeningLibrary {
         case .finished(let end, let minutes, let terminating):
             update(id, sync: terminating) { meta in
                 meta.end = end
-                meta.status = Self.status(after: minutes)
+                meta.status = MeetingStatus.after(minutes)
             }
             if minutes != .generating {
                 finishWriting(id)
             }
         case .minutes(let outcome):
             update(id, sync: outcome == .interrupted) { meta in
-                meta.status = Self.status(after: outcome)
+                meta.status = MeetingStatus.after(outcome)
             }
             finishWriting(id)
         }
+    }
+}
+
+// MARK: - 会话的会议库（docs/meeting/ENGINE.md §5.2）
+
+extension MeetingStore: MeetingSessionLibrary {
+    /// 本场会议的 meeting.md：会议的版式写进这场会议的目录（会话在第一次开起来时建）。
+    func makeTranscript(_ spec: MeetingTranscriptSpec, start: Date, run: MeetingEngineRun) -> MeetingTranscriptWriting {
+        MeetingTranscript(start: start, run: run, spec: spec)
     }
 }
