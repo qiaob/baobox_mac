@@ -77,6 +77,10 @@
   暂停 / 继续、单路静音、🔖、速记调完引擎就直接写；`.ended` 里先收尾文档（它同步报回的 `.finished` 写 meta 或作废）再撤勿扰、收控制条、复位。
   App 退出：先置 `terminating` 再让引擎停，引擎在返回前把剩下的句子和 `.ended` 同步报回来；没报 `.ended`（比如正因为改设置在重启）就自己收尾。
   `MeetingTool.willTerminate` 的顺序是显式的四步：会话 `terminate()` → 引擎 `terminate()`（自由听译）→ `MeetingTranscript.abortAllMinutes()` → `MeetingStore.shared.flush()`。
+- **会话是纯逻辑 + App 外壳**（#107 PR7，`ENGINE.md` §5.2）：`MeetingSessionController` 在 `Modules/Meeting/Logic/`，只留决策；会议库、本场文档、
+  App 环境（勿扰、控制条、菜单栏、Timer、通知、合规对话框、日历、设置、文案）经 `MeetingSessionPorts.swift` 的三个端口，App 里的实现是
+  `MeetingStore`、`MeetingTranscript`、`MeetingSessionShell`。meeting.md 的模型与排版（`MeetingTranscriptModel`）、纪要提示词与切段
+  （`MeetingMinutesPrompts`）也在 `Logic/`；整个目录编进 `BaoboxTests`（`mac/Tests/Meeting/`，PR8）。
 - **控制条** `MeetingControlBar`：nonactivating 面板，`.statusBar` 级，速记展开时可成为 key（输入用），收起后交还焦点。经 Core 的 `AccessoryDock` 找挂靠点，不认识宠物（#108）：宠物在（开着、显示着、没借给休息画面、不在出场退场途中）时挂成宠物窗的子窗口，贴在宠物头顶，跟着宠物走，自己不能拖；宠物关着、中途被关掉或借出、宠物模块没注册时回到屏幕顶部居中，可拖动（记住位置）。
 - **合规说明**：首次开始记录弹一次（宠物常驻气泡，[我已告知][取消]）。
 

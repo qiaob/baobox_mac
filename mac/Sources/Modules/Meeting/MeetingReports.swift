@@ -170,7 +170,7 @@ final class MeetingWeeklyReporter {
     /// 让本地模型（Qwen3-1.7B）写一段 2–4 句的本周概述。材料超出上下文就截断。
     private static func overview(_ entries: [MeetingWeeklyReport.Entry],
                                  labels: MeetingWeeklyReport.Labels, route: AIRoute) async throws -> String? {
-        let material = MeetingMinutesGenerator.clip(MeetingWeeklyReport.overviewInput(entries, labels: labels), budget: 2400)
+        let material = MeetingMinutesPrompts.clip(MeetingWeeklyReport.overviewInput(entries, labels: labels), budget: 2400)
         guard !material.isEmpty else { return nil }
         let chinese = L10n.locale.identifier.hasPrefix("zh")
         // 提示词是给模型看的，不是界面文案：按语言写死两套。末尾 /no_think 关掉 Qwen3 的「思考」。
