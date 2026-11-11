@@ -648,6 +648,18 @@ Tab 只有 Claude 吃掉（Codex 现在放行，保持）。
   `Modules/AITools/AIToolsNotify.swift`（同理）；`mac/project.yml`（加 `Sources/Core/EventFile`）。
 - 行为：除 §2 那条启停收紧外不变；事件文件名、上限、队列名不变。
 - 文档：`TECH_DESIGN.md` §3.4 加注、`DESIGN.md` §9.1、根 `CLAUDE.md` 的 Core 清单。
+- **状态（2026-11-11）：已实现**（分支 `refactor/cli-event-file`，单测 19 个，差分结果贴在 PR 描述里）。与上面的出入：
+  1. `EventFileLog.prepare` 读文件大小前先清掉 URL 的 resourceValues 缓存。follower 存着同一个 URL，而后台线程读进去的缓存一直不过期
+     （scratchpad 探针：追加 1000 字节后同一个 URL 实例仍报 4 字节），停了再启动会按旧大小判断要不要截断；以前每次启动都现算一个新 URL，碰不上。
+     不改行为，防的是搬家带进来的回归（单测 `testPrepareSeesTheCurrentSizeWhenTheSameURLIsReused`）。
+  2. `EventFileFollower` 多一个只读的 `isFollowing`（回放完、监听器建好之后为 true），测试拿它确认「后台读完之前 `stop()` 不会建出监听器」。
+  3. Codex 的 `replay` 照旧逐行调 `apply(notify: false)`（它本来就直接返回），没改成空闭包，`apply` 一行没动。
+  4. §5.2 C3 的实际表现（差分测出来的）：后台读完之前再 `start()`，旧代码会回放两遍，但第二个监听器赋值时第一个就被释放、不再交行，
+     平时不会重复通知（只有两轮后台读之间写进来的行可能交两遍）；后台读完之前 `stop()`，旧代码随后照样建出监听器、一直跟随；
+     `stop()` 时已排进主线程的行，旧代码照样处理。新代码这三种都不会。
+  5. 实现时新查到、这一步没修的（建议并进 PR4）：监听器的 `stop()` 用 `[weak self]` 排一个块去 `cancel()`，调用方紧接着就放掉了最后一个引用，
+     块执行时对象已经没了，`cancel()` 没调、取消回调里的 `close(fd)` 也就没跑 —— 每次 `stop()`（以及上面被替换掉的那个监听器）漏一个
+     `O_EVTONLY` 文件描述符（探针：起 20 个再停掉，打开的描述符数不回落）。不影响交行（释放后不再回调），只在停止时漏，量很小。
 
 ### PR3 快速切换部件 + 会话数据源
 
