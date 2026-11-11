@@ -183,7 +183,7 @@ final class MeetingDetector {
         }
         lines.append(L("meeting.detect.startedBody"))
         detectorLog.notice("calendar meeting started without recording")
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: MeetingSessionController.source,
             level: .alert,
             title: L("meeting.detect.startedTitle \(info.title)"),
@@ -274,7 +274,7 @@ final class MeetingDetector {
     private func askApp(bundleID: String, name: String, event: MeetingCalendarEvent?) {
         detectorLog.notice("meeting app with microphone: \(bundleID, privacy: .public)")
         let body = event.map { L("meeting.detect.appBodyEvent \($0.info.title)") } ?? L("meeting.detect.appBody")
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: MeetingSessionController.source,
             level: .alert,
             title: L("meeting.detect.appTitle \(name)"),
@@ -304,9 +304,9 @@ final class MeetingDetector {
 
     private func autoStart(_ event: MeetingCalendarEvent) {
         detectorLog.notice("auto-starting a calendar meeting recording")
-        NotifyCenter.shared.post(PetNotification(source: MeetingSessionController.source, level: .alert,
-                                                 title: L("meeting.detect.autoStarted \(event.info.title)"),
-                                                 style: .toast, icon: "record.circle"))
+        NotifyCenter.shared.post(Notice(source: MeetingSessionController.source, level: .alert,
+                                        title: L("meeting.detect.autoStarted \(event.info.title)"),
+                                        style: .toast, icon: "record.circle"))
         MeetingSessionController.shared.start(type: .online, event: event.info)
     }
 

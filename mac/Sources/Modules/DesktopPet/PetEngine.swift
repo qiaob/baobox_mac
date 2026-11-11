@@ -276,7 +276,7 @@ final class PetEngine {
     var isScripted: Bool { script != nil }
     /// 脚本期间改了活动范围 / 来了通知：脚本结束时补做（见 endScript）。
     private var pendingRangeChange = false
-    private var pendingNotify: PetNotification.Level?
+    private var pendingNotify: Notice.Level?
     /// 从打盹醒来那一下（起身 + 伸懒腰 / 打哈欠）要多久：这段时间里不溜达、不歇脚、不跳（控制器按形象的 wake 片段设）。
     var wakeDuration: TimeInterval = 0.5
     /// 跳 / 飞落地后路线还没走完时，先停一下让落地缓冲播出来再走下一段（控制器按 jump_land 设）。
@@ -683,7 +683,7 @@ final class PetEngine {
     /// 拖拽中 / 在空中不改状态；落地或松手后 tick 按 notifyUntil 补上提醒动作。
     /// 出场 / 退场中只记下级别，脚本结束时再补（按那时的时间算，不会还没落地就过期）。
     /// 蹲着 / 坐地时先站起来，提醒那一下小跳等起身片段播完再跳（不然半蹲着就飘起来）。
-    func notify(level: PetNotification.Level) {
+    func notify(level: Notice.Level) {
         if script != nil {
             if pendingNotify != .alert { pendingNotify = level }
             return

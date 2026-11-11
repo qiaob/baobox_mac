@@ -3,7 +3,8 @@ import Foundation
 import UserNotifications
 
 /// 一条通知（内部模型，docs/desktop-pet/DESIGN.md §3）。来源模块先转成它，再由 NotifyCenter 分发呈现。
-struct PetNotification {
+/// 和 Windows 版 `pet_notify.rs` 的 `Notice` 同名。
+struct Notice {
     enum Level {
         case ambient    // 轻提示：气泡数秒自消
         case bubble     // 带动作：气泡 + 按钮
@@ -56,12 +57,16 @@ struct PetNotification {
     }
 }
 
+/// `Notice` 的旧名（#108 PR 6 改名，docs/notify-core/DESIGN.md §6-1）。留一个版本，给还在用旧名的在途分支缓冲；下个版本删。
+@available(*, deprecated, renamed: "Notice")
+typealias PetNotification = Notice
+
 /// 呈现端（桌面宠物）。NotifyCenter 不持有窗口，只调这个协议，便于回退与测试。
 /// 模块用 `ToolModule.presentationRoles()` 交出来，框架在启动时装进 `PresentationHub`（docs/notify-core/DESIGN.md §3.3）。
 @MainActor
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
-    func present(_ n: PetNotification, onAction: @escaping (String) -> Void)
+    func present(_ n: Notice, onAction: @escaping (String) -> Void)
     /// 配合提醒做个动作（喝水、伸懒腰、远眺），按片段名播；做不了返回 false。默认做不了。
     func performGesture(_ clips: [String]) -> Bool
 }
@@ -79,14 +84,14 @@ final class NotifyCenter {
     struct HistoryEntry {
         let date: Date
         let source: String
-        let level: PetNotification.Level
+        let level: Notice.Level
         let title: String
         var mergeCount: Int
     }
 
     private(set) var history: [HistoryEntry] = []
     private var lastPostAt: [String: Date] = [:]
-    private var suppressedQueue: [(PetNotification, ((String) -> Void)?)] = []
+    private var suppressedQueue: [(Notice, ((String) -> Void)?)] = []
     private var flushTimer: Timer?
     private var didRequestAuth = false
     /// 回退系统通知的按钮回调（通知 id → 投稿方回调）与已登记的按钮组。
@@ -94,9 +99,9 @@ final class NotifyCenter {
     private var systemCallbackOrder: [String] = []
     private var systemCategories: [String: UNNotificationCategory] = [:]
     /// 启动期间攒着的通知，按投递顺序；nil = 没在攒（见 holdDuringLaunch）。
-    private var launchHeld: [(PetNotification, ((String) -> Void)?)]?
+    private var launchHeld: [(Notice, ((String) -> Void)?)]?
 
-    func post(_ n: PetNotification, onAction: ((String) -> Void)? = nil) {
+    func post(_ n: Notice, onAction: ((String) -> Void)? = nil) {
         // 启动期间原样攒着：来源开关、去重、勿扰都等放行时再从头判一遍。
         if launchHeld != nil {
             launchHeld?.append((n, onAction))
@@ -140,7 +145,7 @@ final class NotifyCenter {
         PresentationHub.shared.notifications?.performGesture(clips) ?? false
     }
 
-    private func deliver(_ n: PetNotification, onAction: ((String) -> Void)?) {
+    private func deliver(_ n: Notice, onAction: ((String) -> Void)?) {
         if let presenter = PresentationHub.shared.notifications, presenter.isReady {
             if wantsSound(n) {
                 NSSound(named: "Glass")?.play()
@@ -153,14 +158,14 @@ final class NotifyCenter {
 
     /// 投稿方自己的声音设置（Claude Code / Codex 的提示音开关，已折算进 playSound）照旧生效；
     /// notify.sound 只给没要求发声的 alert 级补一声（docs/desktop-pet/DESIGN.md §9：alert 提示音，默认关）。
-    private func wantsSound(_ n: PetNotification) -> Bool {
+    private func wantsSound(_ n: Notice) -> Bool {
         n.playSound || (n.level == .alert && NotifySettings.soundEnabled)
     }
 
     /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（docs/desktop-pet/DESIGN.md §2）。气泡上的按钮照样带上
     /// （UNNotificationAction），用户点了经 SystemNotificationRouter 回到投稿方 —— 否则推迟、
     /// 「现在休息」「再来一轮」这些在宠物关着时全都点不了（2026-11-06 真机踩到）。
-    private func postSystemNotification(_ n: PetNotification, onAction: ((String) -> Void)?) {
+    private func postSystemNotification(_ n: Notice, onAction: ((String) -> Void)?) {
         let center = UNUserNotificationCenter.current()
         prepareSystemFallback(requestPermission: true)
         let content = UNMutableNotificationContent()
@@ -224,7 +229,7 @@ final class NotifyCenter {
         callback(actionID == UNNotificationDefaultActionIdentifier ? "open" : actionID)
     }
 
-    private func recordHistory(_ n: PetNotification) {
+    private func recordHistory(_ n: Notice) {
         history.insert(
             HistoryEntry(date: Date(), source: n.source, level: n.level, title: n.title, mergeCount: 1),
             at: 0
@@ -277,7 +282,7 @@ final class NotifyCenter {
         flushTimer = nil
         // 摘要不带动作按钮（原动作多已过期），只汇总标题。
         let titles = queued.prefix(3).map { $0.0.title }.joined(separator: "、")
-        let digest = PetNotification(
+        let digest = Notice(
             source: "digest",
             level: .bubble,
             title: L("notify.digest.title \(queued.count)"),

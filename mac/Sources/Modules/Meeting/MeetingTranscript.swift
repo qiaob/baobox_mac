@@ -140,7 +140,7 @@ final class MeetingTranscript {
 
     private static func notifyMinutesReady(fileName: String) {
         // 改走通知内核（DesktopPet）：宠物呈现，宠物关时由内核回退系统通知。
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "livetranslate",
             level: .ambient,
             title: L("livetranslate.record.notifyTitle"),

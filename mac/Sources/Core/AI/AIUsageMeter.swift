@@ -118,7 +118,7 @@ final class AIUsageMeter: ObservableObject {
         notifiedAllowance = allowance
         let limit = Self.dailyLimit
         // alert：开会时（勿扰）也要立刻看到 —— 这之后字幕翻译改走本地或停掉，得让人知道、能马上放行。
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "ai", level: .alert,
             title: L("ai.usage.limitTitle \(stored.requests)"),
             body: L("ai.usage.limitBody"),

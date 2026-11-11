@@ -206,7 +206,7 @@ final class MeetingWeeklyReporter {
     }
 
     private func toast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: MeetingSessionController.source, level: .ambient, title: text,
-                                                 icon: "doc.text"))
+        NotifyCenter.shared.post(Notice(source: MeetingSessionController.source, level: .ambient, title: text,
+                                        icon: "doc.text"))
     }
 }

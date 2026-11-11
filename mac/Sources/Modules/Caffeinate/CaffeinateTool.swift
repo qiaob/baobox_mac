@@ -109,8 +109,8 @@ final class CaffeinateTool: ToolModule {
 
     /// 宠物说一句。是用户刚点的操作的回执：专注 / 安静这些勿扰时也照常显示。
     private static func toast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: "caffeinate", level: .ambient, title: text,
-                                                 icon: "cup.and.saucer.fill", isUserFeedback: true))
+        NotifyCenter.shared.post(Notice(source: "caffeinate", level: .ambient, title: text,
+                                        icon: "cup.and.saucer.fill", isUserFeedback: true))
     }
 
     // MARK: - 展示

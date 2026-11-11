@@ -203,8 +203,8 @@ final class FocusHealthController: ObservableObject {
         }
         if stage.isBusy { stage.end(.skipped) }
         // 先说一声再挂勿扰（挂上之后这条轻提示会被攒起来）。
-        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient,
-                                                 title: L("focus.toast.started \(length)"), icon: "timer"))
+        NotifyCenter.shared.post(Notice(source: Self.source, level: .ambient,
+                                        title: L("focus.toast.started \(length)"), icon: "timer"))
         session.start(seconds: Double(length * 60), at: now)
         deferredDuringFocus = []
         NotifyDND.shared.setSuppressed(true, token: Self.focusToken)
@@ -219,7 +219,7 @@ final class FocusHealthController: ObservableObject {
         session.pause(at: Date())
         NotifyDND.shared.setSuppressed(false, token: Self.focusToken)
         changed()
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: statusLine(),
             actions: [.init(id: "resume", label: L("focus.action.resume"), role: .primary),
                       .init(id: "end", label: L("focus.action.endRound"))],
@@ -245,8 +245,8 @@ final class FocusHealthController: ObservableObject {
 
     /// 用户刚点的操作的回执：勿扰（含专注自己挂的）时也照常显示。
     private func feedback(_ text: String, icon: String) {
-        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: text, icon: icon,
-                                                 isUserFeedback: true))
+        NotifyCenter.shared.post(Notice(source: Self.source, level: .ambient, title: text, icon: icon,
+                                        isUserFeedback: true))
     }
 
     /// 提前结束：记为完成（接休息）或作废（不计轮次、不接休息，顺延的提醒照常补上）。
@@ -297,8 +297,8 @@ final class FocusHealthController: ObservableObject {
         let round = session.roundsToday
 
         if overdue > Self.staleFocus {
-            NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient,
-                                                     title: L("focus.toast.staleDone"), icon: "checkmark.circle"))
+            NotifyCenter.shared.post(Notice(source: Self.source, level: .ambient,
+                                            title: L("focus.toast.staleDone"), icon: "checkmark.circle"))
             changed(now)
             return
         }
@@ -334,7 +334,7 @@ final class FocusHealthController: ObservableObject {
     private func postFocusDone(round: Int, breakMinutes: Int, extras: String, byUser: Bool = false) {
         var body = L("focus.focusDone.shortBody \(breakMinutes)")
         if !extras.isEmpty { body += "\n" + L("focus.alsoLine \(extras)") }
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: L("focus.focusDone.title \(round)"), body: body,
             actions: [.init(id: "next", label: L("focus.action.nextRound"), role: .primary),
                       .init(id: "end", label: L("focus.action.endCycle"), role: .destructive)],
@@ -382,7 +382,7 @@ final class FocusHealthController: ObservableObject {
             startFocus()
             return
         }
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: L("focus.breakDone.title"), body: L("focus.breakDone.body"),
             actions: [.init(id: "start", label: L("focus.action.startRound"), role: .primary),
                       .init(id: "end", label: L("focus.action.notNow"))],
@@ -459,9 +459,9 @@ final class FocusHealthController: ObservableObject {
         guard let first = due.first else { return }
         for item in due { ReminderScheduler.reset(item.id, runtime: &runtime, now: now) }
         let title = due.count == 1 ? first.nudgeTitle : due.map(\.displayName).joined(separator: " · ")
-        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: title,
-                                                 body: due.count == 1 ? first.nudgeBody : "", ttl: 6,
-                                                 icon: first.icon))
+        NotifyCenter.shared.post(Notice(source: Self.source, level: .ambient, title: title,
+                                        body: due.count == 1 ? first.nudgeBody : "", ttl: 6,
+                                        icon: first.icon))
         if let clips = due.compactMap(\.petClips).first {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 MainActor.assumeIsolated { _ = NotifyCenter.shared.performGesture(clips) }
@@ -500,7 +500,7 @@ final class FocusHealthController: ObservableObject {
             body = ""
         }
         let sticky = due.contains { $0.schedule == .daily }
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: title, body: body,
             actions: [.init(id: "ok", label: L("focus.action.ok"), role: .primary),
                       .init(id: "snooze", label: L("focus.action.snooze10"))],
@@ -522,7 +522,7 @@ final class FocusHealthController: ObservableObject {
     /// 休息画面预告：到点前 1 分钟（标准 / 严格档不能推迟，只能提前开始）。
     private func fireWarn(_ item: ReminderItem) {
         let id = item.id
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: L("focus.warn.title"),
             body: item.restTitle + " · " + FocusText.duration(item.restSeconds),
             actions: [.init(id: "now", label: L("focus.action.restNow"), role: .primary)],
@@ -548,7 +548,7 @@ final class FocusHealthController: ObservableObject {
             let extras = Self.foldLines(alsoDue)
             if !extras.isEmpty { body += "\n" + L("focus.alsoLine \(extras.joined(separator: L("focus.listSeparator")))") }
             let id = item.id
-            NotifyCenter.shared.post(PetNotification(
+            NotifyCenter.shared.post(Notice(
                 source: Self.source, level: .bubble, title: L("focus.downgrade.title"), body: body,
                 actions: [.init(id: "ok", label: L("focus.action.ok"), role: .primary),
                           .init(id: "now", label: L("focus.action.restNow"))],
@@ -577,10 +577,10 @@ final class FocusHealthController: ObservableObject {
             let line = L("focus.alsoLine \(extras.joined(separator: L("focus.listSeparator")))")
             body = body.isEmpty ? line : body + "\n" + line
         }
-        var actions: [PetNotification.Action] = [.init(id: "ok", label: L("focus.action.ok"), role: .primary)]
+        var actions: [Notice.Action] = [.init(id: "ok", label: L("focus.action.ok"), role: .primary)]
         if canSnooze(item) { actions.append(.init(id: "snooze", label: L("focus.action.snooze5"))) }
         let id = item.id
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble,
             title: item.restTitle + " · " + FocusText.duration(item.restSeconds), body: body,
             actions: actions, icon: item.icon
@@ -681,7 +681,7 @@ final class FocusHealthController: ObservableObject {
         let strength = FocusHealthSettings.strength
         if strength == .relaxed {
             // 宠物关着时轻松档的提醒是系统通知（带同样的按钮），文案别再说「宠物冒个气泡」。
-            NotifyCenter.shared.post(PetNotification(
+            NotifyCenter.shared.post(Notice(
                 source: Self.source, level: .bubble, title: L("focus.preview.title"),
                 body: NotifyCenter.shared.presenterIsReady ? L("focus.preview.bubbleMessage")
                                                            : L("focus.preview.notificationMessage"),
