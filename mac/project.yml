@@ -144,6 +144,8 @@ targets:
   # - Core/Shell.swift：shell 单引号转义与跑小命令取 stdout（docs/codex-assistant/DEDUPE-P2.md §2.4 类 4）
   # - Core/Terminal/TerminalLaunchScript.swift：在终端里跑命令的一次性脚本内容与只留最近 20 个（同上类 5；
   #   同目录其余文件是 AppKit，不进来）
+  # - Core/CLIFormat.swift：Claude Code / Codex 助手共用的展示格式化（费用、token、倒计时、相对时间、星期名；同上类 2）
+  # - Core/CLIVersion.swift：本机 CLI 的 --version 与 npm 上的最新版（同上类 9；npm 那半在测试里用 URLProtocol 桩）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -165,6 +167,8 @@ targets:
       - path: Sources/Modules/ClaudeCode/ClaudeUsageCollector.swift
       - path: Sources/Core/Shell.swift
       - path: Sources/Core/Terminal/TerminalLaunchScript.swift
+      - path: Sources/Core/CLIFormat.swift
+      - path: Sources/Core/CLIVersion.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

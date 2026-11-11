@@ -67,7 +67,7 @@ final class AIToolsTool: ToolModule {
         let usageItem = ClosureMenuItem(title: L("aitools.menu.usageReport")) {
             AIToolsCenterController.shared.show(tab: .usage)
         }
-        usageItem.attributedTitle = Self.multiLineTitle(L("aitools.menu.usageReport"), subtitles: quotaSubtitles())
+        usageItem.attributedTitle = ClosureMenuItem.multiLineTitle(L("aitools.menu.usageReport"), subtitles: quotaSubtitles())
         items.append(usageItem)
 
         // —— 完成通知开关行（SwiftUI switch，仿 Claude 版）——
@@ -144,24 +144,6 @@ final class AIToolsTool: ToolModule {
 
     private func disabled(_ title: String) -> NSMenuItem {
         NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    }
-
-    /// 多行菜单项：标题正常字号，每条副标题小号次要色，以 `\n` 逐行拼接。无副标题则退化为单行。
-    private static func multiLineTitle(_ title: String, subtitles: [String]) -> NSAttributedString {
-        let result = NSMutableAttributedString(
-            string: title,
-            attributes: [.font: NSFont.menuFont(ofSize: NSFont.systemFontSize)]
-        )
-        for subtitle in subtitles where !subtitle.isEmpty {
-            result.append(NSAttributedString(
-                string: "\n" + subtitle,
-                attributes: [
-                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-            ))
-        }
-        return result
     }
 }
 

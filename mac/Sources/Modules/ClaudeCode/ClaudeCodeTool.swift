@@ -91,7 +91,7 @@ final class ClaudeCodeTool: ToolModule {
         let usageItem = ClosureMenuItem(title: L("claudecode.menu.usageReport")) {
             ClaudeCodeCenterController.shared.show(tab: .usage)
         }
-        usageItem.attributedTitle = Self.multiLineTitle(L("claudecode.menu.usageReport"), subtitles: quotaSubtitles())
+        usageItem.attributedTitle = ClosureMenuItem.multiLineTitle(L("claudecode.menu.usageReport"), subtitles: quotaSubtitles())
         items.append(usageItem)
         items.append(ClosureMenuItem(title: L("claudecode.menu.todayChanges")) {
             ClaudeCodeCenterController.shared.show(tab: .audit)
@@ -186,24 +186,6 @@ final class ClaudeCodeTool: ToolModule {
     /// 置灰信息行（action 为 nil，NSMenu autoenablesItems 自动禁用）。
     private func disabled(_ title: String) -> NSMenuItem {
         NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    }
-
-    /// 多行菜单项:标题正常字号,每条副标题小号次要色,以 `\n` 逐行拼接。无副标题则退化为单行。
-    private static func multiLineTitle(_ title: String, subtitles: [String]) -> NSAttributedString {
-        let result = NSMutableAttributedString(
-            string: title,
-            attributes: [.font: NSFont.menuFont(ofSize: NSFont.systemFontSize)]
-        )
-        for subtitle in subtitles where !subtitle.isEmpty {
-            result.append(NSAttributedString(
-                string: "\n" + subtitle,
-                attributes: [
-                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-            ))
-        }
-        return result
     }
 
 }

@@ -17,7 +17,7 @@
 | `static var isInstalled: Bool` | `~/.claude` 是否存在 |
 | `static func ensureSupportDir() -> URL` | 幂等创建支持目录 |
 | `static func findClaudeBinary() -> String?` | 探测 claude 二进制（缓存），回退 `"claude"` |
-| `static func cliVersion() -> String?` | 运行 `claude --version`（**必须后台调用**） |
+| `static func cliVersion() -> String?` | 运行 `claude --version`（**必须后台调用**）；2026-11（#164）起一行转调 Core 的 `CLIVersion.local(binary:)`（与 Codex 助手共用） |
 | `static func mcpServers() -> [(name: String, config: [String: Any])]` | 读 `.claude.json` 顶层 mcpServers（后台） |
 | `static func setMCPServer(name:config:) throws` / `removeMCPServer(name:) throws` | 增改 / 删 MCP 条目（后台） |
 | `enum PermissionKind { case allow, deny }` | 权限种类 |

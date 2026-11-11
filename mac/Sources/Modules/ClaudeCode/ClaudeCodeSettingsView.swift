@@ -146,15 +146,6 @@ struct ClaudeNotificationsSection: View {
         Binding(get: { weeklyBudget / 1000 }, set: { weeklyBudget = max(0, $0) * 1000 })
     }
 
-    /// 本地化 standalone 星期名（Calendar 口径：1=周日…7=周六）。
-    private static func weekdayName(_ weekday: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = L10n.locale
-        let symbols = formatter.standaloneWeekdaySymbols ?? []
-        let index = weekday - 1
-        return symbols.indices.contains(index) ? symbols[index] : "\(weekday)"
-    }
-
     var body: some View {
         Form {
             SwiftUI.Section("claudecode.settings.notify.section") {
@@ -227,7 +218,7 @@ struct ClaudeNotificationsSection: View {
                 if weeklyFixed {
                     Picker("claudecode.settings.notify.weeklyWeekday", selection: $weeklyWeekday) {
                         ForEach(1...7, id: \.self) { weekday in
-                            Text(verbatim: Self.weekdayName(weekday)).tag(weekday)
+                            Text(verbatim: ClaudeFormat.weekdayName(weekday)).tag(weekday)
                         }
                     }
                     .onChange(of: weeklyWeekday) { _, _ in ClaudeUsageStore.shared.refresh() }
@@ -1140,7 +1131,9 @@ struct ClaudeMaintenanceSection: View {
     @State private var checkFailed = false
     @State private var copied = false
 
-    private static let upgradeCommand = "npm install -g @anthropic-ai/claude-code"
+    /// npm 包名：「检查最新版」查它，「复制升级命令」装它。
+    private static let npmPackage = "@anthropic-ai/claude-code"
+    private static let upgradeCommand = "npm install -g " + npmPackage
 
     var body: some View {
         Form {
@@ -1222,38 +1215,21 @@ struct ClaudeMaintenanceSection: View {
         }
     }
 
+    /// 查 npm 上的最新版（请求与解析在 Core 的 `CLIVersion`，与 Codex 助手共用，#164）。
     private func checkUpdate() {
         checking = true
         checkFailed = false
         latestVersion = nil
-        guard let url = URL(string: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest") else {
-            checking = false
-            checkFailed = true
-            return
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            let version: String?
-            if let data,
-               let raw = try? JSONSerialization.jsonObject(with: data),
-               let object = raw as? [String: Any],
-               let v = object["version"] as? String {
-                version = v
-            } else {
-                version = nil
-            }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    checking = false
-                    if let version {
-                        latestVersion = version
-                    } else {
-                        checkFailed = true
-                    }
+        CLIVersion.latestOnNPM(package: Self.npmPackage) { version in
+            MainActor.assumeIsolated {
+                checking = false
+                if let version {
+                    latestVersion = version
+                } else {
+                    checkFailed = true
                 }
             }
-        }.resume()
+        }
     }
 }
 

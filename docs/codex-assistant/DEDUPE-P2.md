@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1 已实现（PR #182，§5 PR1 末尾的落地记录）。
+> 进度：PR1 已实现（PR #182）、PR2 已实现（PR #186），落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -815,6 +815,49 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
   `ClaudeEnv.swift` / `CodexEnv.swift`（`cliVersion`）、`Core/ClosureMenuItem.swift`、`mac/project.yml`。
 - 文档：`CORE_API.md` §1 的 `cliVersion` 一行注明转调 `CLIVersion`；`DESIGN.md` §7 当时就建议「多行副标题构件、金额 / token 格式化放 `Sources/Core/`」（:221），
   标成已做；根 `CLAUDE.md` 的 Core 清单。
+
+#### PR2 落地记录（2026-11-11，PR #186，分支 `refactor/cli-small-shared`，基线 main `d1cbaf5`）
+
+照上面的清单做了，D5、D9 按建议（文案 key 一条不动；设置页只抽版本检查与星期名）。
+
+1. **新增**：`Core/CLIFormat.swift`（`CLIFormatLocalization` + `CLIFormat<Localization>`：`cost`、`tokens`、`countdown`、`countdownLong`、`bytes`、`relative(_:now:)`、
+   `weekdayName`、`weekAnchor(weekday:hour:)`）、`Core/CLIVersion.swift`（`local(binary:)`、`localArguments(binary:)`、`latestOnNPM(package:completion:)`、
+   `npmLatestURL(package:)`、`parseNPMLatest(_:)`）、`ClosureMenuItem.multiLineTitle(_:subtitles:)`；测试 `mac/Tests/CLIFormat/CLIFormatTests.swift`（12 个）、
+   `mac/Tests/CLIVersion/CLIVersionTests.swift`（14 个），`project.yml` 的 `BaoboxTests.sources` 加了两个文件。
+2. **改**：两个中心窗口的 `ClaudeFormat` / `AIToolsFormat`（各 52 行）换成六行的 `ClaudeFormatLocalization` / `AIToolsFormatLocalization` + typealias，
+   `ClaudeFormat.` / `AIToolsFormat.` 的调用点一行没改；两个用量页的 `weekAnchorDescription` 留成一行转调 `weekAnchor`（用量页 PR5 再动）；
+   两个 Tool 删了 `multiLineTitle`，调用改成 `ClosureMenuItem.multiLineTitle`；两个设置页删了 `weekdayName`（星期选择器改调 `ClaudeFormat.weekdayName` /
+   `AIToolsFormat.weekdayName`），`checkUpdate` 只剩改状态 + `CLIVersion.latestOnNPM`，npm 包名收成 `npmPackage` 常量、「复制升级命令」由它拼（字符串不变）；
+   `ClaudeEnv.cliVersion()` / `CodexEnv.cliVersion()` 一行转调 `CLIVersion.local`。
+3. **文档**：`CORE_API.md` §1（`cliVersion` 那行）、`DESIGN.md` §7（:221 标成已做）/ §9.1（`AIToolsFormat` 那句）/ §9.3（「没有超时」那条：现在改一处就行）、
+   根 `CLAUDE.md` 的 Core 清单、本文状态。
+
+和设计稿的出入：
+
+- 比 §2.4 的签名多两样：`CLIVersion.localArguments(binary:)`、`npmLatestURL(package:)` —— `/bin/zsh` 的参数与请求地址各只在一处拼，单测和差分直接比它们。
+- `latestOnNPM` 的回调标了 `@Sendable`：`URLSession` 的完成闭包是 `@Sendable`，不标会多一条「capture of non-sendable」告警（本工程这类告警是开着的，
+  `ScrollingCaptureController` 那两条就是）。设置页照旧在回调里 `MainActor.assumeIsolated` 改 `@State`（同文件 `diskStats` / `cleanup` 的写法）。
+- 设置页原来「URL 拼不出来」时同步置「检查失败」，现在 `latestOnNPM` 一律在主线程异步回调 nil —— 包名是常量，URL 不会拼不出来，看不出差别。
+- 单测里 npm 那半没有「不跑」：用 `URLProtocol` 桩替 `URLSession.shared` 回答（地址、GET、超时 10 秒、主线程回调、断网 / 超时 / 404 / 非 JSON、不看状态码），
+  不打网络。`CLIVersionTests` 标 `@MainActor`（要转主 RunLoop 等回调）。
+- 删掉设置页的 `weekdayName` 之后，`ClaudeCodeSettingsView.swift` 里原有的 4 条告警行号上移 9 行（内容不变）。
+
+验证（Mac 本机，Xcode 16.2）：
+
+- `xcodebuild … clean test`：TEST SUCCEEDED，445 个（基线 419 + 新增 26）；warning 21 条，和 origin/main（`d1cbaf5`）同命令逐条相同（只有上面那 4 条行号 −9）。
+- 差分探针（§4.2：旧实现加 `Old` 前缀、新代码原样，编进同一个程序；挂真实构建出来的 `en.lproj` / `zh-Hans.lproj`，中英各跑一遍），每遍 2,627,145 项检查全过。
+  旧实现取自 `db61da9`；rebase 到 `d1cbaf5`（#183 只改了两个中心窗口建窗口那一行）后从新基线重新抽，探针源码逐字节相同。
+  - 格式化 1,006,380 个输入：费用 100,022、token 104,028（含 998,000–1,002,000 整段）、倒计时 300,021（含 0–200,000 秒整段，`countdown` 与 `countdownLong` 都比）、
+    字节 100,014、相对时间 100,010、星期名 100,031、锚点 202,254 组；每个输入 Claude、Codex 两份旧 / 新逐字相同。`countdownLong` 确认查到的是真译文（中文「1 天 1 小时」、英文「1d 1h」）。
+  - 多行标题 3,004 组（含空标题、空副标题、长串、emoji）：新旧 `isEqual`，逐段属性（字体名、字号、颜色）相同。
+  - `cliVersion` 56 个假 CLI（正常、首尾空白、把参数打回来、无输出、只有空白、非 UTF-8、退出码非 0、少量 stderr、多行、非 ASCII、慢、200 KB stdout、
+    路径带单引号 / `$` / 反引号 / 非 ASCII、不存在、PATH 里没有的裸名、目录、40 个随机怪文件名）：Claude / Codex 旧新四份相同；2,000 组 `localArguments` 与旧代码那行拼法逐字相同。
+  - 检查最新版 19 种桩回答（正常、缺 version、version 是数字 / null / 空串 / 带空白、非 JSON、数组、顶层字符串、空、截断、大 JSON、404、500 带 version、断网、超时、
+    找不到主机、取消）× 两个模块：点下去那一刻的状态、发出的请求（GET、地址、超时 10 秒、缓存策略、请求头）、回来后的状态全相同；升级命令字符串相同。
+  - stderr 写 1 MB：旧实现 5 秒没返回（子进程卡在写没人读的 stderr 管道），新实现照常返回 —— 就是 §3 第 11 条，不计入相同性检查。
+  - 探针查得出改动：把 token 门槛改成 `> 1000`、请求超时改成 60 秒，探针报 42 项失败（`tokens(1000)` 4 项、请求 38 项）。
+- 变异：token 门槛 `>= 1000` → `> 1000`、锚点 `%02d` → `%d`、本机版本不去首尾空白，三处分别让单测红 1 / 3 / 4 条。
+- 文案 key 集合不变，`Localizable.xcstrings` 没动（2,424 个 key，逐字节相同）；按声明查边界的脚本（§4.3）无输出；进测试的两个文件只 import Foundation、不调 `L()`。
 
 ### PR3 中心窗口会话页
 
