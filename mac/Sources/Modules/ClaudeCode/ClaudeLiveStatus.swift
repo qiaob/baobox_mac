@@ -5,7 +5,8 @@ import Foundation
 /// Claude Code 助手 —— events.jsonl 监听、会话状态机、系统通知。
 ///
 /// events.jsonl 由 reporter 脚本追加（见 ClaudeHooks.swift）。建文件、超限截断、启动时回放、之后增量跟随
-/// 用与 Codex 助手共用的 `EventFileFollower`（Core/EventFile）。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲。
+/// 用与 Codex 助手共用的 `EventFileFollower`（Core/EventFile）。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲；
+/// 回合结束（Stop）与等你确认（Notification）时顺带节流刷新用量（`ClaudeUsageStore.refreshThrottledFromHook`）。
 /// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key，建议中英文案）：
@@ -343,6 +344,13 @@ final class ClaudeLiveStatus: ObservableObject {
                 sessions[sessionID] = existing
             }
         }
+
+        // 回合结束 / 等你确认：刚产生了用量，节流刷新（≥ 60 秒才真刷），菜单的「今日」与额度不用等 5 分钟的定时器
+        // （docs/codex-assistant/DEDUPE.md §5.1 B1、§9 D4）。不看通知开关；启动回放的旧事件不刷。
+        // 不挂 UserPromptSubmit / SessionStart：那时还没有新用量，刷了反而把回合结束后的那次节流掉。
+        if notify, event == "Stop" || event == "Notification" {
+            ClaudeUsageStore.shared.refreshThrottledFromHook()
+        }
     }
 
     private func update(sessionID: String, state: ClaudeSessionState, cwd: String?, terminal: TerminalLocation?, at date: Date) {
@@ -358,23 +366,26 @@ final class ClaudeLiveStatus: ObservableObject {
         }
     }
 
+    /// 会话现在还占着的终端（快速切换面板续接用，docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）：hook 记下的位置，
+    /// 且同一个终端（tty）后来没见过别的会话。nil = 没装 hooks、6 小时内没见过它、位置里没记 tty，或那个终端已经让给了
+    /// 后来的会话。会话此刻是不是还在那儿跑，由 `TerminalLauncher.focusRunningSession` 再按进程确认。
+    func currentTerminal(of sessionID: String) -> TerminalLocation? {
+        guard let location = sessions[sessionID]?.terminal else { return nil }
+        let sightings = sessions.values.map {
+            ClaudeRunningSession.Sighting(sessionID: $0.sessionID, tty: $0.terminal?.tty, lastEvent: $0.lastEvent)
+        }
+        return ClaudeRunningSession.ownsTerminal(sessionID, sightings: sightings) ? location : nil
+    }
+
     /// 点通知时跳回这个会话所在的终端（docs/claude-code-assistant/NOTIFY_JUMP.md）。
-    /// 终端位置在发通知这一刻取好（会话之后可能结束、被清掉）：hook 记下了就精确到窗口 / 标签页 / 面板；
-    /// 没记下（旧版脚本、不认识的终端）退回按进程猜，与快速切换面板相同。
+    /// 终端位置在发通知这一刻取好（会话之后可能结束、被清掉），点的时候直接用：hook 记下了就精确到窗口 / 标签页 / 面板；
+    /// 没记下（旧版脚本、不认识的终端）退回按进程猜。与快速切换面板续接走同一个函数（面板的位置要先确认）。
     private func focusAction(_ sessionID: String) -> () -> Void {
         let terminal = sessions[sessionID]?.terminal
         let cwd = sessions[sessionID]?.cwd
         return {
-            if let terminal, TerminalFocus.focus(terminal) { return }
-            guard let cwd else { return }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let running = TerminalLauncher.findRunningSession(sessionID: sessionID, projectPath: cwd, isNewestInProject: true)
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        if let running { TerminalLauncher.focusTerminalWindow(of: running) }
-                    }
-                }
-            }
+            TerminalLauncher.focusRunningSession(sessionID: sessionID, projectPath: cwd, location: terminal,
+                                                 confirmRunning: false, isNewestInProject: true) { _ in }
         }
     }
 

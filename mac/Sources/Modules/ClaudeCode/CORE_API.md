@@ -40,6 +40,13 @@
 ### `@MainActor enum TerminalLauncher`（主线程调用）
 - `run(command:in:)` —— 把命令写成一次性 `.command` 脚本用默认终端打开。
 - `resume(sessionID:in:binary:)` —— 续接会话 `claude --resume <id>`。
+- `resumeCommandString(sessionID:in:)` —— 可直接粘贴执行的续接命令（含 cd）。
+- `focusRunningSession(sessionID:projectPath:location:confirmRunning:isNewestInProject:completion:)` —— 把正在跑的会话所在的终端切到前台：
+  先用 hook 记下的位置（`confirmRunning` 时先在后台确认那个 tty 上有 claude 在跑），再按进程找；`completion(false)` = 都不行，调用方兜底。
+  点通知跳回（位置直接用）与快速切换面板续接（位置要确认，false 时开新窗口）共用，见 `docs/claude-code-assistant/NOTIFY_JUMP.md` §3。
+  按进程找（`findRunningSession`）与切窗口（`focusTerminalWindow`）只在它里面用。
+- `enum ClaudeRunningSession`（`ClaudeRunningSession.swift`，纯 Foundation，`BaoboxTests` 有单元测试）—— 上面「位置要确认」的两关：
+  会话还占着那个 tty（`ownsTerminal`）、那个 tty 上有 claude 进程（`claudeRuns(onTTY:processes:)`），以及 `isClaudeCommand`。
 
 ---
 
@@ -99,8 +106,9 @@
 | `@Published private(set) var isRefreshing: Bool` | |
 | `static let budgetKey = "claudecode.tokenBudget"` | 每窗口 token 预算（UserDefaults Int，0=未设） |
 | `func startAutoRefresh()` / `stopAutoRefresh()` | activate 时启动 5 分钟定时刷新 |
-| `func refresh()` | 后台解析近 24h 文件，算窗口+今日，末尾做 80% 额度提醒 |
-| `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新（≥60s） |
+| `func refresh()` | 后台收集近 180h 改过的文件的用量（`usageCollector`：只重新解析改过的文件），算 5h 窗口 + 今日 + 周窗口，末尾做 80% 额度提醒；进行中再调合并成结束后补一轮 |
+| `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新：≥60s 马上刷，60s 内来的在窗口结束时补刷一次（只补一次，规则在共用的 `CLIUsageRefreshThrottle`）；`ClaudeLiveStatus` 在 Stop / Notification 时调（启动回放不调） |
+| `nonisolated static let usageCollector: ClaudeUsageCollector` | 用量条目的收集器（`ClaudeUsageCollector.swift`，纯 Foundation，`BaoboxTests` 有差分测试）：按文件缓存解析结果（只在内存，保留 180h），结果与全量解析逐条相同；刷新与报表共用 |
 | `func report(days:completion: @escaping (ClaudeUsageReport) -> Void)` | 三维度报表 |
 | `func invocationStats(days:completion: @escaping (ClaudeInvocationStats) -> Void)` | 调用统计(Skill/斜杠命令、MCP 两级、内置工具);后台算主线程回调，同 report 线程约定。**无新 L() key**(名称均为数据) |
 
@@ -109,7 +117,7 @@
 ## 4. ClaudeLiveStatus.swift —— 实时状态 + 通知
 
 - `enum ClaudeSessionState: Equatable { case running; case waiting(String); case idle }`
-- `struct ClaudeLiveSession` —— `sessionID, state, cwd?, lastEvent`；`projectName`。
+- `struct ClaudeLiveSession` —— `sessionID, state, cwd?, terminal?（hook 记下的终端位置）, lastEvent`；`projectName`。
 - `enum ClaudeNotifierSettings` —— UserDefaults 键与读值：`enabled`(默认关) / `soundEnabled`(默认开) / `budgetAlertEnabled`(默认开) / `budgetRestoreEnabled`(默认关)，键名见文件。
 
 ### `@MainActor final class ClaudeNotifier`（`.shared`）
@@ -122,6 +130,9 @@
 | `func start()` / `stop()` | 监听 events.jsonl（DispatchSource 增量），维护状态机 |
 | `var runningCount / waitingCount: Int` | 计数 |
 | `func summaryLine() -> String?` | 菜单状态行；无 hooks 时按 mtime<2min 降级推断；无内容→nil |
+| `func currentTerminal(of:) -> TerminalLocation?` | 会话现在还占着的终端（同一个 tty 后来没见过别的会话），快速切换面板续接用；nil = 没见过 / 没记 tty / 已让给后来的会话 |
+
+> Stop / Notification（非回放）时顺带调 `ClaudeUsageStore.shared.refreshThrottledFromHook()`。
 
 > 事件文件的建 / 截断 / 回放 / 增量监听用 Core 的 `EventFileFollower`（`Sources/Core/EventFile/`，与 Codex 助手共用），UI 不直接用。
 

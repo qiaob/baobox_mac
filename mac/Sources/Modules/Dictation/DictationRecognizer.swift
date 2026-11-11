@@ -236,7 +236,7 @@ final class DictationMicrophone {
 ///   每次停顿 ≥ 1.2 秒或满 50 秒收一段，一段段交出。
 /// - 自动判别（两种语言）：每段录音留着；定稿后平均置信度 < 0.45（或有人声却没认出字）就拿录音给另一种语言重认，
 ///   按实时翻译的打分（置信度 × 文字系统吻合度 × 字数密度）取高的那份；换不换成它接着听与会议共用一套规则
-///   （`LiveTranslateLanguageSwitch`：结果够长或连赢两段才换，2026-11-11）。
+///   （`LiveTranslateLanguageSwitch`，2026-11-11）：换回主语言（第一种）赢了就换；从主语言换走要结果够长且可信、或连赢两段。
 @MainActor
 final class DictationRecognizer {
     enum Mode {
@@ -528,7 +528,7 @@ final class DictationRecognizer {
     }
 
     /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；换不换成它接着听看 `LiveTranslateLanguageSwitch` ——
-    /// 另一种赢了但结果短只这段用它的文字，连赢两段或结果够长才换。
+    /// 另一种是主语言就当场换回；从主语言换走时，结果短或不可信只这段用它的文字，连赢两段或结果够长且可信才换。
     private func recheckDone(segment id: Int, text: String, confidence: Double) {
         guard running, let state = recheck, state.segment == id else { return }
         recheck = nil
@@ -541,11 +541,14 @@ final class DictationRecognizer {
                                                     language: languages[state.other], voiced: state.voiced)
         let otherCJK = LiveTranslateScoring.countsCharacters(languages[state.other])
         let otherUnits = LiveTranslateScoring.units(otherText, cjk: otherCJK)
+        // 主语言 = 两种里的第一种：切回它不设门槛，从它切走要更有把握。
         let decision = LiveTranslateLanguageSwitch.decide(ownScore: ownScore, otherScore: otherScore,
-                                                          otherUnits: otherUnits, otherCJK: otherCJK, votes: otherWins)
+                                                          otherUnits: otherUnits, otherCJK: otherCJK,
+                                                          otherConfidence: confidence, otherIsPrimary: state.other == 0,
+                                                          votes: otherWins)
         otherWins = decision.votes
         DictationLog.recognition.notice(
-            "recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(state.startedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[state.other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units) -> \(decision.logLabel, privacy: .public)")
+            "recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(state.startedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[state.other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units, conf \(String(format: "%.3f", confidence), privacy: .public)) -> \(decision.logLabel, privacy: .public)")
         if decision.switches {
             active = state.other
         }
