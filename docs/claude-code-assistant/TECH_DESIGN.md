@@ -178,6 +178,8 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 > **增量收集**(`ClaudeUsageCollector.swift`,纯 Foundation,`BaoboxTests` 有差分测试):hook 接通后最快每分钟刷一次,而原来每次都把近 180 小时改过的日志从头解析一遍(用户实测 144 个文件、1.3 GB,约 11 秒 CPU,合起来约占一个核的 18%)。现在按文件缓存解析结果(只在内存):路径 → 修改时间 + 大小 + 这个文件按行序的候选条目(带去重键 message.id + requestId;同一个文件里重复的键只留第一条),修改时间或大小变了才重新解析;跨文件的去重每轮按原来的遍历顺序在合并时重做,结果与全量解析逐条相同(顺序、去重、费用)。缓存只留修改时间在 180 小时以内、目录里还在的文件;报表(30 天)共用这份缓存,更早的文件照旧每次解析、不进缓存;调用统计是另一套解析,没动。修改时间与大小都没变、内容却变了的文件会用旧结果(与会话索引同一个前提)。
 >
 > 合成数据实测(144 个文件 / 1.3 GB / 15.6 万条,`-O`,M3):原来的全量解析 13.4 秒 CPU;缓存为空的第一次一样 13.2 秒;**缓存命中 0.03 秒**,加上窗口 / 今日 / 周的计算一次刷新 0.35 秒;一个 60 MB 的活跃会话写了一回合后再刷 0.64 + 0.32 秒。缓存约 28 MB(每条约 190 字节)。剩下的大头是两处:计算里逐条按模型名查价(约占 0.32 秒的一半),和活跃大文件整份重新解析(可以只读追加部分,同 `ClaudeFileIndex`),都没做。
+>
+> **Store 外壳共用**(2026-11,#164 PR4,`../codex-assistant/DEDUPE-P2.md` §2.4 类 8):上面这些刷新规则 —— 5 分钟定时器、进行中再请求合并成补一轮、事件节流 + 窗口末尾补刷、报表与调用统计的后台外壳、80% 提醒的防重 —— 搬进与 Codex 助手共用的 `Core/CLIUsage/CLIUsageStore.swift`(`CLIUsageStore<Source>` 基类,`BaoboxTests` 有单元测试),逐行照搬,Claude 这边行为不变。`ClaudeUsageStore` 成了它的非泛型子类:只留 `shared`、五个设置键常量,以及三个钩子(`readSettings()` 读预算与锚点、`budgetWindowChanged(weekly:)` 发「额度已恢复」、`budgetReached(percent:window:weekly:)` 发 80% 提醒);条目收集(`usageCollector`)、报表排序、调用统计的解析在用量来源 `ClaudeUsageSource`。改名两处:`currentWindow` → `fiveHourWindow`、`refreshThrottledFromHook()` → `refreshThrottledFromEvent()`(与 Codex 同名)。Codex 那边因此补上了这里 #174 起就有的合并刷新与节流补刷。
 
 > 2026-11(#109)起,定价结构、`UsageTotals` 累加、5h / 周窗口、今日累计、报表分组与 80% 提醒防重的算法移到与 Codex 助手共用的 `mac/Sources/Core/CLIUsage/`(纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeUsage.swift` 只留定价表 `ClaudePricingTable`、JSONL 解析、设置键与通知,`UsageTotals` / `UsageWindow` / `UsageBucket` / `ClaudeUsageReport` 成了共用类型的别名。
 

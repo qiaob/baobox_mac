@@ -2,9 +2,9 @@ import Foundation
 
 /// 事件触发的用量刷新的节流：距上次放行满 `interval` 秒才马上放行；窗口里来的请求不丢，在窗口结束时补刷一次（只补一次，不叠加）。
 ///
-/// Claude Code 助手收到 hook 事件（回合结束 / 等你确认）时用它（#109 B1，docs/codex-assistant/DEDUPE.md §5.1）：
-/// 回合中途刚因等确认刷过、几十秒后回合结束，那次的用量也能在窗口结束时刷到。
-/// Codex 助手的 `CodexUsageStore.refreshThrottledFromEvent` 还是只节流不补刷的老规则，没换过来 —— 留给两个用量 Store 外壳合并的那一步（同上 §5.3）。
+/// 用量 Store 基类 `CLIUsageStore.refreshThrottledFromEvent` 用它：Claude Code 助手收到 hook 事件（回合结束 / 等你确认）时
+/// （#109 B1，docs/codex-assistant/DEDUPE.md §5.1），Codex 助手收到回合完成的 notify 事件时（#164 PR4 起，之前是只节流不补刷，
+/// 60 秒内的第二回合直接丢，DEDUPE-P2.md §7 D6）。回合中途刚因等确认刷过、几十秒后回合结束，那次的用量也能在窗口结束时刷到。
 /// 只做判断，不碰定时器与磁盘：补刷的定时器由调用方按 `.trailing(at:)` 排、到点调 `fireTrailing`。调用方在主线程持有一个实例。
 struct CLIUsageRefreshThrottle {
     /// 一次请求的结论。

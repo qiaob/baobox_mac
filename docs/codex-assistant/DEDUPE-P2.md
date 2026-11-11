@@ -217,7 +217,7 @@
 - `tokens` 在 999,950–999,999 之间显示「1000.0k」（先判 ≥ 1000，再按一位小数四舍五入）。一直如此，不改；PR2 的单测把它钉住，想改另说。
 - 两个面板控制器的 `handleKey` 还有 14 行相同：#172 有意把按键含义留在各自控制器（`DEDUPE.md` §4.3），不动。
 - （PR1 落地时查到）「按进程找宿主终端」在真机上一直找不到：`processTable` 切出来的命令行开头带着 ps 的列对齐空格，`Bundle(path:)` 认不出终端 App。
-  PR1 原样搬、没修，见 §5 PR1 落地记录末段。
+  PR1 原样搬、没修，见 §5 PR1 落地记录末段；之后单独修了（`ClaudeRunningSession.parseProcessTable` 去掉对齐空格，有单测）。
 
 ## 2. 设计
 
@@ -803,6 +803,8 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 （tty 是 `??` 的进程前面 6 个空格，ttysNNN 的 1 个），于是 `terminalApp(inCommand:)` 拼出的 App 路径以空格开头、`Bundle(path:)` 认不出 —— 本机实测 iTerm2、Otty
 都认不出来（去掉空格就认得）。结果是「按进程找」那条兜底在真机上从来找不到宿主终端：没有 hook 记下的位置时，点通知不跳，面板续接正在跑的会话会另开一个窗口。
 装了 hooks 的常规路径（先用位置）不受影响。修法是切完把命令行去掉首尾空格，属行为变化，建议另开 issue。
+**已修**（PR1 之后单独一个 PR）：解析挪进纯逻辑 `ClaudeRunningSession.parseProcessTable` / `appBundlePath`（进 BaoboxTests），去掉对齐空格；
+本机实测旧解析认不出 Otty、新解析认得出（`io.appmakes.otty`）。Otty 不在 `TerminalAppChoice` 里，这条兜底认的终端仍只有 iTerm2 / Ghostty / kitty / WezTerm / Alacritty / 系统 Terminal。
 
 ### PR2 小件
 
@@ -874,6 +876,27 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 改：`ClaudeUsage.swift`、`CodexUsage.swift`（Store 变子类、来源各一个）、`ClaudeCodeTool.swift` / `ClaudeCodeCenterWindow.swift`（`fiveHourWindow`）、`ClaudeLiveStatus.swift`（方法名）、
   `CLIUsageRefreshThrottle.swift` 的注释（:7 那句「留给这一步」改成已完成）。
 - 文档：`CORE_API.md` §用量、`DESIGN.md` §9.1、`TECH_DESIGN.md` §3.3 加注。
+- **状态（2026-11-11）：已实现**（分支 `refactor/cli-usage-store`）。单测 14 个（`mac/Tests/CLIUsage/CLIUsageStoreTests.swift`：假来源，收集可以停住来复现「刷新进行中」）；
+  6 处变异 —— 进行中的请求直接丢、间隔里的不补刷、停了不取消补刷、先熄转圈再提醒、`weeklyWindow` 不是协议要求、预算在刷新开始时读 —— 各自让对应的测试变红。
+  行数：`ClaudeUsage.swift` 406 → 282、`CodexUsage.swift` 453 → 363、`Core/CLIUsage/CLIUsageStore.swift` 243（连测试与文档 +829 / −316，估的是 +480 / −200；多出来的是 468 行测试与基类的注释）。
+  探针（scratchpad，结果贴在 PR 描述里）：
+  - 差分：origin/main 的两个 Store 改名 `Old…`，与新代码编进同一个程序，读开发机真实数据的只读快照（Claude：近 180 小时 1.0 GB、近 30 天 1.8 GB）、
+    Codex 的真实快照（只有 1 个文件）+ 合成夹具（80 个 rollout、458 MB，三种 token_count 口径轮换）+ 不存在的目录，在四种周窗口设置下刷新：
+    5 小时窗口、周窗口、今日、1 / 7 / 30 天报表、7 / 30 天调用统计、提醒调用序列，82 项逐值相同（费用比 Double 的位模式）。
+  - 事件序列（0 / 30 / 61 秒按 1 : 10 缩放；第 0 秒同一个回合里再要一次刷新；中途换两次周锚点）：Claude 新旧四轮刷新的时刻与提醒序列相同；
+    Codex 旧的两轮（0、61 秒），新的四轮（0、0 —— 合并的那一轮、60、120 —— 窗口末尾补刷），只差 D6 这两处；新的多一条周提醒，是补刷那一轮更早用上了改过的锚点。
+  - 内存与耗时（每个变体单独一个进程，新旧交替跑 3 轮取中位数，`-O`）：Claude 冷启动全量刷新峰值 378 → 380 MB、CPU 10.5 → 10.4 秒；30 天调用统计 372 → 374 MB、16.3 → 16.3 秒；
+    Codex 刷新（合成 458 MB）52 → 52 MB、13.2 → 13.1 秒；Codex 调用统计 39 → 40 MB（7 轮）、5.3 → 5.3 秒。反例：把搬过来的「每个文件一个 autoreleasepool」换成不建池的同形包装，
+    Codex 刷新峰值 1355 MB、调用统计 1472 MB —— #171 的那层池子跟着代码搬了过来。
+  与上面的出入：
+  1. `CLIUsageSettings` 多一个 `.unset`（没有预算、近 7 天滚动），是基类 `readSettings()` 的默认值；基类多三个 typealias（`Window` / `Totals` / `Report`）
+     与两个只读属性 `collectHours` / `autoRefreshInterval`。
+  2. 两个 Store 的静态 `weeklyAnchorConfig()` 没有别的调用方，并进了各自的 `readSettings()`；`ClaudeUsageStore.refreshWindowHours` / `usageCollector` 跟着解析挪到
+     `ClaudeUsageSource`（只有 `CORE_API.md` 提到过，已改）。
+  3. 预算原来是 5 小时、周两次检查各读各的，现在结果回来时 `readSettings()` 读一次、两个一起用：同一个主线程回合里，值相同。锚点照旧在刷新开始时读（单测钉住两者的时机）。
+  4. `AIToolsNotify.swift` 没动（与 PR1 并行开发，约定不碰这个文件）：调用名本来就是 `refreshThrottledFromEvent()`；:214 的注释「≥60s 才真正刷」仍说得通（马上刷要隔 60 秒，间隔里来的在 60 秒末补），以后顺手改。
+  5. 差分第一遍撞上了 5 小时窗口恰好到期（15:00:00）：新旧先后跑、中间隔了 12 秒，前一个算出了窗口、后一个已经没有（提醒序列也因此差一条）。
+     探针改成新旧同时起之后逐值相同。不是代码差异，记下来免得重跑的人困惑。
 
 ### PR5 中心窗口用量页部件
 

@@ -6,7 +6,7 @@ import Foundation
 ///
 /// events.jsonl 由 reporter 脚本追加（见 ClaudeHooks.swift）。建文件、超限截断、启动时回放、之后增量跟随
 /// 用与 Codex 助手共用的 `EventFileFollower`（Core/EventFile）。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲；
-/// 回合结束（Stop）与等你确认（Notification）时顺带节流刷新用量（`ClaudeUsageStore.refreshThrottledFromHook`）。
+/// 回合结束（Stop）与等你确认（Notification）时顺带节流刷新用量（`ClaudeUsageStore.refreshThrottledFromEvent`）。
 /// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key，建议中英文案）：
@@ -349,7 +349,7 @@ final class ClaudeLiveStatus: ObservableObject {
         // （docs/codex-assistant/DEDUPE.md §5.1 B1、§9 D4）。不看通知开关；启动回放的旧事件不刷。
         // 不挂 UserPromptSubmit / SessionStart：那时还没有新用量，刷了反而把回合结束后的那次节流掉。
         if notify, event == "Stop" || event == "Notification" {
-            ClaudeUsageStore.shared.refreshThrottledFromHook()
+            ClaudeUsageStore.shared.refreshThrottledFromEvent()
         }
     }
 

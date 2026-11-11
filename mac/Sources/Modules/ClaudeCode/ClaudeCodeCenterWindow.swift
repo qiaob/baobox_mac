@@ -357,7 +357,7 @@ struct ClaudeUsageTab: View {
                 .buttonStyle(.borderless)
                 .help(Text("claudecode.common.refresh"))
             }
-            if let window = usage.currentWindow {
+            if let window = usage.fiveHourWindow {
                 HStack(alignment: .firstTextBaseline, spacing: 32) {
                     metric(value: ClaudeFormat.tokens(window.totals.totalTokens),
                            label: "claudecode.usage.metric.used")

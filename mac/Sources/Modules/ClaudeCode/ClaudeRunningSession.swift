@@ -46,4 +46,27 @@ enum ClaudeRunningSession {
     static func ttyName(_ tty: String) -> String {
         tty.hasPrefix("/dev/") ? String(tty.dropFirst("/dev/".count)) : tty
     }
+
+    /// `ps -axo pid=,ppid=,tty=,command=` 的输出 → pid → (ppid, tty, command)。tty 为 `??`（无控制终端）时记 nil。
+    /// ps 按列对齐，切完三列后 command 前面还带着对齐用的空格，要去掉：以前没去，命令行里的 App 路径带着前导空格，
+    /// `Bundle(path:)` 认不出终端，「按进程找宿主终端」在真机上从来没成功过（#164 PR1 查到，iTerm2 / Otty 实测）。
+    static func parseProcessTable(_ output: String) -> [Int32: (ppid: Int32, tty: String?, command: String)] {
+        var table: [Int32: (ppid: Int32, tty: String?, command: String)] = [:]
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+            guard fields.count >= 4,
+                  let pid = Int32(fields[0]), let ppid = Int32(fields[1]) else { continue }
+            let tty = fields[2] == "??" ? nil : String(fields[2])
+            table[pid] = (ppid, tty, fields[3].trimmingCharacters(in: .whitespaces))
+        }
+        return table
+    }
+
+    /// 命令行里 App 包的路径：`/Applications/iTerm.app/Contents/MacOS/iTerm2 …` → `/Applications/iTerm.app`；
+    /// 不是 App 包里的可执行文件返回 nil。按第一个 `.app/Contents/MacOS/` 切（嵌套的 Helper.app 归它自己，往上一层父进程再找）。
+    static func appBundlePath(inCommand command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard let range = trimmed.range(of: ".app/Contents/MacOS/") else { return nil }
+        return String(trimmed[..<range.lowerBound]) + ".app"
+    }
 }
