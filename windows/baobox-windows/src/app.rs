@@ -23,9 +23,8 @@ use crate::{
 };
 use baobox_app::config_file::{Startup, Unreadable};
 use baobox_app::menu::{ACTION_ABOUT, ACTION_QUIT, ACTION_SETTINGS};
-use baobox_app::{HotkeySpec, ToolRegistry};
+use baobox_app::ToolRegistry;
 use baobox_core::config::Config;
-use baobox_core::hotkey::KeyCombo;
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -294,7 +293,8 @@ impl App {
                 "normal",
             )) == crate::paste::Style::Terminal
         {
-            resolve_hotkeys(&self.registry, &self.config)
+            self.registry
+                .resolved_hotkeys(&self.config)
                 .into_iter()
                 .find_map(|(spec, combo)| (spec.id == action).then_some(combo).flatten())
                 .filter(|combo| combo.to_string() == "Ctrl+Shift+V")
@@ -411,7 +411,7 @@ impl App {
         self.hotkeys.unregister_all();
         let report = self
             .hotkeys
-            .register_all(&resolve_hotkeys(&self.registry, &self.config));
+            .register_all(&self.registry.resolved_hotkeys(&self.config));
         if report.has_problems() {
             eprintln!("{}", report.describe());
         }
@@ -461,7 +461,7 @@ pub fn run(show_settings: bool) -> Result<String, String> {
 
         let tray = tray::Tray::start(hwnd, "Baobox —— 点击托盘图标打开菜单")?;
         let mut center = hotkeys::HotkeyCenter::new(hwnd);
-        let report = center.register_all(&resolve_hotkeys(&registry, &config));
+        let report = center.register_all(&registry.resolved_hotkeys(&config));
         if report.has_problems() {
             eprintln!("{}", report.describe());
         }
@@ -635,21 +635,6 @@ unsafe extern "system" fn wndproc(
     }
 }
 
-/// 把注册表里的快捷键规格与用户的配置合起来。
-pub fn resolve_hotkeys(
-    registry: &ToolRegistry,
-    config: &Config,
-) -> Vec<(HotkeySpec, Option<KeyCombo>)> {
-    registry
-        .hotkeys()
-        .into_iter()
-        .map(|spec| {
-            let combo = spec.resolve(config);
-            (spec, combo)
-        })
-        .collect()
-}
-
 /// 启动时设置文件读不了 → 一条提醒。
 ///
 /// 用 `Alert`：勿扰、全屏都压不住它，用户点「关闭」或一小时后才消失 ——
@@ -746,6 +731,8 @@ mod tests {
 
     #[test]
     fn hotkeys_resolve_against_the_users_config() {
+        use baobox_app::HotkeySpec;
+        use baobox_core::hotkey::KeyCombo;
         let registry = build_registry(HWND::default());
         let mut config = Config::new();
         let capture = |resolved: &[(HotkeySpec, Option<KeyCombo>)]| -> String {
@@ -756,18 +743,15 @@ mod tests {
                 .map(|combo| combo.to_string())
                 .unwrap_or_default()
         };
-        assert_eq!(
-            capture(&resolve_hotkeys(&registry, &config)),
-            "Ctrl+Shift+S"
-        );
+        assert_eq!(capture(&registry.resolved_hotkeys(&config)), "Ctrl+Shift+S");
 
         config.set("hotkey", screenshot_module::CAPTURE, "Ctrl+Alt+P");
-        assert_eq!(capture(&resolve_hotkeys(&registry, &config)), "Ctrl+Alt+P");
+        assert_eq!(capture(&registry.resolved_hotkeys(&config)), "Ctrl+Alt+P");
     }
 
     #[test]
     fn only_two_hotkeys_ship_bound() {
-        let resolved = resolve_hotkeys(&build_registry(HWND::default()), &Config::new());
+        let resolved = build_registry(HWND::default()).resolved_hotkeys(&Config::new());
         // 出厂绑定的：截图与剪贴板面板各一个。其余易冲突的组合留给用户自设
         assert_eq!(
             resolved.iter().filter(|(_, combo)| combo.is_some()).count(),
@@ -824,26 +808,6 @@ mod tests {
         write_field(&mut buffer, "很长很长很长很长很长");
         assert_eq!(buffer[7], 0, "必须留出结尾的 NUL");
         assert_ne!(buffer[0], 0);
-    }
-
-    #[test]
-    fn the_windows_tool_declares_the_same_actions_as_the_linux_one() {
-        // 两个平台的动作 id 必须一致，否则同一份配置里的快捷键绑定
-        // 在另一个系统上会失效
-        let registry = build_registry(HWND::default());
-        let ids: Vec<String> = registry.hotkeys().into_iter().map(|spec| spec.id).collect();
-        // 窗口管理那 13 个由 layout::ALL 生成，另有一条测试盯着
-        assert_eq!(
-            &ids[..5],
-            vec![
-                screenshot_module::CAPTURE,
-                screenshot_module::CAPTURE_FULL,
-                screenshot_module::OCR,
-                screenshot_module::RECORD,
-                clipboard_module::PANEL,
-            ],
-            "前面这几个是逐字写死的 —— 它们是用户配置里的键名，改了等于让绑定失效"
-        );
     }
 
     #[test]

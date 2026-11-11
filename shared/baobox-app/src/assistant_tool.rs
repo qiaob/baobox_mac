@@ -21,7 +21,7 @@
 //! 用哪个终端由用户在设置里选（与 macOS 侧 `TerminalAppPreference` 同一个思路）。
 
 use crate::assistant;
-use crate::{Field, HotkeySpec, MenuItem, SettingsPage, ToolModule};
+use crate::{now_seconds, Field, HotkeySpec, MenuItem, SettingsPage, ToolModule};
 use baobox_core::aisession::Flavor;
 use baobox_core::aiusage::{self, Window};
 use baobox_core::config::Config;
@@ -38,16 +38,6 @@ const REPORT: &str = "report";
 const REFRESH: &str = "refresh";
 /// 动作前缀：续接某个会话，后面接会话 id。
 const RESUME: &str = "resume.";
-
-/// 当前 Unix 秒。
-///
-/// 平台层各有一份同名函数，但为了让这个模块自足，这里直接问系统。
-fn now_seconds() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
 
 /// 这个工具的 id。
 fn id_of(flavor: Flavor) -> &'static str {
