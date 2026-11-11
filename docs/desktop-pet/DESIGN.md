@@ -159,7 +159,8 @@ NotifyCenter.shared.post(_ n: Notice,
 ## 10. 文件
 
 - 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
-- 通知内核：`mac/Sources/Core/Notify/`（#108 从本模块搬出）——`NotifyCenter.swift`（通知模型、去重、勿扰聚合、系统通知回退）、`NotifyDND.swift`（勿扰判定）、
+- 通知内核：`mac/Sources/Core/Notify/`（#108 从本模块搬出）——`NotifyCenter.swift`（投递入口、呈现与系统通知回退、勿扰摘要的定时器）、
+  `Model/`（通知模型 `Notice`，和来源开关、去重、勿扰聚合、历史的纯逻辑 `NotifyLedger`，有单测）、`NotifyDND.swift`（勿扰判定）、
   `NotifySettings.swift`（通知设置）。`NotifyGateway.swift`（socket/CLI/URL，M2 未实现）落地时也放这里。
 - 资源：`mac/Sources/Resources/Pets/`（内置形象目录）。
 - CLI 源码：`tools/baobox-pet/`（单文件 Swift，随包分发方式从待定项里定；M2 未实现）。
