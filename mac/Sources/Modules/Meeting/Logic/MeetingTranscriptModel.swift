@@ -139,7 +139,7 @@ struct MeetingTranscriptModel {
     /// 至少记下了一句（或会议记了速记）才有文件。
     var hasContent: Bool { !lineIndex.isEmpty || !notes.isEmpty }
 
-    /// 记下 / 更新一句。`key` 在这份记录里唯一（重启后句子 id 会从头编，键里带着第几次运行）。
+    /// 记下 / 更新一句。`key` 在这份记录里唯一，同一句再报一遍还是同一个键（`MeetingEngineLine.key`）。
     /// 返回有没有变（同一 key、原文 / 译文 / 说话人都没变就是没变）。说话人只在会议标说话人时写进记录。
     @discardableResult
     mutating func update(_ line: MeetingEngineLine) -> Bool {

@@ -135,6 +135,8 @@ targets:
   # - ClaudeSessionMarkdown.swift / CodexSessionMarkdown.swift：两边会话 JSONL 的逐行解析辅助与导出 Markdown（同上 §5.1 B2）
   # - Core/QuickSwitch/QuickSwitchLogic.swift：Claude Code / Codex 快速切换面板的键码与过滤 / 选中（同上 §4.3；同目录其余文件是 AppKit / SwiftUI，不进来）
   # - Core/MeetingEngine + Modules/Meeting/Logic：会议引擎接口、会话的决策、meeting.md 的模型与排版、纪要提示词（docs/meeting/ENGINE.md §5）
+  # - Core/Notify/Model：通知模型 Notice 与通知内核的判断、记账 NotifyLedger（docs/notify-core/DESIGN.md §4 PR 5；
+  #   同级的 NotifyCenter / NotifyDND / NotifySettings 管呈现、勿扰判定与 UserDefaults，不进来）
   # - LiveTranslateMixing.swift：混音与说话人判定（本来就是纯的）
   # - LiveTranslateLanguageSwitch.swift：轮流识别重认后这段用哪种文字、之后切不切（会议 / 字幕与听写共用）
   # - ClaudeRunningSession.swift：快速切换面板续接时 hook 记下的终端位置还能不能用（docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）
@@ -153,6 +155,7 @@ targets:
       - path: Sources/Core/QuickSwitch/QuickSwitchLogic.swift
       - path: Sources/Core/MeetingEngine
       - path: Sources/Modules/Meeting/Logic
+      - path: Sources/Core/Notify/Model
       - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift
       - path: Sources/Modules/LiveTranslate/LiveTranslateLanguageSwitch.swift
       - path: Sources/Modules/ClaudeCode/ClaudeRunningSession.swift

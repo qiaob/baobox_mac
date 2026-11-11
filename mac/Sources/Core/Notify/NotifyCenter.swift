@@ -2,65 +2,6 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// 一条通知（内部模型，docs/desktop-pet/DESIGN.md §3）。来源模块先转成它，再由 NotifyCenter 分发呈现。
-/// 和 Windows 版 `pet_notify.rs` 的 `Notice` 同名。
-struct Notice {
-    enum Level {
-        case ambient    // 轻提示：气泡数秒自消
-        case bubble     // 带动作：气泡 + 按钮
-        case alert      // 重要：气泡 + 宠物提醒动作，可发声
-    }
-
-    /// 呈现样式（docs/desktop-pet/INTERACTION.md §2）。不指定时按级别：ambient → toast、bubble → card、alert → sticky。
-    enum Style {
-        case toast      // 一行字，3 秒自动消失
-        case card       // 标题 + 正文（+ 按钮），8 秒自动消失，鼠标悬停时暂停计时
-        case sticky     // 常驻：必须点按钮或 × 才消失，宠物隔一会儿招手提醒
-    }
-
-    struct Action {
-        enum Role {
-            case primary        // 品牌色实心按钮（「进入会议」）
-            case secondary      // 普通按钮（「稍后」）
-            case destructive    // 红字（「忽略」「取消」）
-        }
-
-        let id: String
-        let label: String
-        var role: Role = .secondary
-    }
-
-    var source: String
-    var level: Level
-    var title: String
-    var body: String = ""
-    var actions: [Action] = []
-    var dedupeKey: String? = nil
-    var ttl: TimeInterval? = nil
-    /// 投稿方要求发声（其自身声音设置已折算进来）；宠物路径再受 notify.sound 总开关约束。
-    var playSound: Bool = false
-    /// 不指定 = 按级别决定。
-    var style: Style? = nil
-    /// SF Symbol；不指定 = 按来源给默认图标。
-    var icon: String? = nil
-    /// 用户刚做的操作的回执（环形菜单开关防休眠、暂停专注…）：人就在电脑前等着看结果，任何勿扰下（含录屏）都照常呈现，
-    /// 从不攒进摘要 —— 回执只在当下有意义，事后跟着摘要冒出来既没用、按钮也早过期了。自动发出的提醒不要设。
-    var isUserFeedback: Bool = false
-
-    var resolvedStyle: Style {
-        if let style { return style }
-        switch level {
-        case .ambient: return .toast
-        case .bubble: return .card
-        case .alert: return .sticky
-        }
-    }
-}
-
-/// `Notice` 的旧名（#108 PR 6 改名，docs/notify-core/DESIGN.md §6-1）。留一个版本，给还在用旧名的在途分支缓冲；下个版本删。
-@available(*, deprecated, renamed: "Notice")
-typealias PetNotification = Notice
-
 /// 呈现端（桌面宠物）。NotifyCenter 不持有窗口，只调这个协议，便于回退与测试。
 /// 模块用 `ToolModule.presentationRoles()` 交出来，框架在启动时装进 `PresentationHub`（docs/notify-core/DESIGN.md §3.3）。
 @MainActor
@@ -76,22 +17,19 @@ extension NotifyPresenting {
 }
 
 /// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史、启动期间先攒着。
+/// 判断和记账（来源开关、去重、历史、勿扰时攒不攒、摘要）在 `NotifyLedger`，和通知模型 `Notice` 一起放在 Model/（纯逻辑，有单测）；
+/// 这里给它接上时间、设置和勿扰判定，管呈现、声音、系统通知、定时器和文案。
 @MainActor
 final class NotifyCenter {
     static let shared = NotifyCenter()
     private init() {}
 
-    struct HistoryEntry {
-        let date: Date
-        let source: String
-        let level: Notice.Level
-        let title: String
-        var mergeCount: Int
-    }
+    typealias HistoryEntry = NotifyLedger.HistoryEntry
 
-    private(set) var history: [HistoryEntry] = []
-    private var lastPostAt: [String: Date] = [:]
-    private var suppressedQueue: [(Notice, ((String) -> Void)?)] = []
+    /// 最近的通知，新的在前，最多 notify.historyLimit 条。macOS 上还没有界面读它（docs/notify-core/DESIGN.md §8）。
+    var history: [HistoryEntry] { ledger.history }
+
+    private var ledger = NotifyLedger()
     private var flushTimer: Timer?
     private var didRequestAuth = false
     /// 回退系统通知的按钮回调（通知 id → 投稿方回调）与已登记的按钮组。
@@ -107,31 +45,19 @@ final class NotifyCenter {
             launchHeld?.append((n, onAction))
             return
         }
-        guard NotifySettings.sourceEnabled(n.source) else { return }
-
-        // 去重：同来源同 key 30 秒内只呈现一次，其余合并进历史计数。
-        if let key = n.dedupeKey {
-            let id = n.source + "|" + key
-            if let last = lastPostAt[id], Date().timeIntervalSince(last) < 30 {
-                if let idx = history.firstIndex(where: { $0.source == n.source && $0.title == n.title }) {
-                    history[idx].mergeCount += 1
-                }
-                return
-            }
-            lastPostAt[id] = Date()
-        }
-        recordHistory(n)
-
-        // 勿扰：alert 照常呈现（宠物路径本身不额外发声，见 deliver）；操作回执也照常呈现，录屏中同样 ——
-        // 起初录屏时把回执也攒了起来（免得录进视频），结果录屏中暂停专注什么都看不到，录完才跟着摘要一起冒出来
-        // （2026-11-08 用户反馈）。环形菜单本身就会被录进去，跟着出一句回执不算多。其余入队待解除后合并摘要。
-        let showsAnyway = n.level == .alert || n.isUserFeedback
-        if NotifyDND.shared.isSuppressed, !showsAnyway {
-            suppressedQueue.append((n, onAction))
+        // 来源开关 → 去重（同来源同 key 30 秒内只呈现一次，其余并进历史计数）→ 记历史 → 勿扰时攒不攒（alert 和操作回执照常呈现）：
+        // 规则都在 NotifyLedger.post。勿扰要查窗口列表，只在走到最后一步时才查。
+        switch ledger.post(n, onAction: onAction, at: Date(),
+                           sourceEnabled: NotifySettings.sourceEnabled(n.source),
+                           historyLimit: NotifySettings.historyLimit,
+                           isSuppressed: { NotifyDND.shared.isSuppressed }) {
+        case .deliver:
+            deliver(n, onAction: onAction)
+        case .hold:
             startFlushTimerIfNeeded()
-            return
+        case .drop:
+            break
         }
-        deliver(n, onAction: onAction)
     }
 
     /// 现在发一条会不会由呈现端（宠物气泡）呈现；false = 走系统通知（宠物关着、宠物模块没注册）。设置页预览文案用。
@@ -237,16 +163,6 @@ final class NotifyCenter {
         callback(actionID == UNNotificationDefaultActionIdentifier ? "open" : actionID)
     }
 
-    private func recordHistory(_ n: Notice) {
-        history.insert(
-            HistoryEntry(date: Date(), source: n.source, level: n.level, title: n.title, mergeCount: 1),
-            at: 0
-        )
-        if history.count > NotifySettings.historyLimit {
-            history.removeLast(history.count - NotifySettings.historyLimit)
-        }
-    }
-
     // MARK: - 启动期间先攒着
 
     /// 只给 `ToolRegistry.activateAll()` 调：从现在起投递的通知先攒着，等 `releaseAfterLaunch()`。
@@ -277,26 +193,24 @@ final class NotifyCenter {
     }
 
     private func flushIfPossible() {
-        guard !NotifyDND.shared.isSuppressed, !suppressedQueue.isEmpty else {
-            if suppressedQueue.isEmpty {
-                flushTimer?.invalidate()
-                flushTimer = nil
-            }
+        switch ledger.flush(isSuppressed: NotifyDND.shared.isSuppressed) {
+        case .stillSuppressed:
             return
+        case .nothingHeld:
+            flushTimer?.invalidate()
+            flushTimer = nil
+        case .digest(let digest):
+            flushTimer?.invalidate()
+            flushTimer = nil
+            // 摘要不带动作按钮（原动作多已过期），只汇总标题。
+            let notice = Notice(
+                source: "digest",
+                level: .bubble,
+                title: L("notify.digest.title \(digest.count)"),
+                body: digest.body
+            )
+            deliver(notice, onAction: nil)
         }
-        let queued = suppressedQueue
-        suppressedQueue.removeAll()
-        flushTimer?.invalidate()
-        flushTimer = nil
-        // 摘要不带动作按钮（原动作多已过期），只汇总标题。
-        let titles = queued.prefix(3).map { $0.0.title }.joined(separator: "、")
-        let digest = Notice(
-            source: "digest",
-            level: .bubble,
-            title: L("notify.digest.title \(queued.count)"),
-            body: titles
-        )
-        deliver(digest, onAction: nil)
     }
 }
 
