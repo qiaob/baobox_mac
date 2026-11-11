@@ -9,7 +9,7 @@ import SwiftUI
 /// 未安装 Codex 时整体降级为一条置灰引导。
 ///
 /// 菜单构建在 `menuNeedsUpdate` 同步调用，**只读各单例的内存缓存、零磁盘 IO**，
-/// 后台刷新由 `activate()` 启动的服务负责。
+/// 后台刷新由 `activate()` 启动的服务负责；会话索引另在每次构建菜单时顺带发起一次后台刷新（不等结果）。
 @MainActor
 final class AIToolsTool: ToolModule {
     let id = "aitools"
@@ -42,6 +42,10 @@ final class AIToolsTool: ToolModule {
             // 未检测到 Codex：仅一条置灰引导，设置入口由框架自动追加。
             return [disabled(L("aitools.menu.notInstalled"))]
         }
+
+        // 顺带发起会话索引的后台刷新（docs/codex-assistant/DEDUPE.md §5.2 C5），不等结果：这一次照旧只读内存里的列表，
+        // 下次打开菜单时状态行的会话数就是新的。没变的文件只看修改时间与大小，进行中再来的请求合并成一轮。
+        sessionIndex.refresh()
 
         var items: [NSMenuItem] = []
 

@@ -6,7 +6,8 @@ import SwiftUI
 /// 菜单结构严格按 TECH_DESIGN 3.7（状态行 → 最近会话 → 浏览历史 → 额度行 →
 /// 用量报表 / 今日改动 → 通知开关；未安装时降级为一条引导文案）。
 /// 菜单构建在 `menuNeedsUpdate` 同步调用，**只读各单例的内存缓存、零磁盘 IO**，
-/// 后台刷新由 `activate()` 启动的服务负责。所有用户可见文案走 L() / SwiftUI key。
+/// 后台刷新由 `activate()` 启动的服务负责；会话索引另在每次构建菜单时顺带发起一次后台刷新（不等结果）。
+/// 所有用户可见文案走 L() / SwiftUI key。
 @MainActor
 final class ClaudeCodeTool: ToolModule {
     let id = "claudecode"
@@ -44,6 +45,10 @@ final class ClaudeCodeTool: ToolModule {
             // 未检测到 Claude Code：仅一条置灰引导，设置入口由框架自动追加。
             return [disabled(L("claudecode.menu.notInstalled"))]
         }
+
+        // 顺带发起会话索引的后台刷新（docs/codex-assistant/DEDUPE.md §5.2 C5），不等结果：这一次照旧只读内存里的列表，
+        // 下次打开菜单就是新的（没装 hooks 时「N 个会话活跃（推断）」靠它）。没变的文件只看修改时间与大小，进行中再来的请求合并成一轮。
+        index.refresh()
 
         var items: [NSMenuItem] = []
 

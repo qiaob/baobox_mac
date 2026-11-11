@@ -104,7 +104,8 @@ final class ClaudeUsageStore: ObservableObject {
     /// 周窗口 80% 提醒的防重状态（与 5h 独立防重）。仅主线程访问。
     private var weeklyBudgetReminder = CLIUsageBudgetReminder()
     private var refreshing = false
-    private var lastHookRefresh: Date = .distantPast
+    /// hook 事件触发的刷新：60 秒内只放行一次。
+    private var hookRefreshThrottle = CLIUsageRefreshThrottle(interval: 60)
     private var timer: Timer?
 
     private init() {}
@@ -129,10 +130,9 @@ final class ClaudeUsageStore: ObservableObject {
         timer = nil
     }
 
-    /// 收到 hook 事件时的节流刷新（≥60s 才真正刷）。
+    /// 收到 hook 事件时的节流刷新（≥60s 才真正刷）。`ClaudeLiveStatus` 在回合结束（Stop）与等你确认（Notification）时调。
     func refreshThrottledFromHook() {
-        guard Date().timeIntervalSince(lastHookRefresh) >= 60 else { return }
-        lastHookRefresh = Date()
+        guard hookRefreshThrottle.allow() else { return }
         refresh()
     }
 
