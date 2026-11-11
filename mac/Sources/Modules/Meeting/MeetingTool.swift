@@ -323,7 +323,7 @@ enum MeetingActions {
     }
 
     private static func toast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: MeetingSessionController.source, level: .ambient, title: text,
-                                                 icon: "calendar"))
+        NotifyCenter.shared.post(Notice(source: MeetingSessionController.source, level: .ambient, title: text,
+                                        icon: "calendar"))
     }
 }

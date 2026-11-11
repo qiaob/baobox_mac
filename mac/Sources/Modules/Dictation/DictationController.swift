@@ -561,7 +561,7 @@ final class DictationController: ObservableObject {
     }
 
     private func postAccessibilityGuide() {
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: Self.source, level: .bubble, title: L("dictation.toast.noAXTitle"),
             body: L("dictation.toast.noAXBody"),
             actions: [.init(id: "grant", label: L("dictation.toast.grant"), role: .primary)],
@@ -969,8 +969,8 @@ final class DictationController: ObservableObject {
     }
 
     private func notify(_ title: String, body: String = "") {
-        NotifyCenter.shared.post(PetNotification(source: Self.source, level: .ambient, title: title, body: body,
-                                                 icon: "mic.fill"))
+        NotifyCenter.shared.post(Notice(source: Self.source, level: .ambient, title: title, body: body,
+                                        icon: "mic.fill"))
     }
 }
 

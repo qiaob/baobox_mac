@@ -49,7 +49,7 @@ final class MeetingTranscript {
     /// 至少记下了一句（或会议记了速记）才有文件。
     var hasContent: Bool { model.hasContent }
 
-    /// 记下 / 更新一句。`key` 在这份记录里唯一（重启后句子 id 会从头编，键里带着第几次运行）。
+    /// 记下 / 更新一句。`key` 在这份记录里唯一，同一句再报一遍还是同一个键（`MeetingEngineLine.key`）。
     /// 说话人只在会议标说话人时写进记录。
     func update(_ line: MeetingEngineLine) {
         let hadContent = model.hasContent
@@ -140,7 +140,7 @@ final class MeetingTranscript {
 
     private static func notifyMinutesReady(fileName: String) {
         // 改走通知内核（DesktopPet）：宠物呈现，宠物关时由内核回退系统通知。
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "livetranslate",
             level: .ambient,
             title: L("livetranslate.record.notifyTitle"),

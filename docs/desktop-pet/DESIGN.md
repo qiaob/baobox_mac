@@ -42,7 +42,7 @@
 ## 3. 通知模型与内部 API
 
 ```swift
-struct PetNotification {
+struct Notice {
     var source: String            // 来源标识，如 "meeting" / "focus" / "claude-code" / 外部自报
     var level: Level              // ambient | bubble | alert
     var title: String
@@ -51,10 +51,12 @@ struct PetNotification {
     var dedupeKey: String?        // 同来源同 key 在窗口期内合并计数
     var ttl: TimeInterval?        // 过期自动撤下
 }
-NotifyCenter.shared.post(_ n: PetNotification,
+NotifyCenter.shared.post(_ n: Notice,
                          onAction: ((String) -> Void)? = nil)
 ```
 
+- 类型名：原名 `PetNotification`，#108 改成 `Notice`（和 Windows 版 `pet_notify.rs` 同名）。旧名留了一个版本的
+  deprecated typealias，下个版本删（`docs/notify-core/DESIGN.md` §4 PR 6）。
 - 内部来源在代码内注册（meeting / focus / dictation / ai-tools / livetranslate…)，免授权；外部来源走网关，须经授权名单（§5）。专注与健康（#43）的来源 id 定为 `focus`。
 - 去重：同 `(source, dedupeKey)` 在 30 秒内重复投递只更新计数与最新文案，不重复弹。
 - 动作回调只在进程内分发给来源模块；对外部来源经 socket 写回（§5）。
@@ -157,7 +159,8 @@ NotifyCenter.shared.post(_ n: PetNotification,
 ## 10. 文件
 
 - 模块：`mac/Sources/Modules/DesktopPet/`——`DesktopPetTool.swift`（注册）、`PetEngine.swift`、`PetWindow.swift`、`BubbleWindow.swift`、`SpriteRenderer.swift`、`SceneRenderer.swift`、`PetSettingsView.swift`。
-- 通知内核：`mac/Sources/Core/Notify/`（#108 从本模块搬出）——`NotifyCenter.swift`（通知模型、去重、勿扰聚合、系统通知回退）、`NotifyDND.swift`（勿扰判定）、
+- 通知内核：`mac/Sources/Core/Notify/`（#108 从本模块搬出）——`NotifyCenter.swift`（投递入口、呈现与系统通知回退、勿扰摘要的定时器）、
+  `Model/`（通知模型 `Notice`，和来源开关、去重、勿扰聚合、历史的纯逻辑 `NotifyLedger`，有单测）、`NotifyDND.swift`（勿扰判定）、
   `NotifySettings.swift`（通知设置）。`NotifyGateway.swift`（socket/CLI/URL，M2 未实现）落地时也放这里。
 - 资源：`mac/Sources/Resources/Pets/`（内置形象目录）。
 - CLI 源码：`tools/baobox-pet/`（单文件 Swift，随包分发方式从待定项里定；M2 未实现）。

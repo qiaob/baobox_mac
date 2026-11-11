@@ -473,7 +473,7 @@ final class BreakStageController {
                     Self.log.info("break end: screen locked")
                 } else {
                     Self.log.error("break end: screen did not lock (accessibility permission?)")
-                    NotifyCenter.shared.post(PetNotification(
+                    NotifyCenter.shared.post(Notice(
                         source: FocusHealthController.source, level: .bubble, title: L("focus.lock.failedTitle"),
                         body: L("focus.lock.failedBody"), icon: "lock.slash"))
                 }

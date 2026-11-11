@@ -187,7 +187,7 @@ final class CodexNotify: ObservableObject {
     /// 额度 80% 提醒（5h 或周）。与 Claude 同机制，防重由 `CodexUsageStore` 负责。
     func notifyBudget(percent: Int, weekly: Bool) {
         // 改走通知内核（DesktopPet）：宠物呈现，宠物关时由内核回退系统通知。
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "codex",
             level: .ambient,
             title: weekly ? L("aitools.notify.weeklyBudget.title") : L("aitools.notify.budget.title"),
@@ -239,7 +239,7 @@ final class CodexNotify: ObservableObject {
         }
         let body = String(summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.summaryClip))
 
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "codex",
             level: .bubble,
             title: title,

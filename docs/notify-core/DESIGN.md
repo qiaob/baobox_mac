@@ -1,6 +1,7 @@
 # 通知内核与呈现角色搬出桌面宠物 · 技术设计
 
-> issue #108（范围 P1）。状态：已拍板（§6），按 §4 的 PR 顺序实现。通知内核（`NotifyCenter` / `NotifyDND`）现在放在 `Modules/DesktopPet/` 里；休息画面、会议控制条、
+> issue #108（范围 P1）。状态：已拍板（§6），按 §4 的 PR 顺序实现：PR 1–4、PR 6 已合入（#146、#147、#154、#159、#176，PR 6 的落地记录在 §4 PR 6 末尾）；**PR 5（抽出 `NotifyLedger` + 通知内核纯逻辑单测）已实现**（2026-11-11，分支 `refactor/notify-ledger`），落地记录在 §4 PR 5 末尾。
+> 通知内核（`NotifyCenter` / `NotifyDND`）原来放在 `Modules/DesktopPet/` 里；休息画面、会议控制条、
 > 专注与健康又直接调 `PetController.shared`。结果 Core 和别的模块都得认识宠物。
 > 本文把通知内核搬到 Core，把「宠物替别的模块做的三件事」换成 Core 里的协议，由框架在启动时接上。
 > **只改结构，产品行为不变**：宠物开着时照旧由宠物呈现，宠物关着时照旧回退（用户 2026-11-06 定的规则不动）。
@@ -23,7 +24,7 @@
 
 | DesktopPet 里的类型 | 引用方（`文件:行`） | 用途 |
 |---|---|---|
-| `NotifyCenter`、`PetNotification`（`NotifyCenter.swift:6-244`） | **Core**：`Core/StorageWriteFailure.swift:23`、`Core/AI/AIUsageMeter.swift:121`<br>**模块**：`AIToolsNotify.swift:262,314`、`CaffeinateTool.swift:112`、`ClaudeLiveStatus.swift:169,182`、`DictationController.swift:564,972`、`BreakStage.swift:477`、`FocusHealthController.swift:188,204,230,280,317,364,440,481,503,529,558,561,662`、`LiveTranslateController.swift:482`、`LiveTranslateTranscript.swift:350`、`MeetingDetector.swift:186,277,307`、`MeetingReminder.swift:167,181`、`MeetingReports.swift:213`、`MeetingSessionController.swift:491,498,516`、`MeetingTool.swift:317`、`MenuBarActions.swift:283` | 投递通知 |
+| `NotifyCenter`、`PetNotification`（PR 6 起叫 `Notice`）（`NotifyCenter.swift:6-244`） | **Core**：`Core/StorageWriteFailure.swift:23`、`Core/AI/AIUsageMeter.swift:121`<br>**模块**：`AIToolsNotify.swift:262,314`、`CaffeinateTool.swift:112`、`ClaudeLiveStatus.swift:169,182`、`DictationController.swift:564,972`、`BreakStage.swift:477`、`FocusHealthController.swift:188,204,230,280,317,364,440,481,503,529,558,561,662`、`LiveTranslateController.swift:482`、`LiveTranslateTranscript.swift:350`、`MeetingDetector.swift:186,277,307`、`MeetingReminder.swift:167,181`、`MeetingReports.swift:213`、`MeetingSessionController.swift:491,498,516`、`MeetingTool.swift:317`、`MenuBarActions.swift:283` | 投递通知 |
 | `NotifyDND`（`NotifyDND.swift`） | `RecordingController.swift:155,185`、`MeetingSessionController.swift:182,376`、`MeetingDetector.swift:243`、`MeetingMicrophoneUsage.swift:42`、`FocusHealthController.swift:71,127,192,202,223,241,274,456`、`BreakStage.swift:172,609` | 挂 / 摘勿扰令牌、查勿扰原因、查麦克风 |
 | `PetController` | `MeetingControlBar.swift:27,58,80,97,118` | 会议控制条挂到宠物头顶（`dockAccessory` / `undockAccessory` / `refreshAccessory`） |
 | | `BreakStage.swift:102,173,612,688,696,711` | 休息画面借渲染视图、推姿态、戳一下、归还（`Loan` / `lendRenderView` / `setLentPose` / `performLent` / `returnRenderView`） |
@@ -107,6 +108,8 @@ mac/Sources/Core/Notify/
   NotifyCenter.swift        通知内核（原样搬来）+ NotifyPresenting + SystemNotificationRouter
   NotifyDND.swift           勿扰判定（原样搬来）
   NotifySettings.swift      新：notify.* 各键 +「安静一下」（沿用老键 pet.quietUntil）
+  Model/Notice.swift        PR 5：通知模型（从 NotifyCenter.swift 移来），只依赖 Foundation
+  Model/NotifyLedger.swift  PR 5：来源开关、去重、合并计数、勿扰时攒不攒、摘要、历史（纯逻辑，进 BaoboxTests）
 mac/Sources/Core/Presentation/
   PresentationRoles.swift   新：PresentationRoles（模块能提供的角色）+ PresentationHub（装一次，之后只读）
   AccessoryHost.swift       新：AccessoryHost 协议 + AccessoryDock 入口（没有挂靠点时的回退）
@@ -135,12 +138,12 @@ ToolRegistry.activateAll ─ 收集各模块的 presentationRoles() ─► Prese
 `NotifyCenter.swift`、`NotifyDND.swift` 用 `git mv` 原样搬过去，对外接口只做下面这些增删：
 
 ```swift
-struct PetNotification { /* 字段、Level / Style / Action 原样；改不改名见 §6-1 */ }
+struct Notice { /* 字段、Level / Style / Action 原样；原名 PetNotification，PR 6 改名（§6-1） */ }
 
 @MainActor
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
-    func present(_ n: PetNotification, onAction: @escaping (String) -> Void)
+    func present(_ n: Notice, onAction: @escaping (String) -> Void)
     /// 配合提醒做个动作（喝水、伸懒腰、远眺）；做不了返回 false。默认做不了。（PR 4 新增）
     func performGesture(_ clips: [String]) -> Bool
 }
@@ -151,7 +154,7 @@ extension NotifyPresenting {
 @MainActor
 final class NotifyCenter {
     static let shared: NotifyCenter
-    func post(_ n: PetNotification, onAction: ((String) -> Void)? = nil)     // 不变
+    func post(_ n: Notice, onAction: ((String) -> Void)? = nil)               // 不变
     func prepareSystemFallback(requestPermission: Bool)                       // 不变
     func handleSystemResponse(requestID: String, actionID: String)            // 不变
     private(set) var history: [HistoryEntry]                                  // 不变
@@ -502,12 +505,66 @@ PR 内分两个提交：第一个只做 `git mv`，第二个再改引用。这�
   - 历史裁剪。
 - 测试按现状写，不顺手改语义。比如「同一个去重 key、标题不同」：第二条直接丢，历史也不加计数，今天就是这样。
 
-### PR 6（可选，待拍板）· `PetNotification` 改名 `Notice`
+**落地记录（2026-11-11，分支 `refactor/notify-ledger`）**
+
+- 模型：`Notice`（连同 `Level` / `Style` / `Action` 和 deprecated typealias `PetNotification`）从 `NotifyCenter.swift` 原样移到 `Model/Notice.swift`，只多一行注释。
+  模型里本来就没有 AppKit / `L()`，不用拆。
+- `Model/NotifyLedger.swift`，值类型，`NotifyCenter` 在主线程持有一个：
+
+  ```swift
+  struct NotifyLedger {
+      static let dedupeWindow: TimeInterval = 30
+      static let digestTitleLimit = 3
+      private(set) var history: [HistoryEntry]   // 新的在前；NotifyCenter.HistoryEntry 是它的 typealias
+      private(set) var held: [Held]              // 勿扰时攒着的，连同投稿方的回调
+      /// .deliver / .hold / .drop(.sourceDisabled | .duplicate)
+      mutating func post(_ notice: Notice, onAction: ((String) -> Void)?, at now: Date,
+                         sourceEnabled: Bool, historyLimit: Int, isSuppressed: () -> Bool) -> Decision
+      /// .nothingHeld / .stillSuppressed / .digest(Digest(count:titles:))，Digest.body = 前 3 个标题用「、」连
+      mutating func flush(isSuppressed: Bool) -> Flush
+  }
+  ```
+
+  判断顺序、「不到 30 秒」、合并计数找最近一条同来源同标题、裁历史的写法都逐行照搬。勿扰用闭包传进来：
+  `NotifyDND.isSuppressed` 要遍历窗口列表，原来只在过了来源开关和去重之后才查，现在还是。
+- `NotifyCenter`：`post` 只剩「启动期间先攒着 → 问账本 → 按结论呈现或开定时器」；`flushIfPossible` 问账本，摘要标题的 `L()` 留在这里。
+  `history` 改成转读账本的只读属性，对外接口不变。窗口、声音、系统通知、定时器、启动期间先攒着都没动。
+- 测试：`mac/Tests/Notify/NotifyLedgerTests.swift` 23 个（去重 4、合并计数 4、来源开关 1、勿扰 6、摘要 4、历史 3、模型 1），`BaoboxTests` 共 392 个（原 369 个）。
+- 行为不变的证据：
+  - 新旧对比探针：main 上真实的 `NotifyCenter.swift`，和新的 `NotifyCenter.swift` + `Model/`，各编一个程序。只换掉系统通知、权限、NSSound、定时器和时钟，
+    换掉的函数体先断言新旧逐字相同。喂同一批脚本：10 份按规则手写，300 份随机交错来源开关、勿扰、呈现端就绪、历史上限、启动攒着和时间推进，共 37199 步。
+    逐行比较呈现、系统通知、声音、按钮回调、历史、攒着的、定时器、勿扰被问的次数，310 份全部一致（61223 行）。
+    故意改坏的两个变体（去重窗口改 31 秒、勿扰提前查）分别有 39 份、307 份对不上，说明探针抓得到差异。
+  - 变异检查：去重窗口改 31 秒、去掉「alert 绕过勿扰」、摘要改取前 4 个标题，单测分别红 3、3、1 个。
+  - 构建警告和 main 逐条相同（21 条）。
+- 按现状钉住、没改的几处（像 bug，另议）：
+  1. `notify.historyLimit` 设成负数会崩：裁历史时 `removeLast` 超过现有条数。设置页没有这一项，只有手改 defaults 才会碰到。
+  2. 合并计数记在历史里最近一条「同来源同标题」上，不看去重 key：中间夹一条同标题、别的 key 的，计数就记到它头上；原来那条被裁掉了，计数就丢了。
+     macOS 上还没有界面读历史，今天看不出来；做通知历史界面（§8）时要先定口径。
+  3. 去重用的「来源|key → 上次放行时刻」只增不删。会议、纪要、日历提醒的 key 都带各自的 id，App 不重启就一直攒（每条一个字符串加一个时刻，量很小）。
+  4. 去重 id 是 `来源 + "|" + key` 直接拼：来源里带 `|` 时，不同的来源和 key 可能拼成同一个 id。现在的来源都是写死的模块 id，碰不到；对外协议（#113）的外部来源名要注意。
+
+### PR 6 · `PetNotification` 改名 `Notice`（已拍板，§6-1）
 
 - 纯改名：16 个文件里的 35 行，加上宠物模块内部的引用。
 - `NotifyCenter.swift` 里保留一个版本的 `@available(*, deprecated, renamed: "Notice") typealias PetNotification = Notice`，给在途分支缓冲，下个版本删。
   macOS 构建不把警告当错误；2026-11-10 用 swiftc 在临时文件里核对过，旧名只报 deprecated 警告。
 - 放在最后：改名碰的文件最多，等在途分支都合完再做，冲突最少。
+
+**落地记录（2026-11-11，分支 `refactor/notice-rename`）**
+
+- 和估的一样：投递方 16 个文件 35 行，宠物模块 3 个文件 14 处（`BubbleWindow` / `PetController` / `PetEngine`），
+  加上 `NotifyCenter.swift` 自己 11 处，共 20 个文件 60 处。嵌套类型跟着变成 `Notice.Level` / `Notice.Style` / `Notice.Action`。
+- 字段、默认值、行为、用户可见文案、日志 category 一个没动。原来对齐在 `PetNotification(` 第一个参数下面的 13 行续行跟着左移 9 列，
+  仍然对齐（只动空白）。
+- typealias 放在 `NotifyCenter.swift` 里 `Notice` 的定义后面，注释写明留一个版本、下个版本删。
+  仓库里已经没有用旧名的代码：构建不出 deprecated 警告（警告列表和 main 逐条相同），`grep -rn PetNotification mac/Sources` 只剩 typealias 那一行。
+  用旧名写的在途分支照样能编，只报 `'PetNotification' is deprecated: renamed to 'Notice'`（带改名的 fix-it）；
+  2026-11-11 拿真实的声明用 swiftc 核对过。
+- 文档：`docs/desktop-pet/DESIGN.md` §3、`docs/desktop-pet/INTERACTION.md`、`docs/focus-health/TECH_DESIGN.md`、`docs/meeting/TECH_DESIGN.md`
+  和本文 §3.2 的接口草图改用新名；§1.1、§7 写的是基线时的现状，保留旧名、注明改名。
+- 下个版本删 typealias：删掉 `NotifyCenter.swift` 里那三行（注释 + `@available` + `typealias`），`grep -rn PetNotification mac/Sources` 应为空。
+  PR 5 把这三行连同 `Notice` 移到了 `Model/Notice.swift`，到时候删那里的。
 
 ## 5. 风险与验证
 
@@ -606,7 +663,7 @@ grep -rnwE "PetController|PetPose|PetSettings|PetEngine|BubbleController|Desktop
   - `FocusHealthController.swift:664`：读 `PetController.shared.isReady`；
   - `BreakStage.swift:102`：用了 `PetController.Loan` 类型；
   - `BreakStage.swift:110,300`：用了 `PetPose`，连带宠物引擎内部的 `PetEngine.State` / `PetGait` / `PetFlightPose`。
-- **「`NotifyPresenting` 已存在，只需搬家」不完全成立**。`NotifyCenter` 读 `PetSettings.sourceEnabled / soundEnabled / historyLimit`，`NotifyDND` 读 `PetSettings.quietUntil`，搬之前得先拆出 `NotifySettings`。另外模型类型还叫 `PetNotification`。
+- **「`NotifyPresenting` 已存在，只需搬家」不完全成立**。`NotifyCenter` 读 `PetSettings.sourceEnabled / soundEnabled / historyLimit`，`NotifyDND` 读 `PetSettings.quietUntil`，搬之前得先拆出 `NotifySettings`。另外模型类型还叫 `PetNotification`（PR 6 已改名 `Notice`）。
 - **「宠物关闭时回退到独立窗口」今天已经有了**：
   - 控制条：`MeetingControlBar.swift:64-73`；
   - 休息画面的回退画面：`BreakStage.swift:198-205,249-253`（#49 / #50）；

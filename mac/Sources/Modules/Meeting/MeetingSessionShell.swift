@@ -135,8 +135,8 @@ final class MeetingSessionShell: MeetingSessionEnvironment {
 
     /// 一行轻提示。记录中挂着会议自己的勿扰，普通提示会被攒起来，所以用 alert 级、toast 样式（宠物不会出声）。
     private func postToast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: MeetingSessionController.source, level: .alert, title: text,
-                                                 style: .toast, icon: "waveform"))
+        NotifyCenter.shared.post(Notice(source: MeetingSessionController.source, level: .alert, title: text,
+                                        style: .toast, icon: "waveform"))
     }
 
     /// 纪要好了 / 没整理成 / 只存了转录：宠物通知，[打开] 打开这场的记录。
@@ -158,7 +158,7 @@ final class MeetingSessionShell: MeetingSessionEnvironment {
         }
         var summarized = false
         if case .done = outcome { summarized = true }
-        let notification = PetNotification(
+        let notification = Notice(
             source: MeetingSessionController.source, level: .bubble, title: title, body: body,
             actions: [.init(id: "open", label: L("meeting.notify.open"), role: .primary)],
             dedupeKey: "saved.\(id)", icon: summarized ? "doc.text" : "waveform")

@@ -5,7 +5,7 @@
 ## 0. 约定与踩过的坑（写代码前必读）
 
 - 模块 id `meeting`，通知来源 `meeting`，本地化前缀 `meeting.*`，UserDefaults 前缀 `meeting.*`，数据目录 `~/Library/Application Support/Baobox/Meetings/`。
-- 通知一律 `NotifyCenter.shared.post(PetNotification(...))`（宠物模块决定怎么呈现）；不碰 `UNUserNotificationCenter`。勿扰用 `NotifyDND.shared.setSuppressed(_:token:)`，记录中挂 `meeting`。
+- 通知一律 `NotifyCenter.shared.post(Notice(...))`（宠物模块决定怎么呈现）；不碰 `UNUserNotificationCenter`。勿扰用 `NotifyDND.shared.setSuppressed(_:token:)`，记录中挂 `meeting`。
 - 浮窗不抢焦点：borderless + `.nonactivatingPanel`，`hidesOnDeactivate = false`，`orderFrontRegardless()`，不 `NSApp.activate`。**不要在设置 `level` 之后设 `isFloatingPanel`**（它的 setter 会把 level 改回 `.floating`）。需要输入（速记）时面板 `canBecomeKey = true` 但仍 nonactivating。
 - 往窗口里加视图时用手上那个窗口变量，别用还没赋值的可选属性（`stageWindow?.contentView` 挂空的教训）。
 - 拿注册表用 `AppDelegate.shared?.registry`（`NSApp.delegate as? AppDelegate` 在 SwiftUI 入口下永远是 nil）。

@@ -783,7 +783,7 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     // MARK: - 通知呈现（NotifyPresenting）
 
-    func present(_ n: PetNotification, onAction: @escaping (String) -> Void) {
+    func present(_ n: Notice, onAction: @escaping (String) -> Void) {
         radial.close()
         engine.notify(level: n.level)
         bubble.show(n, onAction: onAction)
@@ -818,7 +818,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     /// 宠物说一句话：一条 2 秒的轻提示，不进通知历史。
     private func say(_ text: String) {
         guard !text.isEmpty else { return }
-        bubble.show(PetNotification(source: "pet", level: .ambient, title: text, ttl: 2, icon: "pawprint.fill")) { _ in }
+        bubble.show(Notice(source: "pet", level: .ambient, title: text, ttl: 2, icon: "pawprint.fill")) { _ in }
     }
 
     private static func line(for kind: String) -> String {
@@ -1172,17 +1172,17 @@ final class PetController: ObservableObject, NotifyPresenting {
 
     // MARK: - 测试通知（三种样式各一条，走完整的通知内核）
 
-    func sendTestNotification(_ style: PetNotification.Style = .card) {
+    func sendTestNotification(_ style: Notice.Style = .card) {
         switch style {
         case .toast:
-            NotifyCenter.shared.post(PetNotification(source: "pet", level: .ambient, title: L("pet.test.toastTitle")))
+            NotifyCenter.shared.post(Notice(source: "pet", level: .ambient, title: L("pet.test.toastTitle")))
         case .card:
-            NotifyCenter.shared.post(PetNotification(
+            NotifyCenter.shared.post(Notice(
                 source: "pet", level: .bubble, title: L("pet.test.title"), body: L("pet.test.body"),
                 actions: [.init(id: "ok", label: L("pet.test.ok"), role: .primary)]
             ))
         case .sticky:
-            NotifyCenter.shared.post(PetNotification(
+            NotifyCenter.shared.post(Notice(
                 source: "meeting", level: .alert, title: L("pet.test.stickyTitle"), body: L("pet.test.stickyBody"),
                 actions: [
                     .init(id: "join", label: L("pet.test.join"), role: .primary),

@@ -213,6 +213,9 @@ final class LiveTranslateController: ObservableObject {
     /// 字幕条上的一句（识别引擎给出的一句）。
     struct Line: Identifiable, Equatable {
         let id: Int
+        /// 这句是第几次开始时认出来的（`run` 当时的值）。记录的键用它、不用此刻的 `run`：改设置重启后旧句子还留在字幕上，
+        /// 重启时与结束时都会再报一遍，键得和第一次报的一样，否则会议 / 自由听译的记录里就成了两句（#149）。
+        let run: Int
         /// 显示用的原文：识别原文里说完的单元换成 AI 纠正后的（有的话）。
         var original: String
         /// 显示用的整句译文：各单元译文拼起来，再接上最后那截的草稿。
@@ -335,7 +338,7 @@ final class LiveTranslateController: ObservableObject {
     /// 托管会话（会议）这一场开到了「开始记」那一步（第一次 `startFlow` 问完权限）：从这时到会话结束，字幕条的「记录」按钮
     /// 跟着会议的暂停走，记下第一句后「打开本次记录」指向 `documentURL`；改设置重启时不动（docs/meeting/ENGINE.md §4.5.2）。
     private var hostedRecording = false
-    /// 第几次开始：改设置重启后接着写同一份记录，而句子 id 会从头编，记录里按「第几次 + id」区分。
+    /// 第几次开始（改设置重启也算一次）：新认出的句子记下当时的值（`Line.run`），记录的键 = 「那一次 + 句子 id」。
     private var run = 0
     /// 正在因为改设置而重启：停止时不收尾记录、不清字幕历史，接着写 / 接着显示。
     private var restarting = false
@@ -424,7 +427,7 @@ final class LiveTranslateController: ObservableObject {
         guard AudioCaptureCoordinator.shared.claim(owner: config.owner, label: config.label,
                                                    microphone: config.sources.usesMicrophone) else {
             if let message = AudioCaptureCoordinator.shared.busyMessage() {
-                NotifyCenter.shared.post(PetNotification(source: config.owner, level: .ambient, title: message))
+                NotifyCenter.shared.post(Notice(source: config.owner, level: .ambient, title: message))
             }
             return false
         }
@@ -1033,7 +1036,7 @@ final class LiveTranslateController: ObservableObject {
                 record(lines[index])
             }
             beat.newLines += 1
-            lines.append(Line(id: id, original: text, translation: "", isFinal: isFinal, raw: text))
+            lines.append(Line(id: id, run: run, original: text, translation: "", isFinal: isFinal, raw: text))
             lines.sort { $0.id < $1.id }
             if lines.count > Self.historyLines {
                 lines.removeFirst(lines.count - Self.historyLines)
@@ -1151,7 +1154,7 @@ final class LiveTranslateController: ObservableObject {
         guard transcript != nil || sessionConfig.onFinalLine != nil, line.isFinal || force else { return }
         let original = line.original.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !original.isEmpty else { return }
-        let key = "\(run)-\(line.id)"
+        let key = "\(line.run)-\(line.id)"
         let translation = line.translates ? line.translation : ""
         let entry = MeetingEngineLine(
             key: key, time: line.startedAt, original: original, translation: translation, speaker: line.speaker)

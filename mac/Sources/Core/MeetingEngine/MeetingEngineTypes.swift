@@ -7,7 +7,8 @@ import Foundation
 
 /// 一句（取代 `LiveTranslateSessionConfig.FinalLine`）。
 struct MeetingEngineLine: Equatable {
-    /// 本场里唯一（改设置重启后句子 id 从头编，键里带着第几次运行：`"\(run)-\(id)"`）。
+    /// 本场里唯一，同一句不管报几次都是同一个键：`"\(这句是第几次运行时认出来的)-\(id)"`。改设置重启后旧句子还留在字幕上，
+    /// 重启与结束时会再报一遍，托管方按键更新、不会记成两句（#149）。
     let key: String
     /// 这句第一次出字的时刻。
     let time: Date

@@ -280,7 +280,7 @@ final class MenuBarActions: ObservableObject {
     }
 
     static func toast(_ text: String) {
-        NotifyCenter.shared.post(PetNotification(source: "menubar", level: .ambient, title: text,
-                                                 icon: "menubar.rectangle", isUserFeedback: true))
+        NotifyCenter.shared.post(Notice(source: "menubar", level: .ambient, title: text,
+                                        icon: "menubar.rectangle", isUserFeedback: true))
     }
 }
