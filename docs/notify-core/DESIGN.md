@@ -75,8 +75,12 @@
 顺带查到回退路径上几个洞。P1 不改，列进 §6 和 §8：
 
 - **关宠物那一刻，气泡里还没点的通知直接丢掉**，包括 sticky 和带按钮的，不转系统通知（`PetController.swift:582` → `BubbleWindow.swift:108-113`）。换形象途中排队的通知也一样。
+  **#144 已修**：关宠物时 `BubbleController.takeHandOver()` 按 `Notice.handsOver(shown:)` 取走常驻、带按钮的与还没露过面的（轻提示、操作回执除外），
+  交给 `NotifyCenter.handOver` 转成系统通知（不再判去重 / 勿扰、不再响）。
 - **标准 / 严格档休息时，alert 和操作回执被盖住**。宠物窗留在原地只是变空，`isReady` 仍为真，所以 alert 级通知和操作回执照样交给宠物气泡。
   但气泡是 `.floating` 级的子窗口（`BubbleWindow.swift:226`），被 `.screenSaver` 级的暗幕（`BreakStage.swift:853`）盖住，休息结束才看得见。8 秒的 card 可能没人看见就消失了。
+  **#144 已修**（用户 2026-11-11 在「气泡跟上休息画面 / 改走系统通知 / 攒到休息结束」里选了第一个）：宠物到了中央（休息、等确认），
+  气泡挂到舞台窗上、大宠物头顶，和舞台同一层，在暗幕上面；飞来飞去时留在宠物窗上，还回来也挂回去（`PetController.attachBubblesToBreakStage`）。
 - **宠物关着、系统通知权限又被拒时，回退通知不显示，代码也不知道**：`center.add` 的回调把错误忽略了（`NotifyCenter.swift:157,164,178`）。
 - **`NotifyCenter.history` 一直在记（`:203-211`），macOS 上没有任何界面读它。** DESIGN.md §6 写的右键「通知历史」没做；Windows 版有。
 

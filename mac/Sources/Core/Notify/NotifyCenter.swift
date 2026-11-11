@@ -145,6 +145,14 @@ final class NotifyCenter {
         PresentationHub.shared.notifications?.performGesture(clips) ?? false
     }
 
+    /// 呈现端没了（关掉宠物）时还挂着 / 还在排队的通知：转成系统通知，按钮照样能点（#144）。哪些要转由呈现端按
+    /// `Notice.handsOver` 挑。它们已经过了来源开关、去重与勿扰，记过历史，宠物路径上也响过声：这里不再判、不再响。
+    func handOver(_ items: [(Notice, (String) -> Void)]) {
+        for (n, onAction) in items {
+            postSystemNotification(n, onAction: onAction, silent: true)
+        }
+    }
+
     private func deliver(_ n: Notice, onAction: ((String) -> Void)?) {
         if let presenter = PresentationHub.shared.notifications, presenter.isReady {
             if wantsSound(n) {
@@ -165,13 +173,13 @@ final class NotifyCenter {
     /// 宠物不可用时的回退：系统通知中心，保证提醒不丢（docs/desktop-pet/DESIGN.md §2）。气泡上的按钮照样带上
     /// （UNNotificationAction），用户点了经 SystemNotificationRouter 回到投稿方 —— 否则推迟、
     /// 「现在休息」「再来一轮」这些在宠物关着时全都点不了（2026-11-06 真机踩到）。
-    private func postSystemNotification(_ n: Notice, onAction: ((String) -> Void)?) {
+    private func postSystemNotification(_ n: Notice, onAction: ((String) -> Void)?, silent: Bool = false) {
         let center = UNUserNotificationCenter.current()
         prepareSystemFallback(requestPermission: true)
         let content = UNMutableNotificationContent()
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
-        if wantsSound(n) { content.sound = .default }
+        if !silent, wantsSound(n) { content.sound = .default }
         let id = UUID().uuidString
         if let onAction {
             systemCallbacks[id] = onAction

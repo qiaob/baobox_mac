@@ -116,7 +116,8 @@ focusing / paused ──作废──► idle
 本工具不认识宠物（#108，`docs/notify-core/DESIGN.md` §3.5）。主角经 `mac/Sources/Core/Presentation/BreakCompanion.swift` 的协议借：
 
 - `PresentationHub.shared.breakCompanion?.lend() -> BreakCompanionLoan?`：桌面宠物模块在启动时交出主角（`presentationRoles()`）。
-  - 借到时，宠物把当前渲染视图（3D / 2D）从宠物窗取出交给舞台。宠物窗留在原地但变空、不接鼠标，引擎站住（不溜达）；挂在宠物窗上的气泡不受影响，休息结束后照常可见。
+  - 借到时，宠物把当前渲染视图（3D / 2D）从宠物窗取出交给舞台。宠物窗留在原地但变空、不接鼠标，引擎站住（不溜达）；气泡跟着宠物：到了中央以后挂到舞台窗上、大宠物头顶，在暗幕上面，提醒和回执休息中也看得见；飞回来时挂回宠物窗
+    （#144；以前留在空宠物窗上，被暗幕盖住，休息结束才看得见）。
   - 宠物关闭、没就绪、正在换形象，或宠物模块没注册：返回 nil → 走回退画面。
 - `loan.view` / `homeFrame` / `maxUpscale`：舞台装进窗口的视图、飞出去的起点兼飞回来的终点、最多放大几倍（nil = 不限，3D；2D 是 3 倍）。
 - `loan.cue(_:)`：只说意图，姿态由宠物模块换算，每秒推 30 次（2D 帧动画靠它走）。意图在阶段切换的那一刻发：

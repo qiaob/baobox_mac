@@ -58,10 +58,12 @@ final class PetBreakLoan: BreakCompanionLoan {
             // 飞到中央（原 flyIn）/ 飞回原位（原 finish）：侧身走，朝着要去的方向。
             pose.state = .wander
             pose.facingLeft = facingLeft
+            owner.attachBubblesToBreakStage(false)
         case .resting:
             restingSince = Date()
+            owner.attachBubblesToBreakStage(true)
         case .attentive:
-            break
+            owner.attachBubblesToBreakStage(true)
         }
     }
 

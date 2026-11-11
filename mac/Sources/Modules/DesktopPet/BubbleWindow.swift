@@ -38,6 +38,16 @@ final class BubbleController: ObservableObject {
     /// 有常驻气泡没处理时，隔一会儿让宠物招手。
     var onStickyReminder: (() -> Void)?
 
+    /// 气泡挂在哪（#144）：平时挂宠物窗；休息画面借走宠物、宠物到了屏幕中央以后挂舞台窗（大宠物头顶，在暗幕上面）。
+    enum Host {
+        case pet
+        /// 上面放不下也不翻到脚下（大宠物脚下是休息卡片），贴着屏幕顶往下压；舞台窗会变大小（宠物飞到中央时），
+        /// 计时器每拍看一眼宠物的位置，变了就重新贴位。
+        case breakStage
+    }
+
+    private(set) var host: Host = .pet
+
     /// 宠物头顶 / 脚下挂着东西（会议控制条）时，气泡往外让开的距离（PetController 贴挂件时设）。
     enum AccessoryClearance: Equatable {
         case none
@@ -66,6 +76,8 @@ final class BubbleController: ObservableObject {
     private var ticker: Timer?
     private var hovering = false
     private var nextStickyReminder = Date.distantFuture
+    /// 上次贴位时宠物的位置（挂在舞台上时据此判断要不要重新贴位）。
+    private var laidOutAnchor = NSRect.zero
 
     // MARK: - 显示 / 关闭
 
@@ -112,6 +124,35 @@ final class BubbleController: ObservableObject {
         refresh()
     }
 
+    /// 宠物关掉时：取走还挂着 / 还在排队、要转成系统通知的（`Notice.handsOver`），然后全部收起（#144）。按到达顺序。
+    func takeHandOver() -> [(Notice, (String) -> Void)] {
+        var out: [(Notice, (String) -> Void)] = []
+        for entry in entries where entry.notification.handsOver(shown: true) {
+            out.append((entry.notification, entry.onAction))
+        }
+        for entry in waiting where entry.notification.handsOver(shown: false) {
+            out.append((entry.notification, entry.onAction))
+        }
+        for (notification, action) in held where notification.handsOver(shown: false) {
+            out.append((notification, action))
+        }
+        dismissAll()
+        return out
+    }
+
+    /// 换挂靠的窗口（#144，见 `Host`）：从原来的窗口上摘下来，挂到新的上面、重新贴位；层级跟着新窗口（见 refresh）。
+    /// 收着的时候只换设置，放出时再挂。
+    func attach(to window: NSWindow?, host: Host, anchor: @escaping () -> NSRect) {
+        if let panel {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+        parentWindow = window
+        anchorFrame = anchor
+        self.host = host
+        if !entries.isEmpty { refresh() }
+    }
+
     /// 收起 / 放出气泡（见 suspended）。放出时排队的按到达顺序补上。
     func setSuspended(_ on: Bool) {
         guard on != suspended else { return }
@@ -156,6 +197,7 @@ final class BubbleController: ObservableObject {
 
     private func tick() {
         let now = Date()
+        if host == .breakStage, !suspended, anchorFrame() != laidOutAnchor { layoutPanel() }
         let expired = entries.filter { ($0.deadline.map { $0 <= now }) ?? false }.map(\.id)
         if !expired.isEmpty {
             entries.removeAll { expired.contains($0.id) }
@@ -209,6 +251,9 @@ final class BubbleController: ObservableObject {
         DispatchQueue.main.async { [weak self] in self?.layoutPanel() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.layoutPanel() }
         if let panel, panel.parent == nil {
+            // 和挂靠的窗口同一层（平时是宠物窗的 .floating；休息画面上是舞台那一层，在暗幕上面），子窗口排在它上面。
+            // AppKit 挂子窗口时其实也会把层级改成父窗口的（macOS 14.6 探针实测），这里显式设一遍，不靠这个没写进文档的行为。
+            panel.level = parentWindow?.level ?? .floating
             layoutPanel()
             panel.orderFrontRegardless()
             parentWindow?.addChildWindow(panel, ordered: .above)
@@ -240,6 +285,7 @@ final class BubbleController: ObservableObject {
     private func layoutPanel() {
         guard let panel, let hosting else { return }
         let pet = anchorFrame()
+        laidOutAnchor = pet
         let screen = NSScreen.screens.first(where: { $0.frame.intersects(pet) }) ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = max(hosting.fittingSize.height, 44)
@@ -252,12 +298,13 @@ final class BubbleController: ObservableObject {
         case .none: break
         }
         let fitsAbove = headTop + height <= visible.maxY - 4
+        let above = fitsAbove || host == .breakStage
         var x = pet.midX - width * 0.28
         x = min(max(x, visible.minX + 4), visible.maxX - width - 4)
-        let y = fitsAbove ? headTop : max(feet - height, visible.minY + 4)
+        let y = above ? min(headTop, visible.maxY - 4 - height) : max(feet - height, visible.minY + 4)
         let newTail = pet.midX - x
         if abs(newTail - tailX) > 0.5 { tailX = newTail }
-        if below == fitsAbove { below = !fitsAbove }
+        if below == above { below = !above }
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 }
