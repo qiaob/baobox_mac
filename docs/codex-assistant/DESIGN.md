@@ -219,6 +219,8 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 
 - `WeeklyAnchor` 与 `lastActiveBlock(from:span:)` 的**算法**（纯函数，泛型化 totals 累加闭包）——放 `Sources/Core/UsageWindowMath.swift`。
 - 多行副标题构件 `multiLineTitle(title:subtitles:)`、金额/ token 格式化——放 `Sources/Core/` 一个小工具文件。
+  **已做（2026-11，#164 PR2）**：多行标题是 `ClosureMenuItem.multiLineTitle(_:subtitles:)`；格式化是 `Core/CLIFormat.swift` 的 `CLIFormat<Localization>`，
+  `ClaudeFormat` / `AIToolsFormat` 成了它的 typealias（「N 天 M 小时」的文案 key 各留各的），见 `DEDUPE-P2.md` §2.4 类 2、类 3。
 - 若不上移，则 Codex 侧平行实现，保持行为一致（与 `CodexSessionIndex` 相对 `ClaudeSessionIndex` 的「平行不耦合」取舍一致）。实现者按 diff 成本二选一，但**周窗口算法两处必须等价**。
 
 ## 8. 验收标准
@@ -242,7 +244,7 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 - **完成通知的事件监听**：起初照 `ClaudeLiveStatus` 平行独立实现（`CodexEventWatcher`）；2026-11（#109）起 `codex-events.jsonl` 的建文件、超限截断、启动回放与增量监听改用两边共用的 `mac/Sources/Core/EventFile/`（`EventFileFollower`，`BaoboxTests` 有单元测试），`AIToolsNotify.swift` 只留「回合完成」这一行事件的处理。文件名、2 MB / 500 行上限、监听队列名不变，两个模块之间仍不互相依赖；启停按 `DEDUPE.md` §2 收紧（已启动时再 `start()` 直接返回，`stop()` 之后的回调一律丢掉）。PR4 起只交完整的行（没写完的半行留到下次、逐行解码，一行坏字节只丢那一行）；`codex-events.jsonl` 被删 / 被换掉后接着跟随，整个 `Baobox/AITools/` 被删也会把目录建回来（notify 脚本不 `mkdir -p`，没有目录写不进来），见 `DEDUPE.md` §5.2 C1、C2。
 - **token_count 聚合**：`CodexUsage.parseFile` 逐文件三选一——有 `info.last_token_usage`（增量）→ 全部相加；否则有 `info.total_token_usage`（累计）→ 只取时间最大一条；否则用 `payload` 顶层计数（仅当无 `info`）当增量。与 §2 反双计规则一致。
 - **窗口**：`lastActiveBlock(from:span:)`（floor 到整点，span 5h/168h，末块 `now<=end` 才活跃）；周窗口滚动（默认）/ 固定锚点（`weekAnchorStart` 用 `Calendar.nextDate(.backward)`）。起初与 Claude 侧平行独立实现；2026-11（#109）按 §7 的建议把定价结构、窗口 / 周窗口 / 今日 / 报表与 80% 提醒防重的算法上移到两边共用的 `mac/Sources/Core/CLIUsage/`（`BaoboxTests` 有单元测试），`CodexUsage.swift` 只留定价表 `CodexPricingTable`、rollout 解析、设置键与通知（两个模块之间仍不互相依赖）。两边原有的口径差异照旧保留：Codex 报表按 token 数排序、无「额度已恢复」提醒、近 180h 没有任何用量时固定锚点周窗口为 nil（Claude 给 0 用量窗口）。
-- **中心窗口**：`AIToolsCenterController.shared.show(tab:)`，两 Tab（`.sessions` / `.usage`）；跨 AppKit/SwiftUI 用小单例 `AIToolsCenterTabSelection`（`selectedTab`）驱动 `TabView`。格式化用新 `AIToolsFormat`（内联在 `AIToolsCenterWindow.swift`，非独立文件）。
+- **中心窗口**：`AIToolsCenterController.shared.show(tab:)`，两 Tab（`.sessions` / `.usage`）；跨 AppKit/SwiftUI 用小单例 `AIToolsCenterTabSelection`（`selectedTab`）驱动 `TabView`。格式化用新 `AIToolsFormat`（内联在 `AIToolsCenterWindow.swift`，非独立文件；2026-11（#164 PR2）起实现搬到两边共用的 `Core/CLIFormat.swift`，`AIToolsFormat` 是 `CLIFormat<AIToolsFormatLocalization>` 的 typealias，调用点不变）。
 - **导出 Markdown**（会话页的行操作）：`# 标题`，之后按出现顺序每条消息一段「## 用户 / ## 助手」（`aitools.export.user` / `aitools.export.assistant`，跟界面语言）；只取 `response_item` 里 user / assistant 的 `message`（`event_msg` 的 user_message / agent_message 是镜像，不取），跳过 developer / system 角色与 `<` 开头的系统注入（`<environment_context>`、`<user_instructions>`…），正文去掉首尾空白。2026-11（#109 PR5b）起按字节逐行读：一行里有坏字节（比如正在写的会话末尾半个汉字）只丢那一行，以前整份按 UTF-8 解成字符串，一个坏字节就整份「导出失败」（顺带：`\r\n` 结尾的行以前切不开，会和下一行一起丢）。拼法在 `CodexSessionMarkdown.swift`（纯逻辑，编进 `BaoboxTests`，`CodexJSONLParsing` 也搬到了这里），逐行读与系统注入的判定和 Claude 共用 `Core/CLISession/`（`CLIJSONL.forEachObject`、`CLISessionMarkdown`），见 `DEDUPE.md` §5.1 B2。
 - **设置 5 节**：config / notify / usage / mcp / maintenance。`CodexEnv` 新增 `cliVersion()`（后台 `Process` 经 `/bin/zsh -lc`，先读 stdout 再 `waitUntilExit` 防管道死锁）、`sessionsDiskStats()`、`cleanupSessions(olderThanDays:)`（2026-11 起移到会话索引，见下一条）、`mcpServers()`（行扫 `[mcp_servers.*]`，只读 command/args）。
 - **会话索引**：起初照 `ClaudeSessionIndex` 平行抄了一份（只在内存缓存，不落盘）；2026-11（#109）刷新（进行中不重入、后台扫描、mtime + 大小没变就复用）、排序、删除、导出外壳与清理旧会话上移到两边共用的 `mac/Sources/Core/CLISession/`（`CLISessionIndex<Format>` 基类，`BaoboxTests` 有单元测试，见 `DEDUPE.md` §4.1）。`CodexSessionIndex.swift` 只留格式 `CodexSessionFormat`（`sessions/` 下递归的 rollout jsonl、头 64 KB 快扫、导出；`cacheFileURL` 为 nil，照旧不落盘）与 rollout 解析，`CodexSessionIndex` 成了基类的非泛型子类，`shared` 与调用方不变；`CodexEnv.cleanupSessions` 改成索引的 `cleanup(olderThanDays:)`（删完先刷新再回调，维护节不再自己 `refresh()`）。两个模块之间仍不互相依赖。PR4 起刷新进行中再请求（或删掉了会话）不再被吞，这一轮结束后补扫一轮（`DEDUPE.md` §5.2 C4）。
@@ -261,6 +263,7 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 ### 9.3 待真机验证 / 已知项
 
 - `CodexEnv.cliVersion()` 的子进程**无超时**：`codex` 二进制挂死会让该后台线程一直阻塞（不阻塞主线程）。建议后续加超时。
+  2026-11（#164 PR2）起这个子进程与 Claude 那份合成 Core 的 `CLIVersion.local(binary:)`，要加超时改那一处即可（这次没加，属行为变化）。
 - 清理旧会话（2026-11 起是 `CodexSessionIndex.cleanup(olderThanDays:)`）直接删 rollout jsonl，仅应用内二次确认，**不可撤销**（无回收站）。
 - token_count 若某文件同时出现 `total_token_usage` 与「仅顶层无 info」的 token_count，一旦走累计路径则顶层条目被丢弃（符合规则，但存在潜在丢数据、无遥测可察）。
 - 预算提醒的「窗口切换」清空启发式与 Claude 侧同源、现已复制一份，改动时注意别过度清空致重复提醒。

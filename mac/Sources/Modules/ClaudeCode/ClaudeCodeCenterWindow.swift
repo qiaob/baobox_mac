@@ -10,58 +10,14 @@ import UniformTypeIdentifiers
 
 // MARK: - 共享格式化
 
-/// 模块内共享的展示格式化（费用 `$%.2f`、token ≥1000 记 `%.1fk` / ≥100 万记 `%.1fM`、倒计时、字节）。
-enum ClaudeFormat {
-
-    /// 费用统一 `$%.2f`（处处标「估算」由文案负责）。
-    static func cost(_ value: Double) -> String {
-        String(format: "$%.2f", value)
-    }
-
-    /// token 数：≥100 万记 `%.1fM`，≥1000 记 `%.1fk`，否则原样。
-    static func tokens(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        }
-        if count >= 1000 {
-            return String(format: "%.1fk", Double(count) / 1000)
-        }
-        return "\(count)"
-    }
-
-    /// 倒计时：`2h15m` / `45m`（语言无关的 h/m）。
-    static func countdown(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        let hours = total / 3600
-        let minutes = (total % 3600) / 60
-        if hours > 0 {
-            return "\(hours)h\(minutes)m"
-        }
-        return "\(minutes)m"
-    }
-
-    /// 长倒计时（跨度可到「天」，供周窗口用）：≥24h 显示本地化的「N 天 M 小时」，<24h 沿用 `countdown`。
-    static func countdownLong(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        let days = total / 86_400
-        guard days > 0 else { return countdown(seconds) }
-        let hours = (total % 86_400) / 3600
-        return L("claudecode.usage.countdown.dayHour \(days) \(hours)")
-    }
-
-    /// 字节数人性化展示。
-    static func bytes(_ value: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
-    }
-
-    /// 相对时间（如「3 分钟前」）。
-    static func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = L10n.locale
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
+/// 模块内共享的展示格式化（费用 `$%.2f`、token ≥1000 记 `%.1fk` / ≥100 万记 `%.1fM`、倒计时、字节、相对时间、星期名）。
+/// 实现在 Core 的 `CLIFormat`（与 Codex 助手共用，#164）；这里只给 Claude 自己的「N 天 M 小时」文案 key 与界面语言。
+enum ClaudeFormatLocalization: CLIFormatLocalization {
+    static func dayHour(days: Int, hours: Int) -> String { L("claudecode.usage.countdown.dayHour \(days) \(hours)") }
+    static var locale: Locale { L10n.locale }
 }
+
+typealias ClaudeFormat = CLIFormat<ClaudeFormatLocalization>
 
 // MARK: - 卡片容器
 
@@ -481,12 +437,7 @@ struct ClaudeUsageTab: View {
 
     /// 固定锚点描述，如「周三 09:00」（本地化 standalone 星期名 + hh:00）。
     private var weekAnchorDescription: String {
-        let formatter = DateFormatter()
-        formatter.locale = L10n.locale
-        let symbols = formatter.standaloneWeekdaySymbols ?? []
-        let index = weeklyWeekday - 1
-        let name = symbols.indices.contains(index) ? symbols[index] : "\(weeklyWeekday)"
-        return String(format: "%@ %02d:00", name, weeklyHour)
+        ClaudeFormat.weekAnchor(weekday: weeklyWeekday, hour: weeklyHour)
     }
 
     // MARK: 明细表（维度切换）

@@ -123,26 +123,9 @@ enum CodexEnv {
     // MARK: - CLI 版本
 
     /// 运行 `codex --version` 取版本串。**必须在后台线程调用**（内部同步等待子进程）。失败返回 nil。
+    /// 子进程与解析在 Core 的 `CLIVersion`（与 Claude Code 助手共用，#164）。
     static func cliVersion() -> String? {
-        let binary = findCodexBinary()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // 走登录 shell，保证 PATH 完整（binary 可能只是 "codex"）。
-        process.arguments = ["-lc", "\(Shell.quote(binary)) --version"]
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        // 先读干管道再等退出，避免管道写满导致子进程阻塞。
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard let raw = String(data: data, encoding: .utf8) else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        CLIVersion.local(binary: findCodexBinary())
     }
 
     // MARK: - 磁盘统计（~/.codex/sessions；清理旧会话在 `CodexSessionIndex.cleanup(olderThanDays:)`）

@@ -26,4 +26,24 @@ final class ClosureMenuItem: NSMenuItem {
     @objc private func invoke() {
         handler()
     }
+
+    /// 多行菜单项的标题：标题正常字号，每条副标题小号次要色，以 `\n` 逐行拼接；空副标题跳过，没有副标题退化为单行。
+    /// 用法：`item.attributedTitle = ClosureMenuItem.multiLineTitle(…)`（Claude Code / Codex 助手的「用量报表」项，#164）。
+    /// 带副标题的项**不要再给 `hotkeyID`**：框架的 `StatusItemController.showHotkeyIfTagged` 会用「名称 + 快捷键」盖掉 `attributedTitle`。
+    static func multiLineTitle(_ title: String, subtitles: [String]) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: title,
+            attributes: [.font: NSFont.menuFont(ofSize: NSFont.systemFontSize)]
+        )
+        for subtitle in subtitles where !subtitle.isEmpty {
+            result.append(NSAttributedString(
+                string: "\n" + subtitle,
+                attributes: [
+                    .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ]
+            ))
+        }
+        return result
+    }
 }

@@ -354,14 +354,6 @@ struct AIToolsUsageSettingsSection: View {
     @AppStorage(CodexUsageStore.weeklyWeekdayKey) private var weeklyWeekday = 2
     @AppStorage(CodexUsageStore.weeklyHourKey) private var weeklyHour = 0
 
-    private static func weekdayName(_ weekday: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = L10n.locale
-        let symbols = formatter.standaloneWeekdaySymbols ?? []
-        let index = weekday - 1
-        return symbols.indices.contains(index) ? symbols[index] : "\(weekday)"
-    }
-
     var body: some View {
         Form {
             SwiftUI.Section("aitools.settings.section.usage") {
@@ -370,7 +362,7 @@ struct AIToolsUsageSettingsSection: View {
                 if weeklyFixed {
                     Picker("aitools.settings.usage.weeklyWeekday", selection: $weeklyWeekday) {
                         ForEach(1...7, id: \.self) { weekday in
-                            Text(verbatim: Self.weekdayName(weekday)).tag(weekday)
+                            Text(verbatim: AIToolsFormat.weekdayName(weekday)).tag(weekday)
                         }
                     }
                     .onChange(of: weeklyWeekday) { _, _ in CodexUsageStore.shared.refresh() }
@@ -553,7 +545,9 @@ struct AIToolsMaintenanceSection: View {
     @State private var checkFailed = false
     @State private var copied = false
 
-    private static let upgradeCommand = "npm install -g @openai/codex"
+    /// npm 包名：「检查最新版」查它，「复制升级命令」装它。
+    private static let npmPackage = "@openai/codex"
+    private static let upgradeCommand = "npm install -g " + npmPackage
 
     var body: some View {
         Form {
@@ -637,37 +631,20 @@ struct AIToolsMaintenanceSection: View {
         }
     }
 
+    /// 查 npm 上的最新版（请求与解析在 Core 的 `CLIVersion`，与 Claude Code 助手共用，#164）。
     private func checkUpdate() {
         checking = true
         checkFailed = false
         latestVersion = nil
-        guard let url = URL(string: "https://registry.npmjs.org/@openai/codex/latest") else {
-            checking = false
-            checkFailed = true
-            return
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            let version: String?
-            if let data,
-               let raw = try? JSONSerialization.jsonObject(with: data),
-               let object = raw as? [String: Any],
-               let v = object["version"] as? String {
-                version = v
-            } else {
-                version = nil
-            }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    checking = false
-                    if let version {
-                        latestVersion = version
-                    } else {
-                        checkFailed = true
-                    }
+        CLIVersion.latestOnNPM(package: Self.npmPackage) { version in
+            MainActor.assumeIsolated {
+                checking = false
+                if let version {
+                    latestVersion = version
+                } else {
+                    checkFailed = true
                 }
             }
-        }.resume()
+        }
     }
 }
