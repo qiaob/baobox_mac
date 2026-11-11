@@ -103,6 +103,8 @@ final class LiveTranslateLanguageSwitchTests: XCTestCase {
                        .switchOver(.votes), "再赢一段就按连赢两段切")
         XCTAssertFalse(Switch.longIsTrusted(ownScore: 0.1, otherConfidence: Switch.longMinConfidence))
         XCTAssertTrue(Switch.longIsTrusted(ownScore: 0.1, otherConfidence: Switch.longMinConfidence + 0.001))
+        // 2026-11-11 seg 19 / 22 那种：日志记 conf 0.00，其实是 0.005 以下的正数 —— 中文出了字也不当场切。
+        XCTAssertEqual(awayFromChinese(own: 0.05, other: 0.3, units: 4, confidence: 0.004), .publishOther(votes: 1))
     }
 
     func testALongResultWhenTheCurrentLanguageHeardNothingOnlyVotes() {
