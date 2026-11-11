@@ -7,8 +7,9 @@ import Speech
 /// 系统的本机识别同一时间只能跑一路，两路同时开会互相挤掉；而装了本机模型的语言没法让它走服务器。所以：
 /// 只开当前语言的识别器，同时把这一句的录音存一份；一句说完看结果像不像当前语言 —— 中文识别器听到英文会吐出
 /// 英文单词，英文识别器听到中文时置信度很低 —— 不像就把录音交给另一种语言的识别器重认一遍（本机识别比实时快得多），
-/// 两边打分取高的定稿；之后切不切到那种语言接着听另算：它的结果够长、或连赢两段才切（`LiveTranslateLanguageSwitch`，
-/// 2026-11-11：一句「OK」就把整个识别器切到了英文）。重认期间音频由闸门攒着，下一句开时补喂，不丢字。
+/// 两边打分取高的定稿；之后切不切到那种语言接着听另算（`LiveTranslateLanguageSwitch`，2026-11-11：一句「OK」就把
+/// 整个识别器切到了英文）：切回主语言（`languages[0]`，自动 A）赢了就切；从主语言切走要结果够长且可信、或连赢两段。
+/// 重认期间音频由闸门攒着，下一句开时补喂，不丢字。
 ///
 /// 只有一种语言有本机模型时用 `LiveTranslateDualRecognizer`（中文本机 + 英文云端同时听）；两种都有时用这个，免得两路
 /// 互相挤掉、中文被停用。英文本机模型删不掉、删了系统也会自动装回来（2026-11-05），所以这台 Mac 上这是「自动」的主路径。
@@ -21,6 +22,7 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
     /// 当前在听的语言（本机 / 服务器）与待命的那种，变了才报（字幕条状态行用）。
     var onRouting: (([LiveTranslateChannelState]) -> Void)?
 
+    /// 自动 A、B 两种；第一种是主语言（切回它不设门槛，`LiveTranslateLanguageSwitch`）。
     private let languages: [TranslationLanguage]
     private var recognizers: [SFSpeechRecognizer]
     private let router: LiveTranslateAudioRouter
@@ -319,7 +321,8 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
     }
 
     /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；之后切不切看 `LiveTranslateLanguageSwitch` ——
-    /// 另一种赢了但结果短（一句「OK」）只这段用它的文字，连赢两段或结果够长才切过去。
+    /// 另一种是主语言（自动 A）就当场切回；从主语言切走时，结果短（一句「OK」）或不可信只这段用它的文字，
+    /// 连赢两段或结果够长且可信才切过去。
     private func recheckDone(segment id: Int, other: Int, text: String, confidence: Double) {
         guard running, recheckDeadline != nil, id == recheckSegment else { return }
         recheckDeadline = nil
@@ -333,11 +336,15 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
                                                     voiced: recheckVoiced)
         let otherCJK = LiveTranslateScoring.countsCharacters(languages[other])
         let otherUnits = LiveTranslateScoring.units(otherText, cjk: otherCJK)
+        // 主语言 = 两种里的第一种（自动 A）：切回它不设门槛，从它切走要更有把握。
         let decision = LiveTranslateLanguageSwitch.decide(ownScore: ownScore, otherScore: otherScore,
-                                                          otherUnits: otherUnits, otherCJK: otherCJK, votes: otherWins)
+                                                          otherUnits: otherUnits, otherCJK: otherCJK,
+                                                          otherConfidence: confidence, otherIsPrimary: other == 0,
+                                                          votes: otherWins)
         otherWins = decision.votes
+        // 置信度记三位小数：0.005 以下的正数和 0 对判定不一样（`LiveTranslateLanguageSwitch.longMinConfidence`）。
         LiveTranslateLog.recognition.notice(
-            "auto recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(self.recheckStartedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units, conf \(String(format: "%.2f", confidence), privacy: .public)) -> \(decision.logLabel, privacy: .public)")
+            "auto recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(self.recheckStartedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units, conf \(String(format: "%.3f", confidence), privacy: .public)) -> \(decision.logLabel, privacy: .public)")
         if decision.switches {
             LiveTranslateLog.recognition.notice(
                 "auto: switched \(self.languages[self.active].code, privacy: .public) -> \(self.languages[other].code, privacy: .public)")
