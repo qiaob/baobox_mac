@@ -47,24 +47,69 @@ enum FakeScannerFormat: CLISessionFormat {
     static func markdown(fileURL: URL, title: String) -> String? { nil }
 }
 
-/// 假格式的根目录与扫描计数。格式全是静态成员、没法按实例传参，所以每个测试开头把它指向自己的临时目录。
+/// 假格式的根目录与扫描 / 列目录计数。格式全是静态成员、没法按实例传参，所以每个测试开头把它指向自己的临时目录。
 final class FakeFormatRoot: @unchecked Sendable {
     private let lock = NSLock()
     private var url = URL(fileURLWithPath: "/nonexistent-baobox-cli-session-tests", isDirectory: true)
     private var scanCount = 0
+    private var listingCount = 0
+    private var pendingHold: FakeListingHold?
 
     var current: URL { lock.withLock { url } }
     var scans: Int { lock.withLock { scanCount } }
+    /// 列了几次目录 = 跑了几轮刷新。
+    var listings: Int { lock.withLock { listingCount } }
 
     func use(_ newURL: URL) {
         lock.withLock {
             url = newURL
             scanCount = 0
+            listingCount = 0
+            pendingHold = nil
         }
     }
 
     func resetScans() { lock.withLock { scanCount = 0 } }
     func countScan() { lock.withLock { scanCount += 1 } }
+
+    /// 让下一轮刷新列完目录后停住，直到测试放行。
+    func holdNextListing() -> FakeListingHold {
+        let hold = FakeListingHold()
+        lock.withLock { pendingHold = hold }
+        return hold
+    }
+
+    /// 列完目录时调（后台线程）：计数；要停就在这里停住。
+    func didList() {
+        let hold: FakeListingHold? = lock.withLock {
+            listingCount += 1
+            defer { pendingHold = nil }
+            return pendingHold
+        }
+        hold?.stopHere()
+    }
+}
+
+/// 停住一轮刷新：这一轮已经列完目录、还没扫描和发布。复现「这一轮在删除之前列的目录、在删除之后才发布」。
+final class FakeListingHold: @unchecked Sendable {
+    private let reached = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+
+    /// 测试线程：等后台那一轮列完目录停在这里。
+    func waitUntilReached(timeout: TimeInterval = 5) -> Bool {
+        reached.wait(timeout: .now() + timeout) == .success
+    }
+
+    /// 放行。
+    func release() {
+        released.signal()
+    }
+
+    /// 后台线程：通知已停住，等放行（最多 10 秒，测试失败时不至于一直卡住）。
+    fileprivate func stopHere() {
+        reached.signal()
+        _ = released.wait(timeout: .now() + 10)
+    }
 }
 
 /// 读磁盘的假格式：会话在 `<根>/logs/<项目>/<会话>.jsonl`（与 Claude Code 同样的两层布局）。
@@ -76,7 +121,9 @@ extension FakeDiskFormat {
     static var logRoot: URL { root.current.appendingPathComponent("logs", isDirectory: true) }
 
     static func sessionFiles() -> [CLISessionFile] {
-        CLISessionFiles.jsonlInSubdirectories(of: logRoot)
+        let files = CLISessionFiles.jsonlInSubdirectories(of: logRoot)
+        root.didList()
+        return files
     }
 
     static func scan(_ file: CLISessionFile) -> FakeSessionRecord? {

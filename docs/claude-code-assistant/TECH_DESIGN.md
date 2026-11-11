@@ -143,6 +143,8 @@ func diskStats(completion:)/cleanup(olderThanDays:completion:)
 - 删除会话 = 删对应 jsonl 文件(NSAlert 确认)。
 
 > 2026-11(#109)起,刷新(进行中不重入、后台扫描、mtime + 大小没变就复用)、排序、删除、导出外壳、磁盘缓存(1 秒防抖、退出 flush)与清理旧会话移到与 Codex 助手共用的 `mac/Sources/Core/CLISession/`(`CLISessionIndex<Format>` 基类,纯 Foundation + Combine,`BaoboxTests` 有单元测试,见 `../codex-assistant/DEDUPE.md` §4.1);`ClaudeSessionIndex.swift` 只留格式 `ClaudeSessionFormat`(会话文件在哪、怎么快扫、怎么导出、缓存放哪)、缓存记录 `ClaudeSessionRecord` 与审计、磁盘分布,`ClaudeSessionIndex` 成了基类的非泛型子类,`shared` 与所有调用方不变。缓存文件实际是 `index-cache-v2.json`(上面写的 `index-cache.json` 是 v1),格式不变;`recentSessions(limit:)` 没有调用方,已删。
+>
+> 同月 PR4 起:刷新进行中再请求(或删掉了会话)不再被吞,这一轮结束后补扫一轮,被补掉的那一轮不发布(免得刚删的会话闪回来);willTerminate 的 `flushCache()` 同步写盘,返回时缓存已经在盘上(`../codex-assistant/DEDUPE.md` §5.2 C4、C6)。
 
 ### 3.3 ClaudeUsage
 
@@ -177,6 +179,8 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 - `ClaudeNotifier`:封装 `UNUserNotificationCenter`(首次开启通知开关时 `requestAuthorization(options:[.alert,.sound])`);Stop→"会话完成 · <项目名>",Notification→"等你确认 · <项目名>"(正文带 message);受 UserDefaults 开关与提示音开关控制。**注意** UN 通知在未签名 dev 包可用,但要判空失败不 crash。
 
 > 2026-11(#109)起,events.jsonl 的建文件、超限截断、启动回放与增量监听移到与 Codex 助手共用的 `mac/Sources/Core/EventFile/`(`EventFileFollower`:后台准备 → 主线程回放已有行 → 从读到的大小起跟随新行;纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeLiveStatus.swift` 只留状态机与通知。文件名、5MB / 1000 行上限、监听队列名不变。启停收紧了一处:`start()` 立即算已启动、再调直接返回,`stop()` 之后还没处理的回调一律丢掉(`docs/codex-assistant/DEDUPE.md` §2)。
+>
+> 同月 PR4 起:只交完整的行 —— 没写完的半行留到下次、逐行解码(一行坏字节只丢那一行),启动回放也只回放完整的行;events.jsonl 被删 / 被换掉(改名、原子保存)后接着跟随路径上的新文件、从头读,目录没了先建回来,监听父目录等文件出现,不轮询;`stop()` 确定关掉文件描述符(以前每次停止漏一个)。见 `docs/codex-assistant/DEDUPE.md` §5.2 C1、C2 与 §6 PR4。
 
 ### 3.5 ClaudeHooks
 
