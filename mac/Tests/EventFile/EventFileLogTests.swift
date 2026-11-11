@@ -84,9 +84,9 @@ final class EventFileLogTests: XCTestCase {
         XCTAssertEqual(result.size, 0)
     }
 
-    /// 现状，PR4 会修（docs/codex-assistant/DEDUPE.md §5.2 C1）：最后一行写到一半、切在汉字中间时整个文件解不成 UTF-8，
-    /// 前面完整的行也一起丢了，大小却算到了文件尾。修好后应返回 `["{\"a\":1}"]`、大小只算到最后一个换行（8）—— 届时把断言翻过来。
-    func testReadAllLosesEveryLineWhenTheLastOneIsCutInsideACharacter() throws {
+    /// 启动那一刻最后一行写到一半、切在汉字中间（docs/codex-assistant/DEDUPE.md §5.2 C1）：前面完整的行照常回放，
+    /// 大小只算到最后一个换行，没写完的那行留给跟随。PR2 时整个文件解不成 UTF-8、一行也不回放，大小却算到了文件尾。
+    func testReadAllStopsAtTheLastNewlineWhenTheLastLineIsCutInsideACharacter() throws {
         let root = try Support.makeSandbox(for: self)
         let url = root.appendingPathComponent("events.jsonl")
         var data = Data("{\"a\":1}\n".utf8)
@@ -95,7 +95,69 @@ final class EventFileLogTests: XCTestCase {
 
         let result = EventFileLog.readAll(url)
 
-        XCTAssertEqual(result.lines, [])
-        XCTAssertEqual(result.size, 10)
+        XCTAssertEqual(result.lines, ["{\"a\":1}"])
+        XCTAssertEqual(result.size, 8)
+    }
+
+    func testReadAllDropsOnlyTheLineWithBrokenBytes() throws {
+        let root = try Support.makeSandbox(for: self)
+        let url = root.appendingPathComponent("events.jsonl")
+        var data = Data("{\"a\":1}\n{\"t\":\"".utf8)
+        data.append(contentsOf: [0xE6, 0x88])
+        data.append(Data("\"}\n{\"b\":2}\n".utf8))
+        try Support.write(data, to: url)
+
+        let result = EventFileLog.readAll(url)
+
+        XCTAssertEqual(result.lines, ["{\"a\":1}", "{\"b\":2}"])
+        XCTAssertEqual(result.size, UInt64(data.count))
+    }
+
+    // MARK: - completeLines
+
+    func testCompleteLinesStopAtTheLastNewline() {
+        let result = EventFileLog.completeLines(in: Data("{\"a\":1}\n\n{\"b\":2}\n{\"c\":".utf8))
+
+        XCTAssertEqual(result.lines, ["{\"a\":1}", "{\"b\":2}"], "空行不算一行")
+        XCTAssertEqual(result.consumed, 17, "到最后一个换行为止（含这个换行），后面的半行不算")
+    }
+
+    func testCompleteLinesWithoutANewlineConsumeNothing() {
+        XCTAssertTrue(EventFileLog.completeLines(in: Data("{\"a\":".utf8)) == ([], 0))
+        XCTAssertTrue(EventFileLog.completeLines(in: Data()) == ([], 0))
+    }
+
+    func testCompleteLinesWaitForTheRestOfACharacter() {
+        var head = Data("{\"t\":\"".utf8)
+        head.append(contentsOf: [0xE6, 0x88])
+        XCTAssertTrue(EventFileLog.completeLines(in: head) == ([], 0))
+
+        var whole = head
+        whole.append(0x90)
+        whole.append(Data("\"}\n".utf8))
+        let result = EventFileLog.completeLines(in: whole)
+
+        XCTAssertEqual(result.lines, ["{\"t\":\"成\"}"])
+        XCTAssertEqual(result.consumed, whole.count)
+    }
+
+    func testCompleteLinesDropOnlyTheLineWithBrokenBytes() {
+        var data = Data("{\"a\":1}\n{\"t\":\"".utf8)
+        data.append(contentsOf: [0xE6, 0x88])
+        data.append(Data("\"}\n{\"b\":2}\n".utf8))
+
+        let result = EventFileLog.completeLines(in: data)
+
+        XCTAssertEqual(result.lines, ["{\"a\":1}", "{\"b\":2}"])
+        XCTAssertEqual(result.consumed, data.count, "坏的那一行也算消费掉了，不会卡住后面的行")
+    }
+
+    func testCompleteLinesOfASliceCountFromTheSliceStart() {
+        let slice = Data("xx\na\nb".utf8).dropFirst(3)   // "a\nb"，startIndex 不是 0
+
+        let result = EventFileLog.completeLines(in: slice)
+
+        XCTAssertEqual(result.lines, ["a"])
+        XCTAssertEqual(result.consumed, 2)
     }
 }
