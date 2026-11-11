@@ -478,14 +478,14 @@ enum LiveTranslateDriver {
     /// nil = 成功；"" = 用户取消；其他 = 出错说明。
     static func install() async -> String? {
         guard let source = bundledURL else { return L("livetranslate.voice.driverNotBundled") }
-        let target = quoted(installedURL.path)
+        let target = Shell.quote(installedURL.path)
         return await runPrivileged("mkdir -p /Library/Audio/Plug-Ins/HAL && rm -rf \(target) && "
-                                   + "cp -R \(quoted(source.path)) \(target) && chown -R root:wheel \(target) && "
+                                   + "cp -R \(Shell.quote(source.path)) \(target) && chown -R root:wheel \(target) && "
                                    + "killall -9 coreaudiod")
     }
 
     static func uninstall() async -> String? {
-        await runPrivileged("rm -rf \(quoted(installedURL.path)) && killall -9 coreaudiod")
+        await runPrivileged("rm -rf \(Shell.quote(installedURL.path)) && killall -9 coreaudiod")
     }
 
     /// 装完后等音频服务重启、设备出现（最多 10 秒）；出现了返回它的 UID。
@@ -496,11 +496,6 @@ enum LiveTranslateDriver {
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return nil
-    }
-
-    /// shell 单引号转义。
-    private static func quoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// 后台线程跑 osascript（会弹系统的管理员密码框），不卡主线程。

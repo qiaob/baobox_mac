@@ -62,26 +62,19 @@ enum AIToolsFormat {
     }
 }
 
-/// Codex 续接命令构造（供窗口与复制按钮共用）。
+/// Codex 续接命令构造（供窗口与复制按钮共用）。单引号转义用 Core 的 `Shell.quote`（#164）。
 enum CodexResumeCommand {
     /// 终端执行的续接命令：`codex resume <id>`。
     static func command(sessionID: String) -> String {
         let bin = CodexEnv.findCodexBinary()
-        return "\(CodexEnv.shellQuote(bin)) resume \(CodexEnv.shellQuote(sessionID))"
+        return "\(Shell.quote(bin)) resume \(Shell.quote(sessionID))"
     }
 
     /// 供「复制命令」用：附带 cd 到项目目录。
     static func fullCommand(sessionID: String, cwd: String) -> String {
         let resume = command(sessionID: sessionID)
         guard !cwd.isEmpty else { return resume }
-        return "cd \(CodexEnv.shellQuote(cwd)) && \(resume)"
-    }
-}
-
-extension CodexEnv {
-    /// 单引号安全包裹（供命令拼接）。独立于 ClaudeEnv 以免耦合。
-    static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "cd \(Shell.quote(cwd)) && \(resume)"
     }
 }
 

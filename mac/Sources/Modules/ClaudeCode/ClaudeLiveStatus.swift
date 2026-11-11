@@ -368,7 +368,7 @@ final class ClaudeLiveStatus: ObservableObject {
 
     /// 会话现在还占着的终端（快速切换面板续接用，docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）：hook 记下的位置，
     /// 且同一个终端（tty）后来没见过别的会话。nil = 没装 hooks、6 小时内没见过它、位置里没记 tty，或那个终端已经让给了
-    /// 后来的会话。会话此刻是不是还在那儿跑，由 `TerminalLauncher.focusRunningSession` 再按进程确认。
+    /// 后来的会话。会话此刻是不是还在那儿跑，由 `ClaudeTerminal.focusRunningSession` 再按进程确认。
     func currentTerminal(of sessionID: String) -> TerminalLocation? {
         guard let location = sessions[sessionID]?.terminal else { return nil }
         let sightings = sessions.values.map {
@@ -384,8 +384,8 @@ final class ClaudeLiveStatus: ObservableObject {
         let terminal = sessions[sessionID]?.terminal
         let cwd = sessions[sessionID]?.cwd
         return {
-            TerminalLauncher.focusRunningSession(sessionID: sessionID, projectPath: cwd, location: terminal,
-                                                 confirmRunning: false, isNewestInProject: true) { _ in }
+            ClaudeTerminal.focusRunningSession(sessionID: sessionID, projectPath: cwd, location: terminal,
+                                               confirmRunning: false, isNewestInProject: true) { _ in }
         }
     }
 

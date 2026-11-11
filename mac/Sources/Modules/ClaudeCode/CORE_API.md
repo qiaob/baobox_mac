@@ -28,7 +28,8 @@
 | `static func model() -> String?` / `setModel(_:) throws` / `removeModel() throws` | 顶层 model 读/写/移除 |
 | `static func cleanupPeriodDays() -> Int?` / `setCleanupPeriodDays(_:) throws` / `removeCleanupPeriodDays() throws` | cleanupPeriodDays 读(容错取整)/写/移除 |
 | `static func envValue(_ key:) -> String?` / `setEnvFlag(_ key:) throws` / `removeEnvKey(_ key:) throws` | env 字典单键读 / 设为 "1" / 移除；只动指定键，env 空则删 env 键 |
-| `static func shellSingleQuote(_:) -> String` | 单引号 shell 转义 |
+
+> 单引号 shell 转义 2026-11（#164）起用 Core 的 `Shell.quote`（`mac/Sources/Core/Shell.swift`，`BaoboxTests` 有单元测试），原 `shellSingleQuote` 已删。
 
 > 以上标量键接口供「配置」节可视化控件（Picker 单选 / 隐私多选勾选）使用，全部走 `ClaudeSettingsFile`、只动自己的键、后台调用。
 
@@ -37,14 +38,19 @@
 - `ClaudeSettingsFile.load() -> [String: Any]` / `mutate(_ transform:) throws` —— 绑定 `settings.json` 的便捷入口。
 - 均为**后台调用**（文件可能几 MB）。
 
-### `@MainActor enum TerminalLauncher`（主线程调用）
-- `run(command:in:)` —— 把命令写成一次性 `.command` 脚本用默认终端打开。
-- `resume(sessionID:in:binary:)` —— 续接会话 `claude --resume <id>`。
+### `@MainActor enum ClaudeTerminal`（`ClaudeTerminal.swift`，主线程调用）
+
+2026-11（#164）起，原 `TerminalLauncher` 拆成两半（`docs/codex-assistant/DEDUPE-P2.md` §2.4 类 5）：通用的「在偏好终端里跑一条命令」
+`TerminalLauncher.run(command:in:)` 与「按 tty 选中 iTerm2 / 系统终端的标签页」`TerminalLauncher.selectTab(bundleID:ttyPath:)` 搬进
+`mac/Sources/Core/Terminal/`（名字与签名不变，Codex 助手也调；一次性脚本写到 `~/Library/Application Support/Baobox/Terminal/launch/`，只留最近 20 个，
+脚本内容与清理在 `TerminalLaunchScript`，`BaoboxTests` 有单元测试）；认得 `claude` 的部分留在本模块，改名 `ClaudeTerminal`：
+- `resume(sessionID:in:binary:)` —— 续接会话 `claude --resume <id>`（经 `TerminalLauncher.run`）。
 - `resumeCommandString(sessionID:in:)` —— 可直接粘贴执行的续接命令（含 cd）。
 - `focusRunningSession(sessionID:projectPath:location:confirmRunning:isNewestInProject:completion:)` —— 把正在跑的会话所在的终端切到前台：
   先用 hook 记下的位置（`confirmRunning` 时先在后台确认那个 tty 上有 claude 在跑），再按进程找；`completion(false)` = 都不行，调用方兜底。
   点通知跳回（位置直接用）与快速切换面板续接（位置要确认，false 时开新窗口）共用，见 `docs/claude-code-assistant/NOTIFY_JUMP.md` §3。
-  按进程找（`findRunningSession`）与切窗口（`focusTerminalWindow`）只在它里面用。
+  按进程找（`findRunningSession`，ps / lsof 经 `Shell.output`）与切窗口（`focusTerminalWindow`，选标签页经 `TerminalLauncher.selectTab`）只在它里面用，都是 private。
+- 旧脚本目录 `Baobox/ClaudeCode/launch/` 由 `ClaudeCodeTool.activate()` 每次启动在后台删一次（随 0.0.9 发出，0.0.11 起去掉）。
 - `enum ClaudeRunningSession`（`ClaudeRunningSession.swift`，纯 Foundation，`BaoboxTests` 有单元测试）—— 上面「位置要确认」的两关：
   会话还占着那个 tty（`ownsTerminal`）、那个 tty 上有 claude 进程（`claudeRuns(onTTY:processes:)`），以及 `isClaudeCommand`。
 
@@ -217,5 +223,5 @@ guard-patterns.txt 只写入「已启用的预置规则 + 自定义规则」；�
 
 - **3.1 `@MainActor enum ClaudeEnv` → 改为非 @MainActor**：`ClaudeEnv`/`ClaudeJSONFile`/`ClaudeSettingsFile`
   的成员要么是纯路径计算、要么是可能读写数 MB 文件的重 IO，必须能在后台线程直接调用。若标 `@MainActor`
-  会把大文件 IO 逼回主线程，违反「重 IO 一律后台」硬约束。触碰 NSWorkspace 的 `TerminalLauncher` 单独标
+  会把大文件 IO 逼回主线程，违反「重 IO 一律后台」硬约束。触碰 NSWorkspace 的 `ClaudeTerminal`（原 `TerminalLauncher`，#164 起通用部分在 Core）单独标
   `@MainActor`。其余签名与 3.x 节一致（`@Published` 部分改用 `private(set)` 强化封装，属加强非削减）。

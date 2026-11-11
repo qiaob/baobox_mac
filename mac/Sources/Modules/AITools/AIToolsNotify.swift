@@ -263,8 +263,8 @@ final class CodexNotify: ObservableObject {
         tty=$(ps -o tty= -p "$PPID" 2>/dev/null)
         term="\"baobox_terminal\":{\"app\":\"$(clean "$__CFBundleIdentifier")\",\"otty_pane\":\"$(clean "$OTTY_PANE_ID")\",\"tty\":\"$(clean "$tty" | tr -d ' ')\"}"
         case "$last" in
-            \{*\}) printf '%s,%s}\n' "${last%\}}" "$term" >> \#(shellSingleQuote(eventsPath)) ;;
-            *) printf '%s\n' "$last" >> \#(shellSingleQuote(eventsPath)) ;;
+            \{*\}) printf '%s,%s}\n' "${last%\}}" "$term" >> \#(Shell.quote(eventsPath)) ;;
+            *) printf '%s\n' "$last" >> \#(Shell.quote(eventsPath)) ;;
         esac
         exit 0
         """#
@@ -282,10 +282,5 @@ final class CodexNotify: ObservableObject {
         } catch {
             return false
         }
-    }
-
-    /// 单引号安全包裹（供脚本内路径拼接）。与 `ClaudeEnv.shellSingleQuote` 同实现，独立以避免耦合。
-    nonisolated static func shellSingleQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

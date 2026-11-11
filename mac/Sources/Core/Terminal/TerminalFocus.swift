@@ -36,7 +36,7 @@ enum TerminalFocus {
         guard let bundleID, let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             return false
         }
-        // macOS 14 起后台 App 直接 activate() 会被协作式激活拒绝，走 Launch Services 前台化（与 TerminalLauncher 相同）。
+        // macOS 14 起后台 App 直接 activate() 会被协作式激活拒绝，走 Launch Services 前台化（等价 `open -a`）。
         NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
         if bundleID == ottyBundleID, let pane = location.ottyPane {
             let cli = appURL.appendingPathComponent("Contents/MacOS/otty-cli").path

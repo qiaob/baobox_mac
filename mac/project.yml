@@ -141,6 +141,9 @@ targets:
   # - LiveTranslateLanguageSwitch.swift：轮流识别重认后这段用哪种文字、之后切不切（会议 / 字幕与听写共用）
   # - ClaudeRunningSession.swift：快速切换面板续接时 hook 记下的终端位置还能不能用（docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）
   # - ClaudeUsageCollector.swift：Claude Code 用量条目的收集与按文件缓存（增量与全量逐条相同，docs/claude-code-assistant/TECH_DESIGN.md §3.3）
+  # - Core/Shell.swift：shell 单引号转义与跑小命令取 stdout（docs/codex-assistant/DEDUPE-P2.md §2.4 类 4）
+  # - Core/Terminal/TerminalLaunchScript.swift：在终端里跑命令的一次性脚本内容与只留最近 20 个（同上类 5；
+  #   同目录其余文件是 AppKit，不进来）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -160,6 +163,8 @@ targets:
       - path: Sources/Modules/LiveTranslate/LiveTranslateLanguageSwitch.swift
       - path: Sources/Modules/ClaudeCode/ClaudeRunningSession.swift
       - path: Sources/Modules/ClaudeCode/ClaudeUsageCollector.swift
+      - path: Sources/Core/Shell.swift
+      - path: Sources/Core/Terminal/TerminalLaunchScript.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

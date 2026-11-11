@@ -247,7 +247,9 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 - **设置 5 节**：config / notify / usage / mcp / maintenance。`CodexEnv` 新增 `cliVersion()`（后台 `Process` 经 `/bin/zsh -lc`，先读 stdout 再 `waitUntilExit` 防管道死锁）、`sessionsDiskStats()`、`cleanupSessions(olderThanDays:)`（2026-11 起移到会话索引，见下一条）、`mcpServers()`（行扫 `[mcp_servers.*]`，只读 command/args）。
 - **会话索引**：起初照 `ClaudeSessionIndex` 平行抄了一份（只在内存缓存，不落盘）；2026-11（#109）刷新（进行中不重入、后台扫描、mtime + 大小没变就复用）、排序、删除、导出外壳与清理旧会话上移到两边共用的 `mac/Sources/Core/CLISession/`（`CLISessionIndex<Format>` 基类，`BaoboxTests` 有单元测试，见 `DEDUPE.md` §4.1）。`CodexSessionIndex.swift` 只留格式 `CodexSessionFormat`（`sessions/` 下递归的 rollout jsonl、头 64 KB 快扫、导出；`cacheFileURL` 为 nil，照旧不落盘）与 rollout 解析，`CodexSessionIndex` 成了基类的非泛型子类，`shared` 与调用方不变；`CodexEnv.cleanupSessions` 改成索引的 `cleanup(olderThanDays:)`（删完先刷新再回调，维护节不再自己 `refresh()`）。两个模块之间仍不互相依赖。PR4 起刷新进行中再请求（或删掉了会话）不再被吞，这一轮结束后补扫一轮（`DEDUPE.md` §5.2 C4）。
 - **调用统计**：`computeInvocationStats(days:)` 识别 `function_call`/`tool_call`/`mcp_tool_call`/`local_shell_call`/`custom_tool_call`；MCP 经显式 `server` 字段或 `<server>__<tool>` 名或裸 `mcp_tool_call` 三法判定；`local_shell_call` 归一为 `shell`。Codex 无 Skill/斜杠命令概念，故只有 builtin + mcp 两类。
-- **跨模块依赖（既存）**：`AIToolsTool`/`AIToolsCenterWindow` 调用 `TerminalLauncher.run(...)`（定义在 `ClaudeCode/ClaudeEnv.swift`），此依赖在本次之前即存在，非新引入，但 AITools 未与 ClaudeCode 完全解耦——留作已知项。
+- **跨模块依赖（既存，2026-11 已解决）**：`AIToolsTool`/`AIToolsCenterWindow` 调用 `TerminalLauncher.run(...)`（定义在 `ClaudeCode/ClaudeEnv.swift`），此依赖在本次之前即存在，非新引入，但 AITools 未与 ClaudeCode 完全解耦——留作已知项。
+  #164 PR1 起 `TerminalLauncher`（`run` 与按 tty 选标签页）搬进 `mac/Sources/Core/Terminal/`，名字与签名不变，AITools 的两处调用一行没改；Codex 的续接脚本改写到 `Baobox/Terminal/launch/`（不再写进 `Baobox/ClaudeCode/launch/`）；
+  `CodexEnv.shellQuote` / `CodexNotify.shellSingleQuote` 换成 Core 的 `Shell.quote`。AITools 与 ClaudeCode 之间不再有代码依赖（按类型声明查边界的脚本无输出，见 `DEDUPE-P2.md` §4.3）。
 
 ### 9.2 与设计的差异
 

@@ -22,6 +22,8 @@ final class ClaudeCodeTool: ToolModule {
     // MARK: - 生命周期
 
     func activate() {
+        // 放在「未安装」判断之前：只装了 Codex 的用户续接过，也有这个旧目录。
+        Self.removeLegacyLaunchScripts()
         // 未安装也不启动重服务，避免无谓的文件监听；菜单会显示降级文案。
         guard ClaudeEnv.isInstalled else { return }
         live.start()
@@ -36,6 +38,19 @@ final class ClaudeCodeTool: ToolModule {
         ClaudeFileIndex.shared.flushCache()
         usage.stopAutoRefresh()
         live.stop()
+    }
+
+    /// 续接脚本 2026-11（#164）起由 Core 的 `TerminalLauncher` 写到 `Baobox/Terminal/launch/`；以前写在 `Baobox/ClaudeCode/launch/`
+    /// （Codex 的也在这里），里面的旧脚本带项目路径与会话 id，每次启动在后台删一次（docs/codex-assistant/DEDUPE-P2.md D2）。
+    /// 只删 `launch/` 这一个子目录：hooks 脚本、两份缓存、事件文件都在它旁边，不在里面（同上 §6 R11）。
+    /// 这段随 0.0.9 发出，留两个版本：0.0.11 起删掉这个函数和 `activate()` 里那一行。
+    private static func removeLegacyLaunchScripts() {
+        let legacy = ClaudeEnv.supportDir.appendingPathComponent("launch", isDirectory: true)
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: legacy.path) else { return }
+            try? fm.removeItem(at: legacy)
+        }
     }
 
     // MARK: - 菜单

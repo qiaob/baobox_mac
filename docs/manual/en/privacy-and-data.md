@@ -51,8 +51,9 @@ Per tool:
 | Phone Transfer | Received files | `~/Downloads/Baobox` (configurable) |
 | Menu bar manager | Which icons to show or hide, an icon cache | UserDefaults / support directory |
 | Keyboard clicking | Settings only | UserDefaults |
-| Claude Code assistant | **Nothing** — reads `~/.claude` live | — |
-| Codex assistant | **Nothing** — reads `~/.codex` live | — |
+| Claude Code assistant | Sessions themselves aren't copied — `~/.claude` is read live. To open quickly: a session list cache (titles, project paths) and a recent-files index (paths the sessions wrote); with hooks installed, the hook scripts and an event log (session, project folder, which terminal, permission prompts and the prompts you send; trimmed to the last 1,000 lines at launch once past 5 MB) | Support directory `ClaudeCode/` |
+| Codex assistant | Sessions themselves aren't copied — `~/.codex` is read live. With completion notifications on, the notify script and an event log (what Codex passes at the end of each turn, including that turn's input and its last reply; trimmed to the last 500 lines at launch once past 2 MB) | Support directory `AITools/` |
+| Claude Code / Codex resume | One-off scripts that resume a session in the terminal (project path, session id); only the latest 20 are kept | Support directory `Terminal/launch/` |
 
 Settings live in UserDefaults (`com.baobox.app`).
 
