@@ -21,6 +21,8 @@ final class PetController: ObservableObject, NotifyPresenting {
     private var started = false
     /// 气泡、环形菜单各自开着没有（任一开着宠物就站住面向用户）。
     private var bubbleShowing = false
+    /// 气泡此刻挂在休息画面的舞台窗上（见 attachBubblesToBreakStage）。
+    private var bubblesOnBreakStage = false
     private var menuShowing = false
     /// 渲染视图借给了休息画面（#43，见 lendRenderView）。
     private(set) var isLent = false
@@ -584,7 +586,8 @@ final class PetController: ObservableObject, NotifyPresenting {
         } else {
             switchingCharacter = false
             radial.close(animated: false)
-            bubble.dismissAll()
+            // 还挂着 / 还在排队的不丢：转成系统通知（按钮照样能点，#144），其余收起。
+            let handOver = bubble.takeHandOver()
             let finish: () -> Void = { [weak self] in
                 guard let self, !PetSettings.enabled else { return }
                 self.hidePet()
@@ -596,6 +599,7 @@ final class PetController: ObservableObject, NotifyPresenting {
             }
             // 宠物关了，之后的通知走系统通知：现在就把权限问好（已问过则不再弹）。
             NotifyCenter.shared.prepareSystemFallback(requestPermission: true)
+            NotifyCenter.shared.handOver(handOver)
         }
     }
 
@@ -864,7 +868,7 @@ final class PetController: ObservableObject, NotifyPresenting {
     }
 
     /// 把当前渲染视图借给休息画面放大。宠物窗留在原地但变空、不接鼠标，引擎站住不溜达；
-    /// 挂在宠物窗上的气泡不受影响。宠物没开 / 没就绪时返回 nil（休息画面走无宠物的回退画面）。
+    /// 气泡等宠物到了中央再跟过去（`attachBubblesToBreakStage`，#144）。宠物没开 / 没就绪时返回 nil（休息画面走无宠物的回退画面）。
     func lendRenderView() -> Loan? {
         guard !isLent, PetSettings.enabled, !switchingCharacter, let panel, panel.isVisible else { return nil }
         // 正在出场 / 退场：直接收尾（站回原位、外观复原）再借出。
@@ -900,10 +904,30 @@ final class PetController: ObservableObject, NotifyPresenting {
         return modelView.perform(kind)
     }
 
+    /// 休息画面借走宠物期间，气泡跟着它（#144，用户 2026-11-11 选的）：到了中央（休息、等确认）挂到舞台窗上、
+    /// 大宠物头顶，和舞台同一层，在暗幕上面（以前留在原位的空宠物窗上，被暗幕盖住）；飞来飞去时留在宠物窗上
+    /// （舞台窗边飞边变大小，挂在上面会漂），还回来也挂回宠物窗。
+    func attachBubblesToBreakStage(_ onStage: Bool) {
+        let view: NSView = shownModelID != nil ? modelView : petView
+        let stageWindow = onStage && isLent ? view.window.flatMap { $0 === panel ? nil : $0 } : nil
+        guard (stageWindow != nil) != bubblesOnBreakStage else { return }
+        bubblesOnBreakStage = stageWindow != nil
+        if let stageWindow {
+            bubble.attach(to: stageWindow, host: .breakStage) { [weak view] in
+                guard let view, let window = view.window else { return .zero }
+                return window.convertToScreen(view.convert(view.bounds, to: nil))
+            }
+        } else {
+            let home = panel
+            bubble.attach(to: home, host: .pet) { [weak home] in home?.frame ?? .zero }
+        }
+    }
+
     /// 休息画面结束：视图放回宠物窗，恢复鼠标与溜达；借出期间积下的换形象请求这时执行。
     func returnRenderView() {
         guard isLent else { return }
         isLent = false
+        attachBubblesToBreakStage(false)
         if stopped {
             // 宠物已经 stop() 了才还回来（退出时模块收尾的顺序反了：宠物先 willTerminate）：只把视图放回去。
             // 再走下面的 applyVisibility 会发现宠物窗没显示，重新显示它、播出场，黑洞窗也出来 —— 退出时闪一下
