@@ -134,6 +134,7 @@ targets:
   # - Core/CLISession：Claude Code / Codex 的会话索引（docs/codex-assistant/DEDUPE.md §4.1）
   # - Core/MeetingEngine + Modules/Meeting/Logic：会议引擎接口、会话的决策、meeting.md 的模型与排版、纪要提示词（docs/meeting/ENGINE.md §5）
   # - LiveTranslateMixing.swift：混音与说话人判定（本来就是纯的）
+  # - LiveTranslateLanguageSwitch.swift：轮流识别重认后这段用哪种文字、之后切不切（会议 / 字幕与听写共用）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -145,6 +146,7 @@ targets:
       - path: Sources/Core/MeetingEngine
       - path: Sources/Modules/Meeting/Logic
       - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift
+      - path: Sources/Modules/LiveTranslate/LiveTranslateLanguageSwitch.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

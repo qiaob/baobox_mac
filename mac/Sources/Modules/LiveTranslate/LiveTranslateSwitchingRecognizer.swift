@@ -7,7 +7,8 @@ import Speech
 /// 系统的本机识别同一时间只能跑一路，两路同时开会互相挤掉；而装了本机模型的语言没法让它走服务器。所以：
 /// 只开当前语言的识别器，同时把这一句的录音存一份；一句说完看结果像不像当前语言 —— 中文识别器听到英文会吐出
 /// 英文单词，英文识别器听到中文时置信度很低 —— 不像就把录音交给另一种语言的识别器重认一遍（本机识别比实时快得多），
-/// 两边打分取高的，并切到那种语言接着听。重认期间音频由闸门攒着，下一句开时补喂，不丢字。
+/// 两边打分取高的定稿；之后切不切到那种语言接着听另算：它的结果够长、或连赢两段才切（`LiveTranslateLanguageSwitch`，
+/// 2026-11-11：一句「OK」就把整个识别器切到了英文）。重认期间音频由闸门攒着，下一句开时补喂，不丢字。
 ///
 /// 只有一种语言有本机模型时用 `LiveTranslateDualRecognizer`（中文本机 + 英文云端同时听）；两种都有时用这个，免得两路
 /// 互相挤掉、中文被停用。英文本机模型删不掉、删了系统也会自动装回来（2026-11-05），所以这台 Mac 上这是「自动」的主路径。
@@ -27,6 +28,8 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
     private let recorder = LiveTranslateSegmentRecorder()
     /// 当前在听的语言（下标）。
     private var active = 0
+    /// 另一种语言连赢了几段、还没切过去（`LiveTranslateLanguageSwitch.Decision.votes`）；开始 / 停止时清零。
+    private var otherWins = 0
 
     private var running = false
     private var watchdog: Timer?
@@ -94,6 +97,7 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
 
     func start() async throws {
         running = true
+        otherWins = 0
         LiveTranslateLog.recognition.notice(
             "switching recognizer start: \(self.languages.map(\.code).joined(separator: "+"), privacy: .public)")
         router.setSink(gate.sink)
@@ -119,6 +123,7 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
         recheckTask = nil
         handoffDeadline = nil
         recheckDeadline = nil
+        otherWins = 0
         _ = recorder.take()
         flushGate?.open()
         flushGate = nil
@@ -261,6 +266,8 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
             recheck(segment: id, own: own, voiced: voiced, audio: audio)
             return
         }
+        // 这段没让另一种语言赢：连赢断了，票数清零。
+        otherWins = 0
         publish(segment: id, text: own.text, languageIndex: active)
         nextSegmentOrEndFlush()
     }
@@ -311,7 +318,8 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
         }
     }
 
-    /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；另一种赢了就切过去。
+    /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；之后切不切看 `LiveTranslateLanguageSwitch` ——
+    /// 另一种赢了但结果短（一句「OK」）只这段用它的文字，连赢两段或结果够长才切过去。
     private func recheckDone(segment id: Int, other: Int, text: String, confidence: Double) {
         guard running, recheckDeadline != nil, id == recheckSegment else { return }
         recheckDeadline = nil
@@ -323,15 +331,20 @@ final class LiveTranslateSwitchingRecognizer: LiveTranslateRecognizer {
                                                   voiced: recheckVoiced)
         let otherScore = LiveTranslateScoring.score(text: otherText, confidence: confidence, language: languages[other],
                                                     voiced: recheckVoiced)
-        // 略高一点不切（差不多时留在当前语言，免得来回跳）。
-        let switches = otherScore > max(ownScore * 1.1, ownScore + 0.02)
+        let otherCJK = LiveTranslateScoring.countsCharacters(languages[other])
+        let otherUnits = LiveTranslateScoring.units(otherText, cjk: otherCJK)
+        let decision = LiveTranslateLanguageSwitch.decide(ownScore: ownScore, otherScore: otherScore,
+                                                          otherUnits: otherUnits, otherCJK: otherCJK, votes: otherWins)
+        otherWins = decision.votes
         LiveTranslateLog.recognition.notice(
-            "auto recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(self.recheckStartedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(LiveTranslateScoring.units(otherText, cjk: self.languages[other].isChinese)) units, conf \(String(format: "%.2f", confidence), privacy: .public)) -> \(switches ? "switch" : "keep", privacy: .public)")
-        if switches {
+            "auto recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(self.recheckStartedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units, conf \(String(format: "%.2f", confidence), privacy: .public)) -> \(decision.logLabel, privacy: .public)")
+        if decision.switches {
             LiveTranslateLog.recognition.notice(
                 "auto: switched \(self.languages[self.active].code, privacy: .public) -> \(self.languages[other].code, privacy: .public)")
             active = other
             stallStreak = 0
+        }
+        if decision.usesOther {
             publish(segment: id, text: otherText, languageIndex: other)
         } else {
             publish(segment: id, text: own.text, languageIndex: active)

@@ -112,6 +112,8 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 - 流程：中文单元说完 → 交给纠错（上文 = 这句前面已说完的单元 + 不够时接上一句，最多 100 字）→ 结果回来换掉字幕原文里
   这一单元 → 按纠正后的文字翻译。还在说的那截照旧先出草稿译文，不等纠错；单元的正式译文晚约 1 秒。
 - 防乱改（`LiveTranslateCorrector.accept`）：取第一行、去掉「改正后：」之类的前缀和引号；长度差或编辑距离超过三成就不用。
+- 只输出简体（2026-11-11，用户转录里出现了繁体字「閒」）：这一单元的语言是简体中文时，提示词再加一句「一律用简体中文输出，
+  繁体字改成对应的简体字」（`AIPrompts.simplifiedChineseRule`，云端「纠错 + 翻译」用同一句）；别的语言（含繁体中文）不加。
 - 纠错模型还在加载（冷启动约 9 秒，比翻译模型还慢）时先不纠、直接翻，就绪后的单元才纠：第一句不用陪着等它。
 - 开关：设置「AI 纠正识别错字」（`livetranslate.aiCorrection`，默认开），模型没下载、或没开翻译时不纠。纠错模型在实时翻译
   运行期间常驻，空闲 10 分钟退出；字幕条状态行显示「· AI 纠错」。
@@ -237,6 +239,7 @@ macOS 26 且该语言被 `SpeechTranscriber` 支持 → 新引擎；不支持、
 | `LiveTranslateAudio.swift` | `AudioRouter`（sink）、PCM 格式转换、麦克风源、系统声音源（SCK） |
 | `LiveTranslateTranslator.swift` | 翻译节流队列（按方向分）+ `translationTask` 桥接 + 离线模型服务循环 |
 | `LiveTranslateDualRecognizer.swift` | 双识别器：两种语言同时听、共用切段、逐句打分定语种 |
+| `LiveTranslateLanguageSwitch.swift` | 轮流识别重认后这段用哪种语言的文字、之后的识别器切不切（纯函数，听写也用；`docs/translation-engine/DESIGN.md` §3.3） |
 | `LiveTranslateBar.swift` | 字幕条 `NSPanel`（可拉伸、记位置大小）与 SwiftUI 视图（快捷菜单、延迟监控、可滚动历史） |
 | `LiveTranslateRecordSettings.swift` | 「保存记录」「停止后整理纪要」两个开关与「打开记录文件夹」（`LiveTranslateRecordSettings`；目录由调用方给：会话配置里的会议库，#107 PR6）。记录本身由会议库写：`Modules/Meeting/MeetingTranscript.swift`（Markdown，增量整份重写）、`MeetingMinutesGenerator.swift`（停止后整理纪要，分段提要点再合并），#107 PR4 从这里搬过去 |
 | `LiveTranslateMeetingEngine.swift` | 会议的引擎：`LiveTranslateController` 包一层，实现 Core 的 `MeetingEngine` 协议（#107 PR5，`docs/meeting/ENGINE.md` §4.4）；会议专属的规则（沿用这里的说话语言 / 译成 / 纠错、字幕关着只转录、只转录时也纠错）在这里，装配在 `AppDelegate.meetingEngine` |

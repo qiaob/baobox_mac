@@ -190,8 +190,13 @@ enum LiveTranslateScoring {
     /// 只为抓「说了好几秒、却几乎没出字」。
     static func density(text: String, voiced: TimeInterval, language: TranslationLanguage) -> Double {
         guard voiced > 0 else { return 1 }
-        let cjk = language.isChinese || language.code == "ja" || language.code == "ko"
+        let cjk = countsCharacters(language)
         return Double(units(text, cjk: cjk)) / (voiced * (cjk ? 1.5 : 1.0))
+    }
+
+    /// 这种语言按字数（中日韩）还是按词数：字数密度、轮流识别「结果够不够长」（`LiveTranslateLanguageSwitch`）都用它。
+    static func countsCharacters(_ language: TranslationLanguage) -> Bool {
+        language.isChinese || language.code == "ja" || language.code == "ko"
     }
 
     /// 字 / 词数：中日韩一个字一个；拉丁字母连成的一个词算一个。

@@ -1218,7 +1218,8 @@ final class LiveTranslateController: ObservableObject {
                 speak(&line, unit: unit, text: line.tailTranslation, language: target)
                 translationLatency = translationSamples.add(0)
                 if corrects {
-                    corrector.submit(key: key, text: text, context: correctionContext(line, before: unit))
+                    corrector.submit(key: key, text: text, context: correctionContext(line, before: unit),
+                                     language: language)
                 }
                 continue
             }
@@ -1226,7 +1227,7 @@ final class LiveTranslateController: ObservableObject {
             if corrects {
                 // 不翻的中文句也纠错：纠正后的原文就是这句的字幕。
                 corrector.submit(key: key, text: text, context: correctionContext(line, before: unit),
-                                 translateTo: combinedTarget)
+                                 language: language, translateTo: combinedTarget)
             } else if let target {
                 translator.submit(id: key, text: text, isFinal: true, target: target.code)
             }
