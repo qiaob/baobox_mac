@@ -50,8 +50,10 @@
 > 本文件只留 Claude Code 的格式 `ClaudeSessionFormat` 与独有的审计、磁盘分布；下表的成员名与签名不变，UI 照旧这样调。
 
 ### 解析工具
-- 逐行解析与时间戳：共用的 `CLIJSONL.parseDate(_:) -> Date?`、`CLIJSONL.parseObject(_ data:) -> [String:Any]?`（Usage / FileIndex / LiveStatus 也用它）。
-- `enum ClaudeJSONLParsing` 只剩 Claude 独有的 `extractText(fromContent:) -> String?`。
+- 逐行解析与时间戳：共用的 `CLIJSONL.parseDate(_:) -> Date?`、`CLIJSONL.parseObject(_ data:) -> [String:Any]?`（Usage / FileIndex / LiveStatus 也用它）；
+  整份逐行的 `CLIJSONL.forEachObject(in:_:)`（按字节切行，坏行只丢那一行；两边的导出用）。
+- `enum ClaudeJSONLParsing` 只剩 Claude 独有的 `extractText(fromContent:) -> String?`（在 `ClaudeSessionMarkdown.swift`：纯逻辑，编进 `BaoboxTests`）。
+- `enum ClaudeSessionMarkdown` —— `markdown(from: Data, title:, headings: CLISessionMarkdown.Headings) -> String`：导出 Markdown 的拼法（逐行读、跳过用户消息里的系统注入，DEDUPE.md §5.1 B2）；小标题文案由 `ClaudeSessionFormat.markdown` 用 `L("claudecode.export.user" / "claudecode.export.assistant")` 取好传进来。
 
 ### 数据模型
 - `struct ClaudeSessionSummary: Identifiable, Equatable, CLISessionSummary` —— `id, fileURL, projectPath, projectName, title, lastActivity, fileSize, model?, contextTokens?`

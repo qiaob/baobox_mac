@@ -1,9 +1,9 @@
 import Foundation
 import XCTest
 
-// 会话索引共用层的测试夹具：假的摘要 / 记录 / 格式、临时目录、等主线程回调的小工具。
-// 真实的 Claude / Codex 格式留在各自模块里（不编进测试）；这里的假格式照真的那样自己读文件：
-// 会话文件是一行 JSON {"title": "…", "activity": <秒>}，没有 activity 就拿文件修改时间当最后活动时间。
+// 会话索引共用层的测试夹具：假的摘要 / 记录 / 格式、临时目录、等主线程回调的小工具，以及导出 Markdown 的夹具（文件末尾）。
+// 真实的 Claude / Codex 格式留在各自模块里（不编进测试，只有导出的拼法 `ClaudeSessionMarkdown` / `CodexSessionMarkdown` 编进来）；
+// 这里的假格式照真的那样自己读文件：会话文件是一行 JSON {"title": "…", "activity": <秒>}，没有 activity 就拿文件修改时间当最后活动时间。
 
 /// 假摘要：项目 = 会话文件所在目录。
 struct FakeSessionSummary: CLISessionSummary, Equatable {
@@ -229,4 +229,60 @@ func spinMainRunLoop(for seconds: TimeInterval) {
 /// 2026-11-10 08:00:00 UTC 起的第 `offset` 秒（测试里的「现在」附近）。
 func sessionTestTime(_ offset: TimeInterval = 0) -> Date {
     Date(timeIntervalSince1970: 1_794_297_600 + offset)
+}
+
+// MARK: - 导出 Markdown
+
+/// 几行拼成一份 JSONL（每行后面一个换行）。要造坏字节、半行，就在返回的 Data 上接着 append。
+func jsonlData(_ lines: String...) -> Data {
+    Data(lines.map { $0 + "\n" }.joined().utf8)
+}
+
+/// 一个对象编成一行 JSON（键排序）。
+func jsonLine(_ object: [String: Any]) throws -> String {
+    String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+}
+
+/// 「成」字（E6 88 90）的前两个字节：单独出现就是坏 UTF-8 —— 正在写的会话末尾常见的半个汉字。
+let halfCharacter: [UInt8] = [0xE6, 0x88]
+
+/// 系统注入的样本：Claude Code（斜杠命令、命令输出、提醒、`!` 命令）与 Codex（环境、指令）往对话里塞的标记块，
+/// 最后一条前面带空白。导出时一律跳过。
+let systemInjectionSamples = [
+    "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>",
+    "<command-message>init is analyzing your codebase…</command-message>\n<command-name>/init</command-name>",
+    "<local-command-stdout>Set model to opus</local-command-stdout>",
+    "<local-command-stderr>Error: no such command</local-command-stderr>",
+    "<system-reminder>The user opened the file LoginView.swift</system-reminder>",
+    "<bash-input>git status</bash-input>",
+    "<bash-stdout>On branch main</bash-stdout><bash-stderr></bash-stderr>",
+    "<environment_context>\n  <cwd>/Users/me/app</cwd>\n</environment_context>",
+    "<user_instructions>Use tabs.</user_instructions>",
+    "\n   <system-reminder>前面有空白</system-reminder>",
+]
+
+extension CLISessionMarkdown.Headings {
+    /// 英文界面下的小标题（Localizable.xcstrings 的 en，逐字；Claude Code 与 Codex 的 key 不同、文案相同）。
+    static let english = CLISessionMarkdown.Headings(user: "User", assistant: "Assistant")
+    /// 中文界面下的小标题（zh-Hans，逐字）。
+    static let chinese = CLISessionMarkdown.Headings(user: "用户", assistant: "助手")
+}
+
+/// 仓库里 Localizable.xcstrings 中 `key` 在 `language` 下的文案；表读不出来或没有这一条返回 nil。
+/// 测试 target 不带本地化表（`L()` 查不到），小标题的文案只能这样对表。
+func catalogValue(_ key: String, language: String) -> String? {
+    // 本文件在 mac/Tests/CLISession/ 下。
+    let catalog = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/Resources/Localizable.xcstrings")
+    guard let data = try? Data(contentsOf: catalog),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let strings = root["strings"] as? [String: Any],
+          let entry = strings[key] as? [String: Any],
+          let localizations = entry["localizations"] as? [String: Any],
+          let localization = localizations[language] as? [String: Any],
+          let unit = localization["stringUnit"] as? [String: Any] else { return nil }
+    return unit["value"] as? String
 }

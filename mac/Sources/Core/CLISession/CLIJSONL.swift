@@ -28,6 +28,16 @@ enum CLIJSONL {
     static func parseObject(_ data: Data) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
+
+    /// 整份 JSONL 逐行解析：按字节切行、每行单独 `parseObject`，按出现顺序交出解析得了的对象。
+    /// 坏行（坏 JSON、坏 UTF-8、写了一半）只丢那一行 —— 整份先解成 `String` 的话，一个坏字节
+    /// （比如正在写的会话末尾半个汉字）就整份失败。空行跳过；最后一行没有换行也照样解析。
+    static func forEachObject(in data: Data, _ body: ([String: Any]) -> Void) {
+        for line in data.split(separator: 0x0A) {
+            guard let object = parseObject(Data(line)) else { continue }
+            body(object)
+        }
+    }
 }
 
 /// 会话里项目路径的展示用小工具。

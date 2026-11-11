@@ -245,10 +245,12 @@ printf '%s\n' "$out"
 
 - `ClaudeCodeCenterController`(单例,仿 SettingsWindowController:NSWindow + NSHostingController,isReleasedWhenClosed=false,show(tab:))。尺寸 720×480,titled/closable/resizable。
 - SwiftUI 根视图:`TabView`(或顶部 segmented Picker)三页:
-  - **会话**:搜索框(标题/项目名包含匹配)+ List(标题、项目、相对时间、大小);行按钮:续接(终端图标)、复制 resume 命令、导出 Markdown(NSSavePanel;导出=逐行解析该 jsonl,user/assistant 文本块拼 `## User / ## Assistant`)、删除。
+  - **会话**:搜索框(标题/项目名包含匹配)+ List(标题、项目、相对时间、大小);行按钮:续接(终端图标)、复制 resume 命令、导出 Markdown(NSSavePanel;导出=逐行解析该 jsonl,user/assistant 文本块拼 `## 用户 / ## 助手`,小标题跟界面语言,见本节末)、删除。
   - **用量**:顶部窗口卡片(进度条对预算,无预算则只显示量)+ 三个小节表(按天 30 行/按项目/按模型):列 = 名称、输入、输出、缓存写、缓存读、估算费用;费用列头标"估算"。刷新按钮。
     末尾追加「调用统计」小节(近 7/30 天 Picker):Skill/斜杠命令、MCP(服务器 › 工具两级)、内置工具三张计数表,数据来自 `invocationStats(days:)`。
   - **审计**:DatePicker(默认今天)+ 按项目分组的 List(文件路径、次数、末次时间;点击 → `NSWorkspace.shared.activateFileViewerSelecting`)。加载中转圈,后台计算。
+
+> 导出 Markdown(2026-11,#109 PR5b 起与 Codex 助手对齐,`../codex-assistant/DEDUPE.md` §5.1 B2):`# 标题`,之后按出现顺序每条消息一段。小标题跟界面语言(`claudecode.export.user` / `claudecode.export.assistant`:英文界面 User / Assistant,中文界面「用户 / 助手」;以前写死英文);用户消息取第一个 text 块、助手拼全部 text 块(tool_use / tool_result / thinking 不导出,正文原样不 trim);用户消息里 `<` 开头的系统注入(`<command-name>`、`<local-command-stdout>`、`<system-reminder>`…,与会话标题同一条规则)不导出,助手的回复以 `<` 开头是正文、照常导出;按字节逐行读,一行坏了只丢那一行。拼法在 `ClaudeSessionMarkdown.swift`(纯逻辑,编进 `BaoboxTests`),逐行读与系统注入的判定和 Codex 共用 `Core/CLISession/`(`CLIJSONL.forEachObject`、`CLISessionMarkdown`)。
 
 ### 3.9 设置 Tab(ClaudeCodeSettingsView)
 

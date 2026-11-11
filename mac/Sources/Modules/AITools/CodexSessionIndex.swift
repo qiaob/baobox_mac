@@ -8,62 +8,10 @@ import Foundation
 ///
 /// 刷新、复用、排序、删除、导出外壳与清理旧会话在与 Claude Code 助手共用的 `Core/CLISession/`（#109）：
 /// 本文件只留 Codex 的「格式」`CodexSessionFormat`。与 Claude 不同（DESIGN 的「简化」）：只做内存缓存，
-/// 不落磁盘缓存文件（`cacheFileURL` 为 nil）。
+/// 不落磁盘缓存文件（`cacheFileURL` 为 nil）。rollout 的逐行解析辅助 `CodexJSONLParsing` 与导出 Markdown 的拼法是纯逻辑，
+/// 在 `CodexSessionMarkdown.swift`（编进 `BaoboxTests`）。
 ///
-/// 用户可见文案：仅一处降级标题 `aitools.session.untitled`。
-
-// MARK: - 解析辅助
-
-/// rollout 行里 Codex 独有的解析辅助。逐行解析与时间戳用共用的 `CLIJSONL`。
-enum CodexJSONLParsing {
-
-    /// 从内容值提取首个可读文本。内容可能是纯字符串，或
-    /// `[{type:text|input_text, text:...}]` 数组（Codex 与 Claude 的 content 略有差异）。
-    nonisolated static func extractText(from content: Any?) -> String? {
-        if let text = content as? String { return text }
-        if let blocks = content as? [[String: Any]] {
-            for block in blocks {
-                let type = block["type"] as? String
-                if type == nil || type == "text" || type == "input_text" || type == "output_text" {
-                    if let text = block["text"] as? String, !text.isEmpty { return text }
-                }
-            }
-        }
-        return nil
-    }
-
-    /// 从一个 rollout 行对象里尽力取出 (id, cwd)。兼容顶层与 `payload` 嵌套两种写法。
-    nonisolated static func extractMeta(from object: [String: Any]) -> (id: String?, cwd: String?) {
-        var id = object["id"] as? String
-        var cwd = object["cwd"] as? String
-        if let payload = object["payload"] as? [String: Any] {
-            id = id ?? (payload["id"] as? String)
-            cwd = cwd ?? (payload["cwd"] as? String)
-        }
-        return (id, cwd)
-    }
-
-    /// 从一个 rollout 行对象里尽力取出用户输入文本；非用户消息返回 nil。
-    nonisolated static func extractUserText(from object: [String: Any]) -> String? {
-        if let payload = object["payload"] as? [String: Any] {
-            // 形态 A：event_msg / user_message，message 为字符串。
-            if (payload["type"] as? String) == "user_message", let m = payload["message"] as? String {
-                return m
-            }
-            // 形态 B：response_item，role == user，content 为块数组。
-            if (payload["role"] as? String) == "user",
-               let text = extractText(from: payload["content"]) {
-                return text
-            }
-        }
-        // 形态 C：顶层直接带 role / content。
-        if (object["role"] as? String) == "user",
-           let text = extractText(from: object["content"]) {
-            return text
-        }
-        return nil
-    }
-}
+/// 用户可见文案：降级标题 `aitools.session.untitled`；导出 Markdown 的小标题 `aitools.export.user` / `aitools.export.assistant`。
 
 // MARK: - 数据模型
 
@@ -205,26 +153,15 @@ enum CodexSessionFormat: CLISessionFormat {
         return candidate
     }
 
-    /// 遍历 rollout jsonl，把 user / assistant 的对话文本拼成 Markdown。
-    /// 只取 `payload.type == "message"` 的 `response_item`（`event_msg` 的 user_message/agent_message
-    /// 是镜像，取之会重复）；跳过 developer/system 角色与 `<...>` 系统注入块。整份读入（可能较大，
-    /// 故只在后台线程调用）。全程容错，任何行解析失败只跳过。
+    /// 把 rollout jsonl 里 user / assistant 的对话文本导出成 Markdown。这里只读文件、取文案，拼法在 `CodexSessionMarkdown`。
+    /// 整份按字节读入（可能较大，故只在后台线程调用），逐行解析：一行里有坏字节只丢那一行（以前整份按 UTF-8 解，
+    /// 一个坏字节就整份导出失败）。读不了文件返回 nil。
     static func markdown(fileURL: URL, title: String) -> String? {
-        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
-        var out = "# \(title)\n"
-        for lineData in content.split(separator: "\n") {
-            guard let object = CLIJSONL.parseObject(Data(lineData.utf8)),
-                  let payload = object["payload"] as? [String: Any],
-                  (payload["type"] as? String) == "message",
-                  let role = payload["role"] as? String,
-                  role == "user" || role == "assistant",
-                  let text = CodexJSONLParsing.extractText(from: payload["content"]) else { continue }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // 跳过系统注入（<environment_context> / <permissions instructions> 等 `<` 起头块）。
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("<") else { continue }
-            let heading = role == "user" ? L("aitools.export.user") : L("aitools.export.assistant")
-            out += "\n## \(heading)\n\n\(trimmed)\n"
-        }
-        return out
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        let headings = CLISessionMarkdown.Headings(
+            user: L("aitools.export.user"),
+            assistant: L("aitools.export.assistant")
+        )
+        return CodexSessionMarkdown.markdown(from: data, title: title, headings: headings)
     }
 }
