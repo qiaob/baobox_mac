@@ -1,19 +1,19 @@
-import AppKit
 import Foundation
 
 /// Claude Code 助手 —— 环境与本地文件基础层。
 ///
 /// 本文件是整个模块的「底座」：路径常量、`claude` 二进制探测、`~/.claude/settings.json`
-/// 与 `~/.claude.json` 的安全读-改-写、MCP / 权限 / Co-Authored-By 的底层读写接口、
-/// 以及在终端里续接会话的启动器。UI 层只调这里暴露的方法，绝不自己碰文件。
+/// 与 `~/.claude.json` 的安全读-改-写、MCP / 权限 / Co-Authored-By 的底层读写接口。
+/// 在终端里续接会话在 `ClaudeTerminal.swift`（2026-11 起，#164；通用的终端启动器在 `Core/Terminal/`）。
+/// UI 层只调这里暴露的方法，绝不自己碰文件。
 ///
 /// 并发说明：`ClaudeEnv` 与 `ClaudeJSONFile` 有意**不**标 `@MainActor`，因为它们的所有
 /// 成员要么是纯路径计算、要么是可能读写数 MB 文件的重 IO —— 这些必须能在后台线程直接调用。
 /// 若强行标 `@MainActor`（技术方案 3.1 的字面写法），反而会把大文件 IO 逼回主线程，违反
-/// 「重 IO 一律后台」的硬约束。因此本文件里唯一需要主线程的 `TerminalLauncher`（触碰
-/// NSWorkspace）单独标 `@MainActor`。这是对 TECH_DESIGN 3.1 的一处**刻意且必要**的偏离。
+/// 「重 IO 一律后台」的硬约束。需要主线程的终端部分（触碰 NSWorkspace）在 `ClaudeTerminal`，
+/// 单独标 `@MainActor`。这是对 TECH_DESIGN 3.1 的一处**刻意且必要**的偏离。
 ///
-/// 本文件不含用户可见文案（脚本与命令字符串不经 L()）。
+/// 本文件不含用户可见文案（命令字符串不经 L()）。
 enum ClaudeEnv {
 
     // MARK: - 路径常量
@@ -101,7 +101,7 @@ enum ClaudeEnv {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // 走登录 shell，保证 PATH 完整（binary 可能只是 "claude"）。
-        process.arguments = ["-lc", "\(shellSingleQuote(binary)) --version"]
+        process.arguments = ["-lc", "\(Shell.quote(binary)) --version"]
         let outPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = Pipe()
@@ -304,13 +304,6 @@ enum ClaudeEnv {
             }
         }
     }
-
-    // MARK: - Shell 转义
-
-    /// 用单引号安全包裹一个字符串，供 shell 命令拼接。内部单引号按 `'\''` 转义。
-    static func shellSingleQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }
 
 // MARK: - JSON 文件读-改-写工具
@@ -364,310 +357,5 @@ enum ClaudeSettingsFile {
 
     static func mutate(_ transform: (inout [String: Any]) -> Void) throws {
         try ClaudeJSONFile.mutate(ClaudeEnv.settingsFile, transform)
-    }
-}
-
-// MARK: - 终端启动器
-
-/// 在用户偏好的终端里执行命令（续接会话等），终端解析见 `TerminalAppChoice`。
-/// 触碰 NSWorkspace，故标 `@MainActor`，由菜单点击等主线程场景调用。
-/// 写入的是极小的 `.command` 脚本，主线程落盘可接受。
-@MainActor
-enum TerminalLauncher {
-
-    /// 把命令包成一次性 `.command` 脚本并用偏好终端打开。
-    /// - Parameters:
-    ///   - command: 要执行的命令行（不含 cd）。
-    ///   - directory: 执行目录；nil 则不 cd。
-    static func run(command: String, in directory: String?) {
-        let launchDir = ClaudeEnv.ensureSupportDir().appendingPathComponent("launch", isDirectory: true)
-        try? FileManager.default.createDirectory(at: launchDir, withIntermediateDirectories: true)
-        cleanupOldLaunchers(in: launchDir)
-
-        var script = "#!/bin/zsh\n"
-        if let directory, !directory.isEmpty {
-            script += "cd \(ClaudeEnv.shellSingleQuote(directory))\n"
-        }
-        script += command + "\n"
-
-        let fileURL = launchDir.appendingPathComponent("\(UUID().uuidString).command")
-        guard let data = script.data(using: .utf8) else { return }
-        do {
-            try data.write(to: fileURL)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fileURL.path)
-        } catch {
-            return
-        }
-        // `.command` 的系统默认关联是 Terminal.app，会脱离用户日常终端的主题/字体
-        // 环境（真彩色在 Terminal.app 下渲染成乱码），必须显式指定偏好终端打开。
-        guard let launch = TerminalAppChoice.resolveLaunch() else {
-            NSWorkspace.shared.open(fileURL)
-            return
-        }
-        switch launch.choice.launchStyle {
-        case .document:
-            NSWorkspace.shared.open([fileURL], withApplicationAt: launch.appURL,
-                                    configuration: NSWorkspace.OpenConfiguration())
-        case .binary(let argsPrefix):
-            // kitty / WezTerm / Alacritty 不接管 .command,直接拉起可执行文件运行脚本。
-            guard let executable = Bundle(url: launch.appURL)?.executableURL else {
-                NSWorkspace.shared.open(fileURL)
-                return
-            }
-            let process = Process()
-            process.executableURL = executable
-            process.arguments = argsPrefix + [fileURL.path]
-            try? process.run()
-        }
-    }
-
-    /// 在指定项目目录续接会话：`<claude> --resume <id>`。
-    static func resume(sessionID: String, in directory: String, binary: String? = nil) {
-        let bin = binary ?? ClaudeEnv.findClaudeBinary() ?? "claude"
-        let command = "\(ClaudeEnv.shellSingleQuote(bin)) --resume \(ClaudeEnv.shellSingleQuote(sessionID))"
-        run(command: command, in: directory)
-    }
-
-    /// 可直接粘贴执行的续接命令(含 cd),供「复制续接命令」类功能共用。
-    static func resumeCommandString(sessionID: String, in directory: String) -> String {
-        let bin = ClaudeEnv.findClaudeBinary() ?? "claude"
-        return "cd \(ClaudeEnv.shellSingleQuote(directory)) && "
-            + "\(ClaudeEnv.shellSingleQuote(bin)) --resume \(ClaudeEnv.shellSingleQuote(sessionID))"
-    }
-
-    // MARK: 已开窗口检测与聚焦
-
-    /// 把正在跑的会话所在的终端切到前台（#109 B3，docs/claude-code-assistant/NOTIFY_JUMP.md §3）。点通知跳回、快速切换面板续接共用：
-    /// 先用 hook 记下的终端位置（精确到标签页 / Otty 面板，同一目录开着几个会话也不会认错），用不了再按进程找（`findRunningSession`）。
-    /// `completion` 在主线程回调：true = 切过去了；false = 都不行，调用方兜底（面板开新窗口续接，通知什么也不做）。
-    ///
-    /// - location: hook 记下的终端位置；nil = 没装 hooks、旧版脚本，或者 6 小时内没见过这个会话。
-    /// - confirmRunning: false = 位置直接用（点通知：位置是发通知那一刻记下的）；true = 先确认那个终端（tty）上现在还有 claude
-    ///   在跑（面板：会话可能早结束了，见 `ClaudeRunningSession`），没记 tty 的位置确认不了、只按进程找。
-    /// - projectPath: 按进程找时比对的项目目录；nil = 不按进程找。
-    static func focusRunningSession(sessionID: String, projectPath: String?, location: TerminalLocation?,
-                                    confirmRunning: Bool, isNewestInProject: Bool,
-                                    completion: @escaping (Bool) -> Void) {
-        if let location, !confirmRunning, TerminalFocus.focus(location) {
-            completion(true)
-            return
-        }
-        let unconfirmed = confirmRunning ? location : nil
-        guard unconfirmed?.tty != nil || projectPath != nil else {
-            completion(false)
-            return
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let table = processTable()
-            var confirmed: TerminalLocation?
-            if let unconfirmed, let tty = unconfirmed.tty,
-               ClaudeRunningSession.claudeRuns(onTTY: tty,
-                                               processes: table.values.map { (tty: $0.tty, command: $0.command) }) {
-                confirmed = unconfirmed
-            }
-            let running = projectPath.flatMap {
-                findRunningSession(sessionID: sessionID, projectPath: $0, isNewestInProject: isNewestInProject, in: table)
-            }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if let confirmed, TerminalFocus.focus(confirmed) {
-                        completion(true)
-                    } else if let running, focusTerminalWindow(of: running) {
-                        completion(true)
-                    } else {
-                        completion(false)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 运行中的会话进程定位结果：宿主终端 App（沿父进程链解析）与会话的 tty。
-    struct RunningSessionProcess: Sendable {
-        let terminalAppURL: URL?
-        let terminalBundleID: String?
-        let ttyPath: String?
-    }
-
-    /// 尽力找到某会话对应的运行中 CLI 进程（`table` 是 ps 快照；还会跑 lsof,须在后台队列调用）：
-    /// 1) 任一进程命令行含 `--resume <id>` → 必然是该会话；
-    /// 2) 项目目录下裸跑的 `claude`（无 --resume）且该会话是此项目最新一条 →
-    ///    大概率是那次首启（运行中的首启会话必然产生项目里最新的 JSONL）。
-    /// 找到后沿父链定位宿主终端 App：iTerm2 的会话可能挂在独立的 iTermServer
-    /// 守护进程下,故按「祖先命令路径含 .app/Contents/MacOS/」匹配而非直接父进程。
-    nonisolated private static func findRunningSession(sessionID: String, projectPath: String, isNewestInProject: Bool,
-                                                       in table: [Int32: (ppid: Int32, tty: String?, command: String)])
-        -> RunningSessionProcess? {
-        let claudes = table.filter { ClaudeRunningSession.isClaudeCommand($0.value.command) }
-
-        var matched: Int32?
-        if let hit = claudes.first(where: { $0.value.command.contains("--resume \(sessionID)") }) {
-            matched = hit.key
-        } else if isNewestInProject {
-            let target = normalizedPath(projectPath)
-            matched = claudes.first { pid, info in
-                !info.command.contains("--resume")
-                    && workingDirectory(ofPID: pid).map(normalizedPath) == target
-            }?.key
-        }
-        guard let pid = matched, let process = table[pid] else { return nil }
-
-        var terminalURL: URL?
-        var terminalBundleID: String?
-        var cursor = process.ppid
-        var hops = 0
-        while cursor > 1, hops < 15, let ancestor = table[cursor] {
-            if let (url, bundleID) = terminalApp(inCommand: ancestor.command) {
-                terminalURL = url
-                terminalBundleID = bundleID
-                break
-            }
-            cursor = ancestor.ppid
-            hops += 1
-        }
-        return RunningSessionProcess(terminalAppURL: terminalURL,
-                                     terminalBundleID: terminalBundleID,
-                                     ttyPath: process.tty.map { "/dev/\($0)" })
-    }
-
-    /// 把按进程找到的会话所在的终端窗口切到前台。定位不到宿主终端返回 false,调用方回退。
-    /// macOS 14 起后台 App 直接 `NSRunningApplication.activate()` 会被协作式激活拒绝,
-    /// 这里走 Launch Services（等价 `open -a`）前台化;iTerm2 / 系统 Terminal 再用
-    /// AppleScript 按 tty 精确选中窗口与标签页（首次触发系统「自动化」授权弹窗）。
-    private static func focusTerminalWindow(of process: RunningSessionProcess) -> Bool {
-        guard let appURL = process.terminalAppURL, let bundleID = process.terminalBundleID else {
-            return false
-        }
-        NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
-        if let tty = process.ttyPath, let script = tabSelectScript(bundleID: bundleID, ttyPath: tty) {
-            // AppleScript 逐个会话查询 tty 是多次 Apple Event 往返,放后台跑避免卡主线程。
-            DispatchQueue.global(qos: .userInitiated).async {
-                _ = runForOutput("/usr/bin/osascript", ["-e", script])
-            }
-        }
-        return true
-    }
-
-    /// 只按 tty 选中 iTerm2 / 系统 Terminal 里承载会话的窗口与标签页（App 本身由调用方前台化）；
-    /// 其他终端没有按 tty 选标签页的脚本接口，什么都不做。点通知跳回会话用（Core/TerminalFocus.swift）。
-    static func selectTab(bundleID: String, ttyPath: String) {
-        guard let script = tabSelectScript(bundleID: bundleID, ttyPath: ttyPath) else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = runForOutput("/usr/bin/osascript", ["-e", script])
-        }
-    }
-
-    /// 从进程命令行解析终端 App：命令路径形如 `/Applications/iTerm.app/Contents/MacOS/...`。
-    nonisolated private static func terminalApp(inCommand command: String) -> (URL, String)? {
-        guard let range = command.range(of: ".app/Contents/MacOS/") else { return nil }
-        let appPath = String(command[..<range.lowerBound]) + ".app"
-        guard let bundleID = Bundle(path: appPath)?.bundleIdentifier,
-              terminalBundleIDs.contains(bundleID) else { return nil }
-        return (URL(fileURLWithPath: appPath), bundleID)
-    }
-
-    nonisolated private static var terminalBundleIDs: Set<String> {
-        Set(TerminalAppChoice.allCases.compactMap(\.bundleID))
-    }
-
-    /// 按 tty 选中承载会话的窗口/标签页的 AppleScript;仅 iTerm2 与系统 Terminal 支持。
-    nonisolated private static func tabSelectScript(bundleID: String, ttyPath: String) -> String? {
-        switch bundleID {
-        case "com.googlecode.iterm2":
-            return """
-            tell application "iTerm2"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        repeat with s in sessions of t
-                            if tty of s is "\(ttyPath)" then
-                                select w
-                                select t
-                                select s
-                                return
-                            end if
-                        end repeat
-                    end repeat
-                end repeat
-            end tell
-            """
-        case "com.apple.Terminal":
-            return """
-            tell application "Terminal"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        if tty of t is "\(ttyPath)" then
-                            set selected tab of w to t
-                            set index of w to 1
-                            return
-                        end if
-                    end repeat
-                end repeat
-            end tell
-            """
-        default:
-            return nil
-        }
-    }
-
-    /// 进程快照：pid → (ppid, tty, command)。tty 为 `??`（无控制终端）时记 nil。
-    nonisolated private static func processTable()
-        -> [Int32: (ppid: Int32, tty: String?, command: String)] {
-        guard let output = runForOutput("/bin/ps", ["-axo", "pid=,ppid=,tty=,command="]) else { return [:] }
-        var table: [Int32: (ppid: Int32, tty: String?, command: String)] = [:]
-        for line in output.split(separator: "\n") {
-            let fields = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-            guard fields.count >= 4,
-                  let pid = Int32(fields[0]), let ppid = Int32(fields[1]) else { continue }
-            let tty = fields[2] == "??" ? nil : String(fields[2])
-            table[pid] = (ppid, tty, String(fields[3]))
-        }
-        return table
-    }
-
-    /// 取进程当前工作目录（lsof cwd）。
-    nonisolated private static func workingDirectory(ofPID pid: Int32) -> String? {
-        guard let output = runForOutput("/usr/sbin/lsof",
-                                        ["-a", "-p", "\(pid)", "-d", "cwd", "-Fn"]) else { return nil }
-        for line in output.split(separator: "\n") where line.hasPrefix("n") {
-            return String(line.dropFirst())
-        }
-        return nil
-    }
-
-    /// 路径归一（解符号链接），避免 /tmp 与 /private/tmp 之类的假不等。
-    nonisolated private static func normalizedPath(_ path: String) -> String {
-        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-    }
-
-    /// 同步执行小命令并取 stdout。
-    nonisolated private static func runForOutput(_ path: String, _ args: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// 目录里超过 20 个旧启动脚本时清理最旧的，避免堆积。
-    private static func cleanupOldLaunchers(in dir: URL) {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ), files.count > 20 else { return }
-        let sorted = files.sorted { lhs, rhs in
-            let l = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            let r = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            return l < r
-        }
-        for url in sorted.prefix(sorted.count - 20) {
-            try? fm.removeItem(at: url)
-        }
     }
 }

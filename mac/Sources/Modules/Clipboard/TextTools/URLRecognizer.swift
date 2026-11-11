@@ -43,7 +43,7 @@ struct URLRecognizer: TextFormatRecognizer {
                     FormatAction(id: "url.encode", title: L("clipboard.tools.action.urlEncode"),
                                  kind: .transform { $0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) }),
                     FormatAction(id: "url.toCurl", title: L("clipboard.tools.action.toCurl"),
-                                 kind: .transform { "curl \(CurlCommand.shellQuote($0))" })
+                                 kind: .transform { "curl \(Shell.quote($0))" })
                 ]))
             ]
         )

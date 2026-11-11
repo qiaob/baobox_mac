@@ -2,7 +2,7 @@ import Foundation
 
 /// Claude Code 助手 ——「正在跑的会话在哪个终端」的纯逻辑（#109 B3，docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）。
 ///
-/// 点通知跳回、快速切换面板续接都经 `TerminalLauncher.focusRunningSession` 把会话所在的终端切到前台：先用 hook 记下的终端位置，
+/// 点通知跳回、快速切换面板续接都经 `ClaudeTerminal.focusRunningSession` 把会话所在的终端切到前台：先用 hook 记下的终端位置，
 /// 再按进程找。面板要续接的会话可能早就结束了 —— reporter 不报 SessionEnd，结束了的会话连同它的位置在 `ClaudeLiveStatus`
 /// 里还要留 6 小时 —— 所以面板用位置之前先过这里的两关：会话还占着那个终端（tty），那个 tty 上现在有 claude 在跑。
 ///

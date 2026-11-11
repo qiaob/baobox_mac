@@ -269,11 +269,11 @@ private struct ClaudeSessionRow: View {
     }
 
     private func resume() {
-        TerminalLauncher.resume(sessionID: session.id, in: session.projectPath)
+        ClaudeTerminal.resume(sessionID: session.id, in: session.projectPath)
     }
 
     private func copyResumeCommand() {
-        let command = TerminalLauncher.resumeCommandString(sessionID: session.id, in: session.projectPath)
+        let command = ClaudeTerminal.resumeCommandString(sessionID: session.id, in: session.projectPath)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
     }

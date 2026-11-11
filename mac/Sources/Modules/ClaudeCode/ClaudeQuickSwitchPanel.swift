@@ -8,7 +8,7 @@ import SwiftUI
 /// ⌘⏎ 访达显示、⌘C 复制路径。⇥ 在两模式间切换(本地监听消费,焦点始终留在搜索框)。
 /// Esc 或点击面板外关闭。窗口外壳、键码、过滤与选中、会话栏视图与 Codex 助手共用 `Core/QuickSwitch/`(#109);
 /// 这里留 Claude 的会话数据源(第二行复用菜单的 SessionRowFormatStore 方案、续接先找正在跑的窗口 ——
-/// 与点通知跳回同一个 `TerminalLauncher.focusRunningSession`,先用 hook 记下的终端位置)
+/// 与点通知跳回同一个 `ClaudeTerminal.focusRunningSession`,先用 hook 记下的终端位置)
 /// 与「最近文件」模式(chips、文件列表、文件动作)。
 
 /// 面板两种模式。菜单入口显式指定;快捷键 toggle 沿用上次(进程内记忆)。
@@ -41,19 +41,19 @@ struct ClaudeQuickSwitchSource: QuickSwitchSessionSource {
             .first(where: { $0.projectPath == session.projectPath })?.id == session.id
         let sessionID = session.id
         let projectPath = session.projectPath
-        TerminalLauncher.focusRunningSession(
+        ClaudeTerminal.focusRunningSession(
             sessionID: sessionID, projectPath: projectPath,
             location: ClaudeLiveStatus.shared.currentTerminal(of: sessionID),
             confirmRunning: true, isNewestInProject: isNewest
         ) { focused in
             if !focused {
-                TerminalLauncher.resume(sessionID: sessionID, in: projectPath)
+                ClaudeTerminal.resume(sessionID: sessionID, in: projectPath)
             }
         }
     }
 
     func resumeCommand(for session: ClaudeSessionSummary) -> String {
-        TerminalLauncher.resumeCommandString(sessionID: session.id, in: session.projectPath)
+        ClaudeTerminal.resumeCommandString(sessionID: session.id, in: session.projectPath)
     }
 }
 

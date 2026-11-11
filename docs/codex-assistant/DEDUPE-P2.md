@@ -1,6 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
+> 进度：PR1 已实现（PR #182，§5 PR1 末尾的落地记录）。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -215,6 +216,8 @@
   hooks / notify 事件、最近文件索引、续接脚本。PR1 动脚本位置时顺手改（D2）。
 - `tokens` 在 999,950–999,999 之间显示「1000.0k」（先判 ≥ 1000，再按一位小数四舍五入）。一直如此，不改；PR2 的单测把它钉住，想改另说。
 - 两个面板控制器的 `handleKey` 还有 14 行相同：#172 有意把按键含义留在各自控制器（`DEDUPE.md` §4.3），不动。
+- （PR1 落地时查到）「按进程找宿主终端」在真机上一直找不到：`processTable` 切出来的命令行开头带着 ps 的列对齐空格，`Bundle(path:)` 认不出终端 App。
+  PR1 原样搬、没修，见 §5 PR1 落地记录末段。
 
 ## 2. 设计
 
@@ -755,6 +758,51 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 改：`ClaudeEnv.swift`（删约 310 行）、`ClaudeQuickSwitchPanel.swift`、`ClaudeLiveStatus.swift`、`ClaudeCodeCenterWindow.swift`、`ClaudeCodeTool.swift`（旧目录清理）、
   `AIToolsCenterWindow.swift`、`AIToolsNotify.swift`、`CodexEnv.swift`；D3 同意的话 `CurlCommand.swift`、`URLRecognizer.swift`、`LiveTranslateVoiceOutput.swift`；`mac/project.yml`。
 - 文档：见 §2.4 类 5 末条；本文状态。
+
+#### PR1 落地记录（2026-11-11，PR #182，分支 `refactor/cli-terminal-core`，基线 main `5841026`）
+
+照上面的清单做了，D1–D3 按建议。
+
+1. **新增**：`Core/Terminal/TerminalLauncher.swift`（`run`、`selectTab`，原样搬）、`Core/Terminal/TerminalLaunchScript.swift`（`contents`、`prune`）、
+   `Core/Shell.swift`（`quote`、`output`）、`Modules/ClaudeCode/ClaudeTerminal.swift`（`resume`、`resumeCommandString`、`focusRunningSession` 与按进程找的几个 private 函数）；
+   测试 `mac/Tests/Shell/ShellTests.swift`（12 个）、`mac/Tests/Terminal/TerminalLaunchScriptTests.swift`（9 个），`project.yml` 的 `BaoboxTests.sources` 加了两个文件。
+2. **挪**：`TerminalAppPreference.swift`、`TerminalFocus.swift` → `Core/Terminal/`（`git mv`）。
+3. **改**：`ClaudeEnv.swift` 删了 `shellSingleQuote` 与整个旧 `TerminalLauncher`（−326 行，`import AppKit` 也去掉了，剩下的只用 Foundation）；Claude 的四处调用改成 `ClaudeTerminal.`；
+   `ClaudeCodeTool.activate()` 第一行（「未安装」判断之前）调 `removeLegacyLaunchScripts()`：后台、目录在才删、只删 `ClaudeEnv.supportDir/launch/`；
+   AITools 删了 `CodexEnv.shellQuote`、`CodexNotify.shellSingleQuote`，`CodexResumeCommand`、`CodexEnv.cliVersion`、notify 脚本改调 `Shell.quote`，`TerminalLauncher.run` 两处一行没动；
+   剪贴板删了 `CurlCommand.shellQuote`（同文件 7 处 + `URLRecognizer` 1 处改调）；实时翻译删了 `LiveTranslateDriver.quoted`（3 处改调）；NetCapture 没动。
+4. **文档**：`CORE_API.md` §1 / §8、`TECH_DESIGN.md` §3.1、`NOTIFY_JUMP.md`、`DESIGN.md` §9.1（跨模块依赖标成已解决）、根 `CLAUDE.md` 的 Core 清单、
+   隐私文档中英两份（Claude Code / Codex 助手那两行改成实际存的东西，另加一行续接脚本）。
+
+和设计稿的出入：
+
+- `TerminalFocus.swift` 不是一字不动：第 39 行注释「（与 TerminalLauncher 相同）」改成「（等价 `open -a`）」—— Launch Services 前台化那段跟着 `focusTerminalWindow`
+  去了 `ClaudeTerminal`，Core 的 `TerminalLauncher` 里不再有，原注释不对了。
+- 比 §2.4 的签名多两样：`TerminalLauncher.launchDirectory`（`nonisolated static var`，脚本目录只在这一处拼）、`TerminalLaunchScript.keepCount = 20`。
+  `RunningSessionProcess` 改成 private（原来 internal，只有它自己用）。
+- 「只留 20 个」照搬原来的顺序：先清再写，所以刚写完那一刻目录里最多 21 个（§4.4 真机第 6 条「最多 20 个」实际看到的是 21，不是 bug）。
+- `Shell.quote` 的单测交给真 shell 回读时走**脚本文件**，不走 `zsh -c` / `sh -c` 参数：Foundation 的 `Process` 会把参数按 NFD 分解（é → e + ◌́，探针实测），
+  非 ASCII 读回来的字节就不同了 —— 那是传参的事，不是转义的事；续接用的 `.command` 本来也是脚本文件。zsh 加 `-f`，不读用户的启动文件。
+- 旧目录清理那几行的注释写明「随 0.0.9 发出，0.0.11 起删掉」（现在的版本号是 0.0.8）。照 R11 只删 `launch/`：只装了 Codex、以前续接过的用户，
+  `Baobox/ClaudeCode/` 会留下一个空目录（新装的不会再有）。
+- 顺带改了两处注释：`AIToolsQuickSwitchPanel.swift` 头注释不再点名 Claude 模块的私有函数 `findRunningSession`；`CurlCommand` 头注释补一句重组用 `Shell.quote`。
+
+验证（Mac 本机，Xcode 16.2）：
+
+- `xcodebuild … test`：TEST SUCCEEDED，413 个（基线 392 + 新增 21）；warning 21 条，和 origin/main 同命令逐条相同（连行号）。
+- 差分探针（§4.2，旧文件加 `Old` 前缀与新代码编进同一个程序，NSWorkspace / 终端解析 / ps / lsof / osascript / `TerminalFocus` / 支持目录全用桩），46145 项检查全过：
+  2000 组随机（命令, 目录）旧 / 新 `run` 写出的脚本与 `TerminalLaunchScript.contents` 逐字节相同、都是 0755、打开方式相同（默认打开 / 指定 App 打开 / binary 各覆盖到），
+  只差目录（`Baobox/ClaudeCode/launch` → `Baobox/Terminal/launch`），跑完各剩 21 个；1000 组 `resumeCommandString` 与 `resume` 写出的脚本相同；
+  1000 组 Codex `command` / `fullCommand`、notify 脚本（1000 个随机路径 + 真实默认路径）逐字节相同；5017 个输入下 `Shell.quote` 与五份旧实现逐字相同，
+  2000 条 curl 的 `formatted` / `minified` 新旧相同；`selectTab` 15 组 osascript 相同；`focusRunningSession` 11 个场景（位置直接用 / 确认后用 / 按进程找到 / 都不行及变体）
+  调用序列、osascript、结局都相同；旧目录清理只删 `launch/`，旁边的 hooks 脚本、两份缓存、事件文件都在。改坏一处（引号换种等价写法 + 空串目录也 cd）探针报 9241 项失败，说明它查得出来。
+- 边界检查（§4.3 那段按声明查的脚本）：本分支无输出；origin/main 上正好报出那三处（`AIToolsQuickSwitchPanel.swift:32`、`AIToolsCenterWindow.swift:271`、`Core/TerminalFocus.swift:47`）。
+- 文案 key 集合不变（902 个），`Localizable.xcstrings` 没动；进测试的两个文件只 import Foundation、不调 `L()`。
+
+顺带查到的（**没修**，PR1 原样搬）：`processTable` 用 `split(separator: " ", maxSplits: 3)` 切 `ps` 的输出，第四段（命令行）开头还带着 ps 的列对齐空格
+（tty 是 `??` 的进程前面 6 个空格，ttysNNN 的 1 个），于是 `terminalApp(inCommand:)` 拼出的 App 路径以空格开头、`Bundle(path:)` 认不出 —— 本机实测 iTerm2、Otty
+都认不出来（去掉空格就认得）。结果是「按进程找」那条兜底在真机上从来找不到宿主终端：没有 hook 记下的位置时，点通知不跳，面板续接正在跑的会话会另开一个窗口。
+装了 hooks 的常规路径（先用位置）不受影响。修法是切完把命令行去掉首尾空格，属行为变化，建议另开 issue。
 
 ### PR2 小件
 

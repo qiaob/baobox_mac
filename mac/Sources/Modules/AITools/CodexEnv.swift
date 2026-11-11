@@ -128,7 +128,7 @@ enum CodexEnv {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // 走登录 shell，保证 PATH 完整（binary 可能只是 "codex"）。
-        process.arguments = ["-lc", "\(shellQuote(binary)) --version"]
+        process.arguments = ["-lc", "\(Shell.quote(binary)) --version"]
         let outPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = Pipe()

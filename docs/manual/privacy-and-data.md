@@ -48,8 +48,9 @@
 | 手机互传 | 收到的文件 | `~/Downloads/Baobox`（可改） |
 | 菜单栏管理 | 每个图标显示 / 隐藏的选择、图标缓存 | UserDefaults / 支持目录 |
 | 键盘点击 | 只有设置项 | UserDefaults |
-| Claude Code 助手 | **不存**——全部实时读 `~/.claude` | — |
-| Codex 助手 | **不存**——全部实时读 `~/.codex` | — |
+| Claude Code 助手 | 会话本身不复制，实时读 `~/.claude`。为了打开快：会话列表缓存（标题、项目路径）、最近文件索引（会话写过的文件路径）；装了 hooks 时还有 hooks 脚本和事件记录（会话、项目目录、所在终端、等你确认的提示和你发出的提示词；启动时超过 5 MB 就只留最后 1000 行） | 支持目录 `ClaudeCode/` |
+| Codex 助手 | 会话本身不复制，实时读 `~/.codex`。打开完成通知时有 notify 脚本和事件记录（Codex 每回合结束传来的内容，含这一回合的输入和最后一条回复；启动时超过 2 MB 就只留最后 500 行） | 支持目录 `AITools/` |
+| Claude Code / Codex 续接 | 在终端里续接会话用的一次性脚本（项目路径、会话 id），只留最近 20 个 | 支持目录 `Terminal/launch/` |
 
 设置项统一存在 UserDefaults（`com.baobox.app`）。
 

@@ -5,6 +5,7 @@ import Foundation
 /// 只实现剪贴板场景需要的 shell 子集：`'…'`、`"…"`（带 `\` 转义）、`$'…'`
 /// （ANSI-C，Chrome 用它包含引号的 body）、裸 `\` 转义、行尾 `\` 续行。
 /// 参数表覆盖常见抓包导出；认不出的参数原样进 `otherArgs`，**不丢**。
+/// 重组时参数一律用 Core 的 `Shell.quote` 单引号包裹（内部单引号用 `'\''` 接续，shell 里最稳的引法）。
 struct CurlCommand {
     var method: String?
     var url: String?
@@ -58,7 +59,7 @@ struct CurlCommand {
                     command.method = String(token.dropFirst(2))
                 } else if token.hasPrefix("-") {
                     if Self.valueTakingFlags.contains(token), let raw = value() {
-                        command.otherArgs.append("\(token) \(Self.shellQuote(raw))")
+                        command.otherArgs.append("\(token) \(Shell.quote(raw))")
                     } else {
                         command.otherArgs.append(token)
                     }
@@ -185,19 +186,14 @@ struct CurlCommand {
         var result: [String] = []
         var head = "curl"
         if let method { head += " -X \(method)" }
-        if let url { head += " \(Self.shellQuote(url))" }
+        if let url { head += " \(Shell.quote(url))" }
         result.append(head)
-        for header in headers { result.append("-H \(Self.shellQuote("\(header.name): \(header.value)"))") }
-        if let cookie { result.append("-b \(Self.shellQuote(cookie))") }
-        if let user { result.append("-u \(Self.shellQuote(user))") }
-        for part in dataParts { result.append("--data-raw \(Self.shellQuote(part))") }
-        for part in formParts { result.append("-F \(Self.shellQuote(part))") }
+        for header in headers { result.append("-H \(Shell.quote("\(header.name): \(header.value)"))") }
+        if let cookie { result.append("-b \(Shell.quote(cookie))") }
+        if let user { result.append("-u \(Shell.quote(user))") }
+        for part in dataParts { result.append("--data-raw \(Shell.quote(part))") }
+        for part in formParts { result.append("-F \(Shell.quote(part))") }
         result.append(contentsOf: otherArgs)
         return result
-    }
-
-    /// 单引号包裹；内部单引号用 `'\''` 接续 —— shell 里最稳的引法。
-    static func shellQuote(_ text: String) -> String {
-        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
