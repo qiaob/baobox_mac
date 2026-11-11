@@ -162,7 +162,7 @@ final class ClaudeCodeTool: ToolModule {
     /// 额度副标题：两行——5 小时窗口 + 本周窗口，各含用量 / 估算花费 / 倒计时；无对应窗口时各自降级文案。
     private func quotaSubtitles() -> [String] {
         var lines: [String] = []
-        if let window = usage.currentWindow {
+        if let window = usage.fiveHourWindow {
             let tokens = ClaudeFormat.tokens(window.totals.totalTokens)
             let cost = ClaudeFormat.cost(window.totals.costUSD)
             let countdown = ClaudeFormat.countdown(window.secondsUntilReset)

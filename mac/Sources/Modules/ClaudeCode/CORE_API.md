@@ -104,19 +104,32 @@
 - `struct ClaudeMCPServerStat: Sendable` —— `server, total: Int, tools: [String: Int]`（MCP 两级统计的值）。
 - `struct ClaudeInvocationStats: Sendable` —— 三字段:`skills: [String: Int]`(Skill+斜杠命令合并) / `mcp: [String: ClaudeMCPServerStat]`(服务器›工具) / `builtin: [String: Int]`(其余工具);排序留给 UI。
 
-### `@MainActor final class ClaudeUsageStore: ObservableObject`（`.shared`）
+### `@MainActor final class ClaudeUsageStore: CLIUsageStore<ClaudeUsageSource>`（`.shared`）
+
+> 2026-11（#164 PR4）起，定时刷新、刷新合并、事件节流 + 补刷、报表 / 调用统计的后台外壳与 80% 提醒的防重在与 Codex 助手共用的
+> `mac/Sources/Core/CLIUsage/CLIUsageStore.swift`（`CLIUsageStore<Source>` 基类，`BaoboxTests` 有单元测试，见 `docs/codex-assistant/DEDUPE-P2.md` §2.4 类 8）。
+> 本文件只留 `shared`、设置键常量与三个钩子（读设置、发「额度已恢复」、发 80% 提醒），解析在用量来源 `enum ClaudeUsageSource: CLIUsageSource`。
+> 改名两处：`currentWindow` → `fiveHourWindow`、`refreshThrottledFromHook()` → `refreshThrottledFromEvent()`；其余成员名与签名不变。
+
 | 成员 | 说明 |
 |---|---|
-| `@Published private(set) var currentWindow: UsageWindow?` | nil=无活跃窗口 |
-| `@Published private(set) var todayTotals: UsageTotals?` | 今日累计 |
-| `@Published private(set) var isRefreshing: Bool` | |
-| `static let budgetKey = "claudecode.tokenBudget"` | 每窗口 token 预算（UserDefaults Int，0=未设） |
-| `func startAutoRefresh()` / `stopAutoRefresh()` | activate 时启动 5 分钟定时刷新 |
-| `func refresh()` | 后台收集近 180h 改过的文件的用量（`usageCollector`：只重新解析改过的文件），算 5h 窗口 + 今日 + 周窗口，末尾做 80% 额度提醒；进行中再调合并成结束后补一轮 |
-| `func refreshThrottledFromHook()` | 收到 hook 事件的节流刷新：≥60s 马上刷，60s 内来的在窗口结束时补刷一次（只补一次，规则在共用的 `CLIUsageRefreshThrottle`）；`ClaudeLiveStatus` 在 Stop / Notification 时调（启动回放不调） |
-| `nonisolated static let usageCollector: ClaudeUsageCollector` | 用量条目的收集器（`ClaudeUsageCollector.swift`，纯 Foundation，`BaoboxTests` 有差分测试）：按文件缓存解析结果（只在内存，保留 180h），结果与全量解析逐条相同；刷新与报表共用 |
-| `func report(days:completion: @escaping (ClaudeUsageReport) -> Void)` | 三维度报表 |
-| `func invocationStats(days:completion: @escaping (ClaudeInvocationStats) -> Void)` | 调用统计(Skill/斜杠命令、MCP 两级、内置工具);后台算主线程回调，同 report 线程约定。**无新 L() key**(名称均为数据) |
+| `@Published private(set) var fiveHourWindow: UsageWindow?` | nil=无活跃 5 小时窗口（基类；原名 `currentWindow`） |
+| `@Published private(set) var weeklyWindow: UsageWindow?` | 周窗口；nil=近 7 天无用量（滚动块口径），固定锚点口径下始终有值（基类） |
+| `@Published private(set) var todayTotals: UsageTotals?` | 今日累计（基类） |
+| `@Published private(set) var isRefreshing: Bool` | 刷新中；补的那一轮接着算，中间不熄（基类） |
+| `static let budgetKey` / `weeklyBudgetKey` / `weeklyFixedKey` / `weeklyWeekdayKey` / `weeklyHourKey` | `claudecode.tokenBudget` / `claudecode.weeklyTokenBudget`（UserDefaults Int，0=未设）、`claudecode.weeklyResetFixed` / `…Weekday`（默认 2=周一）/ `…Hour`（默认 0） |
+| `func startAutoRefresh()` / `stopAutoRefresh()` | activate 时启动：立刻刷一次，之后每 5 分钟；停的时候顺带取消排着的补刷（基类） |
+| `func refresh()` | 后台收集近 180h 改过的文件的用量（`ClaudeUsageSource.usageCollector`：只重新解析改过的文件），算 5h 窗口 + 今日 + 周窗口，末尾做 80% 额度提醒；进行中再调合并成结束后补一轮（基类） |
+| `func refreshThrottledFromEvent()` | 收到 hook 事件的节流刷新：≥60s 马上刷，60s 内来的在窗口结束时补刷一次（只补一次，规则在共用的 `CLIUsageRefreshThrottle`）；`ClaudeLiveStatus` 在 Stop / Notification 时调（启动回放不调）（基类；原名 `refreshThrottledFromHook()`） |
+| `func report(days:completion: @escaping (ClaudeUsageReport) -> Void)` | 三维度报表（基类外壳，排序在 `ClaudeUsageSource.buildReport`） |
+| `func invocationStats(days:completion: @escaping (ClaudeInvocationStats) -> Void)` | 调用统计(Skill/斜杠命令、MCP 两级、内置工具);后台算主线程回调，同 report 线程约定（基类外壳，解析在 `ClaudeUsageSource.invocationStats(days:)`）。**无新 L() key**(名称均为数据) |
+
+### `enum ClaudeUsageSource: CLIUsageSource`（后台线程调用）
+| 成员 | 说明 |
+|---|---|
+| `static let refreshWindowHours = 180` | 菜单刷新的采集窗口，也是收集器缓存的保留窗口 |
+| `static let usageCollector: ClaudeUsageCollector` | 用量条目的收集器（`ClaudeUsageCollector.swift`，纯 Foundation，`BaoboxTests` 有差分测试）：按文件缓存解析结果（只在内存，保留 180h），结果与全量解析逐条相同；刷新与报表共用（原 `ClaudeUsageStore.usageCollector`） |
+| `collectEntries(sinceHoursAgo:)` / `buildReport(from:)` / `invocationStats(days:)` | 协议要求；周窗口用协议的默认实现 |
 
 ---
 
@@ -138,7 +151,7 @@
 | `func summaryLine() -> String?` | 菜单状态行；无 hooks 时按 mtime<2min 降级推断；无内容→nil |
 | `func currentTerminal(of:) -> TerminalLocation?` | 会话现在还占着的终端（同一个 tty 后来没见过别的会话），快速切换面板续接用；nil = 没见过 / 没记 tty / 已让给后来的会话 |
 
-> Stop / Notification（非回放）时顺带调 `ClaudeUsageStore.shared.refreshThrottledFromHook()`。
+> Stop / Notification（非回放）时顺带调 `ClaudeUsageStore.shared.refreshThrottledFromEvent()`（#164 PR4 之前叫 `refreshThrottledFromHook()`）。
 
 > 事件文件的建 / 截断 / 回放 / 增量监听用 Core 的 `EventFileFollower`（`Sources/Core/EventFile/`，与 Codex 助手共用），UI 不直接用。
 

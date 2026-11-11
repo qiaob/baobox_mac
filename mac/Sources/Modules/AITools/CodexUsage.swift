@@ -2,11 +2,13 @@ import Foundation
 
 /// Codex 助手 —— 定价表、用量条目解析、5 小时 + 周额度窗口与报表。
 ///
-/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法与 Claude Code 助手共用 `Core/CLIUsage/`（有单元测试，
-/// 两个模块之间仍不互相依赖）；这里只留 Codex 自己的部分：定价表、rollout 文件的解析、设置键与提醒的发送。
+/// 窗口 / 周窗口 / 今日 / 报表 / 额度提醒的算法，以及 Store 的外壳（定时刷新、进行中再请求合并成补一轮、事件节流与窗口末尾补刷、
+/// 报表与调用统计的后台外壳，`CLIUsageStore<Source>`）与 Claude Code 助手共用 `Core/CLIUsage/`（有单元测试，
+/// 两个模块之间仍不互相依赖）；这里只留 Codex 自己的部分：定价表、用量来源 `CodexUsageSource`（rollout 文件的解析、周窗口的口径、
+/// 报表排序、调用统计）、设置键与提醒的发送。
 /// 费用为按公开定价的**估算**，UI 处处标「估算」；很多 Codex 用户走 ChatGPT 订阅（无按量计费），
 /// 故费用为次要信息、token 数为主（报表按 token 数排序）。
-/// 重 IO 后台，`@Published` 只在主线程写（严格照 `ClaudeUsageStore.refresh`）。解析全程容错不 crash。
+/// 重 IO 后台，`@Published` 只在主线程写（基类负责）。解析全程容错不 crash。
 ///
 /// —— token_count 聚合口径（本文件的唯一难点，见 DESIGN §2）——
 /// Codex 用量在 `event_msg` 行、`payload.type == "token_count"`，字段位置随版本有别：
@@ -93,16 +95,11 @@ struct CodexInvocationStats: Sendable {
 // MARK: - 用量单例
 
 /// 用量聚合：当前 5h 窗口、周窗口、今日累计、报表、调用统计。
+/// 刷新规则在基类 `CLIUsageStore`（`fiveHourWindow` / `weeklyWindow` / `todayTotals` / `isRefreshing`、`startAutoRefresh` / `stopAutoRefresh`、
+/// `refresh`、`refreshThrottledFromEvent`、`report` / `invocationStats`）；这里只放 `shared`、设置键，以及设置怎么读、提醒怎么发。
 @MainActor
-final class CodexUsageStore: ObservableObject {
+final class CodexUsageStore: CLIUsageStore<CodexUsageSource> {
     static let shared = CodexUsageStore()
-
-    /// nil = 无活跃 5h 窗口。
-    @Published private(set) var fiveHourWindow: CodexUsageWindow?
-    /// nil = 近 7 天无用量（滚动块口径）；固定锚点口径下近 180h 有过用量就有值（见 `weeklyWindow(from:anchor:)`）。
-    @Published private(set) var weeklyWindow: CodexUsageWindow?
-    @Published private(set) var todayTotals: CodexUsageTotals?
-    @Published private(set) var isRefreshing = false
 
     /// 5h 窗口 token 预算（0 = 未设）。
     static let budgetKey = "codex.tokenBudget"
@@ -115,129 +112,42 @@ final class CodexUsageStore: ObservableObject {
     /// 固定锚点：重置小时（0...23）。默认 0。
     static let weeklyHourKey = "codex.weeklyResetHour"
 
-    /// 5h / 周窗口 80% 提醒的防重状态（防重复轰炸，两者独立）。仅主线程访问。
-    private var budgetReminder = CLIUsageBudgetReminder()
-    private var weeklyBudgetReminder = CLIUsageBudgetReminder()
-    private var refreshing = false
-    private var lastHookRefresh: Date = .distantPast
-    private var timer: Timer?
-
-    private init() {}
-
-    // MARK: - 定时刷新
-
-    /// activate 时启动：立刻刷新一次，之后每 5 分钟一次。
-    func startAutoRefresh() {
-        refresh()
-        timer?.invalidate()
-        let t = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.refresh()
-            }
-        }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+    private init() {
+        super.init()
     }
 
-    func stopAutoRefresh() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    /// 收到 notify 事件时的节流刷新（≥60s 才真正刷）。
-    func refreshThrottledFromEvent() {
-        guard Date().timeIntervalSince(lastHookRefresh) >= 60 else { return }
-        lastHookRefresh = Date()
-        refresh()
-    }
-
-    // MARK: - 刷新
-
-    /// 后台解析近 180h 内 mtime 的 rollout 文件，一次扫描算出 5h 窗口、今日累计与周窗口。
-    /// 5h / 今日只关心近 24h，是这批条目的天然子集；周窗口需近 7 天故采集窗口取 180h（168h + 余量）。
-    func refresh() {
-        guard !refreshing else { return }
-        refreshing = true
-        isRefreshing = true
-        let anchor = Self.weeklyAnchorConfig()   // 主线程读 UserDefaults 后传入后台。
-        DispatchQueue.global(qos: .utility).async {
-            let entries = Self.collectEntries(sinceHoursAgo: 180)
-            let window = CodexUsageCalculator.activeWindow(from: entries)
-            let today = CodexUsageCalculator.todayTotals(from: entries)
-            let weekly = Self.weeklyWindow(from: entries, anchor: anchor)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.fiveHourWindow = window
-                    self.todayTotals = today
-                    self.weeklyWindow = weekly
-                    self.refreshing = false
-                    self.isRefreshing = false
-                    self.checkBudgetReminder(window: window)
-                    self.checkWeeklyBudgetReminder(window: weekly)
-                }
-            }
-        }
-    }
-
-    /// 主线程读取周窗口锚点配置（值类型，可安全传入后台）。
-    static func weeklyAnchorConfig() -> CodexWeeklyAnchor {
+    /// 主线程读预算与周窗口锚点（值类型，可安全传入后台）。
+    override func readSettings() -> CLIUsageSettings {
         let defaults = UserDefaults.standard
-        return CodexWeeklyAnchor(
-            fixed: defaults.object(forKey: weeklyFixedKey) as? Bool ?? false,
-            clampingWeekday: defaults.object(forKey: weeklyWeekdayKey) as? Int ?? 2,
-            hour: defaults.object(forKey: weeklyHourKey) as? Int ?? 0
+        return CLIUsageSettings(
+            budget: defaults.integer(forKey: Self.budgetKey),
+            weeklyBudget: defaults.integer(forKey: Self.weeklyBudgetKey),
+            anchor: CodexWeeklyAnchor(
+                fixed: defaults.object(forKey: Self.weeklyFixedKey) as? Bool ?? false,
+                clampingWeekday: defaults.object(forKey: Self.weeklyWeekdayKey) as? Int ?? 2,
+                hour: defaults.object(forKey: Self.weeklyHourKey) as? Int ?? 0
+            )
         )
-    }
-
-    /// 三维度报表：解析近 `days` 天文件。后台计算，回主线程。
-    func report(days: Int, completion: @escaping (CodexUsageReport) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            let entries = Self.collectEntries(sinceHoursAgo: days * 24)
-            let report = Self.buildReport(from: entries)
-            DispatchQueue.main.async {
-                completion(report)
-            }
-        }
-    }
-
-    /// 调用统计：内置工具、MCP（服务器›工具两级）两类计数。后台遍历近 `days` 天文件，主线程回调。
-    func invocationStats(days: Int, completion: @escaping (CodexInvocationStats) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            let stats = Self.computeInvocationStats(days: days)
-            DispatchQueue.main.async {
-                completion(stats)
-            }
-        }
     }
 
     // MARK: - 额度提醒
 
-    /// Codex 没有「额度已恢复」提醒：窗口切换只清防重记录（共用层已清）。
-    private func checkBudgetReminder(window: CodexUsageWindow?) {
-        guard let window else { return }
-        let budget = UserDefaults.standard.integer(forKey: Self.budgetKey)
-        let outcome = budgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
-        if let percent = outcome.reachedPercent, AIToolsNotifierSettings.budgetAlertEnabled {
-            CodexNotify.shared.notifyBudget(percent: percent, weekly: false)
-        }
-    }
-
-    private func checkWeeklyBudgetReminder(window: CodexUsageWindow?) {
-        guard let window else { return }
-        let budget = UserDefaults.standard.integer(forKey: Self.weeklyBudgetKey)
-        let outcome = weeklyBudgetReminder.check(windowStart: window.start, totalTokens: window.totals.totalTokens, budget: budget)
-        if let percent = outcome.reachedPercent, AIToolsNotifierSettings.budgetAlertEnabled {
-            CodexNotify.shared.notifyBudget(percent: percent, weekly: true)
-        }
+    /// 用到预算的 80%（5h 或周）。Codex 没有「额度已恢复」提醒：窗口切换只清防重记录（共用层已清），`budgetWindowChanged` 不覆盖。
+    override func budgetReached(percent: Int, window: CodexUsageWindow, weekly: Bool) {
+        guard AIToolsNotifierSettings.budgetAlertEnabled else { return }
+        CodexNotify.shared.notifyBudget(percent: percent, weekly: weekly)
     }
 }
 
-// MARK: - 后台解析（nonisolated static）
+// MARK: - 用量来源（后台线程）
 
-extension CodexUsageStore {
+/// Codex 的用量来源（`CLIUsageSource`）：rollout 文件怎么收成条目、周窗口的口径、报表怎么排、调用统计怎么算。全是静态成员，后台线程调用。
+enum CodexUsageSource: CLIUsageSource {
+    typealias Table = CodexPricingTable
+    typealias InvocationStats = CodexInvocationStats
 
     /// 收集近 N 小时内 mtime 文件的用量条目，按 §2 口径处理每文件的增量 / 累计。
-    nonisolated fileprivate static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
+    static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
         var entries: [CLIUsageEntry] = []
@@ -262,7 +172,7 @@ extension CodexUsageStore {
     }
 
     /// 解析单个 rollout 文件为用量条目序列（按 §2 口径）。
-    nonisolated fileprivate static func parseFile(data: Data, fallbackDate: Date) -> [CLIUsageEntry] {
+    private static func parseFile(data: Data, fallbackDate: Date) -> [CLIUsageEntry] {
         // 会话级维度：cwd（项目）与最后可见 model。
         var cwd = ""
         var modelID = ""
@@ -335,7 +245,7 @@ extension CodexUsageStore {
     }
 
     /// 从一行对象尽力取出 model id（顶层 / payload / turn_context / info）。
-    nonisolated fileprivate static func extractModel(from object: [String: Any]) -> String? {
+    private static func extractModel(from object: [String: Any]) -> String? {
         if let m = object["model"] as? String, !m.isEmpty { return m }
         if let payload = object["payload"] as? [String: Any] {
             if let m = payload["model"] as? String, !m.isEmpty { return m }
@@ -347,22 +257,22 @@ extension CodexUsageStore {
     }
 
     /// 事件时间戳（顶层 / payload 的 timestamp；取不到用文件 mtime）。
-    nonisolated fileprivate static func eventDate(_ object: [String: Any], payload: [String: Any]?, fallback: Date) -> Date {
+    private static func eventDate(_ object: [String: Any], payload: [String: Any]?, fallback: Date) -> Date {
         let ts = (object["timestamp"] as? String) ?? (payload?["timestamp"] as? String)
         return ts.flatMap { CLIJSONL.parseDate($0) } ?? fallback
     }
 
     // MARK: 窗口与报表（算法在共用层，这里只传 Codex 的口径）
 
-    /// 周窗口。与 Claude 有一处原有差异，照旧保留：近 180h 一条用量都没有时，固定锚点口径也返回 nil
+    /// 周窗口（覆盖 `CLIUsageSource` 的默认实现）。与 Claude 有一处原有差异，照旧保留：近 180h 一条用量都没有时，固定锚点口径也返回 nil
     /// （Claude 那边返回一个 0 用量、有起止的窗口）。
-    nonisolated fileprivate static func weeklyWindow(from entries: [CLIUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
+    static func weeklyWindow(from entries: [CLIUsageEntry], anchor: CodexWeeklyAnchor) -> CodexUsageWindow? {
         guard !entries.isEmpty else { return nil }
         return CodexUsageCalculator.weeklyWindow(from: entries, anchor: anchor)
     }
 
     /// 三维度报表：按项目 / 按模型两张表按 token 数从高到低排；取不到 cwd 的用量归到 "unknown" 项目。
-    nonisolated fileprivate static func buildReport(from entries: [CLIUsageEntry]) -> CodexUsageReport {
+    static func buildReport(from entries: [CLIUsageEntry]) -> CodexUsageReport {
         CodexUsageCalculator.buildReport(
             from: entries,
             order: .byTokens,
@@ -376,7 +286,7 @@ extension CodexUsageStore {
     }
 
     /// 调用统计：遍历近 `days` 天 mtime 的 rollout 文件，聚合内置工具与 MCP（服务器›工具两级）。
-    nonisolated fileprivate static func computeInvocationStats(days: Int) -> CodexInvocationStats {
+    static func invocationStats(days: Int) -> CodexInvocationStats {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         // Codex 工具调用事件命名随版本不一，容错匹配这几类。
@@ -445,7 +355,7 @@ extension CodexUsageStore {
         return stats
     }
 
-    nonisolated fileprivate static func stripServerPrefix(_ name: String, server: String) -> String {
+    private static func stripServerPrefix(_ name: String, server: String) -> String {
         let prefix = server + "__"
         if name.hasPrefix(prefix) { return String(name.dropFirst(prefix.count)) }
         return name
