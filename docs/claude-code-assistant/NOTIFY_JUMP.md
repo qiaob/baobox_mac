@@ -10,7 +10,8 @@
 - 快速切换面板已有「切到会话所在终端」（`TerminalLauncher.findRunningSession` + `focusTerminalWindow`，2026-11 起收进 `focusRunningSession`，见 §3；
   #164 起这几个在 Claude 模块的 `ClaudeTerminal`）：
   按进程命令行（`--resume <id>` 或「项目里最新的会话」）猜是哪个进程，沿父进程找终端 App，iTerm2 / 系统 Terminal
-  再用 AppleScript 按 tty 选中标签页。两个缺口：
+  再用 AppleScript 按 tty 选中标签页（沿父进程找终端这一步 2026-11-11 以前从没成功过：`ps` 的列对齐空格留在命令行开头，
+  `Bundle(path:)` 认不出终端 App；解析挪进 `ClaudeRunningSession.parseProcessTable` 后修了）。两个缺口：
   1. 同一个目录开着好几个会话时会猜错（用户常在 `~/cmb` 下同时开五六个 Claude）；
   2. 只认 `TerminalAppChoice` 里的终端，**不认 Otty**。
 

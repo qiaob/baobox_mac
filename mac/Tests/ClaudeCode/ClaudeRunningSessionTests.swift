@@ -132,4 +132,46 @@ final class ClaudeRunningSessionTests: XCTestCase {
         XCTAssertEqual(ClaudeRunningSession.ttyName("ttys003"), "ttys003")
         XCTAssertEqual(ClaudeRunningSession.ttyName("console"), "console")
     }
+
+    // MARK: - ps 快照与宿主终端
+
+    func testProcessTableDropsTheColumnAlignmentBeforeTheCommand() {
+        let output = [
+            "    1     0 ??       /sbin/launchd",
+            "  812     1 ??       /Applications/iTerm.app/Contents/MacOS/iTerm2",
+            " 4242   812 ttys003  -zsh",
+            " 4300  4242 ttys003  node /opt/homebrew/bin/claude --resume abc",
+        ].joined(separator: "\n")
+        let table = ClaudeRunningSession.parseProcessTable(output)
+        XCTAssertEqual(table.count, 4)
+        XCTAssertEqual(table[812]?.command, "/Applications/iTerm.app/Contents/MacOS/iTerm2", "对齐空格去掉了")
+        XCTAssertEqual(table[812]?.ppid, 1)
+        XCTAssertNil(table[812]?.tty, "?? = 没有控制终端")
+        XCTAssertEqual(table[4300]?.tty, "ttys003")
+        XCTAssertEqual(table[4300]?.command, "node /opt/homebrew/bin/claude --resume abc")
+        XCTAssertTrue(ClaudeRunningSession.isClaudeCommand(table[4300]?.command ?? ""))
+    }
+
+    func testProcessTableKeepsSpacesInsideTheCommand() {
+        let table = ClaudeRunningSession.parseProcessTable(
+            "  901     1 ??       /Applications/Visual Studio Code.app/Contents/MacOS/Electron --type=x")
+        XCTAssertEqual(table[901]?.command, "/Applications/Visual Studio Code.app/Contents/MacOS/Electron --type=x")
+    }
+
+    func testProcessTableSkipsMalformedLines() {
+        XCTAssertTrue(ClaudeRunningSession.parseProcessTable("garbage\n   12 x ?? cmd\n   13     1 ??\n").isEmpty)
+    }
+
+    func testAppBundlePathFromACommandLine() {
+        XCTAssertEqual(ClaudeRunningSession.appBundlePath(inCommand: "/Applications/iTerm.app/Contents/MacOS/iTerm2"),
+                       "/Applications/iTerm.app")
+        XCTAssertEqual(ClaudeRunningSession.appBundlePath(inCommand: "   /Applications/Otty.app/Contents/MacOS/Otty --x"),
+                       "/Applications/Otty.app", "前导空格不影响")
+        XCTAssertEqual(ClaudeRunningSession.appBundlePath(
+            inCommand: "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"),
+                       "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app",
+                       "嵌套的 Helper 归它自己，宿主终端要往父进程上找")
+        XCTAssertNil(ClaudeRunningSession.appBundlePath(inCommand: "-zsh"))
+        XCTAssertNil(ClaudeRunningSession.appBundlePath(inCommand: "/usr/bin/login -fp someone"))
+    }
 }
