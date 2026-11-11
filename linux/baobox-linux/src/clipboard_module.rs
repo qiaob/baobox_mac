@@ -33,11 +33,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use x11rb::connection::Connection;
 
-/// 工具 id，同时是配置里的节名。
-pub const ID: &str = "clipboard";
+/// 工具 id 与快捷键动作 id 写进用户配置，两个平台共用 `baobox_app` 里那一份。
+pub use baobox_app::tools::clipboard::{ID, PANEL};
 
-/// 动作 id。
-pub const PANEL: &str = "clipboard.panel";
 /// 动作 id。
 pub const CLEAR: &str = "clipboard.clear";
 /// 动作 id。

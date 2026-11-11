@@ -23,14 +23,26 @@
 pub mod assistant;
 pub mod assistant_tool;
 pub mod config_file;
+pub mod hotkeys;
 pub mod menu;
 pub mod settings;
+pub mod tools;
 
 pub use menu::{MenuItem, MenuModel};
 pub use settings::{Field, FieldKind, SettingsPage};
 
 use baobox_core::config::Config;
 use baobox_core::hotkey::KeyCombo;
+
+/// 当前 Unix 秒。
+///
+/// 两个平台和共享层都用这一份。系统时钟早于 1970 年这种怪事返回 0，不 panic。
+pub fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// 一个全局快捷键的规格。
 ///
@@ -174,6 +186,20 @@ impl ToolRegistry {
     /// 整个 App 的全局快捷键，按注册顺序展开。
     pub fn hotkeys(&self) -> Vec<HotkeySpec> {
         self.tools.iter().flat_map(|tool| tool.hotkeys()).collect()
+    }
+
+    /// 每个快捷键规格连同用户实际绑定的组合（见 [`HotkeySpec::resolve`]），按注册顺序。
+    ///
+    /// 没绑定的（出厂不绑，或用户解绑了）也在里面，组合是 `None` ——
+    /// 平台层注册时跳过它们就是。
+    pub fn resolved_hotkeys(&self, config: &Config) -> Vec<(HotkeySpec, Option<KeyCombo>)> {
+        self.hotkeys()
+            .into_iter()
+            .map(|spec| {
+                let combo = spec.resolve(config);
+                (spec, combo)
+            })
+            .collect()
     }
 
     /// 建出整棵托盘菜单。
@@ -439,6 +465,40 @@ mod tests {
         registry.register(Fake::new("b"));
         let ids: Vec<String> = registry.hotkeys().into_iter().map(|h| h.id).collect();
         assert_eq!(ids, vec!["a.go", "b.go"]);
+    }
+
+    #[test]
+    fn resolved_hotkeys_pair_every_spec_with_what_the_user_bound() {
+        let mut registry = ToolRegistry::new();
+        for id in ["kept", "changed", "unbound"] {
+            registry.register(Fake::new(id));
+        }
+        let mut config = Config::new();
+        config.set("hotkey", "changed.go", "Ctrl+Alt+P");
+        config.set("hotkey", "unbound.go", "");
+
+        let resolved: Vec<(String, Option<String>)> = registry
+            .resolved_hotkeys(&config)
+            .into_iter()
+            .map(|(spec, combo)| (spec.id, combo.map(|c| c.to_string())))
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![
+                ("kept.go".to_string(), Some("Ctrl+Shift+G".to_string())),
+                ("changed.go".to_string(), Some("Ctrl+Alt+P".to_string())),
+                // 解绑了也要在表里：平台层跳过它，而不是这里替它丢掉
+                ("unbound.go".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn now_seconds_counts_seconds_not_milliseconds() {
+        // 2020 年之后、2286 年之前；拿成毫秒的话会大出三个数量级
+        let now = now_seconds();
+        assert!(now > 1_600_000_000, "{now}");
+        assert!(now < 10_000_000_000, "{now}");
     }
 
     #[test]

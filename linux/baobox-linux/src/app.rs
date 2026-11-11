@@ -183,7 +183,7 @@ impl AppState {
         };
         self.registry.config_changed_all(&self.config);
         // 快捷键可能变了，让快捷键线程重新 grab
-        let specs = resolve_hotkeys(&self.registry, &self.config);
+        let specs = self.registry.resolved_hotkeys(&self.config);
         if let Ok(mut slot) = self.shared.specs.lock() {
             *slot = specs;
         }
@@ -220,26 +220,11 @@ struct Shared {
 impl Shared {
     fn new(registry: &ToolRegistry, config: &Config) -> Arc<Self> {
         Arc::new(Self {
-            specs: Mutex::new(resolve_hotkeys(registry, config)),
+            specs: Mutex::new(registry.resolved_hotkeys(config)),
             reload: AtomicBool::new(false),
             quit: AtomicBool::new(false),
         })
     }
-}
-
-/// 把注册表里的快捷键规格与用户的配置合起来。
-fn resolve_hotkeys(
-    registry: &ToolRegistry,
-    config: &Config,
-) -> Vec<(HotkeySpec, Option<KeyCombo>)> {
-    registry
-        .hotkeys()
-        .into_iter()
-        .map(|spec| {
-            let combo = spec.resolve(config);
-            (spec, combo)
-        })
-        .collect()
 }
 
 /// 托盘事件 → 动作 id。
@@ -411,7 +396,7 @@ mod tests {
     fn hotkeys_resolve_against_the_users_config() {
         let registry = build_registry();
         let mut config = Config::new();
-        let default = resolve_hotkeys(&registry, &config);
+        let default = registry.resolved_hotkeys(&config);
         let capture = default
             .iter()
             .find(|(spec, _)| spec.id == screenshot_module::CAPTURE)
@@ -419,7 +404,7 @@ mod tests {
         assert_eq!(capture.1.as_ref().unwrap().to_string(), "Ctrl+Shift+S");
 
         config.set("hotkey", screenshot_module::CAPTURE, "Ctrl+Alt+P");
-        let changed = resolve_hotkeys(&registry, &config);
+        let changed = registry.resolved_hotkeys(&config);
         let capture = changed
             .iter()
             .find(|(spec, _)| spec.id == screenshot_module::CAPTURE)
@@ -453,7 +438,7 @@ mod tests {
     fn unbound_hotkeys_resolve_to_nothing_and_are_simply_skipped() {
         let registry = build_registry();
         let config = Config::new();
-        let resolved = resolve_hotkeys(&registry, &config);
+        let resolved = registry.resolved_hotkeys(&config);
         // 出厂绑定的：截图与剪贴板面板各一个
         assert_eq!(
             resolved.iter().filter(|(_, combo)| combo.is_some()).count(),

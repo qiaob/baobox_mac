@@ -13,6 +13,7 @@
 
 #![cfg(windows)]
 
+use baobox_app::hotkeys::Registration;
 use baobox_app::HotkeySpec;
 use baobox_core::hotkey::{KeyCode, KeyCombo};
 use std::collections::HashMap;
@@ -24,39 +25,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 /// 热键 id 从这里开始编。0 是合法值，但从 1 开始更容易在调试时看出「没设」。
 const FIRST_ID: i32 = 1;
-
-/// 一次注册的结果。与 Linux 版同一形状。
-pub struct Registration {
-    /// 成功注册了几个
-    pub bound: usize,
-    /// 没能注册的，`(动作 id, 原因)`
-    pub conflicts: Vec<(String, String)>,
-}
-
-impl Registration {
-    /// 有没有需要提示用户的问题。
-    pub fn has_problems(&self) -> bool {
-        !self.conflicts.is_empty()
-    }
-
-    /// 一句给用户看的话。
-    pub fn describe(&self) -> String {
-        if self.conflicts.is_empty() {
-            return format!("已注册 {} 个全局快捷键。", self.bound);
-        }
-        let details: Vec<String> = self
-            .conflicts
-            .iter()
-            .map(|(id, why)| format!("  {id}：{why}"))
-            .collect();
-        format!(
-            "已注册 {} 个全局快捷键，{} 个没能注册（多半被别的程序占了，可在设置里换一个）：\n{}",
-            self.bound,
-            self.conflicts.len(),
-            details.join("\n")
-        )
-    }
-}
 
 /// 快捷键中心：持有全部注册，析构时还回去。
 pub struct HotkeyCenter {
@@ -219,24 +187,5 @@ mod tests {
         assert_ne!(flags.0 & MOD_SHIFT.0, 0);
         assert_eq!(flags.0 & MOD_ALT.0, 0);
         assert_eq!(flags.0 & MOD_WIN.0, 0);
-    }
-
-    #[test]
-    fn a_registration_report_reads_like_a_sentence() {
-        let clean = Registration {
-            bound: 3,
-            conflicts: Vec::new(),
-        };
-        assert!(!clean.has_problems());
-        assert!(clean.describe().contains('3'));
-
-        let clashed = Registration {
-            bound: 1,
-            conflicts: vec![("screenshot.capture".into(), "占用".into())],
-        };
-        assert!(clashed.has_problems());
-        let text = clashed.describe();
-        assert!(text.contains("screenshot.capture"));
-        assert!(text.contains("设置"), "要告诉用户去哪儿改");
     }
 }

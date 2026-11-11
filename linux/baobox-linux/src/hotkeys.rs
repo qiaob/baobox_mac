@@ -17,6 +17,7 @@
 //! 这里把冲突收集起来交给调用方提示用户，而不是静默失效 ——
 //! 静默失效是这类功能最难查的故障。
 
+use baobox_app::hotkeys::Registration;
 use baobox_app::HotkeySpec;
 use baobox_core::hotkey::{KeyCode, KeyCombo};
 use std::collections::HashMap;
@@ -56,39 +57,6 @@ const LOCK_MASKS: [u16; 8] = [
 
 /// 反查用的键：抹掉锁定位之后的 (keycode, 修饰键掩码)。
 type Binding = (u8, u16);
-
-/// 一次注册的结果。
-pub struct Registration {
-    /// 成功注册了几个
-    pub bound: usize,
-    /// 没能注册的，`(动作 id, 原因)`。多半是被别的程序占了
-    pub conflicts: Vec<(String, String)>,
-}
-
-impl Registration {
-    /// 有没有需要提示用户的问题。
-    pub fn has_problems(&self) -> bool {
-        !self.conflicts.is_empty()
-    }
-
-    /// 一句给用户看的话。
-    pub fn describe(&self) -> String {
-        if self.conflicts.is_empty() {
-            return format!("已注册 {} 个全局快捷键。", self.bound);
-        }
-        let details: Vec<String> = self
-            .conflicts
-            .iter()
-            .map(|(id, why)| format!("  {id}：{why}"))
-            .collect();
-        format!(
-            "已注册 {} 个全局快捷键，{} 个没能注册（多半被别的程序占了，可在设置里换一个）：\n{}",
-            self.bound,
-            self.conflicts.len(),
-            details.join("\n")
-        )
-    }
-}
 
 /// 快捷键中心：持有全部 grab，析构时还回去。
 pub struct HotkeyCenter {
@@ -320,24 +288,5 @@ mod tests {
         // 但真正多按了一个修饰键就不该命中
         assert_eq!(center.action_for(25, ctrl | ModMask::SHIFT.bits()), None);
         assert_eq!(center.action_for(26, ctrl), None);
-    }
-
-    #[test]
-    fn a_registration_report_reads_like_a_sentence() {
-        let clean = Registration {
-            bound: 3,
-            conflicts: Vec::new(),
-        };
-        assert!(!clean.has_problems());
-        assert!(clean.describe().contains("3"));
-
-        let clashed = Registration {
-            bound: 1,
-            conflicts: vec![("screenshot.capture".into(), "BadAccess".into())],
-        };
-        assert!(clashed.has_problems());
-        let text = clashed.describe();
-        assert!(text.contains("screenshot.capture"));
-        assert!(text.contains("设置"), "要告诉用户去哪儿改");
     }
 }
