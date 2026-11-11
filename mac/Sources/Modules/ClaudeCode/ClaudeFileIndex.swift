@@ -365,71 +365,74 @@ extension ClaudeFileIndex {
         _ url: URL, mtime: Date, size: Int64, startOffset: Int64,
         baseEntries: [String: FileCacheRecord.EntryRecord], mungedDir: String
     ) -> FileCacheRecord? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
+        // 每个文件解析完就放掉临时对象：启动时逐个读 ~/.claude/projects，不包的话峰值随读过的总量累加（#93）。
+        autoreleasepool { () -> FileCacheRecord? in
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? handle.close() }
 
-        let data: Data
-        do {
-            if startOffset > 0 {
-                try handle.seek(toOffset: UInt64(startOffset))
+            let data: Data
+            do {
+                if startOffset > 0 {
+                    try handle.seek(toOffset: UInt64(startOffset))
+                }
+                data = (try handle.readToEnd()) ?? Data()
+            } catch {
+                return nil
             }
-            data = (try handle.readToEnd()) ?? Data()
-        } catch {
-            return nil
-        }
 
-        let sessionId = url.deletingPathExtension().lastPathComponent
+            let sessionId = url.deletingPathExtension().lastPathComponent
 
-        guard let lastNewline = data.lastIndex(of: 0x0A) else {
-            // 一整个完整行都没有：记录 mtime/size 防反复重读，偏移不动。
-            return FileCacheRecord(modified: mtime.timeIntervalSince1970, size: size,
-                                   parsedOffset: startOffset, sessionId: sessionId,
-                                   entries: baseEntries)
-        }
-        let consumedCount = data.distance(from: data.startIndex, to: lastNewline) + 1
-        let complete = data.prefix(consumedCount)
+            guard let lastNewline = data.lastIndex(of: 0x0A) else {
+                // 一整个完整行都没有：记录 mtime/size 防反复重读，偏移不动。
+                return FileCacheRecord(modified: mtime.timeIntervalSince1970, size: size,
+                                       parsedOffset: startOffset, sessionId: sessionId,
+                                       entries: baseEntries)
+            }
+            let consumedCount = data.distance(from: data.startIndex, to: lastNewline) + 1
+            let complete = data.prefix(consumedCount)
 
-        var entries = baseEntries
-        var lastCwd: String?
-        for lineData in complete.split(separator: 0x0A) {
-            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
-            let lineCwd = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            if let lineCwd { lastCwd = lineCwd }
+            var entries = baseEntries
+            var lastCwd: String?
+            for lineData in complete.split(separator: 0x0A) {
+                guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
+                let lineCwd = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                if let lineCwd { lastCwd = lineCwd }
 
-            guard (object["type"] as? String) == "assistant",
-                  let ts = object["timestamp"] as? String,
-                  let date = CLIJSONL.parseDate(ts),
-                  let message = object["message"] as? [String: Any],
-                  let content = message["content"] as? [[String: Any]] else { continue }
+                guard (object["type"] as? String) == "assistant",
+                      let ts = object["timestamp"] as? String,
+                      let date = CLIJSONL.parseDate(ts),
+                      let message = object["message"] as? [String: Any],
+                      let content = message["content"] as? [[String: Any]] else { continue }
 
-            let cwd = lineCwd ?? lastCwd
-            let projectPath = cwd ?? ClaudeSessionIndex.demungeDirName(mungedDir)
+                let cwd = lineCwd ?? lastCwd
+                let projectPath = cwd ?? ClaudeSessionIndex.demungeDirName(mungedDir)
 
-            for block in content where (block["type"] as? String) == "tool_use" {
-                guard let name = block["name"] as? String,
-                      ClaudeSessionIndex.editToolNames.contains(name),
-                      let input = block["input"] as? [String: Any] else { continue }
-                let rawPath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
-                guard let rawPath, !rawPath.isEmpty,
-                      let canonical = canonicalPath(rawPath, cwd: cwd) else { continue }
+                for block in content where (block["type"] as? String) == "tool_use" {
+                    guard let name = block["name"] as? String,
+                          ClaudeSessionIndex.editToolNames.contains(name),
+                          let input = block["input"] as? [String: Any] else { continue }
+                    let rawPath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
+                    guard let rawPath, !rawPath.isEmpty,
+                          let canonical = canonicalPath(rawPath, cwd: cwd) else { continue }
 
-                let stamp = date.timeIntervalSince1970
-                if var entry = entries[canonical] {
-                    entry.count += 1
-                    if stamp > entry.last {
-                        entry.last = stamp
-                        entry.projectPath = projectPath
+                    let stamp = date.timeIntervalSince1970
+                    if var entry = entries[canonical] {
+                        entry.count += 1
+                        if stamp > entry.last {
+                            entry.last = stamp
+                            entry.projectPath = projectPath
+                        }
+                        entries[canonical] = entry
+                    } else {
+                        entries[canonical] = .init(count: 1, last: stamp, projectPath: projectPath)
                     }
-                    entries[canonical] = entry
-                } else {
-                    entries[canonical] = .init(count: 1, last: stamp, projectPath: projectPath)
                 }
             }
-        }
 
-        return FileCacheRecord(modified: mtime.timeIntervalSince1970, size: size,
-                               parsedOffset: startOffset + Int64(consumedCount),
-                               sessionId: sessionId, entries: entries)
+            return FileCacheRecord(modified: mtime.timeIntervalSince1970, size: size,
+                                   parsedOffset: startOffset + Int64(consumedCount),
+                                   sessionId: sessionId, entries: entries)
+        }
     }
 
     /// 规范化为绝对路径：`~` 展开；相对路径按行内 cwd 解析，无 cwd 则放弃（不猜）。

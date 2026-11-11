@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import XCTest
 
-/// 会话索引基类：刷新、复用、删除、导出、清理、磁盘缓存。假格式指向每个测试自己的临时目录，
+/// 会话索引基类：刷新（含进行中再请求的合并）、复用、删除、导出、清理、磁盘缓存（含同步 flush）。假格式指向每个测试自己的临时目录，
 /// 后台扫描经 `DispatchQueue.main` 回写，测试转主线程 RunLoop 等它。
 @MainActor
 final class CLISessionIndexTests: XCTestCase {
@@ -52,17 +52,71 @@ final class CLISessionIndexTests: XCTestCase {
         XCTAssertEqual(FakeCachedFormat.root.scans, 3)
     }
 
-    func testRefreshWhileOneIsRunningIsIgnored() throws {
-        // 记录现状：进行中再调直接丢弃（DEDUPE.md §5.2 C4；PR4 改成「结束后补刷一次」时这条跟着改）。
+    func testRequestsWhileARefreshIsRunningAddExactlyOneMorePass() throws {
+        // DEDUPE.md §5.2 C4：进行中再来的请求不丢，这一轮结束后补一轮；来几次都只补一轮（PR1 时直接丢弃）。
         try prepare(FakeCachedFormat.root)
         let index = CLISessionIndex<FakeCachedFormat>()
 
         index.refresh()
+        index.refresh()   // 主线程还没让出去，后台那一轮回不来：这三次都撞在进行中
         index.refresh()
-        spinMainRunLoop { !index.isRefreshing }
+        index.refresh()
+        spinMainRunLoop { !index.isRefreshing }   // 补的那一轮是在同一个主线程回合里接着发起的，转圈熄了就是全跑完了
 
-        XCTAssertEqual(FakeCachedFormat.root.scans, 3, "第二次调用没有再扫一遍")
-        XCTAssertEqual(index.sessions.count, 3)
+        XCTAssertEqual(FakeCachedFormat.root.listings, 2, "补了一轮，只补一轮")
+        XCTAssertEqual(FakeCachedFormat.root.scans, 3, "补的那一轮复用上一轮扫出来的记录，没变的文件不再读")
+        XCTAssertEqual(index.sessions.map(\.id), ["c", "b", "a"])
+    }
+
+    /// 删除撞上一轮进行中的刷新、删完又请求刷新（清理旧会话就是这样）：那一轮在删除之前列的目录，它的结果不发布，
+    /// 补扫一轮再发布 —— 刚删的会话一刻也不回到列表（DEDUPE.md §5.2 C4；PR1 时第二次请求被吞，旧结果把它放了回来）。
+    func testADeleteDuringARefreshIsNotPutBackByThatRefresh() throws {
+        try prepare(FakeCachedFormat.root)
+        let index = refreshed(CLISessionIndex<FakeCachedFormat>())
+        let victim = try XCTUnwrap(index.sessions.first { $0.id == "b" })
+        let hold = FakeCachedFormat.root.holdNextListing()
+
+        index.refresh()
+        XCTAssertTrue(hold.waitUntilReached(), "这一轮已经列完目录（b 还在里面）")
+        var deleted: Bool?
+        index.deleteSession(victim) { deleted = $0 }
+        spinMainRunLoop { deleted != nil }
+        index.refresh()
+        var published: [[String]] = []
+        let subscription = index.$sessions.dropFirst().sink { published.append($0.map(\.id)) }
+        hold.release()
+        spinMainRunLoop { !index.isRefreshing }
+        subscription.cancel()
+
+        XCTAssertEqual(deleted, true)
+        XCTAssertEqual(index.sessions.map(\.id), ["c", "a"])
+        XCTAssertEqual(published, [["c", "a"]], "过时的那一轮没有发布")
+        XCTAssertEqual(FakeCachedFormat.root.listings, 3, "预热一轮 + 撞上的一轮 + 补的一轮")
+        index.flushCache()
+        XCTAssertEqual(cachedRecords().map { Set($0.keys) }, Set(index.sessions.map(\.fileURL.path)), "缓存里也没有 b")
+    }
+
+    /// 只删除、没人再请求刷新：进行中的那一轮照样补扫一轮，不把刚删的会话放回来。
+    func testADeleteDuringARefreshMakesThatRefreshRunAgain() throws {
+        try prepare(FakeCachedFormat.root)
+        let index = refreshed(CLISessionIndex<FakeCachedFormat>())
+        let victim = try XCTUnwrap(index.sessions.first { $0.id == "b" })
+        let hold = FakeCachedFormat.root.holdNextListing()
+
+        index.refresh()
+        XCTAssertTrue(hold.waitUntilReached())
+        var deleted: Bool?
+        index.deleteSession(victim) { deleted = $0 }
+        spinMainRunLoop { deleted != nil }
+        var published: [[String]] = []
+        let subscription = index.$sessions.dropFirst().sink { published.append($0.map(\.id)) }
+        hold.release()
+        spinMainRunLoop { !index.isRefreshing }
+        subscription.cancel()
+
+        XCTAssertEqual(index.sessions.map(\.id), ["c", "a"])
+        XCTAssertEqual(published, [["c", "a"]])
+        XCTAssertEqual(FakeCachedFormat.root.listings, 3)
     }
 
     func testUnchangedFilesAreNotReadAgain() throws {
@@ -109,7 +163,7 @@ final class CLISessionIndexTests: XCTestCase {
         XCTAssertEqual(index.sessions.map(\.id), ["c", "a"])
 
         index.flushCache()
-        spinMainRunLoop { self.cachedRecords()?.count == 2 }
+        XCTAssertEqual(cachedRecords()?.count, 2, "flush 返回时已经写好")
         XCTAssertNil(cachedRecords()?[victim.fileURL.path], "删掉的会话也出了缓存")
 
         var deletedAgain: Bool?
@@ -166,11 +220,22 @@ final class CLISessionIndexTests: XCTestCase {
 
     // MARK: - 磁盘缓存
 
+    /// DEDUPE.md §5.2 C6：`willTerminate` 调完 flush 进程随时会退出，flush 返回时缓存必须已经在盘上（PR1 时写盘派到了后台）。
+    func testFlushHasWrittenTheCacheWhenItReturns() throws {
+        try prepare(FakeCachedFormat.root)
+        let index = refreshed(CLISessionIndex<FakeCachedFormat>())
+
+        index.flushCache()   // 刚刷新完，1 秒防抖还没到：盘上的缓存只可能是 flush 写的
+
+        XCTAssertEqual(cachedRecords().map { Set($0.keys) }, Set(index.sessions.map(\.fileURL.path)))
+        XCTAssertEqual(cachedRecords()?.values.map(\.title).sorted(), ["修登录页", "写周报", "调构建脚本"].sorted())
+    }
+
     func testFlushWritesACacheThatANewIndexStartsFrom() throws {
         try prepare(FakeCachedFormat.root)
         let first = refreshed(CLISessionIndex<FakeCachedFormat>())
         first.flushCache()
-        spinMainRunLoop { self.cachedRecords()?.count == 3 }
+        XCTAssertEqual(cachedRecords()?.count, 3)
 
         FakeCachedFormat.root.resetScans()
         let second = refreshed(CLISessionIndex<FakeCachedFormat>())

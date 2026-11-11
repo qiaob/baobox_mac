@@ -35,6 +35,32 @@ enum EventFileTestSupport {
         try append(Data(text.utf8), to: url)
     }
 
+    /// 和脚本的 `printf … >> 文件` 一模一样：`O_CREAT | O_APPEND` 打开（没有就建出来，不截断、不替换），写一次，关掉。
+    /// 目录不在就写不进去（Codex 的 notify 脚本不 `mkdir -p`）。
+    static func appendLikeShell(_ text: String, to url: URL) throws {
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        let bytes = Array(text.utf8)
+        let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        guard written == bytes.count else { throw POSIXError(.EIO) }
+    }
+
+    /// 本进程现在打开着的、路径落在 `directory` 下的描述符个数（文件和目录都算）。`directory` 是测试自己的随机目录，
+    /// 别的测试、XCTest 自己开着的描述符不会混进来。
+    static func openDescriptorCount(under directory: URL) -> Int {
+        let marker = "/" + directory.lastPathComponent
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []
+        var count = 0
+        for name in names {
+            guard let fd = Int32(name) else { continue }
+            var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            guard fcntl(fd, F_GETPATH, &path) == 0 else { continue }
+            if String(cString: path).contains(marker) { count += 1 }
+        }
+        return count
+    }
+
     static func bytes(of url: URL) -> Data {
         (try? Data(contentsOf: url)) ?? Data()
     }

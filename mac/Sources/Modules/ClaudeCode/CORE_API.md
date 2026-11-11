@@ -66,13 +66,13 @@
 |---|---|
 | `@Published private(set) var sessions: [ClaudeSessionSummary]` | 新→旧（基类） |
 | `@Published private(set) var isRefreshing: Bool` | 刷新中（基类） |
-| `func refresh()` | 后台快扫（头64K+尾8K）+ 缓存复用，回主线程发布；去抖防重入（基类） |
+| `func refresh()` | 后台快扫（头64K+尾8K）+ 缓存复用，回主线程发布；进行中不重入，再请求合并成结束后补扫一轮（基类） |
 | `func auditEntries(on day:completion: @escaping ([ClaudeAuditProject]) -> Void)` | 某日改动审计 |
 | `func diskStats(completion: @escaping (ClaudeDiskStats) -> Void)` | 磁盘占用 |
 | `func cleanup(olderThanDays:completion: @escaping (Int, Int64) -> Void)` | 清理旧会话，回调 (删除数, 释放字节)，随后自动 refresh（基类） |
 | `func deleteSession(_:completion: @escaping (Bool) -> Void)` | 删单个会话文件（基类） |
 | `func exportMarkdown(_:completion: @escaping (String?) -> Void)` | 导出 Markdown 文本（UI 负责 NSSavePanel；基类调格式的 `markdown`） |
-| `func flushCache()` | willTerminate 落盘索引缓存（基类） |
+| `func flushCache()` | willTerminate 同步落盘索引缓存，返回时已写好（基类） |
 
 > 静态工具 `ClaudeSessionIndex.projectName(fromPath:)`（继承自基类，转给 `CLISessionPaths`）/ `demungeDirName(_:)` / `editToolNames` 供其他文件复用。
 > 原来的 `recentSessions(limit:)` 没有调用方，已删。

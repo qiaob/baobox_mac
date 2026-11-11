@@ -253,8 +253,10 @@ extension CodexUsageStore {
             guard values?.isRegularFile == true else { continue }
             let mtime = values?.contentModificationDate ?? Date()
             if mtime < cutoff { continue }
-            guard let data = try? Data(contentsOf: url) else { continue }
-            entries.append(contentsOf: parseFile(data: data, fallbackDate: mtime))
+            autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
+                guard let data = try? Data(contentsOf: url) else { return }
+                entries.append(contentsOf: parseFile(data: data, fallbackDate: mtime))
+            }
         }
         return entries
     }
@@ -393,42 +395,44 @@ extension CodexUsageStore {
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
             guard values?.isRegularFile == true else { continue }
             if let mtime = values?.contentModificationDate, mtime < cutoff { continue }
-            guard let data = try? Data(contentsOf: url) else { continue }
+            autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
+                guard let data = try? Data(contentsOf: url) else { return }
 
-            for lineData in data.split(separator: 0x0A) {
-                guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
-                let payload = (object["payload"] as? [String: Any]) ?? object
-                let type = (payload["type"] as? String) ?? (object["type"] as? String) ?? ""
-                guard callTypes.contains(type) else { continue }
+                for lineData in data.split(separator: 0x0A) {
+                    guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
+                    let payload = (object["payload"] as? [String: Any]) ?? object
+                    let type = (payload["type"] as? String) ?? (object["type"] as? String) ?? ""
+                    guard callTypes.contains(type) else { continue }
 
-                let name = (payload["name"] as? String) ?? (payload["tool"] as? String) ?? ""
-                let serverField = payload["server"] as? String
+                    let name = (payload["name"] as? String) ?? (payload["tool"] as? String) ?? ""
+                    let serverField = payload["server"] as? String
 
-                if let server = serverField, !server.isEmpty {
-                    // 事件带 server 字段：MCP 两级；tool 取 name 去掉 server__ 前缀。
-                    let tool = stripServerPrefix(name, server: server)
-                    var entry = mcp[server] ?? (total: 0, tools: [:])
-                    entry.total += 1
-                    if !tool.isEmpty { entry.tools[tool, default: 0] += 1 }
-                    mcp[server] = entry
-                } else if name.contains("__") {
-                    // 名字形如 <server>__<tool>。
-                    let parts = name.components(separatedBy: "__")
-                    let server = parts.first.flatMap { $0.isEmpty ? nil : $0 } ?? name
-                    let tool = parts.count >= 2 ? parts[1...].joined(separator: "__") : ""
-                    var entry = mcp[server] ?? (total: 0, tools: [:])
-                    entry.total += 1
-                    if !tool.isEmpty { entry.tools[tool, default: 0] += 1 }
-                    mcp[server] = entry
-                } else if type == "mcp_tool_call" {
-                    let server = name.isEmpty ? "mcp" : name
-                    var entry = mcp[server] ?? (total: 0, tools: [:])
-                    entry.total += 1
-                    mcp[server] = entry
-                } else {
-                    // 内置工具：local_shell_call 归一为 shell；其余按 name（缺失记 unknown）。
-                    let label = type == "local_shell_call" ? "shell" : (name.isEmpty ? "unknown" : name)
-                    builtin[label, default: 0] += 1
+                    if let server = serverField, !server.isEmpty {
+                        // 事件带 server 字段：MCP 两级；tool 取 name 去掉 server__ 前缀。
+                        let tool = stripServerPrefix(name, server: server)
+                        var entry = mcp[server] ?? (total: 0, tools: [:])
+                        entry.total += 1
+                        if !tool.isEmpty { entry.tools[tool, default: 0] += 1 }
+                        mcp[server] = entry
+                    } else if name.contains("__") {
+                        // 名字形如 <server>__<tool>。
+                        let parts = name.components(separatedBy: "__")
+                        let server = parts.first.flatMap { $0.isEmpty ? nil : $0 } ?? name
+                        let tool = parts.count >= 2 ? parts[1...].joined(separator: "__") : ""
+                        var entry = mcp[server] ?? (total: 0, tools: [:])
+                        entry.total += 1
+                        if !tool.isEmpty { entry.tools[tool, default: 0] += 1 }
+                        mcp[server] = entry
+                    } else if type == "mcp_tool_call" {
+                        let server = name.isEmpty ? "mcp" : name
+                        var entry = mcp[server] ?? (total: 0, tools: [:])
+                        entry.total += 1
+                        mcp[server] = entry
+                    } else {
+                        // 内置工具：local_shell_call 归一为 shell；其余按 name（缺失记 unknown）。
+                        let label = type == "local_shell_call" ? "shell" : (name.isEmpty ? "unknown" : name)
+                        builtin[label, default: 0] += 1
+                    }
                 }
             }
         }

@@ -1,7 +1,8 @@
 import Foundation
 import XCTest
 
-/// 回放 + 跟随：后台准备、主线程回放已有行、再跟随新行；启停竞态的收紧（docs/codex-assistant/DEDUPE.md §2、§5.2 C3）。
+/// 回放 + 跟随：后台准备、主线程回放已有行、再跟随新行；启停竞态的收紧（docs/codex-assistant/DEDUPE.md §2、§5.2 C3）；
+/// 启动时没写完的行、跟随中文件被删（§5.2 C1、C2）。
 @MainActor
 final class EventFileFollowerTests: XCTestCase {
 
@@ -80,6 +81,40 @@ final class EventFileFollowerTests: XCTestCase {
 
         XCTAssertTrue(try Support.append("line 11\n", to: url) { log.followed.count >= 1 })
         XCTAssertEqual(log.followed, ["follow:line 11"], "从截断后的大小起跟随")
+    }
+
+    /// 启动那一刻最后一行还没写完（docs/codex-assistant/DEDUPE.md §5.2 C1）：不回放它，写完之后当新行完整地交出一次。
+    func testFollowsTheLineThatWasHalfWrittenAtStartOnceItIsDone() throws {
+        let root = try Support.makeSandbox(for: self)
+        let url = root.appendingPathComponent("events.jsonl")
+        try Support.write("a\n{\"b\":", to: url)
+        let follower = makeFollower(url)
+        let log = Log()
+
+        start(follower, log: log)
+        XCTAssertTrue(Support.spin { follower.isFollowing })
+        XCTAssertEqual(log.entries, ["replay:a"], "没写完的行不回放")
+
+        try Support.append("1}\n", to: url)
+        XCTAssertTrue(Support.spin { log.followed.count >= 1 })
+        XCTAssertEqual(log.entries, ["replay:a", "follow:{\"b\":1}"])
+    }
+
+    /// 跟随中事件文件被删（§5.2 C2）：脚本再写进来的行照常收到，不用重启 App。
+    func testKeepsFollowingAfterTheEventsFileIsDeleted() throws {
+        let root = try Support.makeSandbox(for: self)
+        let url = root.appendingPathComponent("Baobox/ClaudeCode/events.jsonl")
+        let follower = makeFollower(url)
+        let log = Log()
+        start(follower, log: log)
+        XCTAssertTrue(Support.spin { follower.isFollowing })
+        XCTAssertTrue(try Support.append("one\n", to: url) { log.followed.count >= 1 })
+
+        try FileManager.default.removeItem(at: url)
+        try Support.appendLikeShell("two\n", to: url)
+        XCTAssertTrue(Support.spin { log.followed.count >= 2 })
+
+        XCTAssertEqual(log.entries, ["follow:one", "follow:two"])
     }
 
     func testStartWhileStartedIsIgnored() throws {
