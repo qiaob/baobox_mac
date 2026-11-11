@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1 已实现（§5 PR1 末尾的落地记录）。
+> 进度：PR1 已实现（PR #182，§5 PR1 末尾的落地记录）。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -759,7 +759,7 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
   `AIToolsCenterWindow.swift`、`AIToolsNotify.swift`、`CodexEnv.swift`；D3 同意的话 `CurlCommand.swift`、`URLRecognizer.swift`、`LiveTranslateVoiceOutput.swift`；`mac/project.yml`。
 - 文档：见 §2.4 类 5 末条；本文状态。
 
-#### PR1 落地记录（2026-11-11，分支 `refactor/cli-terminal-core`，基线 main `5841026`）
+#### PR1 落地记录（2026-11-11，PR #182，分支 `refactor/cli-terminal-core`，基线 main `5841026`）
 
 照上面的清单做了，D1–D3 按建议。
 
