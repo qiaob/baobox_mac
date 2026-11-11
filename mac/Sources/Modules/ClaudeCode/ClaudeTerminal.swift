@@ -136,9 +136,8 @@ enum ClaudeTerminal {
 
     /// 从进程命令行解析终端 App：命令路径形如 `/Applications/iTerm.app/Contents/MacOS/...`。
     nonisolated private static func terminalApp(inCommand command: String) -> (URL, String)? {
-        guard let range = command.range(of: ".app/Contents/MacOS/") else { return nil }
-        let appPath = String(command[..<range.lowerBound]) + ".app"
-        guard let bundleID = Bundle(path: appPath)?.bundleIdentifier,
+        guard let appPath = ClaudeRunningSession.appBundlePath(inCommand: command),
+              let bundleID = Bundle(path: appPath)?.bundleIdentifier,
               terminalBundleIDs.contains(bundleID) else { return nil }
         return (URL(fileURLWithPath: appPath), bundleID)
     }
@@ -151,15 +150,7 @@ enum ClaudeTerminal {
     nonisolated private static func processTable()
         -> [Int32: (ppid: Int32, tty: String?, command: String)] {
         guard let output = Shell.output("/bin/ps", ["-axo", "pid=,ppid=,tty=,command="]) else { return [:] }
-        var table: [Int32: (ppid: Int32, tty: String?, command: String)] = [:]
-        for line in output.split(separator: "\n") {
-            let fields = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-            guard fields.count >= 4,
-                  let pid = Int32(fields[0]), let ppid = Int32(fields[1]) else { continue }
-            let tty = fields[2] == "??" ? nil : String(fields[2])
-            table[pid] = (ppid, tty, String(fields[3]))
-        }
-        return table
+        return ClaudeRunningSession.parseProcessTable(output)
     }
 
     /// 取进程当前工作目录（lsof cwd）。

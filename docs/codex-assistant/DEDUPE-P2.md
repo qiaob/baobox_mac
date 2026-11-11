@@ -217,7 +217,7 @@
 - `tokens` 在 999,950–999,999 之间显示「1000.0k」（先判 ≥ 1000，再按一位小数四舍五入）。一直如此，不改；PR2 的单测把它钉住，想改另说。
 - 两个面板控制器的 `handleKey` 还有 14 行相同：#172 有意把按键含义留在各自控制器（`DEDUPE.md` §4.3），不动。
 - （PR1 落地时查到）「按进程找宿主终端」在真机上一直找不到：`processTable` 切出来的命令行开头带着 ps 的列对齐空格，`Bundle(path:)` 认不出终端 App。
-  PR1 原样搬、没修，见 §5 PR1 落地记录末段。
+  PR1 原样搬、没修，见 §5 PR1 落地记录末段；之后单独修了（`ClaudeRunningSession.parseProcessTable` 去掉对齐空格，有单测）。
 
 ## 2. 设计
 
@@ -803,6 +803,8 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 （tty 是 `??` 的进程前面 6 个空格，ttysNNN 的 1 个），于是 `terminalApp(inCommand:)` 拼出的 App 路径以空格开头、`Bundle(path:)` 认不出 —— 本机实测 iTerm2、Otty
 都认不出来（去掉空格就认得）。结果是「按进程找」那条兜底在真机上从来找不到宿主终端：没有 hook 记下的位置时，点通知不跳，面板续接正在跑的会话会另开一个窗口。
 装了 hooks 的常规路径（先用位置）不受影响。修法是切完把命令行去掉首尾空格，属行为变化，建议另开 issue。
+**已修**（PR1 之后单独一个 PR）：解析挪进纯逻辑 `ClaudeRunningSession.parseProcessTable` / `appBundlePath`（进 BaoboxTests），去掉对齐空格；
+本机实测旧解析认不出 Otty、新解析认得出（`io.appmakes.otty`）。Otty 不在 `TerminalAppChoice` 里，这条兜底认的终端仍只有 iTerm2 / Ghostty / kitty / WezTerm / Alacritty / 系统 Terminal。
 
 ### PR2 小件
 
