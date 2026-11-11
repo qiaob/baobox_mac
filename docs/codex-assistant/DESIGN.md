@@ -242,7 +242,8 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 - **token_count 聚合**：`CodexUsage.parseFile` 逐文件三选一——有 `info.last_token_usage`（增量）→ 全部相加；否则有 `info.total_token_usage`（累计）→ 只取时间最大一条；否则用 `payload` 顶层计数（仅当无 `info`）当增量。与 §2 反双计规则一致。
 - **窗口**：`lastActiveBlock(from:span:)`（floor 到整点，span 5h/168h，末块 `now<=end` 才活跃）；周窗口滚动（默认）/ 固定锚点（`weekAnchorStart` 用 `Calendar.nextDate(.backward)`）。起初与 Claude 侧平行独立实现；2026-11（#109）按 §7 的建议把定价结构、窗口 / 周窗口 / 今日 / 报表与 80% 提醒防重的算法上移到两边共用的 `mac/Sources/Core/CLIUsage/`（`BaoboxTests` 有单元测试），`CodexUsage.swift` 只留定价表 `CodexPricingTable`、rollout 解析、设置键与通知（两个模块之间仍不互相依赖）。两边原有的口径差异照旧保留：Codex 报表按 token 数排序、无「额度已恢复」提醒、近 180h 没有任何用量时固定锚点周窗口为 nil（Claude 给 0 用量窗口）。
 - **中心窗口**：`AIToolsCenterController.shared.show(tab:)`，两 Tab（`.sessions` / `.usage`）；跨 AppKit/SwiftUI 用小单例 `AIToolsCenterTabSelection`（`selectedTab`）驱动 `TabView`。格式化用新 `AIToolsFormat`（内联在 `AIToolsCenterWindow.swift`，非独立文件）。
-- **设置 5 节**：config / notify / usage / mcp / maintenance。`CodexEnv` 新增 `cliVersion()`（后台 `Process` 经 `/bin/zsh -lc`，先读 stdout 再 `waitUntilExit` 防管道死锁）、`sessionsDiskStats()`、`cleanupSessions(olderThanDays:)`、`mcpServers()`（行扫 `[mcp_servers.*]`，只读 command/args）。
+- **设置 5 节**：config / notify / usage / mcp / maintenance。`CodexEnv` 新增 `cliVersion()`（后台 `Process` 经 `/bin/zsh -lc`，先读 stdout 再 `waitUntilExit` 防管道死锁）、`sessionsDiskStats()`、`cleanupSessions(olderThanDays:)`（2026-11 起移到会话索引，见下一条）、`mcpServers()`（行扫 `[mcp_servers.*]`，只读 command/args）。
+- **会话索引**：起初照 `ClaudeSessionIndex` 平行抄了一份（只在内存缓存，不落盘）；2026-11（#109）刷新（进行中不重入、后台扫描、mtime + 大小没变就复用）、排序、删除、导出外壳与清理旧会话上移到两边共用的 `mac/Sources/Core/CLISession/`（`CLISessionIndex<Format>` 基类，`BaoboxTests` 有单元测试，见 `DEDUPE.md` §4.1）。`CodexSessionIndex.swift` 只留格式 `CodexSessionFormat`（`sessions/` 下递归的 rollout jsonl、头 64 KB 快扫、导出；`cacheFileURL` 为 nil，照旧不落盘）与 rollout 解析，`CodexSessionIndex` 成了基类的非泛型子类，`shared` 与调用方不变；`CodexEnv.cleanupSessions` 改成索引的 `cleanup(olderThanDays:)`（删完先刷新再回调，维护节不再自己 `refresh()`）。两个模块之间仍不互相依赖。
 - **调用统计**：`computeInvocationStats(days:)` 识别 `function_call`/`tool_call`/`mcp_tool_call`/`local_shell_call`/`custom_tool_call`；MCP 经显式 `server` 字段或 `<server>__<tool>` 名或裸 `mcp_tool_call` 三法判定；`local_shell_call` 归一为 `shell`。Codex 无 Skill/斜杠命令概念，故只有 builtin + mcp 两类。
 - **跨模块依赖（既存）**：`AIToolsTool`/`AIToolsCenterWindow` 调用 `TerminalLauncher.run(...)`（定义在 `ClaudeCode/ClaudeEnv.swift`），此依赖在本次之前即存在，非新引入，但 AITools 未与 ClaudeCode 完全解耦——留作已知项。
 
@@ -256,7 +257,7 @@ Codex 的 MCP 配置是 TOML **表**：`[mcp_servers.<name>]` 带 `command` / `a
 ### 9.3 待真机验证 / 已知项
 
 - `CodexEnv.cliVersion()` 的子进程**无超时**：`codex` 二进制挂死会让该后台线程一直阻塞（不阻塞主线程）。建议后续加超时。
-- `cleanupSessions` 直接删 rollout jsonl，仅应用内二次确认，**不可撤销**（无回收站）。
+- 清理旧会话（2026-11 起是 `CodexSessionIndex.cleanup(olderThanDays:)`）直接删 rollout jsonl，仅应用内二次确认，**不可撤销**（无回收站）。
 - token_count 若某文件同时出现 `total_token_usage` 与「仅顶层无 info」的 token_count，一旦走累计路径则顶层条目被丢弃（符合规则，但存在潜在丢数据、无遥测可察）。
 - 预算提醒的「窗口切换」清空启发式与 Claude 侧同源、现已复制一份，改动时注意别过度清空致重复提醒。
 - 并发/安全合规：`@Published` 均主线程写；`CodexTOML` 写前备份 `.baobox.bak`、拒改多行/非字符串值、保留未知行；未见 `try!`/force-unwrap。

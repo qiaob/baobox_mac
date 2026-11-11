@@ -142,6 +142,8 @@ func diskStats(completion:)/cleanup(olderThanDays:completion:)
 - 审计/清理为全量操作,后台线程逐文件逐行流式处理(整读 Data 后按 `\n` split 可接受,单文件解析完立即释放)。
 - 删除会话 = 删对应 jsonl 文件(NSAlert 确认)。
 
+> 2026-11(#109)起,刷新(进行中不重入、后台扫描、mtime + 大小没变就复用)、排序、删除、导出外壳、磁盘缓存(1 秒防抖、退出 flush)与清理旧会话移到与 Codex 助手共用的 `mac/Sources/Core/CLISession/`(`CLISessionIndex<Format>` 基类,纯 Foundation + Combine,`BaoboxTests` 有单元测试,见 `../codex-assistant/DEDUPE.md` §4.1);`ClaudeSessionIndex.swift` 只留格式 `ClaudeSessionFormat`(会话文件在哪、怎么快扫、怎么导出、缓存放哪)、缓存记录 `ClaudeSessionRecord` 与审计、磁盘分布,`ClaudeSessionIndex` 成了基类的非泛型子类,`shared` 与所有调用方不变。缓存文件实际是 `index-cache-v2.json`(上面写的 `index-cache.json` 是 v1),格式不变;`recentSessions(limit:)` 没有调用方,已删。
+
 ### 3.3 ClaudeUsage
 
 ```swift

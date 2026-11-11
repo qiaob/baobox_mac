@@ -45,30 +45,37 @@
 
 ## 2. ClaudeSessionIndex.swift —— 会话索引 / 审计 / 磁盘
 
-### 共享解析工具 `enum ClaudeJSONLParsing`
-`parseDate(_:) -> Date?`、`parseObject(_ data:) -> [String:Any]?`、`extractText(fromContent:) -> String?`（Usage / LiveStatus 也用它）。
+> 2026-11（#109）起，刷新、复用、排序、删除、导出外壳、磁盘缓存与清理旧会话在与 Codex 助手共用的
+> `mac/Sources/Core/CLISession/`（`CLISessionIndex<Format>` 基类，`BaoboxTests` 有单元测试，见 `docs/codex-assistant/DEDUPE.md` §4.1）。
+> 本文件只留 Claude Code 的格式 `ClaudeSessionFormat` 与独有的审计、磁盘分布；下表的成员名与签名不变，UI 照旧这样调。
+
+### 解析工具
+- 逐行解析与时间戳：共用的 `CLIJSONL.parseDate(_:) -> Date?`、`CLIJSONL.parseObject(_ data:) -> [String:Any]?`（Usage / FileIndex / LiveStatus 也用它）。
+- `enum ClaudeJSONLParsing` 只剩 Claude 独有的 `extractText(fromContent:) -> String?`。
 
 ### 数据模型
-- `struct ClaudeSessionSummary: Identifiable, Equatable` —— `id, fileURL, projectPath, projectName, title, lastActivity, fileSize`
+- `struct ClaudeSessionSummary: Identifiable, Equatable, CLISessionSummary` —— `id, fileURL, projectPath, projectName, title, lastActivity, fileSize, model?, contextTokens?`
+- `struct ClaudeSessionRecord: CLISessionRecord` —— `index-cache-v2.json` 的一条记录（原 `ClaudeSessionIndex.CacheRecord`，字段名即缓存文件里的键，别改）
+- `enum ClaudeSessionFormat: CLISessionFormat` —— 会话文件在哪（`projects/<项目>/*.jsonl`）、怎么快扫（头 64K + 尾 8K）、怎么导出、缓存放哪
 - `struct ClaudeAuditEntry: Identifiable` —— `id(=filePath), filePath, count, lastEdited`
 - `struct ClaudeAuditProject: Identifiable` —— `id(=projectPath), projectPath, projectName, entries, totalCount`
 - `struct ClaudeDiskStats` —— `projectsBytes, todosBytes, shellSnapshotsBytes, otherBytes, totalBytes, sessionFileCount`
 
-### `@MainActor final class ClaudeSessionIndex: ObservableObject`（`.shared`）
+### `@MainActor final class ClaudeSessionIndex: CLISessionIndex<ClaudeSessionFormat>`（`.shared`）
 | 成员 | 说明 |
 |---|---|
-| `@Published private(set) var sessions: [ClaudeSessionSummary]` | 新→旧 |
-| `@Published private(set) var isRefreshing: Bool` | 刷新中 |
-| `func refresh()` | 后台快扫（头64K+尾8K）+ 缓存复用，回主线程发布；去抖防重入 |
-| `func recentSessions(limit:) -> [ClaudeSessionSummary]` | 取前 N 条（内存） |
+| `@Published private(set) var sessions: [ClaudeSessionSummary]` | 新→旧（基类） |
+| `@Published private(set) var isRefreshing: Bool` | 刷新中（基类） |
+| `func refresh()` | 后台快扫（头64K+尾8K）+ 缓存复用，回主线程发布；去抖防重入（基类） |
 | `func auditEntries(on day:completion: @escaping ([ClaudeAuditProject]) -> Void)` | 某日改动审计 |
 | `func diskStats(completion: @escaping (ClaudeDiskStats) -> Void)` | 磁盘占用 |
-| `func cleanup(olderThanDays:completion: @escaping (Int, Int64) -> Void)` | 清理旧会话，回调 (删除数, 释放字节)，随后自动 refresh |
-| `func deleteSession(_:completion: @escaping (Bool) -> Void)` | 删单个会话文件 |
-| `func exportMarkdown(_:completion: @escaping (String?) -> Void)` | 导出 Markdown 文本（UI 负责 NSSavePanel） |
-| `func flushCache()` | willTerminate 落盘索引缓存 |
+| `func cleanup(olderThanDays:completion: @escaping (Int, Int64) -> Void)` | 清理旧会话，回调 (删除数, 释放字节)，随后自动 refresh（基类） |
+| `func deleteSession(_:completion: @escaping (Bool) -> Void)` | 删单个会话文件（基类） |
+| `func exportMarkdown(_:completion: @escaping (String?) -> Void)` | 导出 Markdown 文本（UI 负责 NSSavePanel；基类调格式的 `markdown`） |
+| `func flushCache()` | willTerminate 落盘索引缓存（基类） |
 
-> 静态工具 `ClaudeSessionIndex.projectName(fromPath:)` / `demungeDirName(_:)` 供其他文件复用。
+> 静态工具 `ClaudeSessionIndex.projectName(fromPath:)`（继承自基类，转给 `CLISessionPaths`）/ `demungeDirName(_:)` / `editToolNames` 供其他文件复用。
+> 原来的 `recentSessions(limit:)` 没有调用方，已删。
 
 ---
 

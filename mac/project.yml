@@ -128,14 +128,17 @@ targets:
               "${DEST}/BaoboxInterpreter.driver"
           fi
 
-  # 纯逻辑单元测试：只编 Tests/ 与被测的共用层源码（目前是 Core/CLIUsage/），不链接 App、不设 TEST_HOST，
-  # 由 xctest 直接加载，不启动 Baobox。要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
+  # 纯逻辑单元测试：只编 Tests/ 与被测的纯逻辑源码，不链接 App、不设 TEST_HOST，由 xctest 直接加载，不启动 Baobox。
+  # 要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
+  # - Core/CLIUsage：Claude Code / Codex 的用量统计
+  # - Core/CLISession：Claude Code / Codex 的会话索引（docs/codex-assistant/DEDUPE.md §4.1）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: Tests
       - path: Sources/Core/CLIUsage
+      - path: Sources/Core/CLISession
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

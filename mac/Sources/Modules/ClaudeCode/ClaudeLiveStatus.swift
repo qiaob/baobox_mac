@@ -390,7 +390,7 @@ final class ClaudeLiveStatus: ObservableObject {
     /// 处理一行事件 JSON。notify=false 用于初始回放。
     private func apply(line: String, notify: Bool) {
         guard let data = line.data(using: .utf8),
-              let object = ClaudeJSONLParsing.parseObject(data),
+              let object = CLIJSONL.parseObject(data),
               let sessionID = object["session_id"] as? String,
               let event = object["hook_event_name"] as? String else { return }
 

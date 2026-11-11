@@ -392,13 +392,13 @@ extension ClaudeFileIndex {
         var entries = baseEntries
         var lastCwd: String?
         for lineData in complete.split(separator: 0x0A) {
-            guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)) else { continue }
+            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
             let lineCwd = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             if let lineCwd { lastCwd = lineCwd }
 
             guard (object["type"] as? String) == "assistant",
                   let ts = object["timestamp"] as? String,
-                  let date = ClaudeJSONLParsing.parseDate(ts),
+                  let date = CLIJSONL.parseDate(ts),
                   let message = object["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { continue }
 

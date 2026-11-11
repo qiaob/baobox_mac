@@ -5,39 +5,18 @@ import Foundation
 /// 数据源见 TECH_DESIGN 2.2。所有解析都必须容错：任何字段缺失 / 类型不符都只跳过或降级，
 /// **决不 crash**（无 force unwrap、无 try!）。重 IO 一律后台，完成后回主线程发布 `@Published`。
 ///
+/// 刷新、复用、排序、删除、导出外壳、磁盘缓存与清理旧会话在与 Codex 助手共用的 `Core/CLISession/`（#109）：
+/// 本文件只留 Claude Code 的「格式」`ClaudeSessionFormat`（会话文件在哪、怎么快扫、怎么导出、缓存放哪）
+/// 与独有的审计、`~/.claude` 磁盘分布。
+///
 /// 用户可见文案：本文件仅一处降级标题用 L()：
 ///   - `claudecode.session.untitled` —— 无标题会话占位。
 ///     en: "(untitled session)" / zh-Hans: "(无标题会话)"
 
 // MARK: - 逐行 JSON 解析工具（本模块共享）
 
-/// 会话 / 事件 JSONL 的通用解析辅助。ISO8601 formatter 建成静态常量复用（TECH_DESIGN 2.2）。
+/// 会话 / 事件 JSONL 里 Claude Code 独有的解析辅助。逐行解析与时间戳用共用的 `CLIJSONL`。
 enum ClaudeJSONLParsing {
-
-    /// 带毫秒的 ISO8601（首选）。
-    private static let iso8601Fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    /// 不带毫秒的 ISO8601（回退）。
-    private static let iso8601Plain: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
-
-    /// 解析 ISO8601 时间戳，先试带毫秒再退无毫秒。失败返回 nil。
-    nonisolated static func parseDate(_ string: String) -> Date? {
-        if let date = iso8601Fractional.date(from: string) { return date }
-        return iso8601Plain.date(from: string)
-    }
-
-    /// 把一行 JSON 数据解析为字典；失败返回 nil。
-    nonisolated static func parseObject(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
 
     /// 从 message.content 提取首个可读文本。
     /// content 可能是纯字符串，或 `[{type:text,text:...}, {type:tool_use,...}]` 数组。
@@ -57,7 +36,7 @@ enum ClaudeJSONLParsing {
 // MARK: - 数据模型
 
 /// 一条会话摘要（用于列表 / 菜单展示与续接）。
-struct ClaudeSessionSummary: Identifiable, Equatable {
+struct ClaudeSessionSummary: Identifiable, Equatable, CLISessionSummary {
     /// 文件名里的 uuid。
     let id: String
     let fileURL: URL
@@ -103,59 +82,17 @@ struct ClaudeDiskStats {
 
 // MARK: - 索引单例
 
-/// 会话索引：内存缓存 + 磁盘 index-cache.json，快扫（头 64KB + 尾 8KB）+ 增量复用。
+/// 会话索引：内存缓存 + 磁盘 index-cache-v2.json，快扫（头 64KB + 尾 8KB）+ 增量复用，都在共用的 `CLISessionIndex`。
+/// 这里只加 Claude 独有的审计与磁盘分布。
 @MainActor
-final class ClaudeSessionIndex: ObservableObject {
+final class ClaudeSessionIndex: CLISessionIndex<ClaudeSessionFormat> {
     static let shared = ClaudeSessionIndex()
-
-    /// 新→旧排序。
-    @Published private(set) var sessions: [ClaudeSessionSummary] = []
-    /// 是否正在刷新（供 UI 显示转圈）。
-    @Published private(set) var isRefreshing = false
-
-    /// 快扫缓存：键 = 文件路径。仅主线程读写。
-    private var cache: [String: CacheRecord] = [:]
-    /// 去抖 / 防重入标记。
-    private var refreshing = false
-    private var saveWorkItem: DispatchWorkItem?
 
     /// 参与审计的编辑类工具。后台 nonisolated 静态方法要读它，故显式 nonisolated（不可变 Sendable）。
     nonisolated static let editToolNames: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
 
-    /// v2:新增 model / contextTokens 字段,换文件名让旧缓存整体失效重扫一次。
-    private var cacheFileURL: URL {
-        ClaudeEnv.supportDir.appendingPathComponent("index-cache-v2.json")
-    }
-
-    private init() {
-        loadCache()
-    }
-
-    // MARK: - 刷新
-
-    /// 后台快扫全部 jsonl → 回主线程发布。去抖，进行中不重入。
-    func refresh() {
-        guard !refreshing else { return }
-        refreshing = true
-        isRefreshing = true
-        let previousCache = cache        // 主线程快照，传入后台
-        DispatchQueue.global(qos: .utility).async {
-            let (summaries, newCache) = Self.scanAll(previousCache: previousCache)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.sessions = summaries
-                    self.cache = newCache
-                    self.refreshing = false
-                    self.isRefreshing = false
-                    self.scheduleCacheSave()
-                }
-            }
-        }
-    }
-
-    /// 最近 N 条（已按新→旧排序）。主线程同步读内存。
-    func recentSessions(limit: Int) -> [ClaudeSessionSummary] {
-        Array(sessions.prefix(max(0, limit)))
+    private override init() {
+        super.init()
     }
 
     // MARK: - 审计
@@ -170,7 +107,7 @@ final class ClaudeSessionIndex: ObservableObject {
         }
     }
 
-    // MARK: - 磁盘统计 / 清理
+    // MARK: - 磁盘统计
 
     /// 统计 `~/.claude` 占用分布。后台计算，完成回主线程。
     func diskStats(completion: @escaping (ClaudeDiskStats) -> Void) {
@@ -181,177 +118,68 @@ final class ClaudeSessionIndex: ObservableObject {
             }
         }
     }
-
-    /// 删除早于 N 天(按 mtime)的会话 jsonl。回调 (删除文件数, 释放字节数)，随后自动 refresh。
-    func cleanup(olderThanDays days: Int, completion: @escaping (Int, Int64) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
-            let (count, bytes) = Self.performCleanup(olderThanDays: days)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.refresh()
-                }
-                completion(count, bytes)
-            }
-        }
-    }
-
-    /// 删除单个会话文件。回调是否成功，成功则从内存索引移除。
-    func deleteSession(_ summary: ClaudeSessionSummary, completion: @escaping (Bool) -> Void) {
-        let url = summary.fileURL
-        DispatchQueue.global(qos: .utility).async {
-            let ok = (try? FileManager.default.removeItem(at: url)) != nil
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if ok {
-                        self.sessions.removeAll { $0.id == summary.id }
-                        self.cache.removeValue(forKey: url.path)
-                        self.scheduleCacheSave()
-                    }
-                }
-                completion(ok)
-            }
-        }
-    }
-
-    /// 把一个会话导出为 Markdown 文本（逐行解析 user/assistant 文本块）。后台解析，回主线程。
-    func exportMarkdown(_ summary: ClaudeSessionSummary, completion: @escaping (String?) -> Void) {
-        let url = summary.fileURL
-        let title = summary.title
-        DispatchQueue.global(qos: .utility).async {
-            let markdown = Self.buildMarkdown(fileURL: url, title: title)
-            DispatchQueue.main.async {
-                completion(markdown)
-            }
-        }
-    }
-
-    /// App 退出前立即落盘缓存。
-    func flushCache() {
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        saveCacheNow()
-    }
-
-    // MARK: - 缓存持久化
-
-    private func scheduleCacheSave() {
-        saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                self?.saveCacheNow()
-            }
-        }
-        saveWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
-    }
-
-    private func saveCacheNow() {
-        let snapshot = cache
-        let url = cacheFileURL
-        DispatchQueue.global(qos: .utility).async {
-            ClaudeEnv.ensureSupportDir()
-            let encoder = JSONEncoder()
-            if let data = try? encoder.encode(snapshot) {
-                try? data.write(to: url)
-            }
-        }
-    }
-
-    private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheFileURL),
-              let decoded = try? JSONDecoder().decode([String: CacheRecord].self, from: data) else {
-            return
-        }
-        cache = decoded
-    }
 }
 
 // MARK: - 缓存记录
 
-extension ClaudeSessionIndex {
-    /// index-cache-v2.json 的一条记录。可 Codable 持久化。
-    struct CacheRecord: Codable {
-        let modified: Double       // mtime.timeIntervalSince1970
-        let size: Int64
-        let id: String
-        let projectPath: String
-        let projectName: String
-        let title: String
-        let lastActivity: Double   // timeIntervalSince1970
-        var model: String?
-        var contextTokens: Int?
+/// index-cache-v2.json 的一条记录（原 `ClaudeSessionIndex.CacheRecord`）。可 Codable 持久化，字段名就是缓存文件里的键，别改。
+struct ClaudeSessionRecord: CLISessionRecord {
+    let modified: Double       // mtime.timeIntervalSince1970
+    let size: Int64
+    let id: String
+    let projectPath: String
+    let projectName: String
+    let title: String
+    let lastActivity: Double   // timeIntervalSince1970
+    var model: String?
+    var contextTokens: Int?
 
-        func toSummary(fileURL: URL) -> ClaudeSessionSummary {
-            ClaudeSessionSummary(
-                id: id,
-                fileURL: fileURL,
-                projectPath: projectPath,
-                projectName: projectName,
-                title: title,
-                lastActivity: Date(timeIntervalSince1970: lastActivity),
-                fileSize: size,
-                model: model,
-                contextTokens: contextTokens
-            )
-        }
+    func toSummary(fileURL: URL) -> ClaudeSessionSummary {
+        ClaudeSessionSummary(
+            id: id,
+            fileURL: fileURL,
+            projectPath: projectPath,
+            projectName: projectName,
+            title: title,
+            lastActivity: Date(timeIntervalSince1970: lastActivity),
+            fileSize: size,
+            model: model,
+            contextTokens: contextTokens
+        )
     }
 }
 
-// MARK: - 后台扫描 / 解析（全部 nonisolated static，可在后台线程调用）
+// MARK: - 格式（后台扫描 / 解析，全部静态，可在后台线程调用）
 
-extension ClaudeSessionIndex {
+/// Claude Code 会话日志的格式：`~/.claude/projects/<项目>/<会话>.jsonl`，缓存落盘到 index-cache-v2.json。
+enum ClaudeSessionFormat: CLISessionFormat {
 
-    /// 遍历 projects 下全部 jsonl；mtime+size 未变的复用缓存，否则快扫。
-    nonisolated static func scanAll(previousCache: [String: CacheRecord]) -> ([ClaudeSessionSummary], [String: CacheRecord]) {
-        let fm = FileManager.default
-        var summaries: [ClaudeSessionSummary] = []
-        var newCache: [String: CacheRecord] = [:]
+    /// v2:新增 model / contextTokens 字段,换文件名让旧缓存整体失效重扫一次。
+    static var cacheFileURL: URL? {
+        ClaudeEnv.supportDir.appendingPathComponent("index-cache-v2.json")
+    }
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return ([], [:])
-        }
+    /// 清理旧会话的根目录。
+    static var logRoot: URL {
+        ClaudeEnv.projectsDir
+    }
 
-        for projectDir in projectDirs {
-            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let files = try? fm.contentsOfDirectory(
-                at: projectDir,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+    /// projects 下一层项目目录里的全部 jsonl。
+    static func sessionFiles() -> [CLISessionFile] {
+        CLISessionFiles.jsonlInSubdirectories(of: ClaudeEnv.projectsDir)
+    }
 
-            for file in files where file.pathExtension == "jsonl" {
-                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let mtime = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
-                let size = Int64(values?.fileSize ?? 0)
-                let path = file.path
-
-                // 复用未变文件。
-                if let record = previousCache[path],
-                   abs(record.modified - mtime.timeIntervalSince1970) < 0.001,
-                   record.size == size {
-                    newCache[path] = record
-                    summaries.append(record.toSummary(fileURL: file))
-                    continue
-                }
-
-                if let scanned = scanFile(file, mtime: mtime, size: size, mungedDir: projectDir.lastPathComponent) {
-                    newCache[path] = scanned.record
-                    summaries.append(scanned.summary)
-                }
-            }
-        }
-
-        summaries.sort { $0.lastActivity > $1.lastActivity }
-        return (summaries, newCache)
+    static func summary(of record: ClaudeSessionRecord, fileURL: URL) -> ClaudeSessionSummary {
+        record.toSummary(fileURL: fileURL)
     }
 
     /// 快扫单个文件：读头 64KB + 尾 8KB。头取 summary/首条 user/cwd，尾取末次时间戳与末次 cwd。
-    nonisolated static func scanFile(_ url: URL, mtime: Date, size: Int64, mungedDir: String) -> (summary: ClaudeSessionSummary, record: CacheRecord)? {
+    /// 头尾都没有 cwd 时从所在项目目录名（munged）反推展示路径。
+    static func scan(_ file: CLISessionFile) -> ClaudeSessionRecord? {
+        let url = file.url
+        let mtime = file.modified
+        let size = file.size
+        let mungedDir = url.deletingLastPathComponent().lastPathComponent
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
@@ -376,7 +204,7 @@ extension ClaudeSessionIndex {
         var cwd: String?
         var model: String?
         for lineData in headData.split(separator: 0x0A) {
-            guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)) else { continue }
+            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
             let type = object["type"] as? String
             if summaryTitle == nil, type == "summary", let s = object["summary"] as? String {
                 summaryTitle = s
@@ -403,11 +231,11 @@ extension ClaudeSessionIndex {
         var lastActivity: Date?
         var contextTokens: Int?
         for lineData in tailData.split(separator: 0x0A) {
-            guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)) else { continue }
+            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
             if let dirValue = object["cwd"] as? String, !dirValue.isEmpty {
                 cwd = dirValue
             }
-            if let ts = object["timestamp"] as? String, let date = ClaudeJSONLParsing.parseDate(ts) {
+            if let ts = object["timestamp"] as? String, let date = CLIJSONL.parseDate(ts) {
                 lastActivity = date
             }
             if (object["type"] as? String) == "assistant" {
@@ -422,15 +250,15 @@ extension ClaudeSessionIndex {
             }
         }
 
-        let resolvedPath = cwd ?? demungeDirName(mungedDir)
-        let projectName = projectName(fromPath: resolvedPath)
+        let resolvedPath = cwd ?? ClaudeSessionIndex.demungeDirName(mungedDir)
+        let projectName = CLISessionPaths.projectName(fromPath: resolvedPath)
         let title = summaryTitle
             ?? firstUserText.map { String($0.prefix(60)) }
             ?? L("claudecode.session.untitled")
         let activity = lastActivity ?? mtime
         let id = url.deletingPathExtension().lastPathComponent
 
-        let record = CacheRecord(
+        return ClaudeSessionRecord(
             modified: mtime.timeIntervalSince1970,
             size: size,
             id: id,
@@ -441,15 +269,52 @@ extension ClaudeSessionIndex {
             model: model,
             contextTokens: contextTokens
         )
-        return (record.toSummary(fileURL: url), record)
     }
 
     /// 从 assistant 行取 message.model,过滤 `<synthetic>` 等占位值。
-    nonisolated private static func assistantModel(_ object: [String: Any]) -> String? {
+    private static func assistantModel(_ object: [String: Any]) -> String? {
         guard let m = (object["message"] as? [String: Any])?["model"] as? String,
               !m.isEmpty, !m.hasPrefix("<") else { return nil }
         return m
     }
+
+    /// 逐行解析成 Markdown（## User / ## Assistant）。
+    static func markdown(fileURL: URL, title: String) -> String? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        var lines: [String] = ["# \(title)", ""]
+        for lineData in data.split(separator: 0x0A) {
+            guard let object = CLIJSONL.parseObject(Data(lineData)),
+                  let type = object["type"] as? String,
+                  type == "user" || type == "assistant",
+                  let message = object["message"] as? [String: Any] else { continue }
+
+            let text: String?
+            if type == "user" {
+                text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
+            } else {
+                // assistant.content 是数组，拼接全部 text 块。
+                if let blocks = message["content"] as? [[String: Any]] {
+                    let joined = blocks.compactMap { block -> String? in
+                        (block["type"] as? String) == "text" ? block["text"] as? String : nil
+                    }.joined(separator: "\n\n")
+                    text = joined.isEmpty ? nil : joined
+                } else {
+                    text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
+                }
+            }
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            lines.append(type == "user" ? "## User" : "## Assistant")
+            lines.append("")
+            lines.append(text)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - 审计 / 磁盘统计（全部 nonisolated static，可在后台线程调用）
+
+extension ClaudeSessionIndex {
 
     /// 某日改动审计。全量逐文件逐行流式处理。
     nonisolated static func computeAudit(on day: Date) -> [ClaudeAuditProject] {
@@ -485,10 +350,10 @@ extension ClaudeSessionIndex {
                 let mungedName = projectDir.lastPathComponent
 
                 for lineData in data.split(separator: 0x0A) {
-                    guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)),
+                    guard let object = CLIJSONL.parseObject(Data(lineData)),
                           (object["type"] as? String) == "assistant",
                           let ts = object["timestamp"] as? String,
-                          let date = ClaudeJSONLParsing.parseDate(ts),
+                          let date = CLIJSONL.parseDate(ts),
                           date >= dayStart, date < dayEnd,
                           let message = object["message"] as? [String: Any],
                           let content = message["content"] as? [[String: Any]] else { continue }
@@ -542,76 +407,11 @@ extension ClaudeSessionIndex {
         return stats
     }
 
-    /// 删除早于 N 天的会话 jsonl。返回 (数量, 字节数)。
-    nonisolated static func performCleanup(olderThanDays days: Int) -> (Int, Int64) {
-        let fm = FileManager.default
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-        var count = 0
-        var bytes: Int64 = 0
-
-        guard let enumerator = fm.enumerator(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else { return (0, 0) }
-
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-            let mtime = values?.contentModificationDate ?? Date()
-            guard mtime < cutoff else { continue }
-            let size = Int64(values?.fileSize ?? 0)
-            if (try? fm.removeItem(at: url)) != nil {
-                count += 1
-                bytes += size
-            }
-        }
-        return (count, bytes)
-    }
-
-    /// 逐行解析成 Markdown（## User / ## Assistant）。
-    nonisolated static func buildMarkdown(fileURL: URL, title: String) -> String? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        var lines: [String] = ["# \(title)", ""]
-        for lineData in data.split(separator: 0x0A) {
-            guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)),
-                  let type = object["type"] as? String,
-                  type == "user" || type == "assistant",
-                  let message = object["message"] as? [String: Any] else { continue }
-
-            let text: String?
-            if type == "user" {
-                text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
-            } else {
-                // assistant.content 是数组，拼接全部 text 块。
-                if let blocks = message["content"] as? [[String: Any]] {
-                    let joined = blocks.compactMap { block -> String? in
-                        (block["type"] as? String) == "text" ? block["text"] as? String : nil
-                    }.joined(separator: "\n\n")
-                    text = joined.isEmpty ? nil : joined
-                } else {
-                    text = message["content"].flatMap { ClaudeJSONLParsing.extractText(fromContent: $0) }
-                }
-            }
-            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            lines.append(type == "user" ? "## User" : "## Assistant")
-            lines.append("")
-            lines.append(text)
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     // MARK: - 私有辅助
 
     /// munged 目录名反推展示路径（仅展示用，lossy）。munge 把 `/` 与 `.` 都换成了 `-`。
     nonisolated static func demungeDirName(_ dir: String) -> String {
         dir.replacingOccurrences(of: "-", with: "/")
-    }
-
-    /// 从路径取展示名（末段）。
-    nonisolated static func projectName(fromPath path: String) -> String {
-        let name = URL(fileURLWithPath: path).lastPathComponent
-        return name.isEmpty ? path : name
     }
 
     /// 目录递归总字节数（enumerator 遍历，容错）。

@@ -258,7 +258,7 @@ extension ClaudeUsageStore {
                 guard let data = try? Data(contentsOf: file) else { continue }
 
                 for lineData in data.split(separator: 0x0A) {
-                    guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)),
+                    guard let object = CLIJSONL.parseObject(Data(lineData)),
                           (object["type"] as? String) == "assistant",
                           let message = object["message"] as? [String: Any],
                           let usage = message["usage"] as? [String: Any] else { continue }
@@ -276,7 +276,7 @@ extension ClaudeUsageStore {
                     }
 
                     let ts = object["timestamp"] as? String
-                    let date = ts.flatMap { ClaudeJSONLParsing.parseDate($0) } ?? mtime ?? Date()
+                    let date = ts.flatMap { CLIJSONL.parseDate($0) } ?? mtime ?? Date()
                     let modelID = message["model"] as? String ?? ""
                     let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                         ?? ClaudeSessionIndex.demungeDirName(mungedName)
@@ -339,7 +339,7 @@ extension ClaudeUsageStore {
                 guard let data = try? Data(contentsOf: file) else { continue }
 
                 for lineData in data.split(separator: 0x0A) {
-                    guard let object = ClaudeJSONLParsing.parseObject(Data(lineData)),
+                    guard let object = CLIJSONL.parseObject(Data(lineData)),
                           let type = object["type"] as? String,
                           let message = object["message"] as? [String: Any] else { continue }
 

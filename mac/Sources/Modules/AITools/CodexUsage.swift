@@ -272,7 +272,7 @@ extension CodexUsageStore {
         var topEvents: [Counts] = []       // payload 顶层计数（增量）
 
         for lineData in data.split(separator: 0x0A) {
-            guard let object = CodexJSONLParsing.parseObject(Data(lineData)) else { continue }
+            guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
 
             // 项目 cwd（首个非空即定）。
             if cwd.isEmpty, let c = CodexJSONLParsing.extractMeta(from: object).cwd, !c.isEmpty {
@@ -347,7 +347,7 @@ extension CodexUsageStore {
     /// 事件时间戳（顶层 / payload 的 timestamp；取不到用文件 mtime）。
     nonisolated fileprivate static func eventDate(_ object: [String: Any], payload: [String: Any]?, fallback: Date) -> Date {
         let ts = (object["timestamp"] as? String) ?? (payload?["timestamp"] as? String)
-        return ts.flatMap { CodexJSONLParsing.parseDate($0) } ?? fallback
+        return ts.flatMap { CLIJSONL.parseDate($0) } ?? fallback
     }
 
     // MARK: 窗口与报表（算法在共用层，这里只传 Codex 的口径）
@@ -396,7 +396,7 @@ extension CodexUsageStore {
             guard let data = try? Data(contentsOf: url) else { continue }
 
             for lineData in data.split(separator: 0x0A) {
-                guard let object = CodexJSONLParsing.parseObject(Data(lineData)) else { continue }
+                guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }
                 let payload = (object["payload"] as? [String: Any]) ?? object
                 let type = (payload["type"] as? String) ?? (object["type"] as? String) ?? ""
                 guard callTypes.contains(type) else { continue }
