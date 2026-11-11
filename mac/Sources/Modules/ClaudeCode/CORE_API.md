@@ -121,7 +121,7 @@
 | `var runningCount / waitingCount: Int` | 计数 |
 | `func summaryLine() -> String?` | 菜单状态行；无 hooks 时按 mtime<2min 降级推断；无内容→nil |
 
-> `final class ClaudeEventWatcher`（非 @MainActor）是内部增量监听器，UI 不直接用。
+> 事件文件的建 / 截断 / 回放 / 增量监听用 Core 的 `EventFileFollower`（`Sources/Core/EventFile/`，与 Codex 助手共用），UI 不直接用。
 
 ---
 

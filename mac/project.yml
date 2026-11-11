@@ -141,6 +141,7 @@ targets:
       - path: Tests
       - path: Sources/Core/CLIUsage
       - path: Sources/Core/CLISession
+      - path: Sources/Core/EventFile
       - path: Sources/Core/MeetingEngine
       - path: Sources/Modules/Meeting/Logic
       - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift

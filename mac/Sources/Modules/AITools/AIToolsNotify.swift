@@ -4,10 +4,10 @@ import Foundation
 ///
 /// 机制（DESIGN 第 2 节）：把 `codex-notify.sh` 写进支持目录并 chmod 0755，再把其路径装进
 /// `~/.codex/config.toml` 的 `notify` 键。Codex 每个回合结束会调用该程序，并把事件 JSON
-/// 作为**最后一个参数**传入；脚本取末位参数追加到独立 events 文件。Baobox 用
-/// `DispatchSourceFileSystemObject` 监听该文件增量，回合完成（agent-turn-complete）时发系统通知。
+/// 作为**最后一个参数**传入；脚本取末位参数追加到独立 events 文件。Baobox 用与 Claude Code 助手共用的
+/// `EventFileFollower`（Core/EventFile）跟随该文件的增量，回合完成（agent-turn-complete）时发系统通知。
 ///
-/// 模式照 `ClaudeLiveStatus`，但**独立实现、独立 events 文件**，避免两模块耦合。
+/// events 文件与 `ClaudeLiveStatus` 的各自独立；两个模块之间不互相依赖。
 /// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key）：
@@ -31,70 +31,6 @@ enum AIToolsNotifierSettings {
     }
 }
 
-// MARK: - events 文件增量监听器（非 @MainActor，独占后台串行队列）
-
-/// 监听单个文件的增量写入，把新行回调出去。offset 只在自有串行队列上访问，无需锁。
-/// 与 `ClaudeEventWatcher` 平行独立，避免跨模块耦合。
-final class CodexEventWatcher {
-    private let url: URL
-    private var offset: UInt64
-    private let onLines: ([String]) -> Void
-    private let queue = DispatchQueue(label: "com.baobox.aitools.eventwatcher")
-    private var source: DispatchSourceFileSystemObject?
-
-    init(url: URL, startOffset: UInt64, onLines: @escaping ([String]) -> Void) {
-        self.url = url
-        self.offset = startOffset
-        self.onLines = onLines
-    }
-
-    func start() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            let fd = open(self.url.path, O_EVTONLY)
-            guard fd >= 0 else { return }
-            let src = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: fd,
-                eventMask: [.write, .extend],
-                queue: self.queue
-            )
-            src.setEventHandler { [weak self] in
-                self?.drain()
-            }
-            src.setCancelHandler {
-                close(fd)
-            }
-            self.source = src
-            src.resume()
-        }
-    }
-
-    func stop() {
-        queue.async { [weak self] in
-            self?.source?.cancel()
-            self?.source = nil
-        }
-    }
-
-    private func drain() {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
-        defer { try? handle.close() }
-        do {
-            let end = try handle.seekToEnd()
-            if end < offset { offset = 0 }   // 文件被截断 → 偏移复位
-            guard end > offset else { return }
-            try handle.seek(toOffset: offset)
-            let data = (try handle.read(upToCount: Int(end - offset))) ?? Data()
-            offset = end
-            let text = String(data: data, encoding: .utf8) ?? ""
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-            if !lines.isEmpty { onLines(lines) }
-        } catch {
-            return
-        }
-    }
-}
-
 // MARK: - Codex 完成通知管理器（@MainActor 单例）
 
 @MainActor
@@ -106,13 +42,17 @@ final class CodexNotify: ObservableObject {
     /// config.toml 的 notify 键当前不可安全编辑（多行 / 非字符串数组）时置真，UI 据此置灰。
     @Published private(set) var isUneditable = false
 
-    private var watcher: CodexEventWatcher?
+    /// events 文件的回放 + 跟随。
+    private lazy var follower = EventFileFollower(
+        url: eventsURL,
+        limits: CodexNotify.eventFileLimits,
+        queueLabel: "com.baobox.aitools.eventwatcher"
+    )
 
     /// 通知摘要截断长度。
     private static let summaryClip = 60
-    /// events 文件超过此大小则截断保尾。后台读取，显式 nonisolated。
-    nonisolated private static let maxEventBytes = 2 * 1_024 * 1_024
-    nonisolated private static let keepTailLines = 500
+    /// events 文件超过 2 MB 则截断，保留最后 500 行。
+    nonisolated private static let eventFileLimits = EventFileLog.Limits(maxBytes: 2 * 1_024 * 1_024, keepTailLines: 500)
 
     private init() {}
 
@@ -158,34 +98,22 @@ final class CodexNotify: ObservableObject {
 
     // MARK: 生命周期
 
-    /// 已安装则启动事件监听（初始回放不发通知）。未安装则空转。
+    /// 已安装则启动事件监听（初始回放不发通知）。未安装则空转。已启动则直接返回。
     func start() {
-        guard watcher == nil else { return }
-        let url = eventsURL
-        DispatchQueue.global(qos: .utility).async {
-            Self.ensureEventFile(url: url)
-            let (lines, size) = Self.readAll(url: url)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    for line in lines { self.apply(line: line, notify: false) }
-                    let watcher = CodexEventWatcher(url: url, startOffset: size) { [weak self] newLines in
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                guard let self else { return }
-                                for line in newLines { self.apply(line: line, notify: true) }
-                            }
-                        }
-                    }
-                    watcher.start()
-                    self.watcher = watcher
-                }
+        follower.start(
+            replay: { [weak self] lines in
+                guard let self else { return }
+                for line in lines { self.apply(line: line, notify: false) }
+            },
+            follow: { [weak self] newLines in
+                guard let self else { return }
+                for line in newLines { self.apply(line: line, notify: true) }
             }
-        }
+        )
     }
 
     func stop() {
-        watcher?.stop()
-        watcher = nil
+        follower.stop()
     }
 
     // MARK: 安装 / 卸载
@@ -320,7 +248,7 @@ final class CodexNotify: ObservableObject {
         ), onAction: terminal.map { location in { action in if action == "open" { TerminalFocus.focus(location) } } })
     }
 
-    // MARK: 脚本生成 / 事件文件维护（nonisolated static）
+    // MARK: 脚本生成（nonisolated static）
 
     /// notify 脚本内容。事件 JSON 是最后一个参数，用 `for` 循环取末位后追加到 events 文件。
     /// 顺带在同一个 JSON 里补上 `baobox_terminal`：会话开在哪个终端（终端 App、Otty 面板、控制终端），
@@ -354,33 +282,6 @@ final class CodexNotify: ObservableObject {
         } catch {
             return false
         }
-    }
-
-    /// 确保 events 文件存在；超限则截断保留尾部若干行。
-    nonisolated static func ensureEventFile(url: URL) {
-        CodexEnv.ensureSupportDir()
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data())
-            return
-        }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        guard size > maxEventBytes, let data = try? Data(contentsOf: url) else { return }
-        let tail = data.split(separator: 0x0A).suffix(keepTailLines)
-        var rebuilt = Data()
-        for line in tail {
-            rebuilt.append(Data(line))
-            rebuilt.append(0x0A)
-        }
-        try? rebuilt.write(to: url)
-    }
-
-    /// 读入全部行与当前大小（供初始回放 + 设定监听偏移）。
-    nonisolated static func readAll(url: URL) -> (lines: [String], size: UInt64) {
-        guard let data = try? Data(contentsOf: url) else { return ([], 0) }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-        return (lines, UInt64(data.count))
     }
 
     /// 单引号安全包裹（供脚本内路径拼接）。与 `ClaudeEnv.shellSingleQuote` 同实现，独立以避免耦合。

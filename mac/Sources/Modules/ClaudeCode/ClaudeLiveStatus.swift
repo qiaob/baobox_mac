@@ -4,8 +4,8 @@ import Foundation
 
 /// Claude Code 助手 —— events.jsonl 监听、会话状态机、系统通知。
 ///
-/// events.jsonl 由 reporter 脚本追加（见 ClaudeHooks.swift）。用 `DispatchSourceFileSystemObject`
-/// 监听增量，维护读取偏移。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲。
+/// events.jsonl 由 reporter 脚本追加（见 ClaudeHooks.swift）。建文件、超限截断、启动时回放、之后增量跟随
+/// 用与 Codex 助手共用的 `EventFileFollower`（Core/EventFile）。状态机把 hook 事件映射为运行中 / 等待确认 / 空闲。
 /// 通知经通知内核（NotifyCenter，桌面宠物模块）投递：宠物呈现，宠物关时由内核回退系统通知（权限也归内核管）。
 ///
 /// 用户可见文案（L key，建议中英文案）：
@@ -218,76 +218,6 @@ final class ClaudeNotifier {
     }
 }
 
-// MARK: - events.jsonl 增量监听器（非 @MainActor，独占后台串行队列）
-
-/// 监听单个文件的增量写入，把新行回调出去。offset 只在自有串行队列上访问，无需锁。
-final class ClaudeEventWatcher {
-    private let url: URL
-    private var offset: UInt64
-    private let onLines: ([String]) -> Void
-    private let queue = DispatchQueue(label: "com.baobox.claudecode.eventwatcher")
-    private var source: DispatchSourceFileSystemObject?
-    private var descriptor: Int32 = -1
-
-    init(url: URL, startOffset: UInt64, onLines: @escaping ([String]) -> Void) {
-        self.url = url
-        self.offset = startOffset
-        self.onLines = onLines
-    }
-
-    func start() {
-        queue.async { [weak self] in
-            guard let self else { return }
-            let fd = open(self.url.path, O_EVTONLY)
-            guard fd >= 0 else { return }
-            self.descriptor = fd
-            let src = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: fd,
-                eventMask: [.write, .extend],
-                queue: self.queue
-            )
-            src.setEventHandler { [weak self] in
-                self?.drain()
-            }
-            src.setCancelHandler {
-                close(fd)
-            }
-            self.source = src
-            src.resume()
-        }
-    }
-
-    func stop() {
-        queue.async { [weak self] in
-            self?.source?.cancel()
-            self?.source = nil
-            self?.descriptor = -1
-        }
-    }
-
-    /// 从上次偏移读到文件末尾，切成行回调。
-    private func drain() {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
-        defer { try? handle.close() }
-        do {
-            let end = try handle.seekToEnd()
-            // 文件被截断（events.jsonl 超限清理）→ 偏移复位。
-            if end < offset { offset = 0 }
-            guard end > offset else { return }
-            try handle.seek(toOffset: offset)
-            let data = (try handle.read(upToCount: Int(end - offset))) ?? Data()
-            offset = end
-            let text = String(data: data, encoding: .utf8) ?? ""
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-            if !lines.isEmpty {
-                onLines(lines)
-            }
-        } catch {
-            return
-        }
-    }
-}
-
 // MARK: - 实时状态单例
 
 @MainActor
@@ -297,59 +227,47 @@ final class ClaudeLiveStatus: ObservableObject {
     /// sessionID → 会话状态。
     @Published private(set) var sessions: [String: ClaudeLiveSession] = [:]
 
-    private var watcher: ClaudeEventWatcher?
+    /// events.jsonl 的回放 + 跟随。
+    private let follower = EventFileFollower(
+        url: ClaudeEnv.supportDir.appendingPathComponent("events.jsonl"),
+        limits: ClaudeLiveStatus.eventFileLimits,
+        queueLabel: "com.baobox.claudecode.eventwatcher"
+    )
     private var pruneTimer: Timer?
 
     /// 6h 无事件的会话视为失效。
     private static let staleInterval: TimeInterval = 6 * 3_600
-    /// events.jsonl 超过此大小则截断保尾。后台 nonisolated 方法读取，显式 nonisolated。
-    nonisolated private static let maxEventBytes = 5 * 1_024 * 1_024
-    nonisolated private static let keepTailLines = 1_000
+    /// events.jsonl 超过 5 MB 则截断，保留最后 1000 行。
+    nonisolated private static let eventFileLimits = EventFileLog.Limits(maxBytes: 5 * 1_024 * 1_024, keepTailLines: 1_000)
 
     private init() {}
 
-    private var eventFileURL: URL {
-        ClaudeEnv.supportDir.appendingPathComponent("events.jsonl")
-    }
-
     // MARK: - 生命周期
 
-    /// 确保事件文件存在（必要时截断）→ 读入已有事件建初始状态 → 启动增量监听。
+    /// 确保事件文件存在（必要时截断）→ 读入已有事件建初始状态 → 启动增量监听。已启动则直接返回。
     func start() {
-        guard watcher == nil else { return }
-        let url = eventFileURL
-        DispatchQueue.global(qos: .utility).async {
-            Self.ensureEventFile(url: url)
-            let (lines, size) = Self.readAll(url: url)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    // 初始回放不发通知（避免历史事件轰炸）。
-                    for line in lines {
-                        self.apply(line: line, notify: false)
-                    }
-                    self.pruneStale()
-                    let watcher = ClaudeEventWatcher(url: url, startOffset: size) { [weak self] newLines in
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                guard let self else { return }
-                                for line in newLines {
-                                    self.apply(line: line, notify: true)
-                                }
-                                self.pruneStale()
-                            }
-                        }
-                    }
-                    watcher.start()
-                    self.watcher = watcher
-                    self.startPruneTimer()
+        follower.start(
+            replay: { [weak self] lines in
+                guard let self else { return }
+                // 初始回放不发通知（避免历史事件轰炸）。
+                for line in lines {
+                    self.apply(line: line, notify: false)
                 }
+                self.pruneStale()
+                self.startPruneTimer()
+            },
+            follow: { [weak self] newLines in
+                guard let self else { return }
+                for line in newLines {
+                    self.apply(line: line, notify: true)
+                }
+                self.pruneStale()
             }
-        }
+        )
     }
 
     func stop() {
-        watcher?.stop()
-        watcher = nil
+        follower.stop()
         pruneTimer?.invalidate()
         pruneTimer = nil
     }
@@ -474,36 +392,5 @@ final class ClaudeLiveStatus: ObservableObject {
         }
         RunLoop.main.add(t, forMode: .common)
         pruneTimer = t
-    }
-
-    // MARK: - 事件文件维护（nonisolated static）
-
-    /// 确保文件存在；超限则截断保留尾部若干行。
-    nonisolated static func ensureEventFile(url: URL) {
-        ClaudeEnv.ensureSupportDir()
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: Data())
-            return
-        }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        guard size > maxEventBytes else { return }
-        guard let data = try? Data(contentsOf: url) else { return }
-        let lines = data.split(separator: 0x0A)
-        let tail = lines.suffix(keepTailLines)
-        var rebuilt = Data()
-        for line in tail {
-            rebuilt.append(Data(line))
-            rebuilt.append(0x0A)
-        }
-        try? rebuilt.write(to: url)
-    }
-
-    /// 读入全部行与当前大小（供初始建状态 + 设定监听偏移）。
-    nonisolated static func readAll(url: URL) -> (lines: [String], size: UInt64) {
-        guard let data = try? Data(contentsOf: url) else { return ([], 0) }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-        return (lines, UInt64(data.count))
     }
 }
