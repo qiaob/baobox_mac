@@ -30,7 +30,8 @@ enum CLISessionScanner<Format: CLISessionFormat> {
                 continue
             }
 
-            if let record = scan(file) {
+            // 每个文件扫完就放掉临时对象（整份读入 + 逐行 JSON），冷启动全扫时峰值不随文件数累加（#93）。
+            if let record = autoreleasepool(invoking: { scan(file) }) {
                 cache[path] = record
                 summaries.append(Format.summary(of: record, fileURL: file.url))
             }
