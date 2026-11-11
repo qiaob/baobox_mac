@@ -40,6 +40,10 @@
 
 快速续接面板（`ClaudeQuickSwitchPanel`）新增模式概念：**会话 / 文件**。
 
+> 2026-11（#109）起，面板的窗口外壳、键码、过滤与选中、会话栏视图（外框 / 搜索栏 / 会话列表 / 行 / 底栏）与 Codex 助手共用
+> `mac/Sources/Core/QuickSwitch/`（见 `../codex-assistant/DEDUPE.md` §4.3）；文件模式（chips、文件列表与文件行、⇥ / ←→ / ⌘⏎、文件动作）
+> 只有这一个使用者，仍在 `ClaudeQuickSwitchPanel.swift`。下面写的交互一处没变。
+
 - 搜索栏尾部加 segmented 控件（会话 | 文件）；左侧图标随模式切换（terminal ↔ doc.on.doc），
   搜索占位文案随模式切换。
 - **⇥ Tab 键切换模式**：本地键盘监听在 SwiftUI 之前消费,焦点始终留在搜索框（不触发焦点遍历、

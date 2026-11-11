@@ -1,6 +1,6 @@
 # Claude / Codex 两套实现去重 · 第二步（会话索引、快速切换面板、事件文件监听）· 技术设计
 
-> issue #109「Claude 与 Codex 两套实现大面积重复」的第二步。状态：**已拍板（2026-11-10，§9）**：用户同意 D1–D8 全部按建议做。**PR1（会话索引共用层）已实现**（2026-11-11，分支 `refactor/cli-session-index`），与本文的出入记在 §6 PR1 末尾。
+> issue #109「Claude 与 Codex 两套实现大面积重复」的第二步。状态：**已拍板（2026-11-10，§9）**：用户同意 D1–D8 全部按建议做。**PR1（会话索引共用层）已实现**（2026-11-11，分支 `refactor/cli-session-index`），与本文的出入记在 §6 PR1 末尾。**PR3（快速切换部件 + 会话数据源）已实现**（2026-11-11，分支 `refactor/cli-quick-switch`），出入记在 §6 PR3 末尾。
 > 第一步（用量层）已由 #134 合入：定价 / 窗口 / 报表 / 80% 提醒在 `mac/Sources/Core/CLIUsage/`，`BaoboxTests` 单元测试 target 已在 main，
 > issue 的两条验收（改一次定价两边一起变、用量计算有测试覆盖）已满足。本文只管 issue 范围里剩下的三件：`SessionIndex<Summary>` 泛型、
 > `QuickSwitchPanel` 数据源协议、`EventFileWatcher`。
@@ -682,6 +682,17 @@ Tab 只有 Claude 吃掉（Codex 现在放行，保持）。
 - 不改：`ClaudeCodeTool.swift`、`AIToolsTool.swift`（两个控制器的 `shared` 与 `toggle(mode:)` / `showFiles()` / `toggle()` 签名不变）、所有本地化 key。
 - 行为不变：键位、动作先后、焦点时序、面板尺寸与位置、文案逐一对照（§7.4 第 12–17 条）。
 - 文档：根 `CLAUDE.md` 的 Core 清单；`RECENT_FILES.md` 里提到面板实现的地方补一句「外壳与会话栏在 Core/QuickSwitch」。
+- **状态（2026-11-11）：已实现**（分支 `refactor/cli-quick-switch`）。单测 17 个（键码 5、过滤与选中 12），差分与界面对照的结果贴在 PR 描述里。
+  行数：Claude 面板 614 → 475、Codex 面板 324 → 179、`Core/QuickSwitch/` 379（估的是约 430 / 120 / 280，多出来的是注释和部件的初始化器）。与 §4.3 的出入：
+  1. `QuickSwitchSessionList` 多一个每次构造都不同的 `renderToken`。原来会话行写在面板的 body 里，面板每次重画都重算行的第二行；抽成独立视图后，
+     参数都没变时 SwiftUI 会跳过它的 body（scratchpad 探针实测：闭包原样往下传时，子视图的 body 不再跑），而第二行依赖参数里看不出的状态 ——
+     Claude 的会话行方案、相对时间。去掉 token 的对照版本在「面板开着时去设置里换会话行方案」那一步还显示旧方案（列表区 8423 个像素不同），带 token 的与改前逐像素相同。
+  2. 两个视图模型的 `clampSelection` 照原来的时机写：空列表总是写 0，其余只在越界时写 —— `objectWillChange` 的次数也不变（差分逐步比了次数）。
+  3. 会话列表「选中项变了滚到正中」不再判断 Claude 的模式：会话列表只在会话模式下存在，原来那个判断恒为真。
+  4. Claude 文件模式的搜索（文件名 / 全路径 / 项目名）也改用 `QuickSwitchSelection.filter`（同一条规则），类别循环用 `cycled`、取选中项用 `element`；
+     文件列表、文件行、chips、文件动作原样留在 Claude。
+  5. 数据源是无状态的 struct，由视图模型持有（`viewModel.source`），控制器的刷新 / 续接 / 复制与视图的会话列表都经它；两个 `NSPanel` 子类并成 Core 的
+     `QuickSwitchWindow`；`onCopy` 参数删了（§5.1 B4）。Codex 的 Tab 显式写在「交给搜索框」那一支里（原来落在 `default`），照旧不拦。
 
 ### PR4 Core 里的修复（按 §9 D3、D7）
 
