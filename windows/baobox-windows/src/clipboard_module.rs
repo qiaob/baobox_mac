@@ -40,11 +40,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 
-/// 工具 id，同时是配置里的节名。**必须与 Linux 侧一致**。
-pub const ID: &str = "clipboard";
-
-/// 动作 id。
-pub const PANEL: &str = "clipboard.panel";
+/// 工具 id 与快捷键动作 id 写进用户配置，两个平台共用 `baobox_app` 里那一份。
+pub use baobox_app::tools::clipboard::{ID, PANEL};
 
 pub(crate) fn copy_preview_text(text: &str) -> Result<(), String> {
     SUPPRESS_NEXT.store(true, Ordering::SeqCst);

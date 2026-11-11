@@ -85,7 +85,9 @@ mod windowmanager_module;
 use baobox_core::filename::{format_template, sanitize, unique, DateParts, Platform};
 use baobox_core::geometry::Rect;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 当前 Unix 秒。实现在 `baobox_app`，这里转出来，别处照旧写 `crate::now_seconds()`。
+pub use baobox_app::now_seconds;
 
 /// 默认文件名模板。与 Linux 版一致；Windows 的非法字符与保留名由
 /// `sanitize(.., Platform::Windows, ..)` 负责挡掉。
@@ -739,14 +741,6 @@ fn capture_path(dir: &Path, template: &str, extension: &str) -> PathBuf {
 
 fn now_parts() -> DateParts {
     civil_from_unix(now_seconds())
-}
-
-/// 当前 Unix 秒。
-pub fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Unix 秒 → 年月日时分秒（UTC）。

@@ -18,19 +18,11 @@ use baobox_core::hotkey::KeyCombo;
 use baobox_core::selection::Outcome;
 use std::path::PathBuf;
 
-/// 工具 id，同时是配置里的节名。**必须与 Linux 侧一致** ——
-/// 否则同一份配置在两个系统上读到的是不同的节。
-pub const ID: &str = "screenshot";
+/// 工具 id 与快捷键动作 id 写进用户配置，两个平台共用 `baobox_app` 里那一份。
+pub use baobox_app::tools::screenshot::{CAPTURE, CAPTURE_FULL, ID, OCR, RECORD};
 
 /// 动作 id。
-pub const CAPTURE: &str = "screenshot.capture";
 pub const QUICK_CAPTURE: &str = "screenshot.quick";
-/// 动作 id。
-pub const CAPTURE_FULL: &str = "screenshot.full";
-/// 动作 id。
-pub const OCR: &str = "screenshot.ocr";
-/// 动作 id。
-pub const RECORD: &str = "screenshot.record";
 /// 动作 id。
 pub const HISTORY: &str = "screenshot.history";
 pub(crate) const LONG: &str = "screenshot.long";

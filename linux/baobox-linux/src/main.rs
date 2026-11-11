@@ -51,8 +51,10 @@ use baobox_core::geometry::Rect;
 use baobox_core::selection::Outcome;
 use baobox_core::stitch::{compose_rgba, Frame, Stitcher};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use x11capture::X11Session;
+
+/// 当前 Unix 秒。实现在 `baobox_app`，这里转出来，别处照旧写 `crate::now_seconds()`。
+pub use baobox_app::now_seconds;
 
 /// 默认文件名模板。占位符集合见 `baobox_core::filename::format_template`。
 const DEFAULT_TEMPLATE: &str = "Screenshot {yyyy}-{MM}-{dd} {HH}.{mm}.{ss}";
@@ -647,14 +649,6 @@ pub fn default_path(save_dir: &str) -> Result<PathBuf, String> {
 /// 并在文档里写明 —— 含糊的本地时间比明确的 UTC 更糟。
 fn now_parts() -> DateParts {
     civil_from_unix(now_seconds())
-}
-
-/// 当前 Unix 秒。
-pub fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Unix 秒 → 年月日时分秒（UTC）。

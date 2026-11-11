@@ -132,6 +132,8 @@ targets:
   # 要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
   # - Core/CLIUsage：Claude Code / Codex 的用量统计
   # - Core/CLISession：Claude Code / Codex 的会话索引（docs/codex-assistant/DEDUPE.md §4.1）
+  # - Core/MeetingEngine + Modules/Meeting/Logic：会议引擎接口、会话的决策、meeting.md 的模型与排版、纪要提示词（docs/meeting/ENGINE.md §5）
+  # - LiveTranslateMixing.swift：混音与说话人判定（本来就是纯的）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -139,6 +141,9 @@ targets:
       - path: Tests
       - path: Sources/Core/CLIUsage
       - path: Sources/Core/CLISession
+      - path: Sources/Core/MeetingEngine
+      - path: Sources/Modules/Meeting/Logic
+      - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests
