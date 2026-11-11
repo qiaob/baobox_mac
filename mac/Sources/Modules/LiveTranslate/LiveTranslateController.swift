@@ -424,7 +424,7 @@ final class LiveTranslateController: ObservableObject {
         guard AudioCaptureCoordinator.shared.claim(owner: config.owner, label: config.label,
                                                    microphone: config.sources.usesMicrophone) else {
             if let message = AudioCaptureCoordinator.shared.busyMessage() {
-                NotifyCenter.shared.post(PetNotification(source: config.owner, level: .ambient, title: message))
+                NotifyCenter.shared.post(Notice(source: config.owner, level: .ambient, title: message))
             }
             return false
         }

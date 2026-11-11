@@ -164,7 +164,7 @@ final class MeetingReminder: ObservableObject {
             lines.append(L("meeting.reminder.openItems \(briefing.openItems.count)"))
         }
 
-        var actions: [PetNotification.Action] = []
+        var actions: [Notice.Action] = []
         if event.link != nil {
             // 已经在记录（上一场还没结束）：只入会，不另开记录。
             actions.append(session.isActive
@@ -178,7 +178,7 @@ final class MeetingReminder: ObservableObject {
         }
         actions.append(.init(id: "ignore", label: L("meeting.action.ignore"), role: .destructive))
 
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: MeetingSessionController.source,
             level: .alert,
             title: L("meeting.reminder.title \(info.title) \(MeetingText.relative(info.start, now: now))"),

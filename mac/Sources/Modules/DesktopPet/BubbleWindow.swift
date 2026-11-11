@@ -4,7 +4,7 @@ import SwiftUI
 /// 屏幕上的一条气泡。
 struct BubbleEntry: Identifiable {
     let id = UUID()
-    let notification: PetNotification
+    let notification: Notice
     let onAction: (String) -> Void
     /// 总时长；nil = 常驻。
     let duration: TimeInterval?
@@ -12,7 +12,7 @@ struct BubbleEntry: Identifiable {
     var deadline: Date?
     var remaining: TimeInterval?
 
-    var style: PetNotification.Style { notification.resolvedStyle }
+    var style: Notice.Style { notification.resolvedStyle }
 }
 
 /// 气泡层（设计见 docs/desktop-pet/INTERACTION.md §1–§2）：
@@ -60,7 +60,7 @@ final class BubbleController: ObservableObject {
     private var waiting: [BubbleEntry] = []
     /// 出场 / 退场动画期间（#54）气泡先收起来、新来的排队，宠物落地后再出（气泡是宠物窗的子窗口，不收会跟着飞出屏幕）。
     private(set) var suspended = false
-    private var held: [(PetNotification, (String) -> Void)] = []
+    private var held: [(Notice, (String) -> Void)] = []
     private var panel: BubblePanel?
     private var hosting: BubbleHostingView?
     private var ticker: Timer?
@@ -69,7 +69,7 @@ final class BubbleController: ObservableObject {
 
     // MARK: - 显示 / 关闭
 
-    func show(_ n: PetNotification, onAction: @escaping (String) -> Void) {
+    func show(_ n: Notice, onAction: @escaping (String) -> Void) {
         if suspended {
             held.append((n, onAction))
             return
@@ -351,7 +351,7 @@ struct BubbleCard: View {
     let onChoose: (String?) -> Void
 
     private static let tailHeight: CGFloat = 9
-    private var notification: PetNotification { entry.notification }
+    private var notification: Notice { entry.notification }
 
     var body: some View {
         let shape = SpeechBubbleShape(cornerRadius: entry.style == .toast ? 16 : 14, tailX: tailX,
@@ -484,7 +484,7 @@ struct BubbleSourceIcon: View {
 
 /// 按钮：主按钮品牌色实心，次按钮淡底，危险按钮红字。
 struct BubbleActionButton: View {
-    let action: PetNotification.Action
+    let action: Notice.Action
     let onTap: () -> Void
 
     var body: some View {

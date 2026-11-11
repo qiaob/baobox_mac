@@ -167,7 +167,7 @@ final class ClaudeNotifier {
     /// speakProject 非 nil 时,该通知参与语音朗读(完成 / 等待类)。
     /// 视觉呈现改走通知内核（DesktopPet）：宠物在场时经宠物，关时由内核回退系统通知；
     /// 声音仍按本模块 alertStyle 处理（自定义音自播，默认音交给内核在 playSound 时发）。
-    private func post(title: String, body: String, level: PetNotification.Level = .ambient, speakProject: String? = nil,
+    private func post(title: String, body: String, level: Notice.Level = .ambient, speakProject: String? = nil,
                       onOpen: (() -> Void)? = nil) {
         var useDefaultSound = false
         switch ClaudeNotifierSettings.alertStyle {
@@ -180,7 +180,7 @@ final class ClaudeNotifier {
         case .speech, .none:
             break
         }
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "claudecode",
             level: level,
             title: title,

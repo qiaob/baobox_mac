@@ -20,7 +20,7 @@ enum StorageWriteFailure {
     @MainActor
     private static func notifyOnce(_ what: String, reason: String) {
         guard shown.insert(what).inserted else { return }
-        NotifyCenter.shared.post(PetNotification(
+        NotifyCenter.shared.post(Notice(
             source: "storage", level: .alert,
             title: L("storage.writeFailed.title \(what)"),
             body: reason + "\n" + L("storage.writeFailed.body"),
