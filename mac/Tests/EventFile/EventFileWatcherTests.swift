@@ -1,7 +1,8 @@
 import Foundation
 import XCTest
 
-/// 增量监听：DispatchSource 盯 `.write` / `.extend`，从偏移读到文件尾、切成行交出去。真文件、真监听，回调在监听器自己的队列上。
+/// 增量监听：DispatchSource 盯 `.write` / `.extend` / `.delete` / `.rename`，从偏移读到最后一个换行、交出完整的行；
+/// 文件被删 / 被换掉后跟随路径上的新文件；停掉时关描述符。真文件、真监听，回调在监听器自己的队列上。
 final class EventFileWatcherTests: XCTestCase {
 
     private typealias Support = EventFileTestSupport

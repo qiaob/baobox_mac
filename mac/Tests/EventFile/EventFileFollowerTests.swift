@@ -1,7 +1,8 @@
 import Foundation
 import XCTest
 
-/// 回放 + 跟随：后台准备、主线程回放已有行、再跟随新行；启停竞态的收紧（docs/codex-assistant/DEDUPE.md §2、§5.2 C3）。
+/// 回放 + 跟随：后台准备、主线程回放已有行、再跟随新行；启停竞态的收紧（docs/codex-assistant/DEDUPE.md §2、§5.2 C3）；
+/// 启动时没写完的行、跟随中文件被删（§5.2 C1、C2）。
 @MainActor
 final class EventFileFollowerTests: XCTestCase {
 

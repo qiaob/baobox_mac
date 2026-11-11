@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import XCTest
 
-/// 会话索引基类：刷新、复用、删除、导出、清理、磁盘缓存。假格式指向每个测试自己的临时目录，
+/// 会话索引基类：刷新（含进行中再请求的合并）、复用、删除、导出、清理、磁盘缓存（含同步 flush）。假格式指向每个测试自己的临时目录，
 /// 后台扫描经 `DispatchQueue.main` 回写，测试转主线程 RunLoop 等它。
 @MainActor
 final class CLISessionIndexTests: XCTestCase {

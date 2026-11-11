@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 事件文件的维护：建文件、超限截断、读全部。
+/// 事件文件的维护：建文件、超限截断、读全部、切出完整的行。
 final class EventFileLogTests: XCTestCase {
 
     private typealias Support = EventFileTestSupport
