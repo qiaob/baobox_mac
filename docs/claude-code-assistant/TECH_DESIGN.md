@@ -113,6 +113,7 @@ settings.json `statusLine.command` 指向可执行脚本;每次刷新 Claude Cod
 - 二进制探测顺序:`~/.claude/local/claude`、`/opt/homebrew/bin/claude`、`/usr/local/bin/claude`、`~/.local/bin/claude`、`/usr/bin/claude`;都不在则回退字符串 `"claude"`(终端里 PATH 通常有)。
 - `ClaudeSettingsFile`:`load() -> [String: Any]`、`mutate(_ transform: (inout [String: Any]) -> Void) throws`。mutate 内:读原文(不存在则 `[:]`)→ 备份 `settings.json.baobox.bak` → 变换 → `JSONSerialization` 写回(`[.prettyPrinted,.sortedKeys,.withoutEscapingSlashes]`)。`.claude.json` 用同一套工具函数(独立备份名)。**该文件可能几 MB,读写放后台线程,完成回主线程刷 UI。**
 - `TerminalLauncher.run(command:in:)`:把 `#!/bin/zsh\ncd '<dir>'\n<command>\n` 写入 `supportDir/launch/<uuid>.command`,`chmod 755`,`NSWorkspace.shared.open`(.command 默认由终端接管);目录里超过 20 个旧文件时顺手清理。cwd 与 sessionId 拼进命令前用单引号包裹并转义内部单引号。
+  > 2026-11(#164)起 `TerminalLauncher` 在 `mac/Sources/Core/Terminal/`(Codex 助手也用),脚本写到 `~/Library/Application Support/Baobox/Terminal/launch/`,旧的 `supportDir/launch/` 由本模块启动时删掉;`claude --resume` 与切到正在跑的会话改名 `ClaudeTerminal`(本模块);单引号转义是 Core 的 `Shell.quote`。见 `../codex-assistant/DEDUPE-P2.md` §2.4 类 5。
 - 配置节可视化控件所需的简单键读写接口(全部走 `ClaudeSettingsFile`/对应工具函数,UI 不直接碰文件):
   - `permissions.defaultMode`(字符串)读/写/移除;`model`(字符串)读/写/移除;`cleanupPeriodDays`(整数)读/写/移除;
   - `env` 字典单键读/设("1")/移除,不动用户自设的其他 env 键;
@@ -191,7 +192,7 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 >
 > 同月 PR4 起:只交完整的行 —— 没写完的半行留到下次、逐行解码(一行坏字节只丢那一行),启动回放也只回放完整的行;events.jsonl 被删 / 被换掉(改名、原子保存)后接着跟随路径上的新文件、从头读,目录没了先建回来,监听父目录等文件出现,不轮询;`stop()` 确定关掉文件描述符(以前每次停止漏一个)。见 `docs/codex-assistant/DEDUPE.md` §5.2 C1、C2 与 §6 PR4。
 >
-> 同月 PR5a 起:Stop / Notification 顺带节流刷新用量(见 3.3);点通知跳回终端与快速切换面板续接走同一个 `TerminalLauncher.focusRunningSession`(先用 hook 记下的终端位置,再按进程找)。面板的位置先经 `currentTerminal(of:)` 确认会话还占着那个 tty(reporter 不报 SessionEnd,结束了的会话连同位置还会留 6 小时),再在后台确认那个 tty 上有 claude 在跑,见 `NOTIFY_JUMP.md` §3.1。
+> 同月 PR5a 起:Stop / Notification 顺带节流刷新用量(见 3.3);点通知跳回终端与快速切换面板续接走同一个 `TerminalLauncher.focusRunningSession`(#164 起叫 `ClaudeTerminal.focusRunningSession`;先用 hook 记下的终端位置,再按进程找)。面板的位置先经 `currentTerminal(of:)` 确认会话还占着那个 tty(reporter 不报 SessionEnd,结束了的会话连同位置还会留 6 小时),再在后台确认那个 tty 上有 claude 在跑,见 `NOTIFY_JUMP.md` §3.1。
 
 ### 3.5 ClaudeHooks
 

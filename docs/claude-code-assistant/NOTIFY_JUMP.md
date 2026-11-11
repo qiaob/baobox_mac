@@ -7,7 +7,8 @@
 
 - 通知内核早就支持「点卡片」：宠物气泡卡片被点（没按钮时）、系统通知被点，都会回调投稿方的 `onAction("open")`。
   但 Claude Code / Codex 的通知没接这个回调，点了只是收起。
-- 快速切换面板已有「切到会话所在终端」（`TerminalLauncher.findRunningSession` + `focusTerminalWindow`，2026-11 起收进 `focusRunningSession`，见 §3）：
+- 快速切换面板已有「切到会话所在终端」（`TerminalLauncher.findRunningSession` + `focusTerminalWindow`，2026-11 起收进 `focusRunningSession`，见 §3；
+  #164 起这几个在 Claude 模块的 `ClaudeTerminal`）：
   按进程命令行（`--resume <id>` 或「项目里最新的会话」）猜是哪个进程，沿父进程找终端 App，iTerm2 / 系统 Terminal
   再用 AppleScript 按 tty 选中标签页。两个缺口：
   1. 同一个目录开着好几个会话时会猜错（用户常在 `~/cmb` 下同时开五六个 Claude）；
@@ -30,18 +31,19 @@ hook / notify 脚本就跑在会话的进程环境里，直接把终端位置记
 
 ## 3. 点通知时
 
-`TerminalFocus.focus(_:)`（`Core/TerminalFocus.swift`）：
+`TerminalFocus.focus(_:)`（`Core/Terminal/TerminalFocus.swift`）：
 
-1. 用 Launch Services 前台化终端 App（macOS 14 起后台 App 直接 `activate()` 会被拒，与 `TerminalLauncher` 相同）。
+1. 用 Launch Services 前台化终端 App（macOS 14 起后台 App 直接 `activate()` 会被拒，与按进程找到会话后切窗口相同）。
 2. **Otty**：`otty-cli pane list --json` 找到面板（环境变量里的 id 不带 `p_` 前缀）所在的窗口和标签页，
    依次 `window focus` → `tab focus` → `pane focus`。
-3. **iTerm2 / 系统 Terminal**：沿用快速切换面板的 AppleScript，按 tty 选中窗口和标签页（首次会弹「自动化」授权）。
+3. **iTerm2 / 系统 Terminal**：沿用快速切换面板的 AppleScript，按 tty 选中窗口和标签页（首次会弹「自动化」授权；#164 起是 Core 的 `TerminalLauncher.selectTab`）。
 4. 其他终端（Ghostty、Kitty、VS Code…）：只能前台化 App，没有按标签页定位的接口。
 
 Claude 的通知在发出那一刻取好终端位置（会话之后可能结束、被清掉），点的时候直接用；没有位置信息（旧版脚本还没换、不认识的终端）时
 退回按进程猜（命令行带 `--resume <id>`，或项目目录里裸跑的 `claude` 且这个会话是项目里最新的一条）。Codex 没有对应的猜法，没位置就不跳。
 
-2026-11 起（#109 PR5a），点通知跳回和快速切换面板续接走同一个函数 `TerminalLauncher.focusRunningSession`（`ClaudeEnv.swift`）：
+2026-11 起（#109 PR5a），点通知跳回和快速切换面板续接走同一个函数 `TerminalLauncher.focusRunningSession`（`ClaudeEnv.swift`；
+#164 起是 `ClaudeTerminal.focusRunningSession`，在 `ClaudeTerminal.swift`）：
 先用位置，用不了再按进程猜，都不行由调用方兜底（通知什么也不做，面板开新窗口续接）。两边只差一点：通知的位置直接用，面板的位置要先确认（§3.1）。
 
 ### 3.1 快速切换面板续接正在跑的会话（2026-11，#109 PR5a）

@@ -7,7 +7,7 @@ import SwiftUI
 /// ⌘C 复制续接命令、Esc 或点击面板外关闭。窗口外壳、键码、过滤与选中、会话栏视图与 Claude 版共用
 /// `Core/QuickSwitch/`（#109），这里只有 Codex 的会话数据源、薄视图模型与控制器。
 /// 与 Claude 版的差异：数据源为 `CodexSessionIndex`；续接 MVP 直接开新终端窗口（不做窗口聚焦，
-/// 因 `TerminalLauncher.findRunningSession` 只认 claude 进程）；行元信息用 `AIToolsFormat.relative` 简单拼装；
+/// 按进程找正在跑的会话只有 Claude 那边有、只认 claude 进程）；行元信息用 `AIToolsFormat.relative` 简单拼装；
 /// 没有文件模式，Tab 不拦。
 
 // MARK: - 会话数据源
