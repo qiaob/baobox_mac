@@ -1,6 +1,6 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
-> issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**待拍板**（§7 D1–D10）。
+> issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -816,7 +816,7 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 | R10 | 泛型基类上的 `ObservableObject`（Store） | — | 菜单 / 用量页不刷新 | 同 `CLISessionIndex<Format>`（`DEDUPE.md` R10 已探针验证）；单测订阅 `objectWillChange` |
 | R11 | 旧目录清理删错东西 | — | 删掉 Claude 模块别的文件 | 只删 `ClaudeEnv.supportDir.appendingPathComponent("launch", isDirectory: true)` 这一个子目录（hooks 脚本、两份缓存、事件文件都在它旁边，不在里面）；评审逐字核对路径；真机 6 顺带确认 `Baobox/ClaudeCode/` 里其余文件都在 |
 
-## 7. 待拍板
+## 7. 待拍板（2026-11-11 已拍板：全部按建议）
 
 逐条回「按建议」或改。
 
