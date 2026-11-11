@@ -126,7 +126,7 @@ AIFeatureSettings（Core/AI/AIFeature.swift）：功能 → 选择（UserDefault
 enum AIRoute: Hashable { case local; case cloud(String) }   // 模型 id
 AIService.shared.translate(text, to:, from:, glossary:, route:, timeout:) async throws -> Reply
 AIService.shared.generate(prompt, maxTokens:, sampling:, route:, timeout:) async throws -> Reply
-AIService.shared.correctAndTranslate(text, context:, to:, glossary:, modelID:, timeout:) async throws -> (corrected, translation)
+AIService.shared.correctAndTranslate(text, context:, to:, from:, glossary:, modelID:, timeout:) async throws -> (corrected, translation)
 AIService.shared.route(for: 通用类功能) -> AIRoute          // 配置不完整的云端模型 → .local
 AIService.shared.isReady(route, local: .translation / .generation) -> Bool
 AIService.shared.testConnection(modelID:) async -> String?  // nil = 通了
@@ -242,6 +242,8 @@ struct Reply { text; route; usedFallback }
 - 纠错用 `livetranslate.correct` 选的模型，会议只转录时也一样（特例已去掉，§1）。
 - 纠错和字幕翻译**选的是同一个云端模型**时，纠错请求带上目标语言，一条提示词「先改识别错字再翻译」，回一行 JSON
   `{"corrected", "translation"}`，少一次往返；译文直接落到这一单元，不再进翻译队列。两边选的不是同一个模型就各走各的。
+- 待纠正的是简体中文（`from:` 传这一单元的语言）时，纠错那条要求「一律用简体中文输出，繁体字改成对应的简体字」，本地纠错
+  同一句（`AIPrompts.simplifiedChineseRule`，2026-11-11：转录里出现了繁体字「閒」）；别的语言不加。
 - 合一请求失败或 JSON 解析不了 → 照旧只纠错（会退回本地），译文交给翻译队列。纠正结果被 `accept` 判成「在改写」没采用时，
   译文是照改写后的句子翻的，也丢掉，交给翻译队列按原文翻。
 - 走本地时纠错模型照旧常驻；云端时不常驻。「纠错模型还在加载就先不纠、直接翻」只对本地生效。

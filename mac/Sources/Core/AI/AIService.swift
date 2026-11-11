@@ -156,11 +156,12 @@ final class AIService {
     // MARK: - 纠错 + 翻译合一（实时字幕的纠错和翻译选了同一个云端模型时）
 
     /// 一条请求「先改识别错字再翻译」，少一次往返。只走云端、不自动退回：调用方失败时按原流程分别处理。
+    /// `source` = 待纠正那句的语言（简体中文时要求只输出简体）。
     func correctAndTranslate(_ text: String, context: String, to target: TranslationLanguage,
-                             glossary: [GlossaryEntry], modelID: String, timeout: TimeInterval) async throws
-        -> (corrected: String, translation: String) {
+                             from source: TranslationLanguage, glossary: [GlossaryEntry], modelID: String,
+                             timeout: TimeInterval) async throws -> (corrected: String, translation: String) {
         let reply = try await withCloud(modelID: modelID, fallback: nil) { client, cap in
-            let prompt = AIPrompts.correctAndTranslate(text: text, context: context, target: target,
+            let prompt = AIPrompts.correctAndTranslate(text: text, context: context, source: source, target: target,
                                                        glossary: glossary)
             return try await client.complete(system: prompt.system, user: prompt.user,
                                              maxTokens: min(cap, max(256, text.count * 5)), timeout: timeout)
@@ -280,8 +281,14 @@ final class AIService {
     }
 }
 
-/// 云端用的提示词。
+/// 云端用的提示词（`simplifiedChineseRule` 本地纠错也用）。
 enum AIPrompts {
+    /// 纠错提示词里加的一句：待纠正的是简体中文时只要简体（本地纠错 `LiveTranslateCorrector` 与云端「纠错 + 翻译」共用）。
+    /// 2026-11-11 用户转录（说话语言简体中文）里出现了繁体字「閒」。别的语言（含繁体中文）不加。
+    static func simplifiedChineseRule(for language: TranslationLanguage) -> String? {
+        language == .simplifiedChinese ? "一律用简体中文输出，繁体字改成对应的简体字。" : nil
+    }
+
     /// 翻译：系统提示定规矩，用户消息只放原文。带上术语表（与本地 Hy-MT2 同一套 `TranslationGlossary.references`）。
     static func translation(text: String, target: TranslationLanguage, source: TranslationLanguage?,
                             glossary: [GlossaryEntry]) -> (system: String, user: String) {
@@ -298,13 +305,14 @@ enum AIPrompts {
         return (system, text)
     }
 
-    /// 纠错 + 翻译：输出一行 JSON。
-    static func correctAndTranslate(text: String, context: String, target: TranslationLanguage,
-                                    glossary: [GlossaryEntry]) -> (system: String, user: String) {
+    /// 纠错 + 翻译：输出一行 JSON。`source` = 待纠正那句的语言。
+    static func correctAndTranslate(text: String, context: String, source: TranslationLanguage,
+                                    target: TranslationLanguage, glossary: [GlossaryEntry]) -> (system: String, user: String) {
+        let script = simplifiedChineseRule(for: source) ?? ""
         var system = """
         你同时做两件事：
         1. 「待纠正」是一段中文语音识别结果，可能有同音字、近音字识别错误。结合「上文」只改正明显识别错的字词；\
-        不要改写句子，不要增删内容。没有错就原样保留。
+        不要改写句子，不要增删内容。没有错就原样保留。\(script)
         2. 把改正后的句子翻译成 \(target.englishName)，只译这一句。
         只输出一行 JSON：{"corrected": "改正后的中文", "translation": "译文"}，不要别的内容。
         """

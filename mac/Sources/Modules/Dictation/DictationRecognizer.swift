@@ -235,7 +235,8 @@ final class DictationMicrophone {
 /// - 分段：整句模式（按住说话）只在满 50 秒时换段（防触到单次请求的时长上限）；分段模式（长听写、连续听写）
 ///   每次停顿 ≥ 1.2 秒或满 50 秒收一段，一段段交出。
 /// - 自动判别（两种语言）：每段录音留着；定稿后平均置信度 < 0.45（或有人声却没认出字）就拿录音给另一种语言重认，
-///   按实时翻译的打分（置信度 × 文字系统吻合度 × 字数密度）取高的那份，并换成它接着听。
+///   按实时翻译的打分（置信度 × 文字系统吻合度 × 字数密度）取高的那份；换不换成它接着听与会议共用一套规则
+///   （`LiveTranslateLanguageSwitch`：结果够长或连赢两段才换，2026-11-11）。
 @MainActor
 final class DictationRecognizer {
     enum Mode {
@@ -256,6 +257,8 @@ final class DictationRecognizer {
     private let languages: [TranslationLanguage]
     private let recognizers: [SFSpeechRecognizer]
     private var active = 0
+    /// 另一种语言连赢了几段、还没换过去（`LiveTranslateLanguageSwitch.Decision.votes`）；开始 / 收尾时清零。
+    private var otherWins = 0
     private let preferOnDevice: Bool
     private let vocabulary: [String]
     private let pipe = DictationAudioPipe()
@@ -340,6 +343,7 @@ final class DictationRecognizer {
         guard recognizers[active].isAvailable else { throw DictationError.recognizerUnavailable }
         running = true
         startedAt = Date()
+        otherWins = 0
         DictationLog.recognition.notice(
             "start \(self.mode == .segmented ? "segmented" : "utterance", privacy: .public): \(self.languages.map(\.code).joined(separator: "+"), privacy: .public), on-device \(self.preferOnDevice && self.recognizers[self.active].supportsOnDeviceRecognition)")
         beginSegment()
@@ -487,6 +491,8 @@ final class DictationRecognizer {
                 return
             }
         }
+        // 这段没让另一种语言赢：连赢断了，票数清零。
+        otherWins = 0
         accept(text: own.text, languageIndex: active)
     }
 
@@ -494,6 +500,7 @@ final class DictationRecognizer {
         let other = active == 0 ? 1 : 0
         let recognizer = recognizers[other]
         guard recognizer.isAvailable else {
+            otherWins = 0
             accept(text: own.text, languageIndex: active)
             return
         }
@@ -520,7 +527,8 @@ final class DictationRecognizer {
         }
     }
 
-    /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；另一种赢了就换成它接着听。
+    /// 另一种语言重认的结果（超时时 text 为空）：分高的定稿；换不换成它接着听看 `LiveTranslateLanguageSwitch` ——
+    /// 另一种赢了但结果短只这段用它的文字，连赢两段或结果够长才换。
     private func recheckDone(segment id: Int, text: String, confidence: Double) {
         guard running, let state = recheck, state.segment == id else { return }
         recheck = nil
@@ -531,11 +539,17 @@ final class DictationRecognizer {
                                                   language: languages[active], voiced: state.voiced)
         let otherScore = LiveTranslateScoring.score(text: otherText, confidence: confidence,
                                                     language: languages[state.other], voiced: state.voiced)
-        let switches = otherScore > ownScore
+        let otherCJK = LiveTranslateScoring.countsCharacters(languages[state.other])
+        let otherUnits = LiveTranslateScoring.units(otherText, cjk: otherCJK)
+        let decision = LiveTranslateLanguageSwitch.decide(ownScore: ownScore, otherScore: otherScore,
+                                                          otherUnits: otherUnits, otherCJK: otherCJK, votes: otherWins)
+        otherWins = decision.votes
         DictationLog.recognition.notice(
-            "recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(state.startedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[state.other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) -> \(switches ? "switch" : "keep", privacy: .public)")
-        if switches {
+            "recheck seg \(id) (\(String(format: "%.1f", Date().timeIntervalSince(state.startedAt)), privacy: .public)s): \(self.languages[self.active].code, privacy: .public) \(String(format: "%.2f", ownScore), privacy: .public) vs \(self.languages[state.other].code, privacy: .public) \(String(format: "%.2f", otherScore), privacy: .public) (\(otherUnits) units) -> \(decision.logLabel, privacy: .public)")
+        if decision.switches {
             active = state.other
+        }
+        if decision.usesOther {
             accept(text: otherText, languageIndex: state.other)
         } else {
             accept(text: state.own.text, languageIndex: active)
@@ -626,6 +640,7 @@ final class DictationRecognizer {
         recheck = nil
         finalDeadline = nil
         segmentOpen = false
+        otherWins = 0
     }
 
     private func tick() {

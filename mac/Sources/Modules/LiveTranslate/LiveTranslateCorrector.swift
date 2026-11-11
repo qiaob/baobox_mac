@@ -17,6 +17,8 @@ final class LiveTranslateCorrector {
         let key: Int
         let text: String
         let context: String
+        /// 这一单元是哪种语言（简体中文时提示词要求只输出简体，`AIPrompts.simplifiedChineseRule`）。
+        let language: TranslationLanguage
         /// 顺便翻译成哪种语言（纠错和翻译都走云端时）；nil = 只纠错。
         let translateTo: TranslationLanguage?
     }
@@ -39,9 +41,10 @@ final class LiveTranslateCorrector {
     /// reset 之后在飞的那个结果作废。
     private var generation = 0
 
-    func submit(key: Int, text: String, context: String, translateTo: TranslationLanguage? = nil) {
+    func submit(key: Int, text: String, context: String, language: TranslationLanguage,
+                translateTo: TranslationLanguage? = nil) {
         queue.removeAll { $0.key == key }
-        queue.append(Job(key: key, text: text, context: context, translateTo: translateTo))
+        queue.append(Job(key: key, text: text, context: context, language: language, translateTo: translateTo))
         pump()
     }
 
@@ -73,7 +76,7 @@ final class LiveTranslateCorrector {
         if let modelID = route.modelID, let target = job.translateTo {
             do {
                 let result = try await AIService.shared.correctAndTranslate(
-                    job.text, context: job.context, to: target, glossary: SpeechSettings.glossary,
+                    job.text, context: job.context, to: target, from: job.language, glossary: SpeechSettings.glossary,
                     modelID: modelID, timeout: 4)
                 let corrected = accept(result.corrected, original: job.text)
                 // 纠正被判成「在改写」没采用：译文是照改写后的句子翻的，不要，交给翻译队列按原文翻。
@@ -92,11 +95,13 @@ final class LiveTranslateCorrector {
     /// (纠正后, 改用了本地)。出错时「纠正后」就是原文。
     private static func correct(_ job: Job, route: AIRoute) async -> (String, Bool) {
         let context = job.context.isEmpty ? "（无）" : job.context
+        // 说的是简体中文：再加一句只要简体（2026-11-11 转录里出现了繁体字「閒」）。
+        let script = AIPrompts.simplifiedChineseRule(for: job.language).map { "\n" + $0 } ?? ""
         // 末尾的 /no_think 是 Qwen3 关「思考」的软开关；请求里也带了 enable_thinking = false，双保险。
         let prompt = """
         你是语音识别纠错助手。下面「待纠正」是一段中文语音识别结果，可能有同音字、近音字识别错误。
         请结合「上文」判断，只改正明显识别错的字词；不要改写句子，不要增删内容，不要翻译，不要解释。
-        只输出改正后的「待纠正」这一句；没有错就原样输出。
+        只输出改正后的「待纠正」这一句；没有错就原样输出。\(script)
 
         上文：\(context)
         待纠正：\(job.text) /no_think
