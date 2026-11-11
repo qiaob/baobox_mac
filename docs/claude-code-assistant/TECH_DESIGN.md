@@ -9,6 +9,7 @@
 - 文案一律走 `L("claudecode.xxx")` / SwiftUI key 字面量,词条同时给 en 与 zh-Hans,统一加进 `Sources/Resources/Localizable.xcstrings`(JSON,手工合并或写脚本合并均可,保持文件合法)。
 - 对用户文件(settings.json 等)读-改-写必须基于 `JSONSerialization`([String: Any]),只动自己的键,写前把原文件复制为 `<name>.baobox.bak`(每次覆盖)。
 - 菜单构建在 `menuNeedsUpdate` 同步调用,**不得做磁盘扫描**;只读内存缓存,同时触发后台刷新。
+  (会话索引的「同时触发后台刷新」2026-11 #109 PR5a 起才接上:`submenuItems()` 里顺手 `index.refresh()`,不等结果,见 3.7。)
 
 ## 1. 文件划分
 
@@ -169,6 +170,14 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 - 额度提醒挂在 refresh 末尾:预算(UserDefaults,0=未设)>0 且 window tokens ≥ 80% 预算 → 经 ClaudeNotifier 通知一次(记录已提醒的 windowStart 防重);检测到窗口切换且旧窗口曾提醒 → 可选发"额度已恢复"。
 - refresh 触发:activate 后首次 + Timer 每 5 分钟 + 收到 hook 事件时(节流 ≥60s)。
 
+> 「收到 hook 事件时」2026-11(#109 PR5a)起才真正接上 —— 之前 `refreshThrottledFromHook()` 定义了没人调,菜单的「今日」与额度最多晚 5 分钟。现在 `ClaudeLiveStatus` 在 **Stop**(回合结束)与 **Notification**(等你确认)时调它:不看通知开关,启动回放的旧事件不算;不挂 UserPromptSubmit / SessionStart(那时还没有新用量,`../codex-assistant/DEDUPE.md` §9 D4)。
+>
+> **节流 + 补刷**(`Core/CLIUsage/CLIUsageRefreshThrottle.swift`,有单元测试):距上次 ≥ 60 秒马上刷;60 秒内来的不丢,在窗口结束时补刷一次(只补一次、不叠加,补完下一个窗口从补刷时算起)。所以回合中途刚因等确认刷过、几十秒后回合结束,那次的用量最晚 60 秒后也刷得到。补刷的定时器延迟夹在 0–60 秒,系统时钟往回拨过也不会一等几小时。`refresh()` 进行中再来的请求(定时器、hook、补刷、设置变化)不再被吞,合并成「这一轮结束后再刷一轮」——比如启动时那轮全量解析还没完回合就结束了。
+>
+> **增量收集**(`ClaudeUsageCollector.swift`,纯 Foundation,`BaoboxTests` 有差分测试):hook 接通后最快每分钟刷一次,而原来每次都把近 180 小时改过的日志从头解析一遍(用户实测 144 个文件、1.3 GB,约 11 秒 CPU,合起来约占一个核的 18%)。现在按文件缓存解析结果(只在内存):路径 → 修改时间 + 大小 + 这个文件按行序的候选条目(带去重键 message.id + requestId;同一个文件里重复的键只留第一条),修改时间或大小变了才重新解析;跨文件的去重每轮按原来的遍历顺序在合并时重做,结果与全量解析逐条相同(顺序、去重、费用)。缓存只留修改时间在 180 小时以内、目录里还在的文件;报表(30 天)共用这份缓存,更早的文件照旧每次解析、不进缓存;调用统计是另一套解析,没动。修改时间与大小都没变、内容却变了的文件会用旧结果(与会话索引同一个前提)。
+>
+> 合成数据实测(144 个文件 / 1.3 GB / 15.6 万条,`-O`,M3):原来的全量解析 13.4 秒 CPU;缓存为空的第一次一样 13.2 秒;**缓存命中 0.03 秒**,加上窗口 / 今日 / 周的计算一次刷新 0.35 秒;一个 60 MB 的活跃会话写了一回合后再刷 0.64 + 0.32 秒。缓存约 28 MB(每条约 190 字节)。剩下的大头是两处:计算里逐条按模型名查价(约占 0.32 秒的一半),和活跃大文件整份重新解析(可以只读追加部分,同 `ClaudeFileIndex`),都没做。
+
 > 2026-11(#109)起,定价结构、`UsageTotals` 累加、5h / 周窗口、今日累计、报表分组与 80% 提醒防重的算法移到与 Codex 助手共用的 `mac/Sources/Core/CLIUsage/`(纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeUsage.swift` 只留定价表 `ClaudePricingTable`、JSONL 解析、设置键与通知,`UsageTotals` / `UsageWindow` / `UsageBucket` / `ClaudeUsageReport` 成了共用类型的别名。
 
 ### 3.4 ClaudeLiveStatus(@MainActor 单例)
@@ -181,6 +190,8 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 > 2026-11(#109)起,events.jsonl 的建文件、超限截断、启动回放与增量监听移到与 Codex 助手共用的 `mac/Sources/Core/EventFile/`(`EventFileFollower`:后台准备 → 主线程回放已有行 → 从读到的大小起跟随新行;纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeLiveStatus.swift` 只留状态机与通知。文件名、5MB / 1000 行上限、监听队列名不变。启停收紧了一处:`start()` 立即算已启动、再调直接返回,`stop()` 之后还没处理的回调一律丢掉(`docs/codex-assistant/DEDUPE.md` §2)。
 >
 > 同月 PR4 起:只交完整的行 —— 没写完的半行留到下次、逐行解码(一行坏字节只丢那一行),启动回放也只回放完整的行;events.jsonl 被删 / 被换掉(改名、原子保存)后接着跟随路径上的新文件、从头读,目录没了先建回来,监听父目录等文件出现,不轮询;`stop()` 确定关掉文件描述符(以前每次停止漏一个)。见 `docs/codex-assistant/DEDUPE.md` §5.2 C1、C2 与 §6 PR4。
+>
+> 同月 PR5a 起:Stop / Notification 顺带节流刷新用量(见 3.3);点通知跳回终端与快速切换面板续接走同一个 `TerminalLauncher.focusRunningSession`(先用 hook 记下的终端位置,再按进程找)。面板的位置先经 `currentTerminal(of:)` 确认会话还占着那个 tty(reporter 不报 SessionEnd,结束了的会话连同位置还会留 6 小时),再在后台确认那个 tty 上有 claude 在跑,见 `NOTIFY_JUMP.md` §3.1。
 
 ### 3.5 ClaudeHooks
 
@@ -240,6 +251,7 @@ printf '%s\n' "$out"
 - 未安装 Claude Code(`!ClaudeEnv.isInstalled`):只显示一条置灰"未检测到 Claude Code(~/.claude 不存在)"+ 设置入口。
 - 快捷键:`claudecode.center`,标题「打开 Claude Code 中心」,`defaultCombo: nil`(出厂不绑定,同取色器惯例)。
 - `activate()`:LiveStatus.start、SessionIndex.refresh、UsageStore 定时器;`willTerminate()`:落盘索引缓存。
+- 2026-11(#109 PR5a)起,每次构建菜单(`submenuItems()`)顺带发起一次 SessionIndex.refresh():不等结果,这一次照旧只读内存,下次打开菜单就是新的(没装 hooks 时「N 个会话活跃(推断)」靠它)。刷新在后台,没变的文件只看修改时间与大小,进行中再来的请求合并成一轮(PR4),所以连着开几次菜单最多多扫一轮。Codex 助手同样(`../codex-assistant/DEDUPE.md` §5.2 C5)。
 
 ### 3.8 中心窗口(ClaudeCodeCenterWindow)
 

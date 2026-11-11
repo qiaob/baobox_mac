@@ -136,6 +136,8 @@ targets:
   # - Core/MeetingEngine + Modules/Meeting/Logic：会议引擎接口、会话的决策、meeting.md 的模型与排版、纪要提示词（docs/meeting/ENGINE.md §5）
   # - LiveTranslateMixing.swift：混音与说话人判定（本来就是纯的）
   # - LiveTranslateLanguageSwitch.swift：轮流识别重认后这段用哪种文字、之后切不切（会议 / 字幕与听写共用）
+  # - ClaudeRunningSession.swift：快速切换面板续接时 hook 记下的终端位置还能不能用（docs/claude-code-assistant/NOTIFY_JUMP.md §3.1）
+  # - ClaudeUsageCollector.swift：Claude Code 用量条目的收集与按文件缓存（增量与全量逐条相同，docs/claude-code-assistant/TECH_DESIGN.md §3.3）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -150,6 +152,8 @@ targets:
       - path: Sources/Modules/Meeting/Logic
       - path: Sources/Modules/LiveTranslate/LiveTranslateMixing.swift
       - path: Sources/Modules/LiveTranslate/LiveTranslateLanguageSwitch.swift
+      - path: Sources/Modules/ClaudeCode/ClaudeRunningSession.swift
+      - path: Sources/Modules/ClaudeCode/ClaudeUsageCollector.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests
