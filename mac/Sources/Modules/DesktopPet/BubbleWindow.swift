@@ -117,6 +117,12 @@ final class BubbleController: ObservableObject {
         refresh()
     }
 
+    /// 挂着的 + 排队的 + 收着没放出的（出场退场途中来的）。
+    var pendingCount: Int { entries.count + waiting.count + held.count }
+
+    /// 至少两条（挂着 + 排队）时气泡顶上给一个「全部清除」。
+    var offersClearAll: Bool { entries.count + waiting.count >= 2 }
+
     func dismissAll() {
         entries.removeAll()
         waiting.removeAll()
@@ -355,7 +361,7 @@ struct BubbleStackView: View {
         let ordered = controller.below ? Array(controller.entries.reversed()) : controller.entries
         let nearest = controller.entries.last?.id
         VStack(alignment: .leading, spacing: 8) {
-            if controller.overflowCount > 0, !controller.below { overflowPill }
+            if controller.offersClearAll, !controller.below { topRow }
             ForEach(ordered) { entry in
                 BubbleCard(entry: entry, tailX: entry.id == nearest ? controller.tailX - Self.inset : nil,
                            tailOnTop: controller.below) { action in
@@ -366,7 +372,7 @@ struct BubbleStackView: View {
                     removal: .opacity
                 ))
             }
-            if controller.overflowCount > 0, controller.below { overflowPill }
+            if controller.offersClearAll, controller.below { topRow }
         }
         .padding(.horizontal, Self.inset)
         .padding(.top, controller.below ? 2 : 12)
@@ -377,6 +383,27 @@ struct BubbleStackView: View {
 
     /// 两侧留给阴影的边距。
     static let inset: CGFloat = 10
+
+    /// 「还有 N 条」+「全部清除」（离宠物最远的一侧）。清除不回调投稿方，同点 ×。
+    private var topRow: some View {
+        HStack(spacing: 6) {
+            if controller.overflowCount > 0 { overflowPill }
+            Spacer(minLength: 0)
+            Button {
+                controller.dismissAll()
+            } label: {
+                Text(L("pet.bubble.clearAll"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(BubblePalette.accentInk)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(BubblePalette.surface))
+                    .overlay(Capsule().strokeBorder(BubblePalette.line, lineWidth: 0.5))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
 
     private var overflowPill: some View {
         Text(L("pet.bubble.more \(controller.overflowCount)"))

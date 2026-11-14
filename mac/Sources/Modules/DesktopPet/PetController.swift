@@ -793,6 +793,14 @@ final class PetController: ObservableObject, NotifyPresenting {
         bubble.show(n, onAction: onAction)
     }
 
+    /// 气泡里还没处理的条数（NotifyPresenting）。
+    var pendingCount: Int { bubble.pendingCount }
+
+    /// 一键清除（NotifyPresenting）：气泡全部收起，不回调。
+    func dismissAll() {
+        bubble.dismissAll()
+    }
+
     // MARK: - 互动（单击 / 双击 / 抚摸）
 
     /// 做个互动动作并冒一句话。3D 形象按 pet.json 的 interactions（或按片段名猜）播；2D 形象跳一下。
@@ -1017,6 +1025,11 @@ final class PetController: ObservableObject, NotifyPresenting {
         ].compactMap { $0 }
         let hasHotkey = { (item: RadialMenuItem) in HotkeyCenter.shared.combo(for: item.id) != nil }
         var outer = tools.filter { !hasHotkey($0) } + tools.filter(hasHotkey)
+        if NotifyCenter.shared.pendingCount > 0 {
+            outer.append(RadialMenuItem(id: "pet.clearNotices", symbol: "bell.slash", title: L("pet.ring.clearNotices")) {
+                NotifyCenter.shared.clearAll()
+            })
+        }
         outer.append(RadialMenuItem(id: "pet.test", symbol: "bell.badge", title: L("pet.ring.test")) { [weak self] in
             self?.sendTestNotification(.toast)
             self?.sendTestNotification(.card)

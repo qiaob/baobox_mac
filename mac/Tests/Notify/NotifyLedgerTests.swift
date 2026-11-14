@@ -239,6 +239,22 @@ final class NotifyLedgerTests: XCTestCase {
         XCTAssertEqual(digest.body, "b、c")
     }
 
+    /// 一键清除：攒着的全丢、回调不调，之后不再出摘要；历史不动，去重窗口照旧。
+    func testDiscardHeldDropsEverythingWithoutADigest() {
+        var ledger = NotifyLedger()
+        var calls: [String] = []
+        post(&ledger, notice("a", key: "k"), at: 0, suppressed: true, onAction: { calls.append($0) })
+        post(&ledger, notice("b"), at: 1, suppressed: true)
+        let historyBefore = ledger.history
+        XCTAssertEqual(ledger.discardHeld(), 2)
+        XCTAssertTrue(ledger.held.isEmpty)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(ledger.history, historyBefore)
+        XCTAssertEqual(ledger.flush(isSuppressed: false), .nothingHeld)
+        XCTAssertEqual(post(&ledger, notice("a", key: "k"), at: 10), .drop(.duplicate))
+        XCTAssertEqual(ledger.discardHeld(), 0)
+    }
+
     /// 没攒着东西：勿扰不勿扰都是 nothingHeld（NotifyCenter 据此停掉定时器）；直接出的不攒。
     func testFlushWithNothingHeld() {
         var ledger = NotifyLedger()

@@ -10,10 +10,16 @@ protocol NotifyPresenting: AnyObject {
     func present(_ n: Notice, onAction: @escaping (String) -> Void)
     /// 配合提醒做个动作（喝水、伸懒腰、远眺），按片段名播；做不了返回 false。默认做不了。
     func performGesture(_ clips: [String]) -> Bool
+    /// 还挂着、还在排队、还收着没放出的通知条数（「清除所有通知」菜单项的条数）。默认 0。
+    var pendingCount: Int { get }
+    /// 一键清除：挂着的、排队的、收着的全部收起，不回调投稿方（同点 ×）。默认什么都不做。
+    func dismissAll()
 }
 
 extension NotifyPresenting {
     func performGesture(_ clips: [String]) -> Bool { false }
+    var pendingCount: Int { 0 }
+    func dismissAll() {}
 }
 
 /// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史、启动期间先攒着。
@@ -161,6 +167,26 @@ final class NotifyCenter {
               let callback = systemCallbacks.removeValue(forKey: requestID) else { return }
         systemCallbackOrder.removeAll { $0 == requestID }
         callback(actionID == UNNotificationDefaultActionIdentifier ? "open" : actionID)
+    }
+
+    // MARK: - 一键清除
+
+    /// 还没处理的通知条数：呈现端挂着 / 排队的 + 勿扰时攒着的。系统通知中心里的数不出来（要异步查），不算在内。
+    /// 只读内存，菜单构建时可以调。
+    var pendingCount: Int {
+        (PresentationHub.shared.notifications?.pendingCount ?? 0) + ledger.held.count
+    }
+
+    /// 一键清除所有通知（锁屏 / 离开一会儿回来攒了几十条时用）：宠物气泡全部收起、勿扰时攒着的丢掉（不再出摘要）、
+    /// 系统通知中心里 Baobox 发的也一并移走。都不回调投稿方，同点 ×。历史不动。
+    func clearAll() {
+        PresentationHub.shared.notifications?.dismissAll()
+        ledger.discardHeld()
+        flushTimer?.invalidate()
+        flushTimer = nil
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        systemCallbacks.removeAll()
+        systemCallbackOrder.removeAll()
     }
 
     // MARK: - 启动期间先攒着
