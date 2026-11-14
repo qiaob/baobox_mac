@@ -113,6 +113,14 @@ struct NotifyLedger {
         return .digest(digest)
     }
 
+    /// 一键清除通知：勿扰时攒着的全部丢掉，不出摘要；回调不调（同点 ×）。返回丢了几条。历史不动（历史是记账，不是待处理）。
+    @discardableResult
+    mutating func discardHeld() -> Int {
+        let count = held.count
+        held.removeAll()
+        return count
+    }
+
     private mutating func record(_ notice: Notice, at now: Date, limit: Int) {
         history.insert(
             HistoryEntry(date: now, source: notice.source, level: notice.level, title: notice.title, mergeCount: 1),

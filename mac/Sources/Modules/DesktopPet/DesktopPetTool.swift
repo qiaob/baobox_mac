@@ -38,6 +38,17 @@ final class DesktopPetTool: ToolModule {
         }
         quietItem.submenu = quietMenu
         items.append(quietItem)
+        // 一键清除：有没处理的就带条数；宠物关着时通知在系统通知中心，数不出来（要异步查），不带条数、一直给。
+        let pending = NotifyCenter.shared.pendingCount
+        if pending > 0 {
+            items.append(ClosureMenuItem(title: L("pet.menu.clearNotices \(pending)")) {
+                NotifyCenter.shared.clearAll()
+            })
+        } else if !PetSettings.enabled {
+            items.append(ClosureMenuItem(title: L("pet.menu.clearSystemNotices")) {
+                NotifyCenter.shared.clearAll()
+            })
+        }
         let testItem = NSMenuItem(title: L("pet.menu.test"), action: nil, keyEquivalent: "")
         let testMenu = NSMenu()
         testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testToast")) { PetController.shared.sendTestNotification(.toast) })
