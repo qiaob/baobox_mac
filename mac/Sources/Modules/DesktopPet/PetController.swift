@@ -1025,7 +1025,7 @@ final class PetController: ObservableObject, NotifyPresenting {
         ].compactMap { $0 }
         let hasHotkey = { (item: RadialMenuItem) in HotkeyCenter.shared.combo(for: item.id) != nil }
         var outer = tools.filter { !hasHotkey($0) } + tools.filter(hasHotkey)
-        if NotifyCenter.shared.pendingCount > 0 {
+        if NotifyCenter.shared.offersClearAll {
             outer.append(RadialMenuItem(id: "pet.clearNotices", symbol: "bell.slash", title: L("pet.ring.clearNotices")) {
                 NotifyCenter.shared.clearAll()
             })

@@ -122,14 +122,14 @@ final class NotifyCenter {
             }
         }
         guard !n.actions.isEmpty else {
-            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in }
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in NotifyCenter.refreshDeliveredCount() }
             return
         }
         let categoryID = "baobox." + n.actions.map { $0.id + "=" + $0.label }.joined(separator: "|")
         content.categoryIdentifier = categoryID
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         if systemCategories[categoryID] != nil {
-            center.add(request) { _ in }
+            center.add(request) { _ in NotifyCenter.refreshDeliveredCount() }
             return
         }
         systemCategories[categoryID] = UNNotificationCategory(
@@ -143,7 +143,7 @@ final class NotifyCenter {
         // setNotificationCategories 是整组替换；登记完（get 回来）再投递，否则第一条可能不带按钮。
         center.setNotificationCategories(Set(systemCategories.values))
         center.getNotificationCategories { _ in
-            center.add(request) { _ in }
+            center.add(request) { _ in NotifyCenter.refreshDeliveredCount() }
         }
     }
 
@@ -171,10 +171,29 @@ final class NotifyCenter {
 
     // MARK: - 一键清除
 
-    /// 还没处理的通知条数：呈现端挂着 / 排队的 + 勿扰时攒着的。系统通知中心里的数不出来（要异步查），不算在内。
+    /// 没处理的到这么多条才给「清除所有通知」（气泡一次叠 3 条，再多就开始排队了）。少的时候一条条点 × 就行，不多占地方。
+    static let clearAllThreshold = 4
+
+    /// 系统通知中心里 Baobox 发的还剩几条：异步查的缓存（投递后、菜单打开时刷新，见 refreshDeliveredCount）。
+    private var deliveredSystemCount = 0
+
+    /// 还没处理的通知条数：呈现端挂着 / 排队的 + 勿扰时攒着的 + 系统通知中心里的（缓存值）。
     /// 只读内存，菜单构建时可以调。
     var pendingCount: Int {
-        (PresentationHub.shared.notifications?.pendingCount ?? 0) + ledger.held.count
+        (PresentationHub.shared.notifications?.pendingCount ?? 0) + ledger.held.count + deliveredSystemCount
+    }
+
+    /// 多到值得一键清除了（菜单项、环形菜单格据此显示）。
+    var offersClearAll: Bool { pendingCount >= Self.clearAllThreshold }
+
+    /// 后台查一次系统通知中心里还剩几条，回主线程写缓存。菜单构建时调：这次用旧值，下次打开就准了。
+    nonisolated static func refreshDeliveredCount() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { list in
+            let count = list.count
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { NotifyCenter.shared.deliveredSystemCount = count }
+            }
+        }
     }
 
     /// 一键清除所有通知（锁屏 / 离开一会儿回来攒了几十条时用）：宠物气泡全部收起、勿扰时攒着的丢掉（不再出摘要）、
@@ -185,6 +204,7 @@ final class NotifyCenter {
         flushTimer?.invalidate()
         flushTimer = nil
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        deliveredSystemCount = 0
         systemCallbacks.removeAll()
         systemCallbackOrder.removeAll()
     }
