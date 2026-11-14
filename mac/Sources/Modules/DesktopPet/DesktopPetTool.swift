@@ -38,14 +38,11 @@ final class DesktopPetTool: ToolModule {
         }
         quietItem.submenu = quietMenu
         items.append(quietItem)
-        // 一键清除：有没处理的就带条数；宠物关着时通知在系统通知中心，数不出来（要异步查），不带条数、一直给。
-        let pending = NotifyCenter.shared.pendingCount
-        if pending > 0 {
+        // 一键清除：没处理的多了（含系统通知中心里的，缓存值）才给，带条数。顺手在后台刷新系统通知中心的条数，下次打开就准了。
+        NotifyCenter.refreshDeliveredCount()
+        if NotifyCenter.shared.offersClearAll {
+            let pending = NotifyCenter.shared.pendingCount
             items.append(ClosureMenuItem(title: L("pet.menu.clearNotices \(pending)")) {
-                NotifyCenter.shared.clearAll()
-            })
-        } else if !PetSettings.enabled {
-            items.append(ClosureMenuItem(title: L("pet.menu.clearSystemNotices")) {
                 NotifyCenter.shared.clearAll()
             })
         }

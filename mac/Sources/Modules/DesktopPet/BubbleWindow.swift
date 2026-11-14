@@ -120,8 +120,8 @@ final class BubbleController: ObservableObject {
     /// 挂着的 + 排队的 + 收着没放出的（出场退场途中来的）。
     var pendingCount: Int { entries.count + waiting.count + held.count }
 
-    /// 至少两条（挂着 + 排队）时气泡顶上给一个「全部清除」。
-    var offersClearAll: Bool { entries.count + waiting.count >= 2 }
+    /// 多到排队了（挂着 + 排队到 `NotifyCenter.clearAllThreshold` 条）才在气泡顶上给「全部清除」，少的时候点 × 就行。
+    var offersClearAll: Bool { entries.count + waiting.count >= NotifyCenter.clearAllThreshold }
 
     func dismissAll() {
         entries.removeAll()
@@ -361,7 +361,7 @@ struct BubbleStackView: View {
         let ordered = controller.below ? Array(controller.entries.reversed()) : controller.entries
         let nearest = controller.entries.last?.id
         VStack(alignment: .leading, spacing: 8) {
-            if controller.offersClearAll, !controller.below { topRow }
+            if controller.overflowCount > 0 || controller.offersClearAll, !controller.below { topRow }
             ForEach(ordered) { entry in
                 BubbleCard(entry: entry, tailX: entry.id == nearest ? controller.tailX - Self.inset : nil,
                            tailOnTop: controller.below) { action in
@@ -372,7 +372,7 @@ struct BubbleStackView: View {
                     removal: .opacity
                 ))
             }
-            if controller.offersClearAll, controller.below { topRow }
+            if controller.overflowCount > 0 || controller.offersClearAll, controller.below { topRow }
         }
         .padding(.horizontal, Self.inset)
         .padding(.top, controller.below ? 2 : 12)
@@ -389,20 +389,24 @@ struct BubbleStackView: View {
         HStack(spacing: 6) {
             if controller.overflowCount > 0 { overflowPill }
             Spacer(minLength: 0)
-            Button {
-                controller.dismissAll()
-            } label: {
-                Text(L("pet.bubble.clearAll"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(BubblePalette.accentInk)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(BubblePalette.surface))
-                    .overlay(Capsule().strokeBorder(BubblePalette.line, lineWidth: 0.5))
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
+            if controller.offersClearAll { clearAllButton }
         }
+    }
+
+    private var clearAllButton: some View {
+        Button {
+            controller.dismissAll()
+        } label: {
+            Text(L("pet.bubble.clearAll"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(BubblePalette.accentInk)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(BubblePalette.surface))
+                .overlay(Capsule().strokeBorder(BubblePalette.line, lineWidth: 0.5))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var overflowPill: some View {
