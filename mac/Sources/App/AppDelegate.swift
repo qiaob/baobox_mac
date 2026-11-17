@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        // 上次崩溃 / 被强杀留下的本地模型推理进程：现在就结束，不等用到那个模型（#187）。
+        OfflineTranslator.terminateStaleServers()
 
         registry.register(ScreenshotTool())
         registry.register(ScreenDrawTool())

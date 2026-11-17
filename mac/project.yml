@@ -146,6 +146,7 @@ targets:
   #   同目录其余文件是 AppKit，不进来）
   # - Core/CLIFormat.swift：Claude Code / Codex 助手共用的展示格式化（费用、token、倒计时、相对时间、星期名；同上类 2）
   # - Core/CLIVersion.swift：本机 CLI 的 --version 与 npm 上的最新版（同上类 9；npm 那半在测试里用 URLProtocol 桩）
+  # - Core/Translation/OfflineServerPID.swift：本地模型推理进程的 PID 文件（读、列、核对进程名；#187，同目录其余文件不进来）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -169,6 +170,7 @@ targets:
       - path: Sources/Core/Terminal/TerminalLaunchScript.swift
       - path: Sources/Core/CLIFormat.swift
       - path: Sources/Core/CLIVersion.swift
+      - path: Sources/Core/Translation/OfflineServerPID.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests
