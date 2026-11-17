@@ -14,6 +14,8 @@ Needs **Accessibility** permission (to read the selected text). Region Text also
 The action bar appears about 0.4 seconds after you select text and release the mouse. It's just buttons: **nothing runs
 until you click one**.
 
+![Select a sentence and the action bar appears above it](../images/selection-assistant/action-bar.en.png)
+
 - If you press ⌘C (or any key) or the clipboard changes in those 0.4 seconds, it doesn't appear — selecting just to copy
   isn't interrupted.
 - It goes away when you click elsewhere, start typing, scroll, or leave it alone for 4 seconds (with the mouse off the bar).
@@ -33,6 +35,8 @@ until you click one**.
 ## The result panel
 
 Click an action and the bar expands into a result panel:
+
+![Result panels: Translate on top (original, translation, Speak and Copy); Polish below, where the text is in an editable field so the main button is Replace](../images/selection-assistant/result-panels.en.png)
 
 - The same row of actions stays on top, the current one highlighted. Click another to switch results in place; results are
   remembered, so switching back doesn't run it again.
@@ -75,6 +79,8 @@ learning English by default):
 | Your native language (Chinese) | First how to say it in English, then that English sentence as in the row above (clickable words, read aloud, Repeat) |
 | Chinese selected while you're learning Chinese | Pinyin, read aloud, and a translation |
 
+![Learn on a single English word: the dictionary card, with the sentence it came from and its translation below](../images/selection-assistant/learn-card.en.png)
+
 - **Repeat**: click "Repeat" and read the sentence aloud. On-device speech recognition compares it: words you got right turn
   green, the rest red, and you see "N of M words right". It needs Microphone and Speech Recognition access, and can't run while
   a meeting recording or Dictation is using the microphone.
@@ -111,7 +117,8 @@ left to right; the first nine on the bar match ⌥1–⌥9.
 
 ## Which model the AI actions use
 
-Polish, Rewrite, Natural English, Explain, Summarize and custom actions use the model chosen on the "Selection AI Actions" row.
+Polish, Rewrite, Natural English, Explain, Summarize and custom actions use the model chosen on the "AI Actions" row
+(under Selection Assistant in Settings → AI).
 The default is the local Qwen3-1.7B (the same one used for caption correction and dictation polish). Download it once on the
 "Local AI model" row; the first start takes a few seconds.
 
@@ -119,7 +126,7 @@ The default is the local Qwen3-1.7B (the same one used for caption correction an
   "Use the Cloud This Time" sends just this one.
 - You can also pick a larger local model or a cloud model. With a cloud model, text is sent **only when you click an action**;
   just selecting text sends nothing.
-- Translation has its own model setting (the "Selection Translation" row), separate from the AI actions. See [AI](ai.md).
+- Translation has its own model setting (the "Translation" row), separate from the AI actions. See [AI](ai.md).
 
 ## Menu
 
@@ -144,11 +151,11 @@ Settings → Selection Assistant:
 | Actions | The action list | Switch, Move Up / Move Down, Edit, Delete; "New Action" |
 | Shortcuts | Hold ⌥ to pick actions by number | On by default |
 | | The shortcuts | Show Action Bar, Translate Selection, one per action, Region Text; all unbound by default |
-| AI Actions | Selection AI Actions | Which model; the same row as in Settings → AI |
+| AI Actions | AI Actions | Which model; the same row as in Settings → AI |
 | | Local AI model | Downloading Qwen3-1.7B |
 | Languages | Translate into, If already in that language, translate into | |
 | | Speak the translation automatically | Off by default |
-| Translation Engine | Selection Translation | Automatic (default) / System Translation / a local or cloud model; downloading the offline translation model |
+| Translation Engine | Translation | Automatic (default) / System Translation / a local or cloud model; downloading the offline translation model |
 | Learn | My native language, Language I'm learning | 简体中文 / English; they must differ |
 | | English pronunciation | US (default) / UK |
 | | Read the word aloud when the card appears | Off by default |

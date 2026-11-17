@@ -33,6 +33,8 @@ isn't supported yet.
 Keeps listening until you stop. What you say shows up a part at a time in the "Long Dictation" panel, where you can edit it.
 Buttons: "Insert" (into the field you came from), "Copy", "Clear", "Stop" (then "Keep Dictating").
 
+![The Long Dictation panel: what you say comes in a part at a time and can be edited; Clear, Copy, Insert and Stop below](../images/dictation/collect-panel.en.png)
+
 ## The recording bar
 
 A small recording bar appears while you dictate. It never takes focus, so the app you're typing into stays in front. It sits
@@ -42,6 +44,8 @@ finish" and "Esc to cancel".
 
 Afterwards it shows the result for 2 seconds: "Inserted", or "Copied — press ⌘V to paste" (the text couldn't be typed in
 directly and is on the clipboard; the bar also has a "Copy" button).
+
+![The recording bar: listening (level, timer, hints, the text being recognized), Inserted, and Copied with the reason it couldn't type the text in](../images/dictation/recording-bar.en.png)
 
 ## How the text gets in
 
@@ -81,7 +85,7 @@ chats stay as spoken).
 - Start / Stop Dictation and Long Dictation polish sentence by sentence, adding a second or two to each.
 - It uses the local model Qwen3-1.7B by default (the same one subtitles use for AI correction). Download it once under
   "Polishing model" in settings; nothing leaves this Mac. Until it's downloaded, the original goes in and you're told once.
-- You can switch the "AI Polish" row to another local model or a cloud model. With a cloud model, the dictated text is sent
+- You can switch the "Polish" row to another local model or a cloud model. With a cloud model, the dictated text is sent
   to that provider. See [AI](ai.md).
 
 ## Recognition
@@ -128,7 +132,7 @@ Settings → Dictation:
 | | Prefer on-device recognition | On by default; the lines below say which way each language goes |
 | Text | Voice commands, Filter filler words | Both on by default |
 | AI Polish | Polish into written text | Off (default) / All apps / Only these apps ("Add App…") |
-| | AI Polish, Polishing model | Which model, and downloading the local one (shown unless polish is off) |
+| | Polish, Polishing model | Which model, and downloading the local one (shown unless polish is off) |
 | Typing It In | Insert method | Automatic (default) / Always paste |
 | Recording Bar | Position | Next to the cursor (default) / Bottom of the screen |
 | | Play start and end sounds | Off by default |

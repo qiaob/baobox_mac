@@ -41,6 +41,8 @@ is linked to it: the title and attendees come from the calendar. In-person meeti
 
 A small control bar appears; it never takes focus.
 
+![The meeting control bar while recording (REC timer, Online, both audio sources, Pause, Mark, Notes, Subtitles, End); below it, the same bar with Notes open](../images/meeting/control-bar.en.png)
+
 - With the pet on, the bar sits **on top of the pet's head** and moves with it (drag the pet to move it). With the pet off it
   sits at the top center of the screen; drag it anywhere and the position is remembered.
 - On the left: "● REC" with the elapsed time, and the type (Online / In person).
@@ -75,7 +77,7 @@ click "Open" to see them in the meeting library.
   AI Correction group of the Meeting settings, or under Settings → AI → On This Mac). With no usable model, or too little
   content, only the transcript is kept and the status reads "Transcript only"; later you can click "Regenerate Minutes" in the
   meeting library.
-- For better minutes, pick a larger local model on the "Meeting Minutes" row of the Meeting settings. You can also pick a cloud
+- For better minutes, pick a larger local model on the "Minutes" row of the Meeting settings. You can also pick a cloud
   model; only then is the meeting's full transcript and notes sent to that provider. See [AI](ai.md).
 - A meeting in which nothing at all was recorded isn't saved.
 - Free Listening isn't saved by default. Turn on "Save transcripts (Markdown)" under Subtitles & Interpreting and each
@@ -84,6 +86,8 @@ click "Open" to see them in the meeting library.
 ## Meeting library
 
 Menu → "Meeting Library". The window has two views:
+
+![The meeting library: the list of meetings on the left, the selected meeting's minutes and checkable action items on the right](../images/meeting/library.en.png)
 
 - **Meetings**: filter by type (All / Online / In person / Free) and search titles, attendees and minutes. Each row shows the
   title, type, time, duration, attendees and minutes status (Recording / Writing minutes / Minutes ready / Transcript only /
@@ -103,7 +107,7 @@ minutes can't be deleted.
 
 Menu → "Write This Week's Report": collects the decisions and open action items of this week's (Monday to Sunday) online
 and in-person meetings, adds a short AI-written overview, saves it to the meeting library and opens it. With no meetings
-this week it just says so. Choose the model for the overview on the "Weekly Overview" row of the Meeting settings.
+this week it just says so. Choose the model for the overview on the "Weekly" row of the Meeting settings.
 
 ## Connecting your calendar
 
@@ -126,6 +130,8 @@ Once connected:
   The menu item is dimmed when there's nothing to show.
 - **Pause Meeting Reminders** ▸ For 1 Hour / For Today / Until Tomorrow (no reminders today or tomorrow; back the day after).
   Pausing stops reminders, detection prompts and automatic starts; the menu then offers "Resume Meeting Reminders".
+
+![A reminder bubble before a meeting: title, time, attendees, calendar and open action items, with Join & Record, Brief and Ignore](../images/meeting/reminder.en.png)
 
 All-day events, cancelled events and meetings you declined don't count.
 
@@ -190,7 +196,7 @@ Settings → Meeting:
 | Recording | Default type when starting manually | Online Meeting (default) / In-Person Meeting. A reminder's "Start Recording" uses it when the meeting has no link |
 | | Start recording automatically for calendar meetings | Off by default |
 | | Minutes template | Default / Stand-up / 1:1 / Interview |
-| | Meeting Minutes, Weekly Overview | Which model each uses; the same rows as in Settings → AI |
+| | Minutes, Weekly | Which model each uses; the same rows as in Settings → AI |
 | | Keep meetings | Keep forever (default) / 30 / 90 / 180 / 365 days; older meetings go to the Trash the next time Baobox starts |
 | | Meeting library | Where it is; "Open Meeting Library in Finder" |
 | | Device check | Test 3 Seconds |
