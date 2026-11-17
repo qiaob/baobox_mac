@@ -17,4 +17,14 @@ enum CLISessionMarkdown {
     static func isSystemInjection(_ text: String) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<")
     }
+
+    /// 导出时存盘框里预填的文件名（不带 `.md`）：会话标题的 "/" ":" 换成 "-"、去首尾空白（含换行）、取前 60 个字符；
+    /// 清洗完为空时用 `fallback`（模块给：Claude "session"、Codex "codex-session"）。两个中心窗口原来各写一份，#164 PR3 收成这一份。
+    static func exportFileName(title: String, fallback: String) -> String {
+        let cleaned = title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? fallback : String(cleaned.prefix(60))
+    }
 }

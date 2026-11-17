@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1（#182）、PR2（#186）、PR4（#185）已合并；PR6 已实现（PR #189）。落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR4（#185）、PR6（#189）已合并；PR3 已实现（PR #190）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -867,6 +867,57 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 挪 + 改名：`Core/QuickSwitch/QuickSwitchSessionSource.swift` → `Core/CLISession/CLISessionSource.swift`。
 - 改：两个中心窗口（会话页缩成外层几行）、两个面板文件（数据源搬走、类型名）、`Core/QuickSwitch/QuickSwitchViews.swift`（泛型约束改名）、`CLISessionMarkdown.swift`。
 - 文档：`DESIGN.md` §9.1、`DEDUPE.md` §4.3 加注（数据源改名）、根 `CLAUDE.md` 的 Core 清单；PR 描述贴 Codex 前后对照图。
+
+#### PR3 落地记录（2026-11-17，PR #190，分支 `refactor/cli-sessions-page`，基线 main `60182f7`：在 `04ef9ad` 上写完、rebase 过 #188 / #189）
+
+照上面的清单做了，D1、D4、D5 按建议（统一成 Claude 那版；文案 key 一条不动）。
+
+1. **新增**：`Core/CLICenter/CLISessionsPage.swift`（`CLISessionsPageStrings` + `CLISessionsPage<Format, Source>` + private 的行 `CLISessionsPageRow`：
+   页与行从 Claude 的 `ClaudeSessionsTab` / `ClaudeSessionRow` 原样搬，文案换成 `strings.*`，续接 / 复制改调数据源，导出写盘失败带上原因）、
+   `Core/CLISession/CLISessionsPageSearch.swift`（中心窗口会话页的搜索）、`Modules/ClaudeCode/ClaudeSessionSource.swift`、
+   `Modules/AITools/CodexSessionSource.swift`（`CodexResumeCommand` 跟过来）、`CLISessionMarkdown.exportFileName(title:fallback:)`；
+   测试 `mac/Tests/CLISession/CLISessionSourceTests.swift`（7 个：面板的过滤搬家后照旧、会话页的过滤）、`CLISessionMarkdownTests` 加 5 个（`exportFileName`）。
+2. **挪 + 改名**：`Core/QuickSwitch/QuickSwitchSessionSource.swift` → `Core/CLISession/CLISessionSource.swift`（`git mv`，协议改名、签名不变；Git 按改名认，相似度 67%）。
+3. **改**：两个中心窗口的会话页各缩成一个十几行的外层（`static let strings` + 一行 `CLISessionsPage(...)`；Claude 的外层照旧 `@ObservedObject SessionRowFormatStore.shared`），
+   删掉 `ClaudeSessionRow` / `AIToolsSessionRow` 与各自的 `safeFileName` / `alert`，Claude 中心窗口去掉用不着的 `import UniformTypeIdentifiers`（两个中心窗口共 +36 / −340 行）；
+   两个面板文件的数据源搬走、视图模型里换新名；`QuickSwitchViews.swift` 的泛型约束换成 `CLISessionSource`。
+   规模：源码 +358 / −419（估的是 +260 / −300：多出来的是共用页的注释与文案结构体、两个数据源搬家的文件头），测试 +130 / −1。
+4. **文档**：`DESIGN.md` §9.1（加「中心窗口会话页」一条）、`DEDUPE.md` §4.3 加注（改名）、根 `CLAUDE.md` 的 Core 清单（`CLISession/` 加数据源、`QuickSwitch/` 改指向、新增 `CLICenter/`）、
+   `CORE_API.md`（`focusRunningSession` / `currentTerminal(of:)` 的使用方加上中心窗口）、`NOTIFY_JUMP.md` §3.1 加注（中心窗口续接也走这一条）、本文状态。
+
+和设计稿的出入：
+
+- 中心窗口的搜索做成纯函数 `CLISessionsPageSearch.filter`（`Core/CLISession/`，进测试；设计稿没写放哪）：先去首尾空格（`.whitespaces`，换行不去）再交给
+  `QuickSwitchSelection.filter(…, fields: [\.title, \.projectName])`，与两份旧闭包等价（探针 2 万个随机查询 × 中英两遍逐个相同）。单独一个文件而不是放进
+  `CLISessionSource.swift`：放进去那个文件 Git 就认不出是改名了（相似度 32%）。
+- 行不再观察索引（原来两边的行各自 `@ObservedObject` 索引）：第二行由页面算好传进行，页面观察索引、重画时第二行变了，行跟着重画；行里只剩悬停状态。
+- 文案在外层用 `static let` 建一次（`L()` 查的是启动时定死的语言，早取晚取一样），每次重画不再调 `L()`。
+- 第二行是空串时，会话页照原来 Claude 的写法照样放一个 `Text`（面板不放）。Codex 的第二行至少有相对时间，不会是空串。
+
+验证（Mac 本机，Xcode 16.2）：
+
+- `xcodebuild … clean test`：TEST SUCCEEDED，493 个（基线 481 + 新增 12）；warning 21 条，和 origin/main（`60182f7`）同命令逐条相同（连行号）。rebase 前在 `04ef9ad` 上也一样（475 = 463 + 12，warning 相同）。
+- 静态检查（§4.3）：`Localizable.xcstrings` 没动、合法；文案 key 集合（502 个）与 main、`a4833c8` 都相同；按声明查边界的脚本无输出；进测试的文件只 import Foundation / Combine、
+  不调 `L()`（命中的三处都在注释里）；`Core/CLICenter/` 不引用模块类型。
+- 渲染探针（§4.2，rebase 之后在 `60182f7` 上重跑：main 的两个会话 Tab + 行加 `Old` 前缀，与新的 `CLISessionsPage` + 两个外层编进同一个程序；两个会话索引是假格式读 scratchpad 里的 12 个夹具会话，
+  `ClaudeTerminal` / `TerminalLauncher` / `ClaudeLiveStatus` / 剪贴板 / `NSAlert` / `NSSavePanel` 全用桩；中英 × 浅深色，离屏 720×480，`cacheDisplay` 出 PNG；
+  每种语言程序内 40,034 项检查 + 脚本核对动作 84 项，全过）：
+  - Claude 页逐像素相同：{有会话、搜索命中（查询带首尾空格）、搜索落空、悬停一行、刷新中、空列表} × 中英 × 浅深色，24 组全是 0 像素差；右键菜单内容（同一个 `@ViewBuilder`
+    当普通视图画）中英 × 浅深色也是 0。同一份旧视图连画两次也是 0（转圈在 `cacheDisplay` 里是静止的一帧，不会造成假差异）。
+  - Codex 页出前后对照图（中英 × 浅深色 × 六种状态 + 右键菜单）：与 D4 一致 —— 行下方那排带字按钮没了、悬停的行右侧四个图标，行高不跳；斑马纹；第二行「项目 · 时间」
+    间距变窄；右键菜单带图标；搜索落空、空列表两种状态逐像素相同（没有行）。深色图里页签栏与搜索栏是浅色的：`cacheDisplay` 画不出 `NSTabView` 的材质背景，
+    新旧一样，不是界面问题。
+  - 换会话行方案（窗口开着，标准 → 简洁）：旧页、新页第二行都变（中文 10,901 / 英文 9,597 像素），且换完新旧逐像素相同；对照组（去掉 `renderToken` 的新页）0 像素变化 —— token 起作用。
+  - 过滤：两份旧闭包与 `CLISessionsPageSearch.filter` 在 300 个随机会话、2 万个随机查询上逐个相同（含首尾空格 / 制表符 / 换行、大小写、İ / ß、中文、emoji），中英各一遍。
+  - 动作路由（双击、悬停按钮，新旧各跑一遍比桩上的调用序列，脚本逐项核对预期，中英各 84 项全过）：
+    Claude 续接（双击、续接按钮、项目里不是最新的、没有项目的）新的都是先 `focusRunningSession`（`confirmRunning: true`、`isNewestInProject` 对、带上 hook 记下的位置），
+    切不过去再 `ClaudeTerminal.resume`、参数与旧的逐字相同；切过去了就不再开窗口（D4 第 5 条）。复制的命令、导出（存盘框类型、预填文件名含兜底名与 `/` `:` 替换、写出的内容、
+    取消、读失败）、删除确认（标题、正文、按钮、取消不删、确认后文件与行都没了）新旧相同；只有写盘失败的弹窗多了原因一行（D4 第 6 条）。
+    Codex 续接（含没有项目时不 cd）、复制、删除新旧相同；导出只差存盘框限定 .md（D4 第 4 条），其余逐字相同。单击一行什么也不做（新旧都是）。
+  - 探针的三处替代（新旧同样做，真机第 12 条确认）：离屏窗口里合成的鼠标移动触发不了 SwiftUI 的 `onHover`，改成「指定那一行当作悬停中」（只改 `if hovering` 那一个条件）；
+    右键菜单弹不出来（收不到合成的右键），改成把菜单内容画出来比；`role: .destructive` 的删除按钮收不到合成的鼠标点击，改成对点到的那个 `NSButton` `performClick`。
+- 变异：会话页的搜索连换行也去掉、会话页也看项目路径、导出文件名先截 60 再去空白，三处分别让 1 / 1 / 2 个单测变红；探针里把行的上下内边距 4 改 5、删除确认的标题与正文对调，
+  Claude 页（中文浅色）4 种有行的状态报逐像素不同、动作核对报删除两项不同。
 
 ### PR4 用量 Store 外壳
 

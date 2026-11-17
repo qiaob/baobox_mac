@@ -7,54 +7,14 @@ import SwiftUI
 /// 文件模式(RECENT_FILES.md):列出会话写过的文件,类型筛选 chips,⏎ 按类别偏好应用打开、
 /// ⌘⏎ 访达显示、⌘C 复制路径。⇥ 在两模式间切换(本地监听消费,焦点始终留在搜索框)。
 /// Esc 或点击面板外关闭。窗口外壳、键码、过滤与选中、会话栏视图与 Codex 助手共用 `Core/QuickSwitch/`(#109);
-/// 这里留 Claude 的会话数据源(第二行复用菜单的 SessionRowFormatStore 方案、续接先找正在跑的窗口 ——
-/// 与点通知跳回同一个 `ClaudeTerminal.focusRunningSession`,先用 hook 记下的终端位置)
-/// 与「最近文件」模式(chips、文件列表、文件动作)。
+/// 会话栏的数据源是与中心窗口会话页共用的 `ClaudeSessionSource`(同目录 `ClaudeSessionSource.swift`:第二行复用菜单的
+/// SessionRowFormatStore 方案、续接先找正在跑的窗口 —— 与点通知跳回同一个 `ClaudeTerminal.focusRunningSession`,
+/// 先用 hook 记下的终端位置)。这里留「最近文件」模式(chips、文件列表、文件动作)。
 
 /// 面板两种模式。菜单入口显式指定;快捷键 toggle 沿用上次(进程内记忆)。
 enum ClaudePanelMode {
     case sessions
     case files
-}
-
-// MARK: - 会话数据源
-
-/// 面板「会话」栏的 Claude Code 数据源。
-@MainActor
-struct ClaudeQuickSwitchSource: QuickSwitchSessionSource {
-    var sessions: [ClaudeSessionSummary] { ClaudeSessionIndex.shared.sessions }
-
-    func refresh() {
-        ClaudeSessionIndex.shared.refresh()
-    }
-
-    /// 第二行 = 菜单同款的会话行方案。
-    func metadataLine(for session: ClaudeSessionSummary) -> String {
-        SessionRowFormatStore.shared.metadataLine(for: session)
-    }
-
-    func resume(_ session: ClaudeSessionSummary) {
-        // 会话已在某个终端窗口里跑、且能定位到那个窗口时,只把它切到前台:先用 hook 记下的位置(同一目录开着几个会话
-        // 不会认错,Otty 也认得),确认那个终端里还有 claude 在跑才用;再按进程找。
-        // 其余情况(没在跑 / 定位不到宿主终端,如 tmux、SSH)一律照常开新窗口。
-        let isNewest = ClaudeSessionIndex.shared.sessions
-            .first(where: { $0.projectPath == session.projectPath })?.id == session.id
-        let sessionID = session.id
-        let projectPath = session.projectPath
-        ClaudeTerminal.focusRunningSession(
-            sessionID: sessionID, projectPath: projectPath,
-            location: ClaudeLiveStatus.shared.currentTerminal(of: sessionID),
-            confirmRunning: true, isNewestInProject: isNewest
-        ) { focused in
-            if !focused {
-                ClaudeTerminal.resume(sessionID: sessionID, in: projectPath)
-            }
-        }
-    }
-
-    func resumeCommand(for session: ClaudeSessionSummary) -> String {
-        ClaudeTerminal.resumeCommandString(sessionID: session.id, in: session.projectPath)
-    }
 }
 
 // MARK: - 视图模型
@@ -67,7 +27,7 @@ final class ClaudeQuickSwitchViewModel: ObservableObject {
     /// 文件模式的类别筛选;nil = 全部。
     @Published var categoryFilter: ClaudeFileCategory?
 
-    let source = ClaudeQuickSwitchSource()
+    let source = ClaudeSessionSource()
 
     var filtered: [ClaudeSessionSummary] {
         source.sessions(matching: query)

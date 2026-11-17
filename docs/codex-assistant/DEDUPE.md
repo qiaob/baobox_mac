@@ -478,6 +478,11 @@ struct QuickSwitchFooter<Content: View>: View
 struct QuickSwitchKeyHint: View         // init(key:label:)
 ```
 
+> **改名（#164 PR3，`DEDUPE-P2.md` §2.4 类 1、D1）**：中心窗口的会话页也用上了同一个数据源，`QuickSwitchSessionSource` 改名 `CLISessionSource`、
+> 挪到 `Core/CLISession/CLISessionSource.swift`（签名不变；整目录进 `BaoboxTests`；中心窗口会话页的搜索在同目录 `CLISessionsPageSearch.swift`，规则与面板不同、照两个中心窗口原来的）；
+> 两个实现 `ClaudeQuickSwitchSource` / `CodexQuickSwitchSource` 改名 `ClaudeSessionSource` / `CodexSessionSource`，从面板文件挪进各自模块的
+> `ClaudeSessionSource.swift` / `CodexSessionSource.swift`。下文保留当时的名字。
+
 各模块剩下的：
 
 - **Codex**（约 120 行）：`CodexQuickSwitchSource`（第二行 = 项目 · 相对时间；续接 = `TerminalLauncher.run(codex resume …)`；命令 = `CodexResumeCommand.fullCommand`）、

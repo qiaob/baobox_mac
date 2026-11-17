@@ -18,22 +18,6 @@ enum AIToolsFormatLocalization: CLIFormatLocalization {
 
 typealias AIToolsFormat = CLIFormat<AIToolsFormatLocalization>
 
-/// Codex 续接命令构造（供窗口与复制按钮共用）。单引号转义用 Core 的 `Shell.quote`（#164）。
-enum CodexResumeCommand {
-    /// 终端执行的续接命令：`codex resume <id>`。
-    static func command(sessionID: String) -> String {
-        let bin = CodexEnv.findCodexBinary()
-        return "\(Shell.quote(bin)) resume \(Shell.quote(sessionID))"
-    }
-
-    /// 供「复制命令」用：附带 cd 到项目目录。
-    static func fullCommand(sessionID: String, cwd: String) -> String {
-        let resume = command(sessionID: sessionID)
-        guard !cwd.isEmpty else { return resume }
-        return "cd \(Shell.quote(cwd)) && \(resume)"
-    }
-}
-
 // MARK: - 卡片容器
 
 private extension View {
@@ -114,163 +98,26 @@ struct AIToolsCenterView: View {
 
 // MARK: - 会话 Tab
 
+/// 会话页：实现在 Core 的 `CLISessionsPage`（与 Claude Code 助手共用，#164 PR3），这里只给数据源与文案。
 struct AIToolsSessionsTab: View {
-    @ObservedObject private var index = CodexSessionIndex.shared
-    @State private var query = ""
-
-    private var filtered: [CodexSessionSummary] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return index.sessions }
-        let needle = trimmed.lowercased()
-        return index.sessions.filter {
-            $0.title.lowercased().contains(needle) || $0.projectName.lowercased().contains(needle)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("aitools.sessions.search", text: $query)
-                    .textFieldStyle(.plain)
-                if index.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
-                    index.refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(Text("aitools.common.refresh"))
-            }
-            .padding(10)
-            Divider()
-
-            if filtered.isEmpty {
-                Spacer()
-                Text("aitools.sessions.empty")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                List(filtered) { session in
-                    AIToolsSessionRow(session: session)
-                }
-                .listStyle(.inset)
-            }
-        }
-    }
-}
-
-/// 单条会话行：标题、项目、相对时间 + 悬停浮现操作 + 右键菜单 + 导出 Markdown（对齐 Claude 版）。
-private struct AIToolsSessionRow: View {
-    let session: CodexSessionSummary
-    @ObservedObject private var index = CodexSessionIndex.shared
-    @State private var hovering = false
+    private static let strings = CLISessionsPageStrings(
+        search: "aitools.sessions.search",
+        empty: "aitools.sessions.empty",
+        refreshHelp: "aitools.common.refresh",
+        rowHint: "aitools.sessions.rowHint",
+        resume: "aitools.sessions.resume",
+        copyCommand: "aitools.sessions.copyCommand",
+        export: "aitools.sessions.export",
+        delete: "aitools.sessions.delete",
+        exportFailed: L("aitools.sessions.exportFailed"),
+        deleteConfirmTitle: L("aitools.sessions.deleteConfirm.title"),
+        deleteConfirmMessage: L("aitools.sessions.deleteConfirm.message"),
+        deleteButton: L("aitools.sessions.delete"),
+        exportFileFallback: "codex-session"
+    )
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: session.title)
-                .lineLimit(1)
-            HStack(spacing: 8) {
-                if !session.projectName.isEmpty {
-                    Text(verbatim: session.projectName)
-                    Text(verbatim: "·")
-                }
-                Text(verbatim: AIToolsFormat.relative(session.lastActivity))
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            if hovering {
-                HStack(spacing: 12) {
-                    actionButton("aitools.sessions.resume", "terminal") { resume() }
-                    actionButton("aitools.sessions.copyCommand", "doc.on.doc") { copyCommand() }
-                    actionButton("aitools.sessions.export", "square.and.arrow.up") { exportMarkdown() }
-                    actionButton("aitools.sessions.delete", "trash", destructive: true) { confirmDelete() }
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .padding(.top, 2)
-            }
-        }
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { resume() }
-        .contextMenu {
-            Button("aitools.sessions.resume") { resume() }
-            Button("aitools.sessions.copyCommand") { copyCommand() }
-            Button("aitools.sessions.export") { exportMarkdown() }
-            Divider()
-            Button("aitools.sessions.delete", role: .destructive) { confirmDelete() }
-        }
-        .help(Text("aitools.sessions.rowHint"))
-    }
-
-    private func actionButton(_ title: LocalizedStringKey, _ icon: String,
-                              destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
-        Button(role: destructive ? .destructive : nil, action: action) {
-            Label(title, systemImage: icon)
-        }
-    }
-
-    private func resume() {
-        TerminalLauncher.run(command: CodexResumeCommand.command(sessionID: session.id),
-                             in: session.projectPath.isEmpty ? nil : session.projectPath)
-    }
-
-    private func copyCommand() {
-        let command = CodexResumeCommand.fullCommand(sessionID: session.id, cwd: session.projectPath)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-    }
-
-    private func exportMarkdown() {
-        index.exportMarkdown(session) { markdown in
-            guard let markdown else {
-                Self.alert(L("aitools.sessions.exportFailed"), "")
-                return
-            }
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = Self.safeFileName(session.title) + ".md"
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            do {
-                try markdown.data(using: .utf8)?.write(to: url)
-            } catch {
-                Self.alert(L("aitools.sessions.exportFailed"), error.localizedDescription)
-            }
-        }
-    }
-
-    private func confirmDelete() {
-        let alert = NSAlert()
-        alert.messageText = L("aitools.sessions.deleteConfirm.title")
-        alert.informativeText = L("aitools.sessions.deleteConfirm.message")
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: L("aitools.sessions.delete"))
-        alert.addButton(withTitle: L("common.cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        index.deleteSession(session) { _ in }
-    }
-
-    private static func safeFileName(_ title: String) -> String {
-        let cleaned = title
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let clipped = String(cleaned.prefix(60))
-        return clipped.isEmpty ? "codex-session" : clipped
-    }
-
-    private static func alert(_ title: String, _ message: String) {
-        let a = NSAlert()
-        a.messageText = title
-        if !message.isEmpty { a.informativeText = message }
-        a.addButton(withTitle: L("common.ok"))
-        a.runModal()
+        CLISessionsPage(index: CodexSessionIndex.shared, source: CodexSessionSource(), strings: Self.strings)
     }
 }
 
