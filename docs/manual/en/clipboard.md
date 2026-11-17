@@ -13,18 +13,23 @@ it degrades to copy-only).
 **⌘⇧V** brings up a floating panel with the cursor already in the search field —
 **type to filter**.
 
+![The clipboard history panel: search field and type filters on top, the history list (image, text, link, file, favorites) on the left, a preview of the selected screenshot on the right, and key hints along the bottom](../images/clipboard/history-panel.en.png)
+
 | Key | Action |
 |---|---|
 | Type | Filters history live |
 | ↑ / ↓ | Move through results |
+| ← / → | Switch the type filter (left to the cursor while the search field has text) |
 | ⏎ | **Paste back** into the app you came from |
+| ⌥⏎ | Paste as plain text |
+| ⇥ | Expand the preview to the whole panel; press again to shrink it |
+| ⌘P | Favorite / unfavorite |
 | ⌘⌫ | Delete the selected entry |
-| Esc | Close the panel |
+| Esc | Close the panel (shrinks an expanded preview first) |
 
-Type filters run across the top: **All / Text / Link / Image / File / Favorites**.
+Type filters run across the top: **All / Favorites / Text / Images / Links / Files**.
 
-The bottom bar shows the actions available for the current entry — paste, plain-text paste,
-favorite, delete, expand (large editor), preview — along with the total count.
+The bottom row lists the common keys, with the total count on the left.
 
 ### Paste-back
 
@@ -40,8 +45,8 @@ entry" and a suggestion to delete the record.
 
 ### Plain-text paste
 
-**⌘⌥V** pastes the most recent entry as plain text, dropping rich formatting. The panel has
-a button for it too.
+**⌘⌥V** pastes the most recent entry as plain text, dropping rich formatting. In the panel,
+⌥⏎ does the same for the selected entry.
 
 ### Favorites
 
@@ -56,23 +61,28 @@ A favorited entry:
 
 ## Preview pane and text tools
 
-Selecting an entry shows the full content, the source app, and a character count.
+Selecting an entry shows the full content, the source app, the character count and when it
+was copied, in the preview pane on the right.
+
+![A JWT selected: the preview pane shows it decoded into header / payload / signature, turns iat and exp into times and flags the token as expired, with the action bar below](../images/clipboard/text-tools.en.png)
 
 With "Detect content format in the preview pane" on, Baobox runs detection **only on the
 selected entry** and offers matching conversions in place:
 
 | Detected | Actions |
 |---|---|
-| JSON | Format, minify |
-| JWT | Decode, extract header, extract payload; expired tokens are labeled |
-| XML / HTML | Format |
+| JSON | "JSON" menu: format, minify, escape, unescape |
+| JWT | Shown decoded right away as header / payload / signature, with iat / exp etc. as times and expired tokens labeled; actions: Payload, Header |
+| XML / HTML | Format, minify |
 | Timestamp | Seconds / millis / micros / nanos / Apple absolute time are told apart automatically, with local time, UTC, ISO 8601, and relative time |
-| URL | Encode, decode, extract URLs |
-| Base64 | Encode, decode |
-| curl command | Expand to multiple lines or collapse to one; break out method, auth, body, form, and other flags |
-| Any text | MD5 / SHA1 / SHA256, escape / unescape, **generate a QR code**, pin as a card, open in the large editor |
+| URL | "URL" menu: URL decode, URL encode, make a curl command |
+| Base64 | Decode (encoding lives in "Encode / Decode" below) |
+| curl command | "cURL" menu: expand to multiple lines, collapse to one, extract the URL; break out method, auth, body, form, and other flags |
+| Any text | "Encode / Decode" menu (Base64 encode / decode, JWT decode, MD5, SHA1, SHA256), **QR code**, Pin, Edit (large editor) |
 
-Every action is an **in-place preview**; "Revert" returns to the original. Content beyond
+The first nine actions in the bar map to ⌘1…⌘9, in order.
+
+Every action is an **in-place preview**; "Revert" (or ⌘0) returns to the original. Content beyond
 the QR code capacity (2900 bytes) is reported rather than silently truncated.
 
 **A second shortcut worth knowing**: "QR code from the most recent entry" (unbound by
@@ -81,8 +91,8 @@ default) pins a QR code of the latest text straight to the screen without openin
 
 ### Large editor
 
-When the preview is too small, click Expand for a separate window: monospaced, with undo and
-a ⌘F find bar. Click Copy when you're done.
+When the preview is too small, click Edit in the action bar for a separate window: monospaced,
+with undo and a ⌘F find bar. Click Copy when you're done.
 
 ### Pinned cards
 
@@ -94,6 +104,8 @@ Copy or close it any time.
 Settings → Clipboard → Snippets. A snippet is **a favorite you wrote yourself**: it never
 expires and "Clear history" never touches it. Snippets live among your other favorites in
 the panel — same search field, same ⏎ to paste.
+
+![Text snippets in Settings: the snippet list (name, first line, keyword capsule, edit and delete), then New Snippet and the keyword-expansion switches](../images/clipboard/snippets.en.png)
 
 A new snippet has three fields: **name** (optional), **content**, and **keyword** (optional).
 
