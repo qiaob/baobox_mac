@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1（#182）、PR2（#186）、PR4（#185）、PR6（#189）已合并；PR3 已实现（PR #PR3NUM）。落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR4（#185）、PR6（#189）已合并；PR3 已实现（PR #190）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -868,7 +868,7 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 改：两个中心窗口（会话页缩成外层几行）、两个面板文件（数据源搬走、类型名）、`Core/QuickSwitch/QuickSwitchViews.swift`（泛型约束改名）、`CLISessionMarkdown.swift`。
 - 文档：`DESIGN.md` §9.1、`DEDUPE.md` §4.3 加注（数据源改名）、根 `CLAUDE.md` 的 Core 清单；PR 描述贴 Codex 前后对照图。
 
-#### PR3 落地记录（2026-11-17，PR #PR3NUM，分支 `refactor/cli-sessions-page`，基线 main `60182f7`：在 `04ef9ad` 上写完、rebase 过 #188 / #189）
+#### PR3 落地记录（2026-11-17，PR #190，分支 `refactor/cli-sessions-page`，基线 main `60182f7`：在 `04ef9ad` 上写完、rebase 过 #188 / #189）
 
 照上面的清单做了，D1、D4、D5 按建议（统一成 Claude 那版；文案 key 一条不动）。
 
