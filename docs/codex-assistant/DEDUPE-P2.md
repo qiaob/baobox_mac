@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1（#182）、PR2（#186）、PR4（#185）已合并；PR6 已实现（分支 `refactor/cli-traversal-cache`）。落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR4（#185）已合并；PR6 已实现（PR #189）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -914,7 +914,7 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 改：`CLISessionIndex.swift`（缓存部分换成 `CLICacheFile`）、`ClaudeFileIndex.swift`、`ClaudeSessionIndex.swift`（审计）、`ClaudeUsage.swift` / `CodexUsage.swift`（调用统计、Codex 用量）、`CodexEnv.swift`（磁盘统计）。
 - 文档：`RECENT_FILES.md` §4 加注、`CORE_API.md`。
 
-#### PR6 落地记录（2026-11-17，分支 `refactor/cli-traversal-cache`，基线 main `04ef9ad`）
+#### PR6 落地记录（2026-11-17，PR #189，分支 `refactor/cli-traversal-cache`，基线 main `04ef9ad`）
 
 照上面的清单做了，D8 按建议。
 
