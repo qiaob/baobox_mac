@@ -148,24 +148,15 @@ enum CodexUsageSource: CLIUsageSource {
 
     /// 收集近 N 小时内 mtime 文件的用量条目，按 §2 口径处理每文件的增量 / 累计。
     static func collectEntries(sinceHoursAgo hours: Int) -> [CLIUsageEntry] {
-        let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(hours) * 3_600)
         var entries: [CLIUsageEntry] = []
 
-        guard let enumerator = fm.enumerator(
-            at: CodexEnv.sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
-            guard values?.isRegularFile == true else { continue }
-            let mtime = values?.contentModificationDate ?? Date()
-            if mtime < cutoff { continue }
+        for file in CLISessionFiles.jsonlRecursively(under: CodexEnv.sessionsDir) {
+            // 取不到修改时间的记作 1970，一并跳过（#164 PR6 起；以前当成「现在」照读）。
+            if file.modified < cutoff { continue }
             autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
-                guard let data = try? Data(contentsOf: url) else { return }
-                entries.append(contentsOf: parseFile(data: data, fallbackDate: mtime))
+                guard let data = try? Data(contentsOf: file.url) else { return }
+                entries.append(contentsOf: parseFile(data: data, fallbackDate: file.modified))
             }
         }
         return entries
@@ -287,7 +278,6 @@ enum CodexUsageSource: CLIUsageSource {
 
     /// 调用统计：遍历近 `days` 天 mtime 的 rollout 文件，聚合内置工具与 MCP（服务器›工具两级）。
     static func invocationStats(days: Int) -> CodexInvocationStats {
-        let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         // Codex 工具调用事件命名随版本不一，容错匹配这几类。
         let callTypes: Set<String> = ["function_call", "tool_call", "mcp_tool_call", "local_shell_call", "custom_tool_call"]
@@ -295,18 +285,11 @@ enum CodexUsageSource: CLIUsageSource {
         var builtin: [String: Int] = [:]
         var mcp: [String: (total: Int, tools: [String: Int])] = [:]
 
-        guard let enumerator = fm.enumerator(
-            at: CodexEnv.sessionsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return CodexInvocationStats() }
-
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
-            guard values?.isRegularFile == true else { continue }
-            if let mtime = values?.contentModificationDate, mtime < cutoff { continue }
+        for file in CLISessionFiles.jsonlRecursively(under: CodexEnv.sessionsDir) {
+            // 取不到修改时间的记作 1970，一并跳过（#164 PR6 起；以前照读）。
+            if file.modified < cutoff { continue }
             autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
-                guard let data = try? Data(contentsOf: url) else { return }
+                guard let data = try? Data(contentsOf: file.url) else { return }
 
                 for lineData in data.split(separator: 0x0A) {
                     guard let object = CLIJSONL.parseObject(Data(lineData)) else { continue }

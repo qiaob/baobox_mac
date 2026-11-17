@@ -2,6 +2,8 @@ import Foundation
 import XCTest
 
 /// 两种列会话文件的办法与清理旧会话。都在临时目录里做，不碰真实的 `~/.claude` / `~/.codex`。
+/// #164 PR6 起审计、调用统计、最近文件索引、Codex 用量与磁盘统计也改用这两个函数：「和原来手写的遍历逐项相同」那两条
+/// 拿原来的写法当参照，连先后、修改时间、大小一起比。
 final class CLISessionFilesTests: XCTestCase {
 
     private var root: URL!
@@ -68,6 +70,64 @@ final class CLISessionFilesTests: XCTestCase {
         XCTAssertEqual(CLISessionFiles.jsonlInSubdirectories(of: root.appendingPathComponent("missing")), [])
     }
 
+    /// 审计、Claude 调用统计、最近文件索引原来各自手写的两层遍历（#164 PR6 之前）：列出来的文件、先后、修改时间与大小都和它相同，
+    /// 文件的上级目录名就是原来的项目目录名（munged，取不到 cwd 时反推项目路径用）。
+    func testSubdirectoryListingMatchesTheHandWrittenWalkItReplaced() throws {
+        try writeProjectFixture()
+
+        let files = CLISessionFiles.jsonlInSubdirectories(of: root)
+        let reference = handWrittenTwoLevelWalk(root)
+
+        XCTAssertEqual(files.count, 12)
+        XCTAssertEqual(files, reference.map(\.file), "同样的文件、同样的先后、同样的修改时间与大小")
+        XCTAssertEqual(files.map { $0.url.deletingLastPathComponent().lastPathComponent }, reference.map(\.projectDirectory))
+    }
+
+    private func writeProjectFixture() throws {
+        for (index, project) in ["-Users-me-work-app", "-Users-me-work-tool", "-Users-me-notes", "-tmp-scratch"].enumerated() {
+            for session in 0..<3 {
+                let name = UUID().uuidString.lowercased()
+                try write("\(project)/\(name).jsonl", String(repeating: "x", count: index * 10 + session),
+                          modified: sessionTestTime(Double(-index * 3_600 - session * 60)))
+            }
+            try write("\(project)/memory.md")                          // 不是 .jsonl
+            try write("\(project)/\(UUID().uuidString.lowercased())/subagents/agent.jsonl")   // 孙目录不进
+        }
+        try write("loose.jsonl")
+        try write(".hidden/one.jsonl")
+    }
+
+    /// 原来三处的写法（`ClaudeFileIndex.scanAll` 那份：取不到修改时间 / 大小记 1970 / 0）。
+    private func handWrittenTwoLevelWalk(_ root: URL) -> [(file: CLISessionFile, projectDirectory: String)] {
+        let fm = FileManager.default
+        guard let projectDirs = try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var result: [(file: CLISessionFile, projectDirectory: String)] = []
+        for projectDir in projectDirs {
+            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDir else { continue }
+            guard let files = try? fm.contentsOfDirectory(
+                at: projectDir,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for file in files where file.pathExtension == "jsonl" {
+                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                result.append((
+                    CLISessionFile(url: file,
+                                   modified: values?.contentModificationDate ?? Date(timeIntervalSince1970: 0),
+                                   size: Int64(values?.fileSize ?? 0)),
+                    projectDir.lastPathComponent
+                ))
+            }
+        }
+        return result
+    }
+
     // MARK: - 递归（Codex：sessions/YYYY/MM/DD/rollout-*.jsonl）
 
     func testRecursiveListingFindsRegularJSONLFilesAtAnyDepth() throws {
@@ -97,6 +157,48 @@ final class CLISessionFilesTests: XCTestCase {
 
     func testRecursiveListingOfAMissingRootIsEmpty() {
         XCTAssertEqual(CLISessionFiles.jsonlRecursively(under: root.appendingPathComponent("missing")), [])
+    }
+
+    /// Codex 用量、调用统计与磁盘统计原来各自手写的递归遍历（#164 PR6 之前）：列出来的文件与先后和它相同，修改时间与大小照实。
+    func testRecursiveListingMatchesTheHandWrittenWalkItReplaced() throws {
+        for (day, count) in [("2026/11/09", 2), ("2026/11/10", 3), ("2026/10/31", 1)] {
+            for index in 0..<count {
+                try write("\(day)/rollout-2026-11-10T08-0\(index)-\(UUID().uuidString.lowercased()).jsonl",
+                          String(repeating: "y", count: 5 + index), modified: sessionTestTime(Double(-index * 600)))
+            }
+        }
+        try write("2026/11/10/notes.txt")
+        try write("2026/11/10/.partial.jsonl")
+        try write(".cache/x.jsonl")
+        try makeDirectory("2026/11/10/folder.jsonl")
+
+        let files = CLISessionFiles.jsonlRecursively(under: root)
+        let reference = handWrittenRecursiveWalk(root)
+
+        XCTAssertEqual(files.count, 6)
+        XCTAssertEqual(files.map(\.url), reference.map(\.url), "同样的文件、同样的先后")
+        XCTAssertEqual(files.map { Optional($0.modified) }, reference.map(\.modified))
+        XCTAssertEqual(files.map(\.size), reference.map(\.size))
+        let totalBytes: Int64 = files.reduce(0) { $0 + $1.size }
+        XCTAssertEqual(totalBytes, 34, "磁盘统计按它加总：5 + 6、5 + 6 + 7、5")
+    }
+
+    /// 原来三处的写法（Codex 用量那份：枚举器、只要普通文件；大小另取）。
+    private func handWrittenRecursiveWalk(_ root: URL) -> [(url: URL, modified: Date?, size: Int64)] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var result: [(url: URL, modified: Date?, size: Int64)] = []
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            result.append((url, values?.contentModificationDate, Int64(size)))
+        }
+        return result
     }
 
     // MARK: - 清理旧会话

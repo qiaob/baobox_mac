@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1 已实现（PR #182）、PR2 已实现（PR #186），落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR4（#185）已合并；PR6 已实现（PR #189）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -913,6 +913,44 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 新增：`Core/CLISession/CLICacheFile.swift`、测试。
 - 改：`CLISessionIndex.swift`（缓存部分换成 `CLICacheFile`）、`ClaudeFileIndex.swift`、`ClaudeSessionIndex.swift`（审计）、`ClaudeUsage.swift` / `CodexUsage.swift`（调用统计、Codex 用量）、`CodexEnv.swift`（磁盘统计）。
 - 文档：`RECENT_FILES.md` §4 加注、`CORE_API.md`。
+
+#### PR6 落地记录（2026-11-17，PR #189，分支 `refactor/cli-traversal-cache`，基线 main `04ef9ad`）
+
+照上面的清单做了，D8 按建议。
+
+1. **新增**：`Core/CLISession/CLICacheFile.swift`（`CLICacheFile<Snapshot: Codable & Sendable>`：`load`、`scheduleSave`、`flush`；整个 `Core/CLISession` 本来就进
+   `BaoboxTests`，`project.yml` 不用改）；测试 `mac/Tests/CLISession/CLICacheFileTests.swift`（9 个），`CLISessionFilesTests` 加 2 个（两种列法与被它们替掉的手写遍历逐项相同）。
+2. **改**：
+   - `CLISessionIndex.swift`：缓存的读、防抖、写盘队列、flush 换成一个 `CLICacheFile` 成员（队列名照旧 `com.baobox.clisession.cachesave`），+8 / −54 行；`CLISessionIndexTests` 一条没改，全过。
+   - `ClaudeFileIndex.swift`：缓存换成 `CLICacheFile`（队列 `com.baobox.claudecode.fileindex.cachesave`）；`refresh` 照会话索引合并请求（进行中再调记一笔、结束后带着结果补扫一轮、
+     补扫那轮重新读「包含内部文件」、不发布中间结果、转圈不熄）；`scanAll` 改用 `CLISessionFiles.jsonlInSubdirectories`。`FileCacheRecord` / `EntryRecord` 加了 `Sendable`（字段与键不变）。
+   - 审计 `computeAudit`、Claude / Codex 两个 `invocationStats`、Codex `collectEntries`、`CodexEnv.sessionsDiskStats` 改用 `CLISessionFiles`；
+     项目目录名改从文件的上级目录取。`ClaudeUsageCollector` 没动（§2.4 类 6）。
+3. **文档**：`RECENT_FILES.md` §4.2 加注、`CORE_API.md` §2（`flushCache` 一行 + 列会话文件的说明）、`DEDUPE.md` §5.3 表两行标成已做、本文状态。
+
+和设计稿的出入：
+
+- `scheduleSave` 的闭包返回 `Snapshot?`（设计稿写的是 `Snapshot`）：调用方弱引用自己，主人已经释放时返回 nil、不写 —— 同抽出来之前的 `[weak self]`。
+- 遍历换掉之后，六个函数的循环体只少一层缩进（`git diff -w` 里除了列目录那几行，只有 `file` → `file.url`、项目目录名的取法两处）；
+  目录不存在时原来的提前 `return []` / `return …Stats()` 变成走完空循环，结果相同（空数组 / 空字典）。
+- 顺带确认的旧行为（**没改**）：审计结果只按 `totalCount` 排，`totalCount` 相同的项目先后取决于字典遍历顺序，同一份数据连算两次先后都可能不同（探针的对照组：旧代码对自己，
+  夹具上 70 天里有 1–8 天不同）。差分因此按 id 排序后比；要固定先后可以另加次序键，属行为变化，不在本 PR。
+
+验证（Mac 本机，Xcode 16.2）：
+
+- `xcodebuild … test`：TEST SUCCEEDED，474 个（基线 463 + 新增 11）；warning 21 条，和 origin/main 同命令逐条相同。
+- 差分探针（§4.2：origin/main 的九个模块文件整份加 `Old` 前缀（45 个类型），与本分支的模块文件、Core 编进同一个程序；`~` 与 Application Support、UserDefaults 在两份拷贝里
+  同样重定向到 scratchpad，不碰真实目录）：
+  - 夹具（3 组随机种子；14 个项目、每组约 50 个 Claude 会话、60 个 Codex rollout，含孙目录、隐藏项、非 .jsonl、根目录散文件、同名目录、坏行、三种 token_count 口径）：
+    审计 70 天、Claude 调用统计 6 个窗口、Codex 用量 6 个窗口、Codex 调用统计 4 个窗口、磁盘统计、最近文件全量扫 / 复用重扫 / 发布列表（含 / 不含内部文件），
+    再追加与改写三分之一的文件后整套重跑（走续读与重解析两条路）—— 每组 219 项全过。
+  - 开发机真实数据的 APFS 克隆（`~/.claude/projects` 2.7 GB、172 个会话；`~/.codex/sessions` 1 个文件；跑完即删）：审计 21 天、全部窗口、最近文件 172 个会话 / 2279 个文件，
+    以及两份真实缓存文件（只读）：`index-cache-v2.json`（172 条、67,502 字节）、`file-index-cache-v1.json`（172 条、464,720 字节）经 `CLICacheFile` 读入再写出，
+    JSON 相同、长度相同；旧编码写的文件新代码读得回、新代码写的旧类型解得开 —— 73 项全过。
+  - D8 第 9 条（刷新请求不再被吞）：真实数据上首轮全量扫描进行中新建一个会话文件再调 `refresh()`：旧代码这次请求被丢、列表里没有它；新代码补扫一轮后有它，`files` 只发布一次；
+    `flushCache()` 返回时新代码已写好文件，旧代码还没写（异步）。
+- 变异：`flush` 改成异步写 → 4 条单测红；`scheduleSave` / `flush` 不取消排着的落盘 → 3 条红；写盘队列改成并发 → 「旧快照盖掉 flush」那条红。
+- 文案 key 集合不变，`Localizable.xcstrings` 没动；按声明查边界的脚本（§4.3）无输出；`Core/CLISession` 只 import Foundation / Combine、不调 `L()`。
 
 ## 6. 风险
 

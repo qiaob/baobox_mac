@@ -173,7 +173,6 @@ enum ClaudeUsageSource: CLIUsageSource {
 
     /// 调用统计：遍历近 `days` 天 mtime 的会话文件，聚合 Skill/斜杠命令、MCP、内置工具三类计数。
     static func invocationStats(days: Int) -> ClaudeInvocationStats {
-        let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         // 斜杠命令标记解析（<command-name>/foo</command-name>）；编译失败则跳过该路统计。
         let commandRegex = try? NSRegularExpression(pattern: "<command-name>([^<]*)</command-name>", options: [])
@@ -183,76 +182,60 @@ enum ClaudeUsageSource: CLIUsageSource {
         // server → (总次数, [tool: 次数])
         var mcp: [String: (total: Int, tools: [String: Int])] = [:]
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return ClaudeInvocationStats() }
+        for file in CLISessionFiles.jsonlInSubdirectories(of: ClaudeEnv.projectsDir) {
+            // 取不到修改时间的记作 1970，一并跳过（#164 PR6 起；以前照读）。
+            if file.modified < cutoff { continue }
+            autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
+                guard let data = try? Data(contentsOf: file.url) else { return }
 
-        for projectDir in projectDirs {
-            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let files = try? fm.contentsOfDirectory(
-                at: projectDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+                for lineData in data.split(separator: 0x0A) {
+                    guard let object = CLIJSONL.parseObject(Data(lineData)),
+                          let type = object["type"] as? String,
+                          let message = object["message"] as? [String: Any] else { continue }
 
-            for file in files where file.pathExtension == "jsonl" {
-                let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                if let mtime, mtime < cutoff { continue }
-                autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
-                    guard let data = try? Data(contentsOf: file) else { return }
-
-                    for lineData in data.split(separator: 0x0A) {
-                        guard let object = CLIJSONL.parseObject(Data(lineData)),
-                              let type = object["type"] as? String,
-                              let message = object["message"] as? [String: Any] else { continue }
-
-                        if type == "user" {
-                            // 斜杠命令标记 → 并入 skills。
-                            guard let regex = commandRegex else { continue }
-                            let text = allText(fromContent: message["content"])
-                            guard !text.isEmpty else { continue }
-                            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-                            for match in regex.matches(in: text, options: [], range: range) {
-                                guard match.numberOfRanges >= 2,
-                                      let r = Range(match.range(at: 1), in: text) else { continue }
-                                var name = text[r].trimmingCharacters(in: .whitespacesAndNewlines)
-                                if name.hasPrefix("/") { name.removeFirst() }
-                                guard !name.isEmpty else { continue }
-                                skills[name, default: 0] += 1
-                            }
-                            continue
+                    if type == "user" {
+                        // 斜杠命令标记 → 并入 skills。
+                        guard let regex = commandRegex else { continue }
+                        let text = allText(fromContent: message["content"])
+                        guard !text.isEmpty else { continue }
+                        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                        for match in regex.matches(in: text, options: [], range: range) {
+                            guard match.numberOfRanges >= 2,
+                                  let r = Range(match.range(at: 1), in: text) else { continue }
+                            var name = text[r].trimmingCharacters(in: .whitespacesAndNewlines)
+                            if name.hasPrefix("/") { name.removeFirst() }
+                            guard !name.isEmpty else { continue }
+                            skills[name, default: 0] += 1
                         }
+                        continue
+                    }
 
-                        guard type == "assistant",
-                              let content = message["content"] as? [[String: Any]] else { continue }
+                    guard type == "assistant",
+                          let content = message["content"] as? [[String: Any]] else { continue }
 
-                        for block in content where (block["type"] as? String) == "tool_use" {
-                            guard let name = block["name"] as? String, !name.isEmpty else { continue }
+                    for block in content where (block["type"] as? String) == "tool_use" {
+                        guard let name = block["name"] as? String, !name.isEmpty else { continue }
 
-                            if name == "Skill" {
-                                // input.skill 为技能名，取不到则跳过（不计入）。
-                                if let input = block["input"] as? [String: Any],
-                                   let skill = input["skill"] as? String, !skill.isEmpty {
-                                    skills[skill, default: 0] += 1
-                                }
-                            } else if name.hasPrefix("mcp__") {
-                                // mcp__<server>__<tool>：拆出 server 与 tool；拆不出整名归到 server 名下。
-                                let rest = String(name.dropFirst("mcp__".count))
-                                let parts = rest.components(separatedBy: "__")
-                                let server = parts.first.flatMap { $0.isEmpty ? nil : $0 } ?? rest
-                                let tool = parts.count >= 2 ? parts[1...].joined(separator: "__") : nil
-                                var entry = mcp[server] ?? (total: 0, tools: [:])
-                                entry.total += 1
-                                if let tool, !tool.isEmpty {
-                                    entry.tools[tool, default: 0] += 1
-                                }
-                                mcp[server] = entry
-                            } else {
-                                builtin[name, default: 0] += 1
+                        if name == "Skill" {
+                            // input.skill 为技能名，取不到则跳过（不计入）。
+                            if let input = block["input"] as? [String: Any],
+                               let skill = input["skill"] as? String, !skill.isEmpty {
+                                skills[skill, default: 0] += 1
                             }
+                        } else if name.hasPrefix("mcp__") {
+                            // mcp__<server>__<tool>：拆出 server 与 tool；拆不出整名归到 server 名下。
+                            let rest = String(name.dropFirst("mcp__".count))
+                            let parts = rest.components(separatedBy: "__")
+                            let server = parts.first.flatMap { $0.isEmpty ? nil : $0 } ?? rest
+                            let tool = parts.count >= 2 ? parts[1...].joined(separator: "__") : nil
+                            var entry = mcp[server] ?? (total: 0, tools: [:])
+                            entry.total += 1
+                            if let tool, !tool.isEmpty {
+                                entry.tools[tool, default: 0] += 1
+                            }
+                            mcp[server] = entry
+                        } else {
+                            builtin[name, default: 0] += 1
                         }
                     }
                 }

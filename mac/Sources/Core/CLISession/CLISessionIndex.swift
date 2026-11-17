@@ -61,14 +61,14 @@ class CLISessionIndex<Format: CLISessionFormat>: ObservableObject {
     private var refreshing = false
     /// 扫描进行中又来了刷新请求，或者删掉了会话：这一轮结束后再扫一轮（多次请求合并成一轮，DEDUPE.md §5.2 C4）。
     private var refreshAgain = false
-    private var saveWorkItem: DispatchWorkItem?
-    /// 写缓存文件的串行队列：防抖的落盘在这里异步写，`flushCache` 在这里同步写 ——
-    /// 之前排进来、带着旧快照的异步写一定先写完，不会反过来盖掉 flush 写的新快照。
-    private let saveQueue = DispatchQueue(label: "com.baobox.clisession.cachesave")
+    /// 磁盘缓存文件（`Format.cacheFileURL`；nil = 只在内存里缓存）：1 秒防抖落盘、退出时同步 flush，写盘走串行队列 ——
+    /// 之前排进来、带着旧快照的异步写一定先写完，不会反过来盖掉 flush 写的新快照（与最近文件索引共用，DEDUPE-P2.md §2.4 类 7）。
+    private let cacheFile: CLICacheFile<[String: Format.Record]>
 
     /// 有磁盘缓存文件就同步读入（发生在首次取 `shared` 时，即模块的 `activate`，不在菜单构建里）。
     init() {
-        loadCache()
+        cacheFile = CLICacheFile(url: Format.cacheFileURL, queueLabel: "com.baobox.clisession.cachesave")
+        cache = cacheFile.load() ?? [:]
     }
 
     /// 从路径取展示名（末段）。经继承在子类名下照旧能调（`ClaudeSessionIndex.projectName(fromPath:)`…）。
@@ -170,59 +170,13 @@ class CLISessionIndex<Format: CLISessionFormat>: ObservableObject {
     /// App 退出前立即落盘缓存：取消防抖，**同步**写完再返回（`willTerminate` 返回后进程随时会退出，DEDUPE.md §5.2 C6）。
     /// 没有缓存文件时什么也不做。
     func flushCache() {
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        guard let url = Format.cacheFileURL else { return }
-        let snapshot = cache
-        saveQueue.sync {
-            CLISessionCacheFile.write(snapshot, to: url)
-        }
+        cacheFile.flush(cache)
     }
 
     // MARK: - 缓存持久化
 
+    /// 1 秒后落盘（到点取当时的缓存；索引已经释放就不写）。没有缓存文件时什么也不做。
     private func scheduleCacheSave() {
-        guard Format.cacheFileURL != nil else { return }
-        saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                self?.saveCacheNow()
-            }
-        }
-        saveWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
-    }
-
-    /// 防抖到点：在写盘队列上异步写，不占主线程。
-    private func saveCacheNow() {
-        guard let url = Format.cacheFileURL else { return }
-        let snapshot = cache
-        saveQueue.async {
-            CLISessionCacheFile.write(snapshot, to: url)
-        }
-    }
-
-    private func loadCache() {
-        guard let url = Format.cacheFileURL,
-              let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([String: Format.Record].self, from: data) else {
-            return
-        }
-        cache = decoded
-    }
-}
-
-/// 缓存文件的写盘（只在索引的写盘队列上调）。
-private enum CLISessionCacheFile {
-    /// `[路径: 记录]` 用默认 `JSONEncoder` 编码，写前建父目录。缓存是派生数据：写失败照旧静默（丢了只是下次多扫几个文件）。
-    static func write<Record: CLISessionRecord>(_ snapshot: [String: Record], to url: URL) {
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(snapshot) {
-            try? data.write(to: url)
-        }
+        cacheFile.scheduleSave { [weak self] in self?.cache }
     }
 }
