@@ -597,8 +597,8 @@ Tab 只有 Claude 吃掉（Codex 现在放行，保持）。
 | 菜单多行标题 `multiLineTitle` | `ClaudeCodeTool.swift:172–187` / `AIToolsTool.swift:146–161` 逐行相同 | |
 | 单引号转义 | `ClaudeEnv.swift:311`、`AIToolsNotify.swift:387`、`AIToolsCenterWindow.swift:83` 三份 | |
 | `TerminalLauncher` 在 ClaudeCode 模块 | AITools 与 `Core/TerminalFocus.swift` 反向依赖它 | 搬进 Core 才算两模块真正解耦（§1.6 第 3 条） |
-| 会话目录遍历 | Claude 模块内两层遍历写了 5 遍（会话索引、审计、`ClaudeFileIndex`、用量、调用统计），Codex 递归遍历 5 遍 | 本次之后可改用 `CLISessionFiles` |
-| `ClaudeFileIndex` 的外壳 | 刷新防重入、1 秒防抖落盘、flush 与会话索引同款 | 它多一个「只读追加部分」的路径，可在 `CLISessionIndex` 稳定后再套 |
+| 会话目录遍历 | Claude 模块内两层遍历写了 5 遍（会话索引、审计、`ClaudeFileIndex`、用量、调用统计），Codex 递归遍历 5 遍 | 本次之后可改用 `CLISessionFiles`（#164 PR6 已改，`ClaudeUsageCollector` 那处有意留着，见 `DEDUPE-P2.md` §2.4 类 6） |
+| `ClaudeFileIndex` 的外壳 | 刷新防重入、1 秒防抖落盘、flush 与会话索引同款 | 它多一个「只读追加部分」的路径，可在 `CLISessionIndex` 稳定后再套（#164 PR6 已做：共用 `CLICacheFile`，刷新照会话索引合并） |
 | 用量 Store 外壳（#134 之后剩下的） | `ClaudeUsage.swift` / `CodexUsage.swift` 98 个相同的不同行，连续段约 74 行 | 定时器、节流刷新、refresh 管线；算法已在 `Core/CLIUsage/` |
 | 设置页 | `ClaudeCodeSettingsView.swift` / `AIToolsSettingsView.swift` 164 个相同的不同行 | 以维护节（磁盘、清理、版本检查）为主 |
 

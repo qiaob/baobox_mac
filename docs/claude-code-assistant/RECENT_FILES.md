@@ -114,6 +114,12 @@ struct ClaudeRecentFile: Identifiable {   // id = filePath
 每 jsonl 一条缓存记录，Codable 持久化到 `supportDir/file-index-cache-v1.json`
 （1s 防抖落盘、willTerminate flush，同会话索引）：
 
+> 2026-11（#164 PR6，`docs/codex-assistant/DEDUPE-P2.md` §2.4 类 6、类 7）起，外壳与会话索引共用：缓存文件的读写是
+> `Core/CLISession/CLICacheFile`（启动同步读、1 秒防抖、串行写盘队列、退出时**同步** flush —— 以前 flush 也派到全局队列异步写，
+> 进程可能先退出，排在前面的旧快照也可能盖掉新的）；列 jsonl 用 `CLISessionFiles.jsonlInSubdirectories`。刷新照会话索引合并请求：
+> 扫描进行中再调 `refresh()` 只记一笔，这一轮结束后带着它的结果再扫一轮（补扫那轮重新读「包含内部文件」、不发布中间结果、转圈不熄）——
+> 以前直接丢，启动那轮全量扫描期间拨「包含内部文件」要等下一次刷新才生效。文件格式不变，旧缓存照读。
+
 ```swift
 struct FileCacheRecord: Codable {
     var modified: Double      // mtime（容差 0.001 比较）

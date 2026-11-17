@@ -185,100 +185,85 @@ enum ClaudeFileIconCache {
 // MARK: - 索引单例
 
 /// 最近文件索引：内存缓存 + 磁盘 file-index-cache-v1.json，增量扫描（偏移续读）。
+/// 刷新的合并规则照会话索引（`CLISessionIndex.refresh`），缓存文件的读写与它共用 `CLICacheFile`（#164 PR6）。
 @MainActor
 final class ClaudeFileIndex: ObservableObject {
     static let shared = ClaudeFileIndex()
 
     /// 新→旧排序，已过滤（内部路径 / .git / 已删除），最多 500 条。
     @Published private(set) var files: [ClaudeRecentFile] = []
-    /// 是否正在刷新（供 UI 显示首建加载态）。
+    /// 是否正在刷新（供 UI 显示首建加载态）。补扫的那一轮接着算，中间不熄。
     @Published private(set) var isRefreshing = false
 
     /// 键 = jsonl 文件路径。仅主线程读写。
     private var cache: [String: FileCacheRecord] = [:]
+    /// 防重入标记：有一轮扫描在后台跑（含补扫的那一轮）。
     private var refreshing = false
-    private var saveWorkItem: DispatchWorkItem?
+    /// 扫描进行中又来了刷新请求（面板打开、拨「包含内部文件」）：这一轮结束后再扫一轮（来几次都只补一轮）。
+    private var refreshAgain = false
+    /// supportDir/file-index-cache-v1.json：1 秒防抖落盘、退出时同步 flush，写盘走串行队列（旧快照不会盖掉新的）。
+    private let cacheFile: CLICacheFile<[String: FileCacheRecord]>
 
     /// 发布列表上限。
     nonisolated static let maxPublished = 500
 
-    private var cacheFileURL: URL {
-        ClaudeEnv.supportDir.appendingPathComponent("file-index-cache-v1.json")
-    }
-
     private init() {
-        loadCache()
+        cacheFile = CLICacheFile(
+            url: ClaudeEnv.supportDir.appendingPathComponent("file-index-cache-v1.json"),
+            queueLabel: "com.baobox.claudecode.fileindex.cachesave"
+        )
+        cache = cacheFile.load() ?? [:]
     }
 
     // MARK: - 刷新
 
-    /// 后台增量扫描全部 jsonl → 合并过滤 → 回主线程发布。去抖，进行中不重入。
+    /// 后台增量扫描全部 jsonl → 合并过滤 → 回主线程发布 → 安排 1 秒后落盘。
+    ///
+    /// 进行中不重入，但请求不丢：进行中再调只记一笔，这一轮结束后再扫一轮（调几次都只补一轮；以前直接丢，
+    /// 启动那轮全量扫描期间拨「包含内部文件」要等下次刷新才生效）。这一轮的结果不发布，带着它的缓存补扫：没变的文件不用再读。
     func refresh() {
-        guard !refreshing else { return }
+        guard !refreshing else {
+            refreshAgain = true
+            return
+        }
         refreshing = true
         isRefreshing = true
-        let previousCache = cache                                  // 主线程快照，传入后台
-        let includeInternal = ClaudeFileOpenSettings.includeInternal  // 主线程读 UserDefaults
+        scan(previous: cache)                                      // 主线程快照，传入后台
+    }
+
+    private func scan(previous: [String: FileCacheRecord]) {
+        let includeInternal = ClaudeFileOpenSettings.includeInternal  // 主线程读 UserDefaults；补扫那轮重新读
         DispatchQueue.global(qos: .utility).async {
-            let newCache = Self.scanAll(previousCache: previousCache)
+            let newCache = Self.scanAll(previousCache: previous)
             let published = Self.publishList(from: newCache, includeInternal: includeInternal)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    if self.refreshAgain {
+                        self.refreshAgain = false
+                        self.scan(previous: newCache)
+                        return
+                    }
                     self.files = published
                     self.cache = newCache
                     self.refreshing = false
                     self.isRefreshing = false
-                    self.scheduleCacheSave()
+                    self.cacheFile.scheduleSave { [weak self] in self?.cache }
                 }
             }
         }
     }
 
-    /// App 退出前立即落盘缓存。
+    /// App 退出前立即落盘缓存：取消防抖，**同步**写完再返回（`willTerminate` 返回后进程随时会退出）。
     func flushCache() {
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        saveCacheNow()
-    }
-
-    // MARK: - 缓存持久化（同 ClaudeSessionIndex 的 1s 防抖模式）
-
-    private func scheduleCacheSave() {
-        saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                self?.saveCacheNow()
-            }
-        }
-        saveWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
-    }
-
-    private func saveCacheNow() {
-        let snapshot = cache
-        let url = cacheFileURL
-        DispatchQueue.global(qos: .utility).async {
-            ClaudeEnv.ensureSupportDir()
-            if let data = try? JSONEncoder().encode(snapshot) {
-                try? data.write(to: url)
-            }
-        }
-    }
-
-    private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheFileURL),
-              let decoded = try? JSONDecoder().decode([String: FileCacheRecord].self, from: data) else {
-            return
-        }
-        cache = decoded
+        cacheFile.flush(cache)
     }
 }
 
 // MARK: - 缓存记录
 
 extension ClaudeFileIndex {
-    /// file-index-cache-v1.json 的一条记录（对应一个会话 jsonl）。
-    struct FileCacheRecord: Codable {
+    /// file-index-cache-v1.json 的一条记录（对应一个会话 jsonl）。字段名就是缓存文件里的键，别改。
+    struct FileCacheRecord: Codable, Sendable {
         var modified: Double        // mtime.timeIntervalSince1970（容差 0.001 比较）
         var size: Int64
         /// 已消费到「最后一个完整行」之后的字节位置；追加时从这里续读。
@@ -287,7 +272,7 @@ extension ClaudeFileIndex {
         /// 键 = 规范化文件路径。
         var entries: [String: EntryRecord]
 
-        struct EntryRecord: Codable {
+        struct EntryRecord: Codable, Sendable {
             var count: Int
             var last: Double        // 末次写入 timeIntervalSince1970
             var projectPath: String
@@ -299,61 +284,42 @@ extension ClaudeFileIndex {
 
 extension ClaudeFileIndex {
 
-    /// 遍历 projects 下全部 jsonl：未变复用 / 追加续读 / 其余全量重解析。
+    /// 遍历 projects 下全部 jsonl（列目录与会话索引共用 `CLISessionFiles`，取不到修改时间 / 大小记 1970 / 0，同原来）：
+    /// 未变复用 / 追加续读 / 其余全量重解析。
     nonisolated static func scanAll(previousCache: [String: FileCacheRecord]) -> [String: FileCacheRecord] {
-        let fm = FileManager.default
         var newCache: [String: FileCacheRecord] = [:]
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return [:]
-        }
+        for file in CLISessionFiles.jsonlInSubdirectories(of: ClaudeEnv.projectsDir) {
+            let mtime = file.modified
+            let size = file.size
+            let path = file.url.path
+            let mungedDir = file.url.deletingLastPathComponent().lastPathComponent
 
-        for projectDir in projectDirs {
-            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let files = try? fm.contentsOfDirectory(
-                at: projectDir,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+            // ① mtime+size 都没变：整条复用，零 IO。
+            if let record = previousCache[path],
+               abs(record.modified - mtime.timeIntervalSince1970) < 0.001,
+               record.size == size {
+                newCache[path] = record
+                continue
+            }
 
-            let mungedDir = projectDir.lastPathComponent
-            for file in files where file.pathExtension == "jsonl" {
-                let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let mtime = values?.contentModificationDate ?? Date(timeIntervalSince1970: 0)
-                let size = Int64(values?.fileSize ?? 0)
-                let path = file.path
+            // ② 只追加（size 变大）：从上次偏移续读。失败则退回全量。
+            if let previous = previousCache[path],
+               size > previous.size,
+               previous.parsedOffset >= 0, previous.parsedOffset <= previous.size,
+               let updated = parseRecord(file.url, mtime: mtime, size: size,
+                                         startOffset: previous.parsedOffset,
+                                         baseEntries: previous.entries,
+                                         mungedDir: mungedDir) {
+                newCache[path] = updated
+                continue
+            }
 
-                // ① mtime+size 都没变：整条复用，零 IO。
-                if let record = previousCache[path],
-                   abs(record.modified - mtime.timeIntervalSince1970) < 0.001,
-                   record.size == size {
-                    newCache[path] = record
-                    continue
-                }
-
-                // ② 只追加（size 变大）：从上次偏移续读。失败则退回全量。
-                if let previous = previousCache[path],
-                   size > previous.size,
-                   previous.parsedOffset >= 0, previous.parsedOffset <= previous.size,
-                   let updated = parseRecord(file, mtime: mtime, size: size,
-                                             startOffset: previous.parsedOffset,
-                                             baseEntries: previous.entries,
-                                             mungedDir: mungedDir) {
-                    newCache[path] = updated
-                    continue
-                }
-
-                // ③ 全量解析（新文件 / 变小 / 重写 / 续读失败）。
-                if let record = parseRecord(file, mtime: mtime, size: size,
-                                            startOffset: 0, baseEntries: [:],
-                                            mungedDir: mungedDir) {
-                    newCache[path] = record
-                }
+            // ③ 全量解析（新文件 / 变小 / 重写 / 续读失败）。
+            if let record = parseRecord(file.url, mtime: mtime, size: size,
+                                        startOffset: 0, baseEntries: [:],
+                                        mungedDir: mungedDir) {
+                newCache[path] = record
             }
         }
         return newCache

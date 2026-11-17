@@ -279,7 +279,6 @@ extension ClaudeSessionIndex {
 
     /// 某日改动审计。全量逐文件逐行流式处理。
     nonisolated static func computeAudit(on day: Date) -> [ClaudeAuditProject] {
-        let fm = FileManager.default
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: day)
         guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return [] }
@@ -287,58 +286,41 @@ extension ClaudeSessionIndex {
         // 项目路径 → (项目名, 文件路径 → 审计条目)
         var grouped: [String: (name: String, entries: [String: ClaudeAuditEntry])] = [:]
 
-        guard let projectDirs = try? fm.contentsOfDirectory(
-            at: ClaudeEnv.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
+        for file in CLISessionFiles.jsonlInSubdirectories(of: ClaudeEnv.projectsDir) {
+            // 文件 mtime 早于当日起点则整文件跳过（改动不可能落在当日）。取不到修改时间的记作 1970，一并跳过（#164 PR6 起；以前照读）。
+            if file.modified < dayStart { continue }
 
-        for projectDir in projectDirs {
-            let isDir = (try? projectDir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            guard isDir else { continue }
-            guard let files = try? fm.contentsOfDirectory(
-                at: projectDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+            autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
+                guard let data = try? Data(contentsOf: file.url) else { return }
+                let mungedName = file.url.deletingLastPathComponent().lastPathComponent
 
-            for file in files where file.pathExtension == "jsonl" {
-                // 文件 mtime 早于当日起点则整文件跳过（改动不可能落在当日）。
-                let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                if let mtime, mtime < dayStart { continue }
+                for lineData in data.split(separator: 0x0A) {
+                    guard let object = CLIJSONL.parseObject(Data(lineData)),
+                          (object["type"] as? String) == "assistant",
+                          let ts = object["timestamp"] as? String,
+                          let date = CLIJSONL.parseDate(ts),
+                          date >= dayStart, date < dayEnd,
+                          let message = object["message"] as? [String: Any],
+                          let content = message["content"] as? [[String: Any]] else { continue }
 
-                autoreleasepool {  // 每个文件读完就放掉临时对象，峰值不随文件数累加（#93）
-                    guard let data = try? Data(contentsOf: file) else { return }
-                    let mungedName = projectDir.lastPathComponent
+                    let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                        ?? demungeDirName(mungedName)
 
-                    for lineData in data.split(separator: 0x0A) {
-                        guard let object = CLIJSONL.parseObject(Data(lineData)),
-                              (object["type"] as? String) == "assistant",
-                              let ts = object["timestamp"] as? String,
-                              let date = CLIJSONL.parseDate(ts),
-                              date >= dayStart, date < dayEnd,
-                              let message = object["message"] as? [String: Any],
-                              let content = message["content"] as? [[String: Any]] else { continue }
+                    for block in content where (block["type"] as? String) == "tool_use" {
+                        guard let name = block["name"] as? String, editToolNames.contains(name),
+                              let input = block["input"] as? [String: Any] else { continue }
+                        let filePath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
+                        guard let filePath, !filePath.isEmpty else { continue }
 
-                        let projectPath = (object["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                            ?? demungeDirName(mungedName)
-
-                        for block in content where (block["type"] as? String) == "tool_use" {
-                            guard let name = block["name"] as? String, editToolNames.contains(name),
-                                  let input = block["input"] as? [String: Any] else { continue }
-                            let filePath = (input["file_path"] as? String) ?? (input["notebook_path"] as? String)
-                            guard let filePath, !filePath.isEmpty else { continue }
-
-                            var bucket = grouped[projectPath] ?? (name: projectName(fromPath: projectPath), entries: [:])
-                            if var entry = bucket.entries[filePath] {
-                                entry.count += 1
-                                if date > entry.lastEdited { entry.lastEdited = date }
-                                bucket.entries[filePath] = entry
-                            } else {
-                                bucket.entries[filePath] = ClaudeAuditEntry(id: filePath, filePath: filePath, count: 1, lastEdited: date)
-                            }
-                            grouped[projectPath] = bucket
+                        var bucket = grouped[projectPath] ?? (name: projectName(fromPath: projectPath), entries: [:])
+                        if var entry = bucket.entries[filePath] {
+                            entry.count += 1
+                            if date > entry.lastEdited { entry.lastEdited = date }
+                            bucket.entries[filePath] = entry
+                        } else {
+                            bucket.entries[filePath] = ClaudeAuditEntry(id: filePath, filePath: filePath, count: 1, lastEdited: date)
                         }
+                        grouped[projectPath] = bucket
                     }
                 }
             }

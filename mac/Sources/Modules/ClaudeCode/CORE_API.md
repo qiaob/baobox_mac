@@ -87,8 +87,10 @@
 | `func cleanup(olderThanDays:completion: @escaping (Int, Int64) -> Void)` | 清理旧会话，回调 (删除数, 释放字节)，随后自动 refresh（基类） |
 | `func deleteSession(_:completion: @escaping (Bool) -> Void)` | 删单个会话文件（基类） |
 | `func exportMarkdown(_:completion: @escaping (String?) -> Void)` | 导出 Markdown 文本（UI 负责 NSSavePanel；基类调格式的 `markdown`） |
-| `func flushCache()` | willTerminate 同步落盘索引缓存，返回时已写好（基类） |
+| `func flushCache()` | willTerminate 同步落盘索引缓存，返回时已写好（基类；缓存文件的读写在 `Core/CLISession/CLICacheFile`，最近文件索引 `ClaudeFileIndex` 也用它） |
 
+> 列会话文件一律走 `CLISessionFiles.jsonlInSubdirectories(of: ClaudeEnv.projectsDir)`：会话索引、审计、调用统计、最近文件索引（#164 PR6）；
+> 只有用量收集 `ClaudeUsageCollector` 自己列（取不到修改时间或大小的文件不进缓存，差分测试钉着它）。
 > 静态工具 `ClaudeSessionIndex.projectName(fromPath:)`（继承自基类，转给 `CLISessionPaths`）/ `demungeDirName(_:)` / `editToolNames` 供其他文件复用。
 > 原来的 `recentSessions(limit:)` 没有调用方，已删。
 

@@ -130,23 +130,10 @@ enum CodexEnv {
 
     // MARK: - 磁盘统计（~/.codex/sessions；清理旧会话在 `CodexSessionIndex.cleanup(olderThanDays:)`）
 
-    /// 统计 `~/.codex/sessions` 占用字节数与 rollout 文件数。后台线程调用。
+    /// 统计 `~/.codex/sessions` 占用字节数与 rollout 文件数（只算 .jsonl 普通文件，跳过隐藏项；列目录同会话索引）。后台线程调用。
     static func sessionsDiskStats() -> (bytes: Int64, fileCount: Int) {
-        let fm = FileManager.default
-        var bytes: Int64 = 0
-        var count = 0
-        guard let enumerator = fm.enumerator(
-            at: sessionsDir,
-            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return (0, 0) }
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-            guard values?.isRegularFile == true else { continue }
-            bytes += Int64(values?.fileSize ?? 0)
-            count += 1
-        }
-        return (bytes, count)
+        let files = CLISessionFiles.jsonlRecursively(under: sessionsDir)
+        return (files.reduce(0) { $0 + $1.size }, files.count)
     }
 
     // MARK: - MCP 服务器（config.toml [mcp_servers.*]，只读列出）
