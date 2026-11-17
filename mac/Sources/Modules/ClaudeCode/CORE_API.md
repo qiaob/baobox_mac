@@ -48,7 +48,8 @@
 - `resumeCommandString(sessionID:in:)` —— 可直接粘贴执行的续接命令（含 cd）。
 - `focusRunningSession(sessionID:projectPath:location:confirmRunning:isNewestInProject:completion:)` —— 把正在跑的会话所在的终端切到前台：
   先用 hook 记下的位置（`confirmRunning` 时先在后台确认那个 tty 上有 claude 在跑），再按进程找；`completion(false)` = 都不行，调用方兜底。
-  点通知跳回（位置直接用）与快速切换面板续接（位置要确认，false 时开新窗口）共用，见 `docs/claude-code-assistant/NOTIFY_JUMP.md` §3。
+  点通知跳回（位置直接用）与会话数据源 `ClaudeSessionSource` 的续接（位置要确认，false 时开新窗口；快速切换面板与中心窗口会话页都走它，#164 PR3）共用，
+  见 `docs/claude-code-assistant/NOTIFY_JUMP.md` §3。
   按进程找（`findRunningSession`，ps / lsof 经 `Shell.output`）与切窗口（`focusTerminalWindow`，选标签页经 `TerminalLauncher.selectTab`）只在它里面用，都是 private。
 - 旧脚本目录 `Baobox/ClaudeCode/launch/` 由 `ClaudeCodeTool.activate()` 每次启动在后台删一次（随 0.0.9 发出，0.0.11 起去掉）。
 - `enum ClaudeRunningSession`（`ClaudeRunningSession.swift`，纯 Foundation，`BaoboxTests` 有单元测试）—— 上面「位置要确认」的两关：
@@ -151,7 +152,7 @@
 | `func start()` / `stop()` | 监听 events.jsonl（DispatchSource 增量），维护状态机 |
 | `var runningCount / waitingCount: Int` | 计数 |
 | `func summaryLine() -> String?` | 菜单状态行；无 hooks 时按 mtime<2min 降级推断；无内容→nil |
-| `func currentTerminal(of:) -> TerminalLocation?` | 会话现在还占着的终端（同一个 tty 后来没见过别的会话），快速切换面板续接用；nil = 没见过 / 没记 tty / 已让给后来的会话 |
+| `func currentTerminal(of:) -> TerminalLocation?` | 会话现在还占着的终端（同一个 tty 后来没见过别的会话），续接（快速切换面板、中心窗口会话页）用；nil = 没见过 / 没记 tty / 已让给后来的会话 |
 
 > Stop / Notification（非回放）时顺带调 `ClaudeUsageStore.shared.refreshThrottledFromEvent()`（#164 PR4 之前叫 `refreshThrottledFromHook()`）。
 

@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 导出 Markdown 两边共用的三样（DEDUPE.md §5.1 B2）：逐行读、系统注入的判定、小标题文案。
+/// 导出 Markdown 两边共用的几样（DEDUPE.md §5.1 B2）：逐行读、系统注入的判定、小标题文案；以及存盘框预填的文件名（DEDUPE-P2.md §2.4 类 1）。
 final class CLISessionMarkdownTests: XCTestCase {
 
     private func titles(in data: Data) -> [String] {
@@ -60,6 +60,46 @@ final class CLISessionMarkdownTests: XCTestCase {
         for text in ordinary {
             XCTAssertFalse(CLISessionMarkdown.isSystemInjection(text), text)
         }
+    }
+
+    // MARK: - 导出文件名（#164 PR3：两个中心窗口原来各写一份）
+
+    func testExportFileNameReplacesSlashesAndColons() {
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: "fix: a/b//c", fallback: "session"), "fix- a-b--c")
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: #"别的不动 \ "引号" * ? | < >"#, fallback: "session"),
+                       #"别的不动 \ "引号" * ? | < >"#, "只换 / 与 :")
+    }
+
+    func testExportFileNameTrimsWhitespaceAndNewlinesAfterReplacing() {
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: "  整理周报 \n\t", fallback: "session"), "整理周报")
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: " / ", fallback: "session"), "-", "先换再去首尾空白")
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: "a  \n  b", fallback: "session"), "a  \n  b", "中间的空白不动")
+    }
+
+    func testExportFileNameFallsBackWhenNothingIsLeft() {
+        for title in ["", "   ", "\n\t \r\n"] {
+            XCTAssertEqual(CLISessionMarkdown.exportFileName(title: title, fallback: "session"), "session")
+            XCTAssertEqual(CLISessionMarkdown.exportFileName(title: title, fallback: "codex-session"), "codex-session")
+        }
+    }
+
+    func testExportFileNameKeepsTheFirstSixtyCharacters() {
+        let sixty = String(repeating: "字", count: 60)
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: sixty, fallback: "session"), sixty, "正好 60 个不截")
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: sixty + "多", fallback: "session"), sixty)
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: "   " + sixty + "多", fallback: "session"), sixty,
+                       "先去首尾空白再截：开头的空格不占名额")
+
+        let family = "👨‍👩‍👧‍👦"
+        let emoji = String(repeating: family, count: 61)
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: emoji, fallback: "session"),
+                       String(repeating: family, count: 60), "按字符（字素簇）数，不按 UTF-16 / 字节")
+    }
+
+    func testExportFileNameMayEndWithASpaceAfterCutting() {
+        let title = String(repeating: "a", count: 59) + " bcd"
+        XCTAssertEqual(CLISessionMarkdown.exportFileName(title: title, fallback: "session"),
+                       String(repeating: "a", count: 59) + " ", "截完不再去空白（同原来）")
     }
 
     // MARK: - 小标题文案

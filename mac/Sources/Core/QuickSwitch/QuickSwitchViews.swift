@@ -69,7 +69,7 @@ extension QuickSwitchSearchBar where Accessory == EmptyView {
 }
 
 /// 会话列表：空态文案，或可滚动的会话行（单击选中、双击续接、选中项变了滚到正中）。
-struct QuickSwitchSessionList<Source: QuickSwitchSessionSource>: View {
+struct QuickSwitchSessionList<Source: CLISessionSource>: View {
     private let source: Source
     private let sessions: [Source.Session]
     @Binding private var selectedIndex: Int

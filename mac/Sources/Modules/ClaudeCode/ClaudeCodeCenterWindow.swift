@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Claude Code 助手 —— 中心窗口：会话浏览 / 用量报表 / 改动审计三 Tab，及其窗口控制器。
 ///
@@ -107,179 +106,29 @@ struct ClaudeCenterView: View {
 
 // MARK: - 会话 Tab
 
+/// 会话页：实现在 Core 的 `CLISessionsPage`（与 Codex 助手共用，#164 PR3），这里只给数据源与文案。
+/// 观察会话行方案：设置里一换方案就重建页面，第二行跟着变（页面里的 `renderToken` 保证不被跳过）。
 struct ClaudeSessionsTab: View {
-    @ObservedObject private var index = ClaudeSessionIndex.shared
-    @State private var query = ""
-
-    private var filtered: [ClaudeSessionSummary] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return index.sessions }
-        let needle = trimmed.lowercased()
-        return index.sessions.filter {
-            $0.title.lowercased().contains(needle) || $0.projectName.lowercased().contains(needle)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("claudecode.sessions.search", text: $query)
-                    .textFieldStyle(.plain)
-                if index.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
-                    index.refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(Text("claudecode.common.refresh"))
-            }
-            .padding(10)
-            Divider()
-
-            if filtered.isEmpty {
-                Spacer()
-                Text("claudecode.sessions.empty")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                List(filtered) { session in
-                    ClaudeSessionRow(session: session)
-                }
-                .listStyle(.inset)
-                .alternatingRowBackgrounds(.enabled)
-            }
-        }
-    }
-}
-
-/// 单条会话行：标题 + 元信息（沿用会话行方案格式），操作按钮悬停浮现，
-/// 双击续接，右键菜单提供全部操作。
-private struct ClaudeSessionRow: View {
-    let session: ClaudeSessionSummary
-    @ObservedObject private var index = ClaudeSessionIndex.shared
     @ObservedObject private var format = SessionRowFormatStore.shared
-    @State private var hovering = false
+
+    private static let strings = CLISessionsPageStrings(
+        search: "claudecode.sessions.search",
+        empty: "claudecode.sessions.empty",
+        refreshHelp: "claudecode.common.refresh",
+        rowHint: "claudecode.sessions.rowHint",
+        resume: "claudecode.sessions.resume",
+        copyCommand: "claudecode.sessions.copyCommand",
+        export: "claudecode.sessions.export",
+        delete: "claudecode.sessions.delete",
+        exportFailed: L("claudecode.sessions.exportFailed"),
+        deleteConfirmTitle: L("claudecode.sessions.deleteConfirm.title"),
+        deleteConfirmMessage: L("claudecode.sessions.deleteConfirm.message"),
+        deleteButton: L("claudecode.sessions.delete"),
+        exportFileFallback: "session"
+    )
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: session.title)
-                    .lineLimit(1)
-                Text(verbatim: format.metadataLine(for: session))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 12)
-            if hovering {
-                actionButtons
-            }
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .gesture(TapGesture(count: 2).onEnded { resume() })
-        .contextMenu { menuItems }
-        .help(Text("claudecode.sessions.rowHint"))
-    }
-
-    private var actionButtons: some View {
-        HStack(spacing: 2) {
-            iconButton("terminal", help: "claudecode.sessions.resume") { resume() }
-            iconButton("doc.on.doc", help: "claudecode.sessions.copyCommand") { copyResumeCommand() }
-            iconButton("square.and.arrow.up", help: "claudecode.sessions.export") { exportMarkdown() }
-            Button(role: .destructive) {
-                confirmDelete()
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .help(Text("claudecode.sessions.delete"))
-        }
-    }
-
-    private func iconButton(_ symbol: String, help: LocalizedStringKey,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-        }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
-        .help(Text(help))
-    }
-
-    @ViewBuilder
-    private var menuItems: some View {
-        Button { resume() } label: { Label("claudecode.sessions.resume", systemImage: "terminal") }
-        Button { copyResumeCommand() } label: { Label("claudecode.sessions.copyCommand", systemImage: "doc.on.doc") }
-        Button { exportMarkdown() } label: { Label("claudecode.sessions.export", systemImage: "square.and.arrow.up") }
-        Divider()
-        Button(role: .destructive) { confirmDelete() } label: { Label("claudecode.sessions.delete", systemImage: "trash") }
-    }
-
-    private func resume() {
-        ClaudeTerminal.resume(sessionID: session.id, in: session.projectPath)
-    }
-
-    private func copyResumeCommand() {
-        let command = ClaudeTerminal.resumeCommandString(sessionID: session.id, in: session.projectPath)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-    }
-
-    private func exportMarkdown() {
-        index.exportMarkdown(session) { markdown in
-            MainActor.assumeIsolated {
-                guard let markdown else {
-                    Self.alert(title: L("claudecode.sessions.exportFailed"), message: "")
-                    return
-                }
-                let panel = NSSavePanel()
-                panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
-                panel.nameFieldStringValue = Self.safeFileName(session.title) + ".md"
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                do {
-                    try markdown.data(using: .utf8)?.write(to: url)
-                } catch {
-                    Self.alert(title: L("claudecode.sessions.exportFailed"), message: "")
-                }
-            }
-        }
-    }
-
-    private func confirmDelete() {
-        let alert = NSAlert()
-        alert.messageText = L("claudecode.sessions.deleteConfirm.title")
-        alert.informativeText = L("claudecode.sessions.deleteConfirm.message")
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: L("claudecode.sessions.delete"))
-        alert.addButton(withTitle: L("common.cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        index.deleteSession(session) { _ in }
-    }
-
-    /// 会话标题转为安全文件名（去路径分隔符）。
-    private static func safeFileName(_ title: String) -> String {
-        let cleaned = title.replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? "session" : String(cleaned.prefix(60))
-    }
-
-    private static func alert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        if !message.isEmpty { alert.informativeText = message }
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
+        CLISessionsPage(index: ClaudeSessionIndex.shared, source: ClaudeSessionSource(), strings: Self.strings)
     }
 }
 
