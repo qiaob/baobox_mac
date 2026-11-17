@@ -557,6 +557,19 @@ final class OfflineTranslator: ObservableObject {
         stopServer()
     }
 
+    /// App 启动时：上次崩溃 / 被强杀留下的推理进程，不等用到那个模型就结束（#187）。
+    /// 按 PID 文件的文件名扫 `Translation/` 目录，这次运行没建过实例的模型（「AI」页装的那些）也覆盖到；
+    /// 进程名核对、不误杀照旧（`terminateStaleServer`）。和开机自启的模型同时进行也不会结束这次拉起的进程。
+    static func terminateStaleServers() {
+        let pidFiles = OfflineServerPID.files(in: OfflineTranslationEnv.supportDir)
+        guard !pidFiles.isEmpty else { return }
+        Task { @MainActor in
+            for url in pidFiles {
+                await terminateStaleServer(pidURL: url)
+            }
+        }
+    }
+
     /// 退出 App 时：内置的两个和已经建过的大模型实例，推理进程都结束（没建过的不新建）。
     static func shutdownAll() {
         shared.shutdown()
@@ -651,6 +664,7 @@ final class OfflineTranslator: ObservableObject {
             throw OfflineTranslationError.serverFailed(error.localizedDescription)
         }
         try? log?.close()
+        Self.launchedPIDs.insert(process.processIdentifier)
         try? String(process.processIdentifier).write(to: pidFileURL,
                                                      atomically: true, encoding: .utf8)
         self.process = process
@@ -713,15 +727,20 @@ final class OfflineTranslator: ObservableObject {
         return OfflinePrompt.clean(content)
     }
 
+    /// 结束这次运行拉起的推理进程。PID 文件只在记的是这个进程时才删（#187）：这次没拉起过（`process == nil`）时，
+    /// 文件里记的是上次崩溃留下的进程，删了就再也找不到它 —— 留给 `terminateStaleServer` 去结束。
     private func stopServer() {
         idleTimer?.invalidate()
         idleTimer = nil
+        let ownPID = process?.processIdentifier
         if let process, process.isRunning {
             process.terminate()
         }
         process = nil
         serverBase = nil
-        try? FileManager.default.removeItem(at: pidFileURL)
+        if let ownPID, OfflineServerPID.read(pidFileURL) == ownPID {
+            try? FileManager.default.removeItem(at: pidFileURL)
+        }
     }
 
     private func serverDidExit(pid: Int32) {
@@ -749,19 +768,26 @@ final class OfflineTranslator: ObservableObject {
         }
     }
 
+    /// 这次运行拉起过的推理进程。清理遗留进程时跳过它们：启动时的清理（`terminateStaleServers`）和开机自启的模型
+    /// 同时进行时，PID 文件可能已经记着刚拉起的进程（#187）。只增不减（一次运行拉起的进程不多）。
+    private static var launchedPIDs: Set<Int32> = []
+
     /// 上次 App 崩溃 / 被强杀留下的推理进程：按 PID 文件找到、核对进程名后再结束，绝不误杀别的进程。
+    /// 两处调用：拉起某个模型之前（只管它自己的 PID 文件），App 启动时（所有 PID 文件，#187）。
     private static func terminateStaleServer(pidURL: URL) async {
-        guard let text = try? String(contentsOf: pidURL, encoding: .utf8),
-              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else { return }
+        guard let pid = OfflineServerPID.read(pidURL), !launchedPIDs.contains(pid) else { return }
         let command: String = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 continuation.resume(returning: processName(pid: pid))
             }
         }
-        if command.hasSuffix("llama-server") {
+        if OfflineServerPID.isServerCommand(command), !launchedPIDs.contains(pid) {
             kill(pid, SIGTERM)
         }
-        try? FileManager.default.removeItem(at: pidURL)
+        // 等 ps 的这段时间里，同一个模型可能已经重新拉起、改写了 PID 文件：只删还记着这个 PID 的。
+        if OfflineServerPID.read(pidURL) == pid {
+            try? FileManager.default.removeItem(at: pidURL)
+        }
     }
 
     /// `ps -p <pid> -o comm=`（后台线程调用，同步等待）。
