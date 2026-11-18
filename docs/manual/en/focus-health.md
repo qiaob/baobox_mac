@@ -103,6 +103,8 @@ Three strengths (pick one in settings; Standard by default):
 - With the pet off: Standard fills the screen with a background instead (Teal / Dusk / Forest gradients, or your own image);
   Strict still blurs. Pet reminders become system notifications with the same buttons.
 
+![The break screen with the pet off (Standard, Teal background): the title "Take a break", the countdown, one line of text and "Hold 3 s to skip" in the middle](../images/focus-health/break-screen.en.png)
+
 ### Confirming it's you before the cover goes away
 
 With Standard and Strict, "Confirm It's Me Before a Full-Screen Break Goes Away" is on by default: however the break screen
@@ -123,6 +125,7 @@ it. Not available during a focus or a break.
 | Item | Notes |
 |---|---|
 | Status line | "Next: Drink Water · in 12 min"; while focusing, "Focusing · 18:20 left" |
+| Focused today: N min | The line under the status line (greyed out): today's completed focus time |
 | Start Focus (25 min) | Default length; becomes "Pause Focus" while focusing and "Resume Focus" while paused |
 | Focus for… ▸ | 25 / 50 / 90 Minutes (when idle) |
 | End Early ▸ | Count as Done / Discard (while focusing) |
@@ -133,7 +136,12 @@ it. Not available during a focus or a break.
 
 ## Settings
 
-Settings → Focus & Health:
+Settings → Focus & Health. The top line is your focus record, such as "Today 75 min · This week 6.5 h · 4-day streak": today
+and this week add up completed focus time (End Early → Count as Done counts too), and the streak is the number of days in a
+row, up to today (or yesterday, if you haven't focused yet today), with at least one completed round. Until you finish a
+round, the line is a short hint instead.
+
+![The top half of Settings → Focus & Health: the focus record, focus and break lengths, and the reminders (the four presets plus a daily "Vitamins" reminder)](../images/focus-health/settings.en.png)
 
 | Group | Setting | Notes |
 |---|---|---|
@@ -155,8 +163,9 @@ Settings → Focus & Health:
 
 ## Where data lives
 
-`~/Library/Application Support/Baobox/FocusHealth/`: `items.json` (your reminders) and `state.json` (a focus in progress,
-today's rounds, each reminder's progress). Timers carry on after Baobox restarts; if a focus ran out more than 10 minutes ago
+`~/Library/Application Support/Baobox/FocusHealth/`: `items.json` (your reminders), `state.json` (a focus in progress,
+today's rounds, each reminder's progress) and `history.jsonl` (every focus round and break, kept for 400 days; the record at
+the top of Settings comes from it). Timers carry on after Baobox restarts; if a focus ran out more than 10 minutes ago
 while the app was closed, it counts as one round and no break is added. Everything stays on this Mac.
 
 ## Troubleshooting

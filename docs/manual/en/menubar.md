@@ -22,6 +22,8 @@ It needs two permissions. Baobox's screenshot and window tools already ask for b
 
 The settings page lists every icon currently in the menu bar: the icon, its name, and Show / Hide.
 
+![Settings → Menu Bar: the icon list (sample apps), the first three set to Hide and Sky Weather squeezed out right now; below, "Also put squeezed-out icons in the Baobox menu row" and the two permissions](../images/menubar/settings.en.png)
+
 - Hide: the icon leaves the menu bar right away and appears in the first row of the Baobox menu.
 - Show: it goes back to the menu bar.
 - When you change one, Baobox moves just that icon for you; the pointer disappears for an instant and the other icons

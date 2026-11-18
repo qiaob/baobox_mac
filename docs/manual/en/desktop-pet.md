@@ -46,6 +46,8 @@ Right-click the pet and a ring of buttons appears around it:
 - When a click has no visible result (turning Keep Awake on or off, pausing focus), the pet tells you.
 - Click an empty spot, click another app, or press Esc to close it.
 
+![The ring menu with "More" clicked: Focus, Keep Awake, Next Pet, Phone Transfer, Translate, Text, Quiet and "Less" on the inner ring; the other tools plus Test Alerts, Settings and Hide on the outer ring](../images/desktop-pet/ring-menu.en.png)
+
 ## Notifications
 
 | Style | Examples | How it goes away |
@@ -53,6 +55,8 @@ Right-click the pet and a ring of buttons appears around it:
 | Toast | The pet's lines, confirmations, "5 minutes past the scheduled end" | One line, gone after 3 seconds |
 | Card | "Meeting minutes are ready", a finished Claude Code task, the water reminder | Title, text, sometimes buttons; gone after 8 seconds |
 | Sticky | Meeting reminders, Claude Code waiting for you, fixed-time daily reminders | Stays until you click a button or ×; the pet waves at you every 25 seconds |
+
+![Three bubbles stacked above the pet: a toast (one line) at the top, a card in the middle (the thin line is the time left), and, next to the pet with the tail and an accent border, a sticky bubble](../images/desktop-pet/bubbles.en.png)
 
 - Up to 3 bubbles stack at once, the newest next to the pet; the rest wait, with "N more" on top.
 - Hovering a bubble pauses its countdown.
