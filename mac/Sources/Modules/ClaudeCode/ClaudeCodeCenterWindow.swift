@@ -18,17 +18,6 @@ enum ClaudeFormatLocalization: CLIFormatLocalization {
 
 typealias ClaudeFormat = CLIFormat<ClaudeFormatLocalization>
 
-// MARK: - 卡片容器
-
-/// 中心窗口统一卡片：内边距 + 圆角控件底色，撑满可用宽度。
-private extension View {
-    func centerCard() -> some View {
-        padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
-    }
-}
-
 // MARK: - Tab 定位
 
 /// 中心窗口三个页签。
@@ -134,37 +123,26 @@ struct ClaudeSessionsTab: View {
 
 // MARK: - 用量 Tab
 
+/// 用量页：5 小时卡、周卡、明细表、周脚注（只有 Claude 有）、调用统计。卡片、指标、预算条、周标注、明细表、调用统计的分组
+/// 是与 Codex 助手共用的部件（`Core/CLICenter/CLIUsageViews.swift`，#164 PR5），这里定卡片的组合与顺序、文案与明细表的列。
 struct ClaudeUsageTab: View {
     @ObservedObject private var usage = ClaudeUsageStore.shared
     @State private var report = ClaudeUsageReport()
     @State private var loadedReport = false
-    @State private var dimension = UsageDimension.day
+    @State private var dimension = CLIUsageDimension.day
     // 周窗口口径与锚点(驱动周卡片标注与脚注即时刷新)。
     @AppStorage(ClaudeUsageStore.weeklyFixedKey) private var weeklyFixed = false
     @AppStorage(ClaudeUsageStore.weeklyWeekdayKey) private var weeklyWeekday = 2
     @AppStorage(ClaudeUsageStore.weeklyHourKey) private var weeklyHour = 0
 
-    /// 明细表维度（按天 / 按项目 / 按模型），单表切换代替三张长表堆叠。
-    private enum UsageDimension: String, CaseIterable, Identifiable {
-        case day, project, model
-        var id: String { rawValue }
-
-        var label: LocalizedStringKey {
-            switch self {
-            case .day: return "claudecode.usage.dim.day"
-            case .project: return "claudecode.usage.dim.project"
-            case .model: return "claudecode.usage.dim.model"
-            }
-        }
-
-        var columnTitle: LocalizedStringKey {
-            switch self {
-            case .day: return "claudecode.usage.col.date"
-            case .project: return "claudecode.usage.col.project"
-            case .model: return "claudecode.usage.col.model"
-            }
-        }
-    }
+    /// 明细表的列：输入 / 输出 / 缓存写 / 缓存读（宽 80）、费用（宽 96）。
+    private static let columns: [CLIUsageColumn<ClaudePricingTable>] = [
+        CLIUsageColumn(title: "claudecode.usage.col.input", width: 80) { ClaudeFormat.tokens($0.input) },
+        CLIUsageColumn(title: "claudecode.usage.col.output", width: 80) { ClaudeFormat.tokens($0.output) },
+        CLIUsageColumn(title: "claudecode.usage.col.cacheWrite", width: 80) { ClaudeFormat.tokens($0.cacheWrite) },
+        CLIUsageColumn(title: "claudecode.usage.col.cacheRead", width: 80) { ClaudeFormat.tokens($0.cacheRead) },
+        CLIUsageColumn(title: "claudecode.usage.col.cost", width: 96) { ClaudeFormat.cost($0.costUSD) },
+    ]
 
     var body: some View {
         ScrollView {
@@ -178,7 +156,7 @@ struct ClaudeUsageTab: View {
                         .foregroundStyle(.secondary)
                 }
                 ClaudeInvocationSection()
-                    .centerCard()
+                    .cliCenterCard()
             }
             .padding(16)
         }
@@ -194,51 +172,34 @@ struct ClaudeUsageTab: View {
             HStack {
                 Text("claudecode.usage.windowTitle").font(.headline)
                 Spacer()
-                if usage.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
+                CLIUsageRefreshControl(isRefreshing: usage.isRefreshing, help: "claudecode.common.refresh") {
                     usage.refresh()
                     reloadReport()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.borderless)
-                .help(Text("claudecode.common.refresh"))
             }
             if let window = usage.fiveHourWindow {
                 HStack(alignment: .firstTextBaseline, spacing: 32) {
-                    metric(value: ClaudeFormat.tokens(window.totals.totalTokens),
-                           label: "claudecode.usage.metric.used")
-                    metric(value: ClaudeFormat.cost(window.totals.costUSD),
-                           label: "claudecode.usage.metric.cost")
-                    metric(value: ClaudeFormat.countdown(window.secondsUntilReset),
-                           label: "claudecode.usage.metric.reset")
+                    CLIUsageMetric(value: ClaudeFormat.tokens(window.totals.totalTokens),
+                                   label: "claudecode.usage.metric.used")
+                    CLIUsageMetric(value: ClaudeFormat.cost(window.totals.costUSD),
+                                   label: "claudecode.usage.metric.cost")
+                    CLIUsageMetric(value: ClaudeFormat.countdown(window.secondsUntilReset),
+                                   label: "claudecode.usage.metric.reset")
                 }
-                let budget = UserDefaults.standard.integer(forKey: ClaudeUsageStore.budgetKey)
-                if budget > 0 {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ProgressView(value: min(1, Double(window.totals.totalTokens) / Double(budget)))
-                        Text("claudecode.usage.budgetUsed \(ClaudeFormat.tokens(window.totals.totalTokens)) \(ClaudeFormat.tokens(budget))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                budgetBar(window: window, budgetKey: ClaudeUsageStore.budgetKey)
             } else {
                 Text("claudecode.menu.noWindow").foregroundStyle(.secondary)
             }
         }
-        .centerCard()
+        .cliCenterCard()
     }
 
-    private func metric(value: String, label: LocalizedStringKey) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: value)
-                .font(.title2.weight(.semibold).monospacedDigit())
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+    private func budgetBar(window: UsageWindow, budgetKey: String) -> some View {
+        let budget = UserDefaults.standard.integer(forKey: budgetKey)
+        return CLIUsageBudgetBar(
+            used: window.totals.totalTokens, budget: budget,
+            caption: Text("claudecode.usage.budgetUsed \(ClaudeFormat.tokens(window.totals.totalTokens)) \(ClaudeFormat.tokens(budget))")
+        )
     }
 
     // MARK: 本周窗口卡片
@@ -249,39 +210,25 @@ struct ClaudeUsageTab: View {
                 Text("claudecode.usage.weekCard.title").font(.headline)
                 Spacer()
                 // 右上角标注当前口径：滚动 7 天 or 固定重置（周几 hh:00）。
-                if weeklyFixed {
-                    Text("claudecode.usage.weekCard.fixed \(weekAnchorDescription)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("claudecode.usage.weekCard.rolling")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                CLIUsageWeekBadge(fixed: weeklyFixed,
+                                  fixedText: Text("claudecode.usage.weekCard.fixed \(weekAnchorDescription)"),
+                                  rollingText: "claudecode.usage.weekCard.rolling")
             }
             if let window = usage.weeklyWindow {
                 HStack(alignment: .firstTextBaseline, spacing: 32) {
-                    metric(value: ClaudeFormat.tokens(window.totals.totalTokens),
-                           label: "claudecode.usage.metric.used")
-                    metric(value: ClaudeFormat.cost(window.totals.costUSD),
-                           label: "claudecode.usage.metric.cost")
-                    metric(value: ClaudeFormat.countdownLong(window.secondsUntilReset),
-                           label: "claudecode.usage.metric.reset")
+                    CLIUsageMetric(value: ClaudeFormat.tokens(window.totals.totalTokens),
+                                   label: "claudecode.usage.metric.used")
+                    CLIUsageMetric(value: ClaudeFormat.cost(window.totals.costUSD),
+                                   label: "claudecode.usage.metric.cost")
+                    CLIUsageMetric(value: ClaudeFormat.countdownLong(window.secondsUntilReset),
+                                   label: "claudecode.usage.metric.reset")
                 }
-                let budget = UserDefaults.standard.integer(forKey: ClaudeUsageStore.weeklyBudgetKey)
-                if budget > 0 {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ProgressView(value: min(1, Double(window.totals.totalTokens) / Double(budget)))
-                        Text("claudecode.usage.budgetUsed \(ClaudeFormat.tokens(window.totals.totalTokens)) \(ClaudeFormat.tokens(budget))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                budgetBar(window: window, budgetKey: ClaudeUsageStore.weeklyBudgetKey)
             } else {
                 Text("claudecode.menu.noWeekWindow").foregroundStyle(.secondary)
             }
         }
-        .centerCard()
+        .cliCenterCard()
     }
 
     /// 固定锚点描述，如「周三 09:00」（本地化 standalone 星期名 + hh:00）。
@@ -297,7 +244,7 @@ struct ClaudeUsageTab: View {
                 Text("claudecode.usage.detail").font(.headline)
                 Spacer()
                 Picker("claudecode.usage.detail", selection: $dimension) {
-                    ForEach(UsageDimension.allCases) { dim in
+                    ForEach(CLIUsageDimension.allCases, id: \.self) { dim in
                         Text(dim.label).tag(dim)
                     }
                 }
@@ -306,13 +253,14 @@ struct ClaudeUsageTab: View {
                 .fixedSize()
             }
 
-            let buckets = buckets(for: dimension)
+            let buckets = dimension.buckets(of: report)
             if buckets.isEmpty {
                 Text("claudecode.usage.empty")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                bucketTable(buckets)
+                CLIUsageBucketTable(buckets: buckets, firstColumn: dimension.columnTitle,
+                                    columns: Self.columns, totalLabel: L("claudecode.usage.total"))
                 if buckets.contains(where: { $0.totals.unpriced }) {
                     Text("claudecode.usage.unpricedNote")
                         .font(.caption2)
@@ -320,79 +268,7 @@ struct ClaudeUsageTab: View {
                 }
             }
         }
-        .centerCard()
-    }
-
-    private func buckets(for dimension: UsageDimension) -> [UsageBucket] {
-        switch dimension {
-        case .day: return report.byDay
-        case .project: return report.byProject
-        case .model: return report.byModel
-        }
-    }
-
-    private func bucketTable(_ buckets: [UsageBucket]) -> some View {
-        VStack(spacing: 0) {
-            headerRow
-            Divider()
-            ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
-                usageRow(label: bucket.label, totals: bucket.totals, emphasized: false)
-                    .background(
-                        index.isMultiple(of: 2)
-                            ? Color.clear
-                            : Color.primary.opacity(0.04),
-                        in: RoundedRectangle(cornerRadius: 4)
-                    )
-            }
-            Divider()
-            usageRow(label: L("claudecode.usage.total"), totals: summed(buckets), emphasized: true)
-        }
-    }
-
-    private var headerRow: some View {
-        HStack(spacing: 0) {
-            Text(dimension.columnTitle)
-                .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
-            Text("claudecode.usage.col.input").frame(width: 80, alignment: .trailing)
-            Text("claudecode.usage.col.output").frame(width: 80, alignment: .trailing)
-            Text("claudecode.usage.col.cacheWrite").frame(width: 80, alignment: .trailing)
-            Text("claudecode.usage.col.cacheRead").frame(width: 80, alignment: .trailing)
-            Text("claudecode.usage.col.cost").frame(width: 96, alignment: .trailing)
-        }
-        .font(.caption.weight(.medium))
-        .foregroundStyle(.secondary)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 6)
-    }
-
-    private func usageRow(label: String, totals: UsageTotals, emphasized: Bool) -> some View {
-        HStack(spacing: 0) {
-            Text(verbatim: label)
-                .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(verbatim: ClaudeFormat.tokens(totals.input)).frame(width: 80, alignment: .trailing)
-            Text(verbatim: ClaudeFormat.tokens(totals.output)).frame(width: 80, alignment: .trailing)
-            Text(verbatim: ClaudeFormat.tokens(totals.cacheWrite)).frame(width: 80, alignment: .trailing)
-            Text(verbatim: ClaudeFormat.tokens(totals.cacheRead)).frame(width: 80, alignment: .trailing)
-            Text(verbatim: ClaudeFormat.cost(totals.costUSD)).frame(width: 96, alignment: .trailing)
-        }
-        .font(emphasized ? .callout.weight(.semibold).monospacedDigit() : .callout.monospacedDigit())
-        .padding(.vertical, 5)
-        .padding(.horizontal, 6)
-    }
-
-    private func summed(_ buckets: [UsageBucket]) -> UsageTotals {
-        var total = UsageTotals()
-        for bucket in buckets {
-            total.input += bucket.totals.input
-            total.output += bucket.totals.output
-            total.cacheWrite += bucket.totals.cacheWrite
-            total.cacheRead += bucket.totals.cacheRead
-            total.costUSD += bucket.totals.costUSD
-            total.unpriced = total.unpriced || bucket.totals.unpriced
-        }
-        return total
+        .cliCenterCard()
     }
 
     private func reloadReport() {
@@ -403,10 +279,29 @@ struct ClaudeUsageTab: View {
     }
 }
 
+/// 明细表维度（按天 / 按项目 / 按模型）的文案，单表切换代替三张长表堆叠。
+private extension CLIUsageDimension {
+    var label: LocalizedStringKey {
+        switch self {
+        case .day: return "claudecode.usage.dim.day"
+        case .project: return "claudecode.usage.dim.project"
+        case .model: return "claudecode.usage.dim.model"
+        }
+    }
+
+    var columnTitle: LocalizedStringKey {
+        switch self {
+        case .day: return "claudecode.usage.col.date"
+        case .project: return "claudecode.usage.col.project"
+        case .model: return "claudecode.usage.col.model"
+        }
+    }
+}
+
 // MARK: - 调用统计小节（用量 Tab 末尾）
 
 /// 近 7 / 30 天调用统计：Skill / 斜杠命令、MCP（服务器 › 工具两级）、内置工具。
-/// 三组均整条可点折叠，标题右侧带总次数。
+/// 三组均整条可点折叠，标题右侧带总次数（分组视图与 Codex 助手共用，`CLIInvocationCountGroup` / `CLIInvocationMCPGroup`）。
 struct ClaudeInvocationSection: View {
     @State private var days = 7
     @State private var stats = ClaudeInvocationStats()
@@ -426,9 +321,12 @@ struct ClaudeInvocationSection: View {
                 .fixedSize()
             }
 
-            countGroup(title: "claudecode.usage.inv.skills", counts: stats.skills)
-            mcpGroup
-            countGroup(title: "claudecode.usage.inv.builtin", counts: stats.builtin)
+            CLIInvocationCountGroup(title: "claudecode.usage.inv.skills", counts: stats.skills,
+                                    count: Self.count, empty: "claudecode.usage.inv.empty")
+            CLIInvocationMCPGroup(title: "claudecode.usage.inv.mcp", servers: stats.mcp,
+                                  count: Self.count, empty: "claudecode.usage.inv.empty")
+            CLIInvocationCountGroup(title: "claudecode.usage.inv.builtin", counts: stats.builtin,
+                                    count: Self.count, empty: "claudecode.usage.inv.empty")
         }
         .onAppear {
             if !loaded { reload() }
@@ -436,85 +334,9 @@ struct ClaudeInvocationSection: View {
         .onChange(of: days) { _, _ in reload() }
     }
 
-    /// 单级计数组（名称 → 次数），按次数降序，整组可折叠（默认收起，标题带总次数）。
-    private func countGroup(title: LocalizedStringKey, counts: [String: Int]) -> some View {
-        let sorted = counts.sorted { $0.value > $1.value }
-        return TappableDisclosure {
-            if sorted.isEmpty {
-                emptyHint
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(sorted, id: \.key) { name, count in
-                        countRow(name: name, count: count)
-                    }
-                }
-            }
-        } label: {
-            groupLabel(title: title, total: counts.values.reduce(0, +))
-        }
-    }
-
-    /// MCP 两级组：服务器（总次数，可折叠）展开 → 各工具次数。默认收起。
-    private var mcpGroup: some View {
-        let servers = stats.mcp.values.sorted { $0.total > $1.total }
-        return TappableDisclosure {
-            if servers.isEmpty {
-                emptyHint
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(servers, id: \.server) { server in
-                        TappableDisclosure {
-                            ForEach(server.tools.sorted { $0.value > $1.value }, id: \.key) { tool, count in
-                                countRow(name: tool, count: count)
-                                    .padding(.leading, 12)
-                            }
-                        } label: {
-                            HStack {
-                                Text(verbatim: server.server).font(.callout).lineLimit(1)
-                                Spacer()
-                                Text("claudecode.usage.inv.count \(server.total)")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            groupLabel(title: "claudecode.usage.inv.mcp",
-                       total: servers.reduce(0) { $0 + $1.total })
-        }
-    }
-
-    private func groupLabel(title: LocalizedStringKey, total: Int) -> some View {
-        HStack {
-            Text(title).font(.subheadline.weight(.medium))
-            Spacer()
-            Text("claudecode.usage.inv.count \(total)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func countRow(name: String, count: Int) -> some View {
-        HStack {
-            Text(verbatim: name)
-                .font(.callout)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            Text("claudecode.usage.inv.count \(count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var emptyHint: some View {
-        Text("claudecode.usage.inv.empty")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    /// 「N 次」。
+    nonisolated private static func count(_ times: Int) -> Text {
+        Text("claudecode.usage.inv.count \(times)")
     }
 
     private func reload() {

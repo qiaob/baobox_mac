@@ -59,13 +59,8 @@ typealias ClaudeUsageReport = CLIUsageReport<ClaudePricingTable>
 
 private typealias ClaudeUsageCalculator = CLIUsageCalculator<ClaudePricingTable>
 
-/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
-struct ClaudeMCPServerStat: Sendable {
-    let server: String
-    let total: Int
-    /// 工具名 → 次数。
-    let tools: [String: Int]
-}
+/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。结构体在 Core，与 Codex 助手共用（#164 PR5）。
+typealias ClaudeMCPServerStat = CLIUsageMCPServerStat
 
 /// 调用统计三类计数（排序留给 UI）。值类型、Sendable，便于后台构建后跨线程回调。
 struct ClaudeInvocationStats: Sendable {

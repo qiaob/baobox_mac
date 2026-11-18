@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 今日累计与按天 / 项目 / 模型的报表。
+/// 今日累计与按天 / 项目 / 模型的报表；明细表的合计行与维度（#164 PR5）。
 final class CLIUsageReportTests: XCTestCase {
 
     private let posix = Locale(identifier: "en_US_POSIX")
@@ -121,5 +121,128 @@ final class CLIUsageReportTests: XCTestCase {
         XCTAssertTrue(report.byDay.isEmpty)
         XCTAssertTrue(report.byProject.isEmpty)
         XCTAssertTrue(report.byModel.isEmpty)
+    }
+
+    // MARK: - 明细表的合计行（#164 PR5：两个中心窗口原来各写一份 `summed`）
+
+    func testSumMatchesTheOldClaudeTotalBitForBit() {
+        var rng = SumRNG(seed: 0xC1A0DE)
+        for round in 0..<500 {
+            let buckets = (0..<Int.random(in: 0...40, using: &rng)).map { index in
+                randomBucket(AnthropicStyleTable.self, index, cacheWrite: true, using: &rng)
+            }
+            let new = CLIUsageTotals<AnthropicStyleTable>.sum(of: buckets)
+            let old = oldClaudeSummed(buckets)
+            XCTAssertEqual(new, old, "round \(round)")
+            XCTAssertEqual(new.costUSD.bitPattern, old.costUSD.bitPattern, "round \(round)：费用逐位相同")
+        }
+    }
+
+    func testSumMatchesTheOldCodexTotalBitForBit() {
+        var rng = SumRNG(seed: 0xC0DE5)
+        for round in 0..<500 {
+            let buckets = (0..<Int.random(in: 0...40, using: &rng)).map { index in
+                randomBucket(OpenAIStyleTable.self, index, cacheWrite: false, using: &rng)
+            }
+            let new = CLIUsageTotals<OpenAIStyleTable>.sum(of: buckets)
+            let old = oldCodexSummed(buckets)
+            XCTAssertEqual(new, old, "round \(round)：Codex 的桶里缓存写恒为 0，多加这一项结果不变")
+            XCTAssertEqual(new.cacheWrite, 0)
+            XCTAssertEqual(new.costUSD.bitPattern, old.costUSD.bitPattern, "round \(round)：费用逐位相同")
+        }
+    }
+
+    func testSumAddsCostsInBucketOrder() {
+        let buckets = [0.1, 0.2, 0.3].enumerated().map { index, cost in
+            CLIUsageBucket<AnthropicStyleTable>(id: "\(index)", label: "\(index)",
+                                                totals: CLIUsageTotals(costUSD: cost))
+        }
+        let total = CLIUsageTotals<AnthropicStyleTable>.sum(of: buckets).costUSD
+        XCTAssertEqual(total.bitPattern, ((0.1 + 0.2) + 0.3).bitPattern, "从第一个桶加到最后一个")
+        XCTAssertNotEqual(total.bitPattern, (0.1 + (0.2 + 0.3)).bitPattern, "换个结合顺序末位就不同 —— 这条确认上面那条钉得住")
+    }
+
+    func testSumOfNoBucketsIsZeroAndUnpricedIsSticky() {
+        XCTAssertEqual(CLIUsageTotals<AnthropicStyleTable>.sum(of: []), .zero)
+        XCTAssertFalse(CLIUsageTotals<AnthropicStyleTable>.sum(of: []).unpriced)
+
+        let priced = CLIUsageBucket<OpenAIStyleTable>(id: "a", label: "a", totals: CLIUsageTotals(input: 1, unpriced: false))
+        let unpriced = CLIUsageBucket<OpenAIStyleTable>(id: "b", label: "b", totals: CLIUsageTotals(input: 2, unpriced: true))
+        XCTAssertTrue(CLIUsageTotals.sum(of: [priced, unpriced, priced]).unpriced, "任一桶 unpriced，合计就 unpriced")
+        XCTAssertFalse(CLIUsageTotals.sum(of: [priced, priced]).unpriced)
+        XCTAssertEqual(CLIUsageTotals.sum(of: [priced, unpriced, priced]).input, 4)
+    }
+
+    // MARK: - 明细表的维度
+
+    func testDimensionPicksTheMatchingTable() {
+        func bucket(_ id: String) -> CLIUsageBucket<AnthropicStyleTable> {
+            CLIUsageBucket(id: id, label: id, totals: .zero)
+        }
+        let report = CLIUsageReport<AnthropicStyleTable>(byDay: [bucket("d1"), bucket("d2")],
+                                                         byProject: [bucket("p1")],
+                                                         byModel: [bucket("m1"), bucket("m2"), bucket("m3")])
+        XCTAssertEqual(CLIUsageDimension.allCases, [.day, .project, .model], "分段控件的顺序")
+        XCTAssertEqual(CLIUsageDimension.day.buckets(of: report).map(\.id), ["d1", "d2"])
+        XCTAssertEqual(CLIUsageDimension.project.buckets(of: report).map(\.id), ["p1"])
+        XCTAssertEqual(CLIUsageDimension.model.buckets(of: report).map(\.id), ["m1", "m2", "m3"])
+        XCTAssertTrue(CLIUsageDimension.model.buckets(of: CLIUsageReport<AnthropicStyleTable>()).isEmpty)
+    }
+
+    // MARK: 合计行的旧实现（PR5 之前两个中心窗口里的 `summed`，逐行照抄，只换了类型名；用来钉住新旧逐位相同）
+
+    private func oldClaudeSummed(_ buckets: [CLIUsageBucket<AnthropicStyleTable>]) -> CLIUsageTotals<AnthropicStyleTable> {
+        var total = CLIUsageTotals<AnthropicStyleTable>()
+        for bucket in buckets {
+            total.input += bucket.totals.input
+            total.output += bucket.totals.output
+            total.cacheWrite += bucket.totals.cacheWrite
+            total.cacheRead += bucket.totals.cacheRead
+            total.costUSD += bucket.totals.costUSD
+            total.unpriced = total.unpriced || bucket.totals.unpriced
+        }
+        return total
+    }
+
+    /// Codex 版：缓存输入（`cachedInput`）就是 `cacheRead`；缓存写不加。
+    private func oldCodexSummed(_ buckets: [CLIUsageBucket<OpenAIStyleTable>]) -> CLIUsageTotals<OpenAIStyleTable> {
+        var total = CLIUsageTotals<OpenAIStyleTable>()
+        for bucket in buckets {
+            total.input += bucket.totals.input
+            total.cacheRead += bucket.totals.cacheRead
+            total.output += bucket.totals.output
+            total.costUSD += bucket.totals.costUSD
+            total.unpriced = total.unpriced || bucket.totals.unpriced
+        }
+        return total
+    }
+
+    /// 一个随机的桶：token 数从 0 到十亿，费用是若干条真实单价算出来的和（末位各不相同），偶尔 unpriced。
+    private func randomBucket<Table: CLIUsagePricingTable>(
+        _ table: Table.Type, _ index: Int, cacheWrite: Bool, using rng: inout SumRNG
+    ) -> CLIUsageBucket<Table> {
+        var totals = CLIUsageTotals<Table>()
+        for _ in 0..<Int.random(in: 1...6, using: &rng) {
+            let model = Int.random(in: 0..<10, using: &rng) == 0 ? "unknown" : (Table.inputIncludesCacheRead ? "gpt-5" : "sonnet")
+            totals.add(CLIUsageEntry(timestamp: Date(timeIntervalSince1970: 0), modelID: model, projectPath: "/p",
+                                     input: Int.random(in: 0...200_000_000, using: &rng),
+                                     output: Int.random(in: 0...50_000_000, using: &rng),
+                                     cacheWrite: cacheWrite ? Int.random(in: 0...80_000_000, using: &rng) : 0,
+                                     cacheRead: Int.random(in: 0...150_000_000, using: &rng)))
+        }
+        return CLIUsageBucket(id: "\(index)", label: "\(index)", totals: totals)
+    }
+}
+
+/// 固定种子的随机数（SplitMix64），合计行的差分可复现。
+private struct SumRNG: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
