@@ -18,9 +18,9 @@ The whole screen enters selection mode, where you have three ways to go:
 | Action | Result |
 |---|---|
 | Move the mouse | The **window** under the cursor is highlighted with its bounds outlined |
-| Click | Capture that highlighted window |
+| Click | Turns the highlighted window into the selection and brings up the toolbar (press ⏎ or double-click the selection to finish) |
 | Press and drag | Switches to **region capture**; drag out any rectangle |
-| ⏎ | Capture the entire screen |
+| ⏎ | Turns the whole screen into the selection; press ⏎ again to finish |
 | Esc | Cancel |
 
 Once a region exists you can keep adjusting it:
@@ -60,7 +60,10 @@ alert**. It never fails silently.
 
 ## Annotation
 
-Finishing a capture drops you straight into annotation, with the toolbar next to the selection:
+Once the selection is set, the toolbar appears below it (above it if there's no room); pick a
+tool to start annotating:
+
+![A capture being annotated: the area outside the selection is dimmed, the selection has a box, a mosaic, an arrow and a text label, and the annotation toolbar with color and size choices sits below](../images/screenshot/annotate-editor.en.png)
 
 | Tool | Notes |
 |---|---|
@@ -124,6 +127,8 @@ actually scrollable, or the page wasn't scrolled while the control bar was up.
 Pull text off the screen. Recognition runs **locally through the system Vision framework —
 nothing is uploaded**.
 
+![The OCR result window: the recognized text is editable, and the bottom line shows the decoded QR code next to the Copy button](../images/screenshot/ocr-result.en.png)
+
 Entry points:
 
 - A shortcut (unbound by default; assign your own)
@@ -131,6 +136,7 @@ Entry points:
 - Annotation toolbar → OCR
 - Right-click a pin → Recognize text
 - Scrolling capture preview → OCR
+- Screenshot history → an entry → Recognize text
 
 Selection works exactly like capture: **click a window** for the whole window, **drag** to
 frame a region.
@@ -172,7 +178,8 @@ Settings → Screenshot → Recording:
 ## Live drawing
 
 Draw straight onto the **live screen** without capturing anything — for demos and
-explanations. The shortcut is unbound by default; menu → Screenshot → Screen drawing.
+explanations. The shortcut is unbound by default; menu → Draw on Screen → Start Drawing on
+Screen (its own top-level menu entry).
 
 Toolbar:
 
@@ -184,7 +191,7 @@ Toolbar:
 | Save frame (with strokes) | Save the current screen including your drawing |
 | Exit (Esc) | End the session |
 
-Settings → Screenshot → Screen drawing:
+Settings → Draw on Screen:
 
 - **Canvas scope** — all displays or current display only. With "current display only" the
   canvas only swallows clicks on the screen the mouse is on; other screens stay usable.
@@ -197,7 +204,7 @@ Settings → Screenshot → Screen drawing:
 
 Menu → Screenshot → History lists recent captures (20 by default, configurable).
 
-Each has a submenu: **Copy**, **Pin to screen**, **Save as…**, **Delete**. There's a
+Each has a submenu: **Copy Image**, **Pin to Screen**, **Recognize Text**, **Save As…**, **Delete**. There's a
 "Clear history" at the bottom.
 
 History and "files saved to disk" are **independent**: even with auto-save off, every

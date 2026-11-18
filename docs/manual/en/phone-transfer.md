@@ -5,6 +5,8 @@
 Menu bar → **Phone Transfer** → Open Phone Transfer…. Send files and text between your Mac and a phone.
 **The phone doesn't need an app**: scan the QR code in the window with the camera and use the browser.
 
+![The Phone Transfer window on the Mac (LAN mode): mode switch, network menu and QR code on the left; a new device's connection request with its device code, the drop zone and this session's transfers on the right](../images/phone-transfer/mac-window.en.png)
+
 ## Two modes
 
 | | LAN | Internet |
@@ -41,6 +43,8 @@ The choice is remembered; changing it makes a new QR code.
    the files with a "Download" button; in Internet mode files are pushed to the phone with a "Save" button. **Images**
    get a "View" button instead: it opens the image, and **long-pressing it saves it to Photos** (on iPhone, "Download"
    can only save to the Files app).
+
+![The page on the phone (LAN mode, connected): type buttons for picking files and a text box on top; files already sent to the computer and the "From your computer" list below](../images/phone-transfer/phone-page.en.png)
 
 Every entry shows the time, and finished transfers also show how long they took, e.g.
 `2.4 MB · Received · 5:30:12 PM · took 1.2 s`.
