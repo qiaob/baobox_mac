@@ -185,3 +185,46 @@ enum CLIUsageReportOrder: Sendable {
     /// 按 token 总数（Codex：很多用户走 ChatGPT 订阅，费用是次要信息）。
     case byTokens
 }
+
+// MARK: - 中心窗口用量页用到的小件（#164 PR5，docs/codex-assistant/DEDUPE-P2.md §2.4 类 1）
+
+extension CLIUsageTotals {
+    /// 明细表的合计行：按桶的顺序逐项累加四项 token 与费用，任一桶 unpriced 则合计也 unpriced。
+    /// 两个中心窗口原来各写一份：Claude 加四项；Codex 加 input / 缓存输入（= cacheRead）/ output 三项、缓存写一直是 0 ——
+    /// Codex 的桶里缓存写恒为 0，多加一项 0 结果不变；费用相加的顺序与原来相同，逐位相同（单测钉住）。
+    static func sum(of buckets: [CLIUsageBucket<Table>]) -> CLIUsageTotals {
+        var total = CLIUsageTotals()
+        for bucket in buckets {
+            total.input += bucket.totals.input
+            total.output += bucket.totals.output
+            total.cacheWrite += bucket.totals.cacheWrite
+            total.cacheRead += bucket.totals.cacheRead
+            total.costUSD += bucket.totals.costUSD
+            total.unpriced = total.unpriced || bucket.totals.unpriced
+        }
+        return total
+    }
+}
+
+/// 明细表的维度（按天 / 按项目 / 按模型）。文案（分段控件的名字、第一列的列名）由模块给。
+enum CLIUsageDimension: CaseIterable, Sendable {
+    case day, project, model
+
+    /// 这一维度在报表里对应的那张表。
+    func buckets<Table>(of report: CLIUsageReport<Table>) -> [CLIUsageBucket<Table>] {
+        switch self {
+        case .day: return report.byDay
+        case .project: return report.byProject
+        case .model: return report.byModel
+        }
+    }
+}
+
+/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。两个模块原来各有一份字段完全相同的结构体，
+/// 并成这一个；`ClaudeMCPServerStat` / `CodexMCPServerStat` 留作 typealias。
+struct CLIUsageMCPServerStat: Sendable {
+    let server: String
+    let total: Int
+    /// 工具名 → 次数。
+    let tools: [String: Int]
+}

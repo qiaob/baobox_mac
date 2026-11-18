@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1（#182）、PR2（#186）、PR4（#185）、PR6（#189）已合并；PR3 已实现（PR #190）。落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR3（#190）、PR4（#185）、PR6（#189）已合并；PR5 已实现（PR #191）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -956,6 +956,46 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 新增：`Core/CLICenter/CLIUsageViews.swift`；`CLIUsageModels.swift` 加三样；测试。
 - 改：两个中心窗口的用量页与调用统计；`ClaudeUsage.swift` / `CodexUsage.swift`（`…MCPServerStat` 换成 typealias）。
 - PR 描述贴逐像素探针的结果。
+
+#### PR5 落地记录（2026-11-18，PR #191，分支 `refactor/cli-usage-views`，基线 main `a9ac345`）
+
+照上面的清单做了，D5、D7 按建议（文案 key 一条不动；只抽部件，卡片的组合、列、Claude 的周脚注、调用统计几组的顺序留模块）。
+
+1. **新增**：`Core/CLICenter/CLIUsageViews.swift`：`cliCenterCard()`、`CLIUsageRefreshControl`、`CLIUsageMetric`、`CLIUsageBudgetBar`、`CLIUsageWeekBadge`、
+   `CLIUsageColumn` + `CLIUsageBucketTable`、`CLIInvocationCountGroup`、`CLIInvocationMCPGroup`（签名同 §2.4；都是从两个用量页原样搬的写法，修饰符的顺序与数值不变）；
+   `CLIUsageModels.swift` 加 `CLIUsageTotals.sum(of:)`、`CLIUsageDimension`（+ `buckets(of:)`）、`CLIUsageMCPServerStat`；
+   `CLIUsageReportTests` 加 5 个（合计行与两份旧 `summed` 逐位相同 / 按桶的顺序加费用 / 空与 unpriced / 维度）。
+2. **改**：两个中心窗口的用量页与调用统计改用部件（Claude 用量 Tab + 调用统计 393 → 226 行，Codex 373 → 213 行；两个私有 `centerCard()`、`metric`、
+   `headerRow` / `usageRow` / `summed`、`UsageDimension` 枚举、调用统计里的 `countGroup` / `mcpGroup` / `groupLabel` / `countRow` / `emptyHint` 都删了）；
+   维度的文案（分段控件的名字、第一列的列名）留在各自文件的 `private extension CLIUsageDimension`；`ClaudeMCPServerStat` / `CodexMCPServerStat` 换成 typealias。
+   规模：源码 +436 / −490（估的是 +300 / −460：多出来的是部件的注释与 `init`），测试 +124 / −1。
+3. **文档**：`DESIGN.md` §9.1（加「中心窗口用量页」一条）、根 `CLAUDE.md` 的 Core 清单（`CLICenter/` 加用量页部件）、`CORE_API.md` §3（`ClaudeMCPServerStat` 一行）、本文状态。
+
+和设计稿的出入：
+
+- 调用统计两种分组共用的组标题行、计数行、空组提示放在 `CLIUsageViews.swift` 里一个 private 的 `CLIInvocationParts`（原来是两个模块各自的私有函数），设计稿没单列。
+- `CLIUsageDimension` 多了 `Sendable`；模块的分段控件改成 `ForEach(CLIUsageDimension.allCases, id: \.self)`（原来用私有枚举的 `rawValue` 当 id），看不出差别。
+- 预算条、刷新按钮这两个部件在「没有」时什么也不画：`CLIUsageBudgetBar` 预算 ≤ 0 时 body 为空，`CLIUsageRefreshControl` 不带容器、两样直接排进卡片标题的 HStack ——
+  探针确认 VStack / HStack 不会给空的或拆开的部件多留间距（「无预算」「刷新中」两种状态逐像素相同）。
+- 调用统计的「N 次」由模块传一个 `nonisolated` 的静态函数（`(Int) -> Text`）：View 上的静态函数默认是主线程隔离的，当成普通闭包传会多一条「丢了 MainActor」的告警。
+
+验证（Mac 本机，Xcode 16.2）：
+
+- `xcodebuild … clean test`：TEST SUCCEEDED，498 个（基线 493 + 新增 5）；warning 21 条，和 origin/main（`a9ac345`）同命令逐条相同（连行号）。
+- 静态检查（§4.3）：`Localizable.xcstrings` 没动、合法；文案 key 集合（502 个）与 main、`a4833c8` 都相同；按声明查边界的脚本无输出；`Core/CLIUsage` 只 import Foundation / Combine、
+  不调 `L()`；`CLIUsageViews.swift` 不引用模块类型。
+- 渲染探针（§4.2：main 的两个用量页 + 调用统计加 `Old` 前缀，与新代码编进同一个程序；两个 Store 是假的（值由探针直接设，不读 `~/.claude` / `~/.codex`），
+  设置走 UserDefaults 的参数域、不落盘；`TappableDisclosure` 的初始展开、维度与天数的初值、倒计时的「现在」由探针设，新旧同样改；离屏 720 × 1900 一次画完整页，中英 × 浅深色）：
+  - 两个用量页 × 8 种数据状态 × 中英 × 浅深色 = 64 组，**全部 0 像素差**：没有窗口 + 明细为空、有窗口无预算、有预算（5 小时没满 / 周超出被夹到满格）+ 周窗口固定、
+    按项目（含过长项目名中间省略）、按模型 + 不认识的模型（未定价提示）、明细为空 + 调用统计全部展开（空组提示）、调用统计全部展开（含 MCP 两级）+ 近 30 天、刷新中。
+    每组新旧调用 Store 的序列也相同（报表 30 天、调用统计 7 / 30 天）。同一份旧视图连画两次也是 0（抽查「有窗口无预算」）。
+  - 交互（新旧各一遍）：点刷新按钮（Store 收到刷新 + 30 天报表，新旧相同）、分段控件切到「按模型」、调用统计切到「近 30 天」（重新取 30 天的统计），切完后逐像素相同。
+  - 每种语言 86 项检查全过（32 组渲染各比像素与 Store 调用、4 次稳定性、6 组交互各 3 项）。中途两次假差异，都是探针自己的时机问题、已改掉：英文「切到按模型」一次 86 像素（截图时分段控件的切换动画还没走完，
+    连跑 3 遍复现不了，改成切完等 1 秒再截）；夜里几轮里 Codex 5 小时卡的倒计时偶尔一张 2h15m、一张 2h0m（夜里机器会打盹，墙上时钟在新旧两张之间跳了一刻钟）——
+    探针改成倒计时相对探针定的「现在」（替掉探针拷贝里 `secondsUntilReset` 的 `timeIntervalSinceNow`，新旧共用这一份模型）。另外加了
+    `beginActivity(.userInitiatedAllowingIdleSystemSleep)` 免得 App Nap 把计时器拖慢。都只影响探针。
+- 变异：合计漏加缓存写、桶倒着加、维度 project 拿了 byModel，分别让 1 / 3 / 1 个单测变红；探针里把调用统计一行的上下内边距 2 改 3、预算条说明去掉次要色，
+  中文跑一遍报 12 组不同：正好是有预算或调用统计展开且有数据的那几种状态（两个页面 × 浅深色 × 3 种），其余状态照旧 0。
 
 ### PR6 遍历与最近文件索引
 

@@ -104,7 +104,7 @@
 - `struct UsageWindow` —— `start, end(=start+5h), totals`；`secondsUntilReset`。
 - `struct UsageBucket: Identifiable` —— `id, label, totals, date?`（报表一行）。
 - `struct ClaudeUsageReport` —— `byDay, byProject, byModel: [UsageBucket]`。
-- `struct ClaudeMCPServerStat: Sendable` —— `server, total: Int, tools: [String: Int]`（MCP 两级统计的值）。
+- `typealias ClaudeMCPServerStat = CLIUsageMCPServerStat` —— `server, total: Int, tools: [String: Int]`（MCP 两级统计的值；#164 PR5 起结构体在 `Core/CLIUsage/CLIUsageModels.swift`，与 Codex 助手共用）。
 - `struct ClaudeInvocationStats: Sendable` —— 三字段:`skills: [String: Int]`(Skill+斜杠命令合并) / `mcp: [String: ClaudeMCPServerStat]`(服务器›工具) / `builtin: [String: Int]`(其余工具);排序留给 UI。
 
 ### `@MainActor final class ClaudeUsageStore: CLIUsageStore<ClaudeUsageSource>`（`.shared`）

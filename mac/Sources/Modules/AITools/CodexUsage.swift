@@ -77,12 +77,8 @@ extension CLIUsageTotals where Table == CodexPricingTable {
     }
 }
 
-/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。
-struct CodexMCPServerStat: Sendable {
-    let server: String
-    let total: Int
-    let tools: [String: Int]
-}
+/// 一个 MCP 服务器的调用统计（两级：服务器总次数 + 各工具次数）。结构体在 Core，与 Claude Code 助手共用（#164 PR5）。
+typealias CodexMCPServerStat = CLIUsageMCPServerStat
 
 /// 调用统计（Codex 无 Skill / 斜杠命令，只有内置工具与 MCP 两类）。值类型、Sendable。
 struct CodexInvocationStats: Sendable {
