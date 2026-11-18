@@ -112,8 +112,9 @@ final class AIService {
             let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
             // Qwen3 一次只收一条消息：规矩和原文拼在一起；关掉思考，低温度求稳。
             return try await withLocalModel(id, fallback: isLocalReady(.translation) ? local : nil) { backend, extra in
-                try await backend.respond(to: prompt.system + "\n\n" + prompt.user,
-                                          maxTokens: max(256, text.count * 3) + extra, sampling: .correction)
+                AIPrompts.unwrapTranslation(try await backend.respond(to: prompt.system + "\n\n" + prompt.user,
+                                                                      maxTokens: max(256, text.count * 3) + extra,
+                                                                      sampling: .correction))
             }
         }
         guard let modelID = route.modelID else {
@@ -121,8 +122,10 @@ final class AIService {
         }
         return try await withCloud(modelID: modelID, fallback: isLocalReady(.translation) ? local : nil) { client, cap in
             let prompt = AIPrompts.translation(text: text, target: target, source: source, glossary: glossary)
-            return try await client.complete(system: prompt.system, user: prompt.user,
-                                             maxTokens: min(cap, max(256, text.count * 3)), timeout: timeout)
+            let completion = try await client.complete(system: prompt.system, user: prompt.user,
+                                                       maxTokens: min(cap, max(256, text.count * 3)), timeout: timeout)
+            return AICloudCompletion(text: AIPrompts.unwrapTranslation(completion.text),
+                                     inputTokens: completion.inputTokens, outputTokens: completion.outputTokens)
         }
     }
 
@@ -289,20 +292,44 @@ enum AIPrompts {
         language == .simplifiedChinese ? "一律用简体中文输出，繁体字改成对应的简体字。" : nil
     }
 
-    /// 翻译：系统提示定规矩，用户消息只放原文。带上术语表（与本地 Hy-MT2 同一套 `TranslationGlossary.references`）。
+    /// 翻译：系统提示定规矩，用户消息写成「Translate into X: <text>原文</text>」（docs/ai-service/DESIGN.md §4.7）。
+    /// 带上术语表（与本地 Hy-MT2 同一套 `TranslationGlossary.references`）。
     static func translation(text: String, target: TranslationLanguage, source: TranslationLanguage?,
                             glossary: [GlossaryEntry]) -> (system: String, user: String) {
         let from = source.map { " from \($0.englishName)" } ?? ""
         var system = """
-        You are a translation engine. Translate the user's text\(from) into \(target.englishName). \
-        Output only the translation: no explanations, no notes, no quotation marks. Keep the line breaks.
+        You are a translation engine inside a desktop app. Each message gives you a piece of text inside \
+        <text></text> tags; reply with its translation\(from) into \(target.englishName). \
+        Reply with the translation only: no preamble, no notes, no quotation marks, no tags. Keep the line breaks.
         """
+        if let examples = translationExamples(for: target) {
+            system += "\n\nExamples:\n"
+                + examples.map { "<text>\($0.source)</text> → \($0.translation)" }.joined(separator: "\n")
+        }
         let references = TranslationGlossary.references(for: text, target: target, entries: glossary)
         if !references.isEmpty {
             system += "\nUse these translations for the following terms:\n"
                 + references.map { "- \($0.source) → \($0.target)" }.joined(separator: "\n")
         }
-        return (system, text)
+        return (system, "Translate into \(target.englishName):\n<text>\(text)</text>")
+    }
+
+    /// 只给最常用的两个方向配示例：示例里的译文必须对，21 种目标语言逐个手写不划算。
+    /// 别的目标语言不带示例也不会答话，只是偶尔把「LGTM」这类短词原样留着。
+    private static func translationExamples(for target: TranslationLanguage) -> [(source: String, translation: String)]? {
+        switch target.code {
+        case "zh-Hans": return [("Could you send me the file?", "你能把文件发给我吗？"), ("Merged", "已合并")]
+        case "en": return [("你能把文件发给我吗？", "Could you send me the file?"), ("已合并", "Merged")]
+        default: return nil
+        }
+    }
+
+    /// 模型偶尔把 `<text>` 标签也抄进译文（小的本地模型更可能）：去掉首尾的标签。
+    static func unwrapTranslation(_ reply: String) -> String {
+        var text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("<text>") { text.removeFirst("<text>".count) }
+        if text.hasSuffix("</text>") { text.removeLast("</text>".count) }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 纠错 + 翻译：输出一行 JSON。`source` = 待纠正那句的语言。

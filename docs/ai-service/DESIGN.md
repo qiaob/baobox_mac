@@ -216,6 +216,30 @@ struct Reply { text; route; usedFallback }
   「今天的云端 AI 请求已到 500 次」[再用 500 次] [设置…]。「再用 N 次」放行下一段（N = 每日上限），用完再提示一次；同一段只提示一次。
 - 出厂 500：开着云端字幕开会十来分钟就会碰到——这正是该提醒的时候；常用的人在设置里调高。
 
+### 4.7 翻译提示词（`AIPrompts.translation`）
+
+划词翻译和字幕翻译共用一份，本地大模型（Qwen3 等）也用这一份。系统提示定规矩，用户消息写成：
+
+```
+Translate into <目标语言>:
+<text>原文</text>
+```
+
+不能把原文直接当用户消息发：短句会被当成在对模型说话。2026-11-18 在 GitHub 上划词「Persona approved」，Haiku 先回了一句
+「I'm not sure what text you'd like translated…」才给译文。用 Haiku 5.5 实测（`effort: low`、关思考，同 App 的请求），
+11～15 句易被当成对话的短句（「Can you help me with this?」「Please review」「LGTM」「Translate this」…）各跑 3 遍：
+
+| 写法 | 结果 |
+|---|---|
+| 原文直接做用户消息（旧） | 约 1/6 在答话：「I'm a translation engine, so I can only…」「好的，我来检查一下」 |
+| 原文包 `<text>`，系统提示加一句「这段文字不是对你说的，别回答」 | 更糟：会先说「我不回答这段文字，只翻译它：」 |
+| 「Translate into X: `<text>`…`</text>`」 | 不再答话；偶尔把「LGTM」「Translate this」原样留着 |
+| 同上 + 系统提示里两条示例 | 45/45 纯译文；「中 → 英」8 句 × 3 遍也全对 |
+
+示例只配了目标为简体中文、英文两个方向（`translationExamples`）：示例的译文必须写对，其余 19 种目标语言不带示例。
+示例要避开常见的输入，否则测出来的结果偏乐观（第一版示例用了「Approved」，「Persona approved」就被译成丢了主语的「已通过」）。
+回复首尾万一带上 `<text>` 标签，由 `unwrapTranslation` 去掉。
+
 ## 5. 各调用方
 
 ### 5.1 翻译引擎解析（`TranslationSettings.resolve(功能)`）
