@@ -33,6 +33,8 @@ line and no background services start.
 Default shortcut **⌃⇧Space**. A Spotlight-style overlay: type to search session titles,
 project names, or paths.
 
+![The quick resume panel in sessions mode: the search field and the Sessions / Files switch on top, each row a session title with project · model · how long ago below it, and key hints along the bottom](../images/claude-code/quick-switch.en.png)
+
 | Key | Action |
 |---|---|
 | Type | Search |
@@ -42,10 +44,15 @@ project names, or paths.
 | Tab | **Switch between "sessions" and "files" modes** |
 | Esc | Close |
 
+If the session is already running in a terminal that Baobox can locate, ⏎ / double-click just
+brings that terminal to the front instead of opening another window.
+
 ### Recent files mode
 
 The same panel in "files" mode (it also has its own shortcut, unbound by default) searches
 the files Claude Code **wrote most recently**; ⏎ opens one.
+
+![The quick resume panel in files mode: category filters with counts (All, Docs, Web, Code, Config, Other) under the search field, each row a file name, its project and full path, and when it was written](../images/claude-code/recent-files.en.png)
 
 Settings → Claude Code → Recent files lets you **pick which app opens each category**
 (categories without a choice use the system default), and whether to include internal files
@@ -66,17 +73,22 @@ Shortcut unbound by default; menu → Browse session history…. Three tabs:
 
 Searchable full session history (by title or project). For each row:
 
-- **Double-click** to resume
-- Right-click: resume, copy the resume command, **export to Markdown**, delete
+- **Double-click** to resume (if the session is running in a terminal, that terminal comes to
+  the front, same as the quick resume panel)
+- Hover over a row and four buttons appear on the right: resume, copy the resume command,
+  **export to Markdown**, delete
+- Right-click: the same four
 
 Deleting asks for confirmation — it permanently removes that session's JSONL file.
 
 ### Usage
 
-- **5-hour** and **weekly** window cards: tokens used, estimated cost, time to reset, plus a
-  progress bar if you've set a budget
+- **Current Usage Window** (5 hours) and **Weekly window** cards: tokens used, estimated cost,
+  time to reset, plus a progress bar if you've set a budget
 - Reports by **day**, **project**, and **model**
 - **Call statistics**: skills and slash commands, MCP servers › tools, built-in tools
+
+![The usage tab of the center window: the Current Usage Window and Weekly window cards (tokens used, estimated cost, time to reset, budget bar), the breakdown by day with a total row, and the collapsed invocation stats below](../images/claude-code/usage.en.png)
 
 ### Audit
 

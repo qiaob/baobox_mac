@@ -26,6 +26,8 @@ If Codex isn't installed (`~/.codex` doesn't exist) the menu shows a single gray
 
 Unbound by default (to avoid colliding with Claude Code's ⌃⇧Space); assign your own.
 
+![The Codex quick resume panel: the search field, each row a session title with project · how long ago below it, and key hints along the bottom](../images/codex/quick-switch.en.png)
+
 | Key | Action |
 |---|---|
 | Type | Search by title, project, or path |
@@ -40,7 +42,17 @@ Two tabs:
 
 ### Sessions
 
-Search, resume, copy the command, delete.
+Searchable session history (by title or project); each row's second line is "project · how
+long ago".
+
+- **Double-click** to resume (opens a new terminal window running `codex resume <id>`)
+- Hover over a row and four buttons appear on the right: resume, copy the command,
+  **export to Markdown**, delete
+- Right-click: the same four
+
+Deleting asks for confirmation — it permanently removes that session file.
+
+![The sessions tab of the center window: search field and refresh button on top, a striped session list, and the hovered row showing the Resume, Copy command, Export Markdown and Delete buttons on the right](../images/codex/sessions.en.png)
 
 ### Usage
 
@@ -49,6 +61,8 @@ Search, resume, copy the command, delete.
 - Built-in tool and MCP call statistics
 
 Costs come from a built-in pricing table and are labeled as estimates.
+
+![The usage tab of the center window: the 5-hour and Weekly window cards (used, estimated cost, time to reset, budget bar), the breakdown by day (input, cached, output, estimated cost) with a total row, and the collapsed invocation stats below](../images/codex/usage.en.png)
 
 ### How usage is calculated
 
