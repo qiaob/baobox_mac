@@ -82,8 +82,11 @@ final class SelectionTranslateController {
     /// 借剪贴板路径上次弹出的文字。终端里的选区会一直留着，之后拖窗口之类的拖动会把它再拷出来一次 ——
     /// 同一段就不再弹，直到一次普通单击（通常会清掉选区）。
     private var lastBorrowedText = ""
-    /// 本次运行里拷出过文件 / 图片的 App（Finder 选文件、设计软件拖图层）：自动弹出不再对它借剪贴板。
-    private var borrowSkippedApps: Set<pid_t> = []
+    /// 自动弹出借剪贴板时连续拷出文件 / 图片（不是文字）的次数，按 App 记。连续 `notTextLimit` 次
+    /// （Finder 选文件、设计软件拖图层）就本次运行内不再对它借；拷到一次文字就清零 ——
+    /// 浏览器里偶尔选到一张图不该把整个浏览器拉黑（以前一次就拉黑，GitHub 上选到图后 Brave 再也不弹）。
+    private var notTextStrikes: [pid_t: Int] = [:]
+    private static let notTextLimit = 3
 
     /// 原文长度上限：超长段落截断，避免把整篇文章塞进翻译会话。
     private static let maxCharacters = 8000
@@ -514,7 +517,7 @@ final class SelectionTranslateController {
                 }
                 // AX 读不到（很多终端、部分自绘界面）：满足设计文档 §2 的条件才借剪贴板。
                 guard selectionGesture, SelectionTranslateSettings.copyFallback,
-                      !self.borrowSkippedApps.contains(pid),
+                      self.notTextStrikes[pid, default: 0] < Self.notTextLimit,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
                       !PasteboardBorrow.holdsConcealedContent else { return }
                 Task { [weak self] in
@@ -546,9 +549,15 @@ final class SelectionTranslateController {
             "auto borrow in \(bundle, privacy: .public): \(outcome.logDescription, privacy: .public)")
         switch outcome {
         case .copied(let raw, let method):
+            notTextStrikes[pid] = nil
             present(raw, anchor: anchor, generation: generation, route: method == .menu ? .menuCopy : .keystrokeCopy)
         case .notText:
-            borrowSkippedApps.insert(pid)
+            let strikes = notTextStrikes[pid, default: 0] + 1
+            notTextStrikes[pid] = strikes
+            if strikes == Self.notTextLimit {
+                SelectionTranslateLog.selection.notice(
+                    "auto borrow off in \(bundle, privacy: .public) for this run: \(strikes) non-text copies in a row")
+            }
         case .noMenuItem, .disabled, .nothingCopied:
             break
         }
