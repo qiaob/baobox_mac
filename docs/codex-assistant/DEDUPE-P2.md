@@ -1,7 +1,7 @@
 # Claude / Codex 两套实现去重 · 第三步（#164：中心窗口、TerminalLauncher、格式化…）· 技术设计
 
 > issue #164：#109 第二步（`DEDUPE.md`）§5.3 列出、按 D8 拍板另开的 P2。状态：**已拍板**（2026-11-11 用户：「按你的建议来做吧」，§7 D1–D10 全部按建议；PR1–PR6 都做），按 §5 的顺序实现。
-> 进度：PR1（#182）、PR2（#186）、PR3（#190）、PR4（#185）、PR6（#189）已合并；PR5 已实现（PR #PR5NUM）。落地记录在 §5 各自那一节末尾。
+> 进度：PR1（#182）、PR2（#186）、PR3（#190）、PR4（#185）、PR6（#189）已合并；PR5 已实现（PR #191）。落地记录在 §5 各自那一节末尾。
 > 基线：main `a4833c8`（#171–#175 之后）。下文路径都相对 `mac/Sources/`，行号以这个提交为准；issue 里的数字以 §1.1 重新量的为准。
 > 口径、写法照 `DEDUPE.md`：共用层放 Core、纯 Foundation 的部分进 `BaoboxTests`、模块留差异、对外名字尽量不变。
 > 相关：`DEDUPE.md` §1.1（量化口径）、§4（已抽出的 `Core/CLISession` / `EventFile` / `QuickSwitch`）、§5.3；`DESIGN.md` §9.1；
@@ -957,7 +957,7 @@ PR1 + PR3 合进去，issue 的两条验收就满足了；PR5、PR6、PR2 里的
 - 改：两个中心窗口的用量页与调用统计；`ClaudeUsage.swift` / `CodexUsage.swift`（`…MCPServerStat` 换成 typealias）。
 - PR 描述贴逐像素探针的结果。
 
-#### PR5 落地记录（2026-11-18，PR #PR5NUM，分支 `refactor/cli-usage-views`，基线 main `a9ac345`）
+#### PR5 落地记录（2026-11-18，PR #191，分支 `refactor/cli-usage-views`，基线 main `a9ac345`）
 
 照上面的清单做了，D5、D7 按建议（文案 key 一条不动；只抽部件，卡片的组合、列、Claude 的周脚注、调用统计几组的顺序留模块）。
 
