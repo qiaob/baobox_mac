@@ -2,7 +2,7 @@
 
 [简体中文](../window-manager.md) · English
 
-Menu bar → **Window manager**. Moves and resizes the **frontmost window**: halves, quarters,
+Menu bar → **Window Manager**. Moves and resizes the **frontmost window**: halves, quarters,
 maximize, center, across displays, restore — 13 actions, all bindable.
 
 Requires **Accessibility** permission, since it manipulates other apps' windows. Without it
@@ -45,7 +45,7 @@ The rules here are explicit:
 
 ## Window gap
 
-Settings → Window manager → Layout → Gap: the space left around windows and along the
+Settings → Window Manager → Layout → Window gap: the space left around windows and along the
 dividing line for halves, quarters, and maximize, in points. Set it to 0 for flush windows.
 
 ## Layout snapshots
@@ -53,11 +53,13 @@ dividing line for halves, quarters, and maximize, in points. Set it to 0 for flu
 Save where every window is and restore it later — for the recurring "plug in the external
 display / back at my desk" moment.
 
-- **Save**: menu → Window manager → Save current layout…, then name it. It records every
+- **Save**: menu → Window Manager → Save Current Layout…, then name it. It records every
   **regular, non-minimized** window's position and size
 - **Restore**: click the layout's name in the menu
-- **Manage**: Settings → Window manager → Layout snapshots lists and deletes them, each
+- **Manage**: Settings → Window Manager → Layout snapshots lists and deletes them, each
   showing "N windows · saved at …"
+
+![Settings → Window Manager: the window gap, three layout snapshots (each with its window count and when it was saved, and a delete button), and the Accessibility permission](../images/window-manager/settings.en.png)
 
 Matching on restore is **by title first, by order as a fallback**; apps that were running
 then but aren't now are skipped without error.

@@ -2,7 +2,7 @@
 
 [简体中文](../caffeinate.md) · English
 
-Menu bar → **Keep awake**. Temporarily stops the Mac from going to sleep — for builds, test
+Menu bar → **Keep Awake**. Temporarily stops the Mac from going to sleep — for builds, test
 runs, large downloads, anything you leave running.
 
 Built on IOKit power assertions (`IOPMAssertionCreateWithName`). No external commands, no
@@ -13,14 +13,14 @@ resident process.
 The top of the submenu is a **status line**:
 
 - Off
-- On · N minutes left
+- On · N min left
 - On · indefinitely
 
 Below it are four presets — **15 minutes / 1 hour / 2 hours / indefinitely** — with the
-active one ticked, then "Turn off".
+active one ticked, then "Turn Off".
 
-There's also "Start with the default duration", which uses whatever you set under
-Settings → Keep awake.
+There's also "Start with default duration", which uses whatever you set under
+Settings → Keep Awake.
 
 It releases itself when the timer expires, and the remaining time in the menu updates live.
 
@@ -38,8 +38,10 @@ It releases itself when the timer expires, and the remaining time in the menu up
 
 | Setting | Notes |
 |---|---|
-| Duration for menu clicks and quick start | 15 minutes / 1 hour / 2 hours / indefinitely. Used by "Start with the default duration", the shortcut and the ring menu |
-| Also prevent display sleep | **Off** by default. When on, the screen stays lit too; changing it **applies immediately to an assertion already in effect** |
+| Duration for menu and quick start | 15 minutes / 1 hour / 2 hours / indefinitely. Used by "Start with default duration", the shortcut and the ring menu |
+| Also keep the display awake | **Off** by default. When on, the screen stays lit too; changing it **applies immediately to an assertion already in effect** |
+
+![Settings → Keep Awake: the default duration (Indefinitely out of the box) and "Also keep the display awake"](../images/caffeinate/settings.en.png)
 
 By default only system sleep is blocked and the display still turns off — most unattended
 runs don't need the screen on.
