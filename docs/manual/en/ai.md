@@ -16,17 +16,21 @@ The page has three panes at the top: **Features / On This Mac / Cloud**.
 
 Features that use a model are grouped by tool, one row each: the feature name, a model menu, and one line of status.
 
+![Settings → AI, Features: one row per feature with its model and one line of status (suggested model / a suggestion to switch / not downloaded)](../images/ai/features.en.png)
+
 | Tool | Feature | Used for | Default | Sent when set to a cloud model |
 |---|---|---|---|---|
-| Meeting | Caption Translation | Translation in Subtitles & Interpreting, and in meetings once Subtitles are on | Automatic | every recognized sentence |
-| | AI Correction | Fixing recognition mistakes in Chinese | Qwen3-1.7B on this Mac | each recognized Chinese sentence with the preceding context |
-| | Meeting Minutes | Minutes after a meeting, and Regenerate Minutes in the library | Qwen3-1.7B on this Mac | the meeting's full transcript and notes |
-| | Weekly Overview | The overview in this week's report | Qwen3-1.7B on this Mac | the week's meeting summaries |
-| Selection Assistant | Selection Translation | The selection assistant's "Translate" | Automatic | the selected text |
-| | Selection AI Actions | Polish, Rewrite, Natural English, Explain, Summarize, custom actions | Qwen3-1.7B on this Mac | the selected text you run an action on |
-| Dictation | AI Polish | Tidying dictation into written text | Qwen3-1.7B on this Mac | the dictated text |
+| Meeting | Captions | Translation in Subtitles & Interpreting, and in meetings once Subtitles are on | Automatic | every recognized sentence |
+| | Correction | Fixing recognition mistakes in Chinese | Qwen3-1.7B on this Mac | each recognized Chinese sentence with the preceding context |
+| | Minutes | Minutes after a meeting, and Regenerate Minutes in the library | Qwen3-1.7B on this Mac | the meeting's full transcript and notes |
+| | Weekly | The overview in this week's report | Qwen3-1.7B on this Mac | the week's meeting summaries |
+| Selection Assistant | Translation | The selection assistant's "Translate" | Automatic | the selected text |
+| | AI Actions | Polish, Rewrite, Natural English, Explain, Summarize, custom actions | Qwen3-1.7B on this Mac | the selected text you run an action on |
+| Dictation | Polish | Tidying dictation into written text | Qwen3-1.7B on this Mac | the dictated text |
 
-Each tool's own settings page has the same row (plus "AI Settings…" to jump back here); changing either one changes both.
+Rows show a short name under the tool's heading; lists that span tools use the full name, such as "Used by: Selection
+AI Actions" under a cloud model. Each tool's own settings page has the same row (plus "AI Settings…" to jump back here);
+changing either one changes both.
 
 ### What's in the model menu
 
@@ -83,6 +87,8 @@ This pane only manages models:
   Lot of Memory / Not Enough Memory**. Pick one to see what kind of model it is, its file size and roughly how much memory it
   uses while running, then click "Download".
 
+![On This Mac: this Mac's memory and disk, installed models (running, downloading), and Add a Model](../images/ai/local-models.en.png)
+
 The models on offer:
 
 | Model | Notes |
@@ -126,6 +132,8 @@ Local, no key needed) and the number of models. Expanded:
   lists common ones. Below: "Add Model" and "Refresh List".
 - At the very bottom, "Delete Provider…": its models and saved key go too, and features using those models go back to their
   defaults.
+
+![Cloud: Anthropic Claude expanded (base URL, saved key, two models), then DeepSeek without a key and Ollama on this Mac](../images/ai/cloud-models.en.png)
 
 One provider can hold several models (a fast one for captions, a strong one for minutes, say), and you can add several
 accounts for the same service (a work key and a personal key).

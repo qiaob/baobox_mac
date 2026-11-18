@@ -24,6 +24,8 @@ English videos and courses, online meetings, or talking with colleagues in perso
 Switch under Settings → Meeting → Subtitles & Interpreting; switching while running restarts recognition automatically.
 The microphone is the system default input (System Settings › Sound › Input). Baobox's own sounds are never captured.
 
+![Settings → Meeting → Subtitles & Interpreting: audio source, spoken language, custom vocabulary, Translate captions and Translate into](../images/live-translate/settings.en.png)
+
 ## Language
 
 - **Spoken language**: with "Auto (A / B)" each sentence is checked against the two languages; or pick one.
@@ -34,6 +36,8 @@ The microphone is the system default input (System Settings › Sound › Input)
 Turn off "Translate captions" to get original-language captions only (live dictation).
 
 ## Caption bar
+
+![The caption bar: spoken language, Translate into, Speak, Record and the latency monitor on top; Chinese speech with English translations below, the newest sentence brightest](../images/live-translate/caption-bar.en.png)
 
 - The newest sentence updates live at the bottom; earlier ones are dimmer. **Drag an edge or corner to resize the bar**
   (there's a grip in the bottom-right corner); make it taller to see more sentences. Scroll up with the trackpad or
@@ -75,8 +79,10 @@ Turn off "Translate captions" to get original-language captions only (live dicta
 - On **macOS 26 and later** the new on-device speech engine is used automatically: text appears faster, context is kept
   across the whole stream, accuracy is higher, and audio never leaves your Mac. The model downloads the first time
   (the bar shows "Downloading the speech model"). Older systems, or a failed download, fall back to the previous engine.
-- **Custom vocabulary**: add names, product names and jargon that get misheard (comma- or newline-separated) in
-  settings, and recognition favors them.
+- **Custom vocabulary**: in the "Custom Vocabulary" table in settings, add one name, product name or bit of jargon that
+  gets misheard per row ("Add" adds a row), and recognition favors them. "Translate as" is optional (empty = keep it as
+  is); when filled, translation uses it. Apple's system translation (macOS 15+) can't use fixed translations, so there
+  the terms only help recognition.
 
 ## Privacy
 
@@ -84,7 +90,7 @@ Turn off "Translate captions" to get original-language captions only (live dicta
   when the on-device model is available, **audio never leaves your Mac**; otherwise Apple's speech service is used
   (same as system Dictation).
 - Translation uses the built-in on-device Apple Translation (macOS 15+) or the offline model, with no third-party
-  service. Only if you pick a cloud model for "Caption Translation" (or "AI Correction"), in the feature list under
+  service. Only if you pick a cloud model for "Captions" (or "Correction"), in the feature list under
   Settings → AI or the same row on this page, is each recognized sentence sent to that provider. When the cloud is
   unavailable it falls back to the local model (if downloaded).
 - Transcripts aren't saved by default. With "Save transcripts" on, they stay on this Mac, in the meeting library
