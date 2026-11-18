@@ -945,6 +945,16 @@ final class CaptureOverlayView: NSView {
         mosaicImage = nil
     }
 
+    /// 选区四边对齐到本窗口的物理像素格（1x 屏取整点，2x 屏取半点）。
+    /// 选区来自鼠标坐标，带小数（实测 316.08984375）；标注底图却是按整像素裁下来的，
+    /// 再画进带小数的 rect 就要错半个像素重采样 —— 一选标注工具，选区里的字立刻发虚，
+    /// 1x 外接屏上最明显（导出图不受影响，它按底图原像素合成）。贴图窗口按 rect 定尺寸，同理。
+    /// 对齐后裁剪与绘制一一对应，画上去就是原像素。
+    private func pixelAligned(_ rect: NSRect) -> NSRect {
+        let aligned = backingAlignedRect(rect, options: .alignAllEdgesNearest)
+        return aligned.width >= 1 && aligned.height >= 1 ? aligned : rect
+    }
+
     /// 从「含菜单整屏」底图裁剪 view 本地 rect 对应的像素（标注底图 / 最终裁剪用）。原点左上。
     /// 倍率从底图自身反推（像素宽 ÷ 视图点宽），不用 backingScaleFactor 假设 —— 同
     /// `CaptureController.crop`：底图实际像素密度与假设不一致时，按假设裁剪会错位/降采样。
@@ -1097,7 +1107,7 @@ final class CaptureOverlayView: NSView {
         let rect: NSRect
         switch phase {
         case .adjusting(let r), .annotating(let r):
-            rect = r
+            rect = pixelAligned(r)
         default:
             return
         }
@@ -1168,8 +1178,9 @@ final class CaptureOverlayView: NSView {
 extension CaptureOverlayView: AnnotationToolbarDelegate {
     func toolbarDidSelectTool(_ tool: AnnotationTool) {
         switch phase {
-        case .adjusting(let rect):
-            // 首次选定工具：锁定选区、冻结画面，进入标注相。
+        case .adjusting(let adjusted):
+            // 首次选定工具：锁定选区、冻结画面，进入标注相。选区先对齐到像素格（见 pixelAligned）。
+            let rect = pixelAligned(adjusted)
             phase = .annotating(rect: rect)
             beginFreezeIfNeeded(rect: rect)
         case .annotating(let rect):
