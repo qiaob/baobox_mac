@@ -80,9 +80,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - Baobox 自己必须看得见（菜单栏管理用）
 
     /// 主图标的窗口号：菜单栏管理临时显示隐藏的图标时，把它挪到这个窗口左边（最右侧，不会被挤）。
+    /// macOS 27.2.1 起状态栏图标的窗口号是合成值（1<<32 …），放不进 CGWindowID —— 这时给 nil，别硬转（硬转会崩）。
     var mainWindowID: CGWindowID? {
-        statusItem.button?.window.map { CGWindowID($0.windowNumber) }
+        statusItem.button?.window.flatMap { CGWindowID(exactly: $0.windowNumber) }
     }
+
+    /// 主图标窗口的原始窗口号（还没有窗口时 nil）。菜单栏管理据此判断这台 Mac 上能不能用（MenuBarManager.support）。
+    var mainWindowNumber: Int? { statusItem.button?.window?.windowNumber }
 
     /// 主图标此刻的窗口位置（AppKit 坐标）。
     var mainFrame: NSRect? { statusItem.button?.window?.frame }

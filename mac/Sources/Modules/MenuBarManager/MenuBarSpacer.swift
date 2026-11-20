@@ -38,9 +38,10 @@ final class MenuBarSpacer {
         item = nil
     }
 
-    /// 占位项的窗口号（挪图标时当「挪到它左边 / 右边」的目标）。
+    /// 占位项的窗口号（挪图标时当「挪到它左边 / 右边」的目标）。放不进 CGWindowID 就给 nil
+    /// （macOS 27.2.1 起状态栏图标的窗口号是合成值 1<<32 …，以前硬转在这里崩，TECH_DESIGN.md §11）。
     var windowID: CGWindowID? {
-        item?.button?.window.map { CGWindowID($0.windowNumber) }
+        item?.button?.window.flatMap { CGWindowID(exactly: $0.windowNumber) }
     }
 
     /// 占位项窗口的位置（CG 坐标）。向窗口服务器要：别的图标挪动后 AppKit 的 window.frame 要过一会儿才跟上

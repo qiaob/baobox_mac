@@ -13,6 +13,9 @@ struct MenuBarSettingsView: View {
     // 授权状态实时刷新（用户在系统设置里改了不用重开这一页）。
     private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
+    /// 这台 Mac 的系统用不了菜单栏管理（TECH_DESIGN.md §11）：开关置灰、显示成关，用户存的值不动。
+    private var unsupported: Bool { MenuBarManager.shared.isUnsupported }
+
     var body: some View {
         Form {
             Section {
@@ -22,13 +25,20 @@ struct MenuBarSettingsView: View {
             }
 
             Section {
-                Toggle("menubar.settings.enabled", isOn: $enabled)
+                Toggle("menubar.settings.enabled", isOn: unsupported ? .constant(false) : $enabled)
+                    .disabled(unsupported)
                     .onChange(of: enabled) { _, on in
                         MenuBarManager.shared.apply(on, userToggled: true)
                     }
-                Text("menubar.settings.enabledHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if unsupported {
+                    Text("menubar.settings.unsupported")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("menubar.settings.enabledHelp")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("menubar.settings.position")
@@ -43,7 +53,7 @@ struct MenuBarSettingsView: View {
                 }
             }
 
-            if enabled {
+            if enabled && !unsupported {
                 Section("menubar.settings.itemsSection") {
                     if scanner.items.isEmpty {
                         Text("menubar.settings.itemsEmpty")
@@ -81,7 +91,7 @@ struct MenuBarSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            if enabled { scanner.refresh() }
+            if MenuBarManager.shared.isActive { scanner.refresh() }
         }
         .onReceive(timer) { _ in
             hasAccessibility = Permissions.hasAccessibility

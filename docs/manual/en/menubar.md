@@ -67,6 +67,8 @@ several displays, it opens under the Baobox icon on the display the pointer is o
 ## Notes
 
 - Turning off "Manage the menu bar" brings every hidden icon back.
+- Starting with macOS 27.2.1 the system draws menu bar icons itself and Baobox can't move them for now: the switch in
+  Settings is grayed out and says "Not supported on this macOS version yet".
 - Some apps don't remember their icon's position between launches; their icon lands at the far left (hidden) each
   time, and you can still click it from the Baobox menu.
 - In a full-screen app the menu bar is tucked away, so Baobox can't tell what's squeezed out. Icon pictures can only be

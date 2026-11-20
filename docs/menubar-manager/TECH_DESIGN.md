@@ -242,3 +242,27 @@ Baobox 的取舍：
 4. 占位项 + 自动挪图标 + 设置页的显示 / 隐藏列表。
 5. Baobox 图标挪到最右 + 「打开 Baobox 菜单」快捷键。
 6. 文案（en + zh-Hans）、使用手册 `docs/manual/menubar.md`。
+
+## 11. macOS 27.2.1：状态栏图标不再是各 App 的窗口（2026-11-20）
+
+用户的 Mac 升级到 macOS 27.2.1（26B131）后，Baobox 0.0.8 每次启动约 6 秒就崩：`MenuBarSpacer.windowID` 里
+`CGWindowID($0.windowNumber)` 整数溢出（`MenuBarItemScanner.start()` 第一次扫描时读占位项的窗口号）。
+
+探针（独立的小程序，建几个状态项、一个 NSPanel，再列窗口）看到的变化：
+
+- `NSStatusBarWindow.windowNumber` 成了合成值：1<<32、2<<32、3<<32 …（低 32 位全是 0），放不进 32 位的 `CGWindowID`。
+  自己建的 NSPanel 的窗口号照旧（如 659）。
+- 窗口列表里没有任何 App 自己的 layer 25（状态栏层）窗口了；菜单栏那一条由系统进程 **MenuBarAgent**（layer 24）
+  和 Window Server 画。
+
+所以 §2 的扫描（按 layer 25 找各 App 的图标窗口）、§3 的占位项、§8c 的挪图标（事件里填窗口号）在这个系统上都没了依据。
+怎么适配另行调研；这次只做降级，保证不崩：
+
+- 状态栏窗口号一律 `CGWindowID(exactly:)`，放不进就当没有（`MenuBarSpacer.windowID`、`StatusItemController.mainWindowID`）。
+- **运行时判断能不能用，不看系统版本号**：Baobox 主图标的窗口号放得进 `CGWindowID` 才算能用（`MenuBarManager.resolveSupport()`）。
+  各模块 `activate()` 跑在主图标建好之前，那时还看不出来：开关开着就先什么都不装，每 0.25 秒再看一次；
+  5 秒还看不出来（主图标一直没有窗口号）就照旧当能用 —— 窗口号已是安全转换，不会再崩。
+  因此支持的系统上，占位项也改成在主图标建好之后才装（主图标的名字写死 `Item-0`，先后顺序不影响它的位置，§4）。
+- 不支持时：不装占位项、不扫描，Baobox 菜单顶部那一行不出现；「菜单栏」子菜单第一行是置灰的「当前 macOS 版本暂不支持」；
+  设置页开关置灰并显示成关，下面一句说明原因。用户存的 `menubar.enabled` 不改，换到支持的系统上照旧生效。
+- 「把 Baobox 图标放到最右边」不读窗口号（只改位置偏好、重建状态项），不支持时也留着；新系统上还认不认这个位置偏好没验证。
