@@ -11,6 +11,10 @@ final class MenuBarManagerTool: ToolModule {
     let symbolName = "menubar.rectangle"
 
     func submenuItems() -> [NSMenuItem] {
+        // 系统收纳时（macOS 27 起，MACOS27.md §3）只有一行说明：「放到最右边」对用户 ⌘ 拖过的图标不起作用，不放。
+        if MenuBarManager.shared.usesSystemOverflow {
+            return [NSMenuItem(title: L("menubar.menu.systemOverflow"), action: nil, keyEquivalent: "")]
+        }
         var items: [NSMenuItem] = []
         if MenuBarSettings.enabled {
             let hidden = MenuBarItemScanner.shared.items.filter { $0.state == .hidden }.count
@@ -60,16 +64,60 @@ final class MenuBarManager {
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var lastRescue = Date.distantPast
+    /// 这台 Mac 上能不能用；nil = 还看不出来。见 `resolveSupport()`。
+    private var support: Bool?
+    /// 看不出来时已经隔一会儿再看了几次（启动时各模块 activate 比主图标先跑）。
+    private var supportRetries = 0
     /// 第一次看到 Baobox 图标「被挤掉」的时间；连着看到、隔 2 秒以上才挪。
     private var squeezedSince: Date?
     private static let log = Logger(subsystem: "com.baobox.app", category: "menubar")
 
     private init() {}
 
+    /// 这台 Mac 的菜单栏由系统收纳（macOS 27 起，docs/menubar-manager/MACOS27.md §3）：放不下的图标系统自己收进菜单栏左边的「«」，
+    /// Baobox 什么都不装、不挪，菜单和设置页只写一句怎么找、怎么让 Baobox 一直露在外面。
+    var usesSystemOverflow: Bool { resolveSupport() == false }
+
+    /// 开着、并且这台 Mac 用得了旧做法（占位项 + 扫描）：只有这时才有占位项、才扫描。
+    var isActive: Bool { MenuBarSettings.enabled && resolveSupport() == true }
+
+    /// 运行时判断，不看系统版本号：Baobox 主图标的窗口号放得进 CGWindowID 才算能用。
+    /// macOS 27.2.1 起状态栏图标改由系统进程 MenuBarAgent 绘制，各 App 的状态栏窗口号是合成值（1<<32、2<<32 …），
+    /// 窗口列表里也没有各 App 的 layer 25 窗口 —— 占位项、扫描、挪图标都没了依据。
+    /// 主图标还没建好、窗口号还没分配时返回 nil；看出来了就记住（运行中系统版本不会变）。只读内存，菜单构建里也能调。
+    private func resolveSupport() -> Bool? {
+        if support == nil, let number = AppDelegate.shared?.statusItemController?.mainWindowNumber, number > 0 {
+            let fits = CGWindowID(exactly: number) != nil
+            support = fits
+            if !fits {
+                Self.log.notice("Status item windows have synthetic numbers (\(number, privacy: .public)); the system handles overflow, menu bar management stays off")
+            }
+        }
+        return support
+    }
+
     /// 设置页的开关、启动时都走这里（开关的值已由 @AppStorage 写好）。
     /// `userToggled`：用户刚在设置里打开 —— 顺手把 Baobox 图标挪到最右边（从左边开始挤，最右边最安全）。
+    /// 系统收纳时什么都不装、不扫描；用户存的开关值不动。
     func apply(_ enabled: Bool, userToggled: Bool = false) {
-        if enabled {
+        let supported = resolveSupport()
+        if enabled, supported == nil {
+            // 启动时 activate() 比主图标先跑，还看不出来：先什么都不装，过一会儿再看。
+            // 5 秒还看不出来（主图标一直没有窗口号）就照旧当能用 —— 窗口号已经是安全转换，不会再崩。
+            supportRetries += 1
+            if supportRetries > 20 {
+                support = true
+                apply(enabled, userToggled: userToggled)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                MainActor.assumeIsolated {
+                    MenuBarManager.shared.apply(MenuBarSettings.enabled, userToggled: userToggled)
+                }
+            }
+            return
+        }
+        if enabled, supported == true {
             spacer.install()
             startRefreshing()
             if userToggled, let controller = AppDelegate.shared?.statusItemController, !controller.isAtFarRight {
@@ -88,7 +136,7 @@ final class MenuBarManager {
     /// 每次扫描完检查；不对就挪回最右边 —— 改自己的位置值、重建状态项，不用模拟拖，菜单栏不闪。
     /// Baobox 菜单开着、正在挪图标时不动；10 秒内最多挪一次；已经在最右边还被挤掉就不再折腾（靠快捷键兜底）。
     func ensureBaoboxVisible() {
-        guard MenuBarSettings.enabled, !StatusItemController.isMenuOpen, !MenuBarActions.shared.busy,
+        guard isActive, !StatusItemController.isMenuOpen, !MenuBarActions.shared.busy,
               let controller = AppDelegate.shared?.statusItemController,
               let main = controller.mainFrame, let gap = spacer.frameX else { return }
         let hidden = main.maxX <= gap.minX + 2
@@ -107,7 +155,7 @@ final class MenuBarManager {
 
     /// Baobox 菜单最上面那一行：只读扫描缓存（菜单构建零 IO）。
     func headerItems() -> [NSMenuItem] {
-        guard MenuBarSettings.enabled else { return [] }
+        guard isActive else { return [] }
         let items = MenuBarItemScanner.shared.items
         let hidden = items.filter { $0.state == .hidden }
         let squeezed = MenuBarSettings.showSqueezed ? items.filter { $0.state == .squeezed } : []

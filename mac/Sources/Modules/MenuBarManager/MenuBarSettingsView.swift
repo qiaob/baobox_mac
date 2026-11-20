@@ -13,75 +13,86 @@ struct MenuBarSettingsView: View {
     // 授权状态实时刷新（用户在系统设置里改了不用重开这一页）。
     private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
+    /// macOS 27 起菜单栏由系统收纳（MACOS27.md §3）：这一页只剩一句话 —— 去哪找被收起来的图标、怎么让 Baobox 一直露在外面。
+    private var systemOverflow: Bool { MenuBarManager.shared.usesSystemOverflow }
+
     var body: some View {
         Form {
-            Section {
-                Text("menubar.settings.intro")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle("menubar.settings.enabled", isOn: $enabled)
-                    .onChange(of: enabled) { _, on in
-                        MenuBarManager.shared.apply(on, userToggled: true)
-                    }
-                Text("menubar.settings.enabledHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("menubar.settings.position")
-                        Text("menubar.settings.positionHelp")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("menubar.settings.moveRight") {
-                        AppDelegate.shared?.statusItemController?.placeNearSystemIcons()
-                    }
+            if systemOverflow {
+                Section {
+                    Text("menubar.settings.systemOverflow")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-            }
-
-            if enabled {
-                Section("menubar.settings.itemsSection") {
-                    if scanner.items.isEmpty {
-                        Text("menubar.settings.itemsEmpty")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(scanner.items) { item in
-                        itemRow(item)
-                    }
-                    Text("menubar.settings.itemsHelp")
-                        .font(.caption)
+            } else {
+                Section {
+                    Text("menubar.settings.intro")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Section {
-                    Toggle("menubar.settings.showSqueezed", isOn: $showSqueezed)
-                    Text("menubar.settings.showSqueezedHelp")
+                    Toggle("menubar.settings.enabled", isOn: $enabled)
+                        .onChange(of: enabled) { _, on in
+                            MenuBarManager.shared.apply(on, userToggled: true)
+                        }
+                    Text("menubar.settings.enabledHelp")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("menubar.settings.position")
+                            Text("menubar.settings.positionHelp")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("menubar.settings.moveRight") {
+                            AppDelegate.shared?.statusItemController?.placeNearSystemIcons()
+                        }
+                    }
                 }
-            }
 
-            Section("settings.general.permissionSection") {
-                permissionRow(title: "permission.screenRecording", detail: "menubar.settings.screenDesc",
-                              granted: hasScreenRecording) {
-                    Permissions.requestScreenRecording()
-                    Permissions.openSystemSettings(pane: .screenRecording)
+                if enabled {
+                    Section("menubar.settings.itemsSection") {
+                        if scanner.items.isEmpty {
+                            Text("menubar.settings.itemsEmpty")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(scanner.items) { item in
+                            itemRow(item)
+                        }
+                        Text("menubar.settings.itemsHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        Toggle("menubar.settings.showSqueezed", isOn: $showSqueezed)
+                        Text("menubar.settings.showSqueezedHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                permissionRow(title: "permission.accessibility", detail: "menubar.settings.axDesc",
-                              granted: hasAccessibility) {
-                    Permissions.promptAccessibility()
-                    Permissions.openSystemSettings(pane: .accessibility)
+
+                Section("settings.general.permissionSection") {
+                    permissionRow(title: "permission.screenRecording", detail: "menubar.settings.screenDesc",
+                                  granted: hasScreenRecording) {
+                        Permissions.requestScreenRecording()
+                        Permissions.openSystemSettings(pane: .screenRecording)
+                    }
+                    permissionRow(title: "permission.accessibility", detail: "menubar.settings.axDesc",
+                                  granted: hasAccessibility) {
+                        Permissions.promptAccessibility()
+                        Permissions.openSystemSettings(pane: .accessibility)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
         .onAppear {
-            if enabled { scanner.refresh() }
+            if MenuBarManager.shared.isActive { scanner.refresh() }
         }
         .onReceive(timer) { _ in
             hasAccessibility = Permissions.hasAccessibility
