@@ -97,6 +97,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return window.occlusionState.contains(.visible) && Self.isOnVisibleMenuBar(window.frame)
     }
 
+    /// 主图标被系统收进菜单栏的「•••」了（macOS 27 起系统自己收纳放不下的图标，docs/menubar-manager/MACOS27.md §1）：
+    /// 被收进去的状态项窗口不在任何屏上（`screen == nil`，探针里落在 (0, -33)）。27 上状态项窗口的 occlusionState 一直不含
+    /// `.visible`，不能拿它判断。
+    var mainIsInSystemOverflow: Bool {
+        guard let window = statusItem.button?.window else { return false }
+        return window.screen == nil || window.frame.maxY <= 0
+    }
+
     /// 已经在「最右边」了：再挪也不会更好（真放不下时就靠「打开 Baobox 菜单」快捷键）。
     var isAtFarRight: Bool {
         let key = "NSStatusItem Preferred Position \(Self.autosaveName)"

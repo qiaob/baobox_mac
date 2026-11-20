@@ -13,32 +13,26 @@ struct MenuBarSettingsView: View {
     // 授权状态实时刷新（用户在系统设置里改了不用重开这一页）。
     private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
-    /// 这台 Mac 的系统用不了菜单栏管理（TECH_DESIGN.md §11）：开关置灰、显示成关，用户存的值不动。
-    private var unsupported: Bool { MenuBarManager.shared.isUnsupported }
+    /// macOS 27 起菜单栏由系统收纳（MACOS27.md §3）：开关只管 Baobox 自己的图标一直看得见，不列图标、不要权限。
+    private var systemOverflow: Bool { MenuBarManager.shared.usesSystemOverflow }
 
     var body: some View {
         Form {
             Section {
-                Text("menubar.settings.intro")
+                Text(systemOverflow ? LocalizedStringKey("menubar.settings.introSystemOverflow") : LocalizedStringKey("menubar.settings.intro"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Toggle("menubar.settings.enabled", isOn: unsupported ? .constant(false) : $enabled)
-                    .disabled(unsupported)
+                Toggle(systemOverflow ? LocalizedStringKey("menubar.settings.keepVisible") : LocalizedStringKey("menubar.settings.enabled"),
+                       isOn: $enabled)
                     .onChange(of: enabled) { _, on in
                         MenuBarManager.shared.apply(on, userToggled: true)
                     }
-                if unsupported {
-                    Text("menubar.settings.unsupported")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("menubar.settings.enabledHelp")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(systemOverflow ? LocalizedStringKey("menubar.settings.keepVisibleHelp") : LocalizedStringKey("menubar.settings.enabledHelp"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("menubar.settings.position")
@@ -53,7 +47,7 @@ struct MenuBarSettingsView: View {
                 }
             }
 
-            if enabled && !unsupported {
+            if enabled && !systemOverflow {
                 Section("menubar.settings.itemsSection") {
                     if scanner.items.isEmpty {
                         Text("menubar.settings.itemsEmpty")
@@ -76,16 +70,18 @@ struct MenuBarSettingsView: View {
                 }
             }
 
-            Section("settings.general.permissionSection") {
-                permissionRow(title: "permission.screenRecording", detail: "menubar.settings.screenDesc",
-                              granted: hasScreenRecording) {
-                    Permissions.requestScreenRecording()
-                    Permissions.openSystemSettings(pane: .screenRecording)
-                }
-                permissionRow(title: "permission.accessibility", detail: "menubar.settings.axDesc",
-                              granted: hasAccessibility) {
-                    Permissions.promptAccessibility()
-                    Permissions.openSystemSettings(pane: .accessibility)
+            if !systemOverflow {
+                Section("settings.general.permissionSection") {
+                    permissionRow(title: "permission.screenRecording", detail: "menubar.settings.screenDesc",
+                                  granted: hasScreenRecording) {
+                        Permissions.requestScreenRecording()
+                        Permissions.openSystemSettings(pane: .screenRecording)
+                    }
+                    permissionRow(title: "permission.accessibility", detail: "menubar.settings.axDesc",
+                                  granted: hasAccessibility) {
+                        Permissions.promptAccessibility()
+                        Permissions.openSystemSettings(pane: .accessibility)
+                    }
                 }
             }
         }
