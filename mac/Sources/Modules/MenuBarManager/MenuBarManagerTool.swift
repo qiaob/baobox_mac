@@ -11,10 +11,12 @@ final class MenuBarManagerTool: ToolModule {
     let symbolName = "menubar.rectangle"
 
     func submenuItems() -> [NSMenuItem] {
+        // 系统收纳时（macOS 27 起，MACOS27.md §3）只有一行说明：「放到最右边」对用户 ⌘ 拖过的图标不起作用，不放。
+        if MenuBarManager.shared.usesSystemOverflow {
+            return [NSMenuItem(title: L("menubar.menu.systemOverflow"), action: nil, keyEquivalent: "")]
+        }
         var items: [NSMenuItem] = []
-        if MenuBarManager.shared.usesSystemOverflow, MenuBarSettings.enabled {
-            items.append(NSMenuItem(title: L("menubar.menu.systemOverflow"), action: nil, keyEquivalent: ""))
-        } else if MenuBarSettings.enabled, !MenuBarManager.shared.usesSystemOverflow {
+        if MenuBarSettings.enabled {
             let hidden = MenuBarItemScanner.shared.items.filter { $0.state == .hidden }.count
             items.append(NSMenuItem(title: L("menubar.menu.status \(hidden)"), action: nil, keyEquivalent: ""))
         } else {
@@ -68,14 +70,12 @@ final class MenuBarManager {
     private var supportRetries = 0
     /// 第一次看到 Baobox 图标「被挤掉」的时间；连着看到、隔 2 秒以上才挪。
     private var squeezedSince: Date?
-    /// 系统收纳时：已经在最右边还被收进「•••」，这件事记过日志了（不重复记）。
-    private var loggedStuckInOverflow = false
     private static let log = Logger(subsystem: "com.baobox.app", category: "menubar")
 
     private init() {}
 
-    /// 这台 Mac 的菜单栏由系统收纳（macOS 27 起，docs/menubar-manager/MACOS27.md §3）：放不下的图标系统自己收进「•••」，
-    /// 菜单栏管理只管 Baobox 自己的图标一直看得见。菜单、设置页据此换说法。
+    /// 这台 Mac 的菜单栏由系统收纳（macOS 27 起，docs/menubar-manager/MACOS27.md §3）：放不下的图标系统自己收进菜单栏左边的「«」，
+    /// Baobox 什么都不装、不挪，菜单和设置页只写一句怎么找、怎么让 Baobox 一直露在外面。
     var usesSystemOverflow: Bool { resolveSupport() == false }
 
     /// 开着、并且这台 Mac 用得了旧做法（占位项 + 扫描）：只有这时才有占位项、才扫描。
@@ -90,7 +90,7 @@ final class MenuBarManager {
             let fits = CGWindowID(exactly: number) != nil
             support = fits
             if !fits {
-                Self.log.notice("Status item windows have synthetic numbers (\(number, privacy: .public)); the system handles overflow, only keeping the Baobox icon visible")
+                Self.log.notice("Status item windows have synthetic numbers (\(number, privacy: .public)); the system handles overflow, menu bar management stays off")
             }
         }
         return support
@@ -98,7 +98,7 @@ final class MenuBarManager {
 
     /// 设置页的开关、启动时都走这里（开关的值已由 @AppStorage 写好）。
     /// `userToggled`：用户刚在设置里打开 —— 顺手把 Baobox 图标挪到最右边（从左边开始挤，最右边最安全）。
-    /// 系统收纳时不装占位项、不扫描，只开看门狗（`guardBaoboxIcon()`）；用户存的开关值不动。
+    /// 系统收纳时什么都不装、不扫描；用户存的开关值不动。
     func apply(_ enabled: Bool, userToggled: Bool = false) {
         let supported = resolveSupport()
         if enabled, supported == nil {
@@ -120,58 +120,15 @@ final class MenuBarManager {
         if enabled, supported == true {
             spacer.install()
             startRefreshing()
-            moveBaoboxRightIfToggled(userToggled)
+            if userToggled, let controller = AppDelegate.shared?.statusItemController, !controller.isAtFarRight {
+                controller.placeNearSystemIcons()
+            }
             MenuBarItemScanner.shared.refresh()
-        } else if enabled {
-            spacer.remove()
-            MenuBarItemScanner.shared.clear()
-            squeezedSince = nil
-            startRefreshing()
-            moveBaoboxRightIfToggled(userToggled)
         } else {
             spacer.remove()
             stopRefreshing()
             MenuBarItemScanner.shared.clear()
         }
-    }
-
-    private func moveBaoboxRightIfToggled(_ userToggled: Bool) {
-        guard userToggled, let controller = AppDelegate.shared?.statusItemController, !controller.isAtFarRight else { return }
-        controller.placeNearSystemIcons()
-    }
-
-    /// 定时器、App 切换 / 启动 / 退出时：旧做法扫描（扫完顺带 `ensureBaoboxVisible()`），系统收纳时只看 Baobox 自己的图标。
-    private func tick() {
-        if isActive {
-            MenuBarItemScanner.shared.refresh()
-        } else if MenuBarSettings.enabled, usesSystemOverflow {
-            guardBaoboxIcon()
-        }
-    }
-
-    /// 系统收纳时的看门狗（MACOS27.md §3）：Baobox 图标连着 2 秒以上在系统的「•••」里、又不在最右边，就挪回最右边。
-    /// 和 `ensureBaoboxVisible()` 同样的节制：菜单开着不动、10 秒内最多挪一次、已经在最右边还被收进去就不再折腾（靠快捷键兜底）。
-    private func guardBaoboxIcon() {
-        guard !StatusItemController.isMenuOpen, let controller = AppDelegate.shared?.statusItemController else { return }
-        guard controller.mainIsInSystemOverflow else {
-            squeezedSince = nil
-            loggedStuckInOverflow = false
-            return
-        }
-        squeezedSince = squeezedSince ?? Date()
-        guard let since = squeezedSince, Date().timeIntervalSince(since) >= 2 else { return }
-        guard !controller.isAtFarRight else {
-            if !loggedStuckInOverflow {
-                loggedStuckInOverflow = true
-                Self.log.notice("Baobox icon is in the system overflow although it is already at the right end")
-            }
-            return
-        }
-        guard Date().timeIntervalSince(lastRescue) > 10 else { return }
-        lastRescue = Date()
-        squeezedSince = nil
-        Self.log.notice("Baobox icon went into the system overflow; moving it to the right end")
-        controller.placeNearSystemIcons()
     }
 
     /// Baobox 自己的图标必须一直看得见：它要是落进隐藏区（在占位项左边）或被挤掉，就再也打不开 Baobox 菜单，
@@ -209,7 +166,7 @@ final class MenuBarManager {
         guard timer == nil else { return }
         // common 模式：Baobox 菜单开着（事件跟踪模式）时也照样扫。
         let timer = Timer(timeInterval: 3, repeats: true) { _ in
-            MainActor.assumeIsolated { MenuBarManager.shared.tick() }
+            MainActor.assumeIsolated { MenuBarItemScanner.shared.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -220,7 +177,7 @@ final class MenuBarManager {
                                           NSWorkspace.didTerminateApplicationNotification]
         for name in names {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { MenuBarManager.shared.tick() }
+                MainActor.assumeIsolated { MenuBarItemScanner.shared.refresh() }
             })
         }
     }

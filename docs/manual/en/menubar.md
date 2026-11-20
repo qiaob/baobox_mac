@@ -67,9 +67,9 @@ several displays, it opens under the Baobox icon on the display the pointer is o
 ## Notes
 
 - Turning off "Manage the menu bar" brings every hidden icon back.
-- Starting with macOS 27 the system tucks icons that don't fit into the menu bar's "•••" itself, and Baobox can't move
-  other icons. The switch in Settings becomes "Keep the Baobox icon visible": the Baobox icon sits at the right end and
-  moves back there if the system tucks it into "•••". Show / Hide and the top row of the Baobox menu aren't available.
+- Starting with macOS 27 the system puts icons that don't fit under the "«" at the left of the menu bar; click it to see
+  them (the Baobox icon too). Baobox can't move other icons, so Show / Hide and the top row of the Baobox menu aren't
+  available and Settings shows a single line. To keep the Baobox icon in view, hold ⌘ and drag it to the right end.
 - Some apps don't remember their icon's position between launches; their icon lands at the far left (hidden) each
   time, and you can still click it from the Baobox menu.
 - In a full-screen app the menu bar is tucked away, so Baobox can't tell what's squeezed out. Icon pictures can only be

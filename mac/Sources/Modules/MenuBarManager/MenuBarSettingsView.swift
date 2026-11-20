@@ -13,64 +13,69 @@ struct MenuBarSettingsView: View {
     // 授权状态实时刷新（用户在系统设置里改了不用重开这一页）。
     private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
-    /// macOS 27 起菜单栏由系统收纳（MACOS27.md §3）：开关只管 Baobox 自己的图标一直看得见，不列图标、不要权限。
+    /// macOS 27 起菜单栏由系统收纳（MACOS27.md §3）：这一页只剩一句话 —— 去哪找被收起来的图标、怎么让 Baobox 一直露在外面。
     private var systemOverflow: Bool { MenuBarManager.shared.usesSystemOverflow }
 
     var body: some View {
         Form {
-            Section {
-                Text(systemOverflow ? LocalizedStringKey("menubar.settings.introSystemOverflow") : LocalizedStringKey("menubar.settings.intro"))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle(systemOverflow ? LocalizedStringKey("menubar.settings.keepVisible") : LocalizedStringKey("menubar.settings.enabled"),
-                       isOn: $enabled)
-                    .onChange(of: enabled) { _, on in
-                        MenuBarManager.shared.apply(on, userToggled: true)
-                    }
-                Text(systemOverflow ? LocalizedStringKey("menubar.settings.keepVisibleHelp") : LocalizedStringKey("menubar.settings.enabledHelp"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("menubar.settings.position")
-                        Text("menubar.settings.positionHelp")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("menubar.settings.moveRight") {
-                        AppDelegate.shared?.statusItemController?.placeNearSystemIcons()
-                    }
+            if systemOverflow {
+                Section {
+                    Text("menubar.settings.systemOverflow")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-            }
-
-            if enabled && !systemOverflow {
-                Section("menubar.settings.itemsSection") {
-                    if scanner.items.isEmpty {
-                        Text("menubar.settings.itemsEmpty")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(scanner.items) { item in
-                        itemRow(item)
-                    }
-                    Text("menubar.settings.itemsHelp")
-                        .font(.caption)
+            } else {
+                Section {
+                    Text("menubar.settings.intro")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
 
                 Section {
-                    Toggle("menubar.settings.showSqueezed", isOn: $showSqueezed)
-                    Text("menubar.settings.showSqueezedHelp")
+                    Toggle("menubar.settings.enabled", isOn: $enabled)
+                        .onChange(of: enabled) { _, on in
+                            MenuBarManager.shared.apply(on, userToggled: true)
+                        }
+                    Text("menubar.settings.enabledHelp")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("menubar.settings.position")
+                            Text("menubar.settings.positionHelp")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("menubar.settings.moveRight") {
+                            AppDelegate.shared?.statusItemController?.placeNearSystemIcons()
+                        }
+                    }
                 }
-            }
 
-            if !systemOverflow {
+                if enabled {
+                    Section("menubar.settings.itemsSection") {
+                        if scanner.items.isEmpty {
+                            Text("menubar.settings.itemsEmpty")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(scanner.items) { item in
+                            itemRow(item)
+                        }
+                        Text("menubar.settings.itemsHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        Toggle("menubar.settings.showSqueezed", isOn: $showSqueezed)
+                        Text("menubar.settings.showSqueezedHelp")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("settings.general.permissionSection") {
                     permissionRow(title: "permission.screenRecording", detail: "menubar.settings.screenDesc",
                                   granted: hasScreenRecording) {
