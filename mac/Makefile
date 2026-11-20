@@ -20,6 +20,9 @@ DEST      := /Applications/$(APP)
 # 目录名以 .noindex 结尾：Spotlight 不索引这种目录，编出来的 Baobox.app 就不会出现在
 # 「应用程序」列表里（每个 worktree 编一次就多一个同名图标）。
 BUILD_DIR := $(CURDIR)/build.noindex
+# 光躲开 Spotlight 不够：xcodebuild 每次编完都会把产物登记进 Launch Services，
+# 系统的 App 列表也读那份登记。所以编完再把它注销掉（只按路径注销，不动 /Applications 里那份）。
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 # 离线翻译的推理进程：llama.cpp 官方 macOS 预编译包，构建号与 SHA-256 固定（升级时两个一起改）。
 # 只取 llama-server 和它依赖的 dylib 放进 Vendor/llama/（gitignore），
@@ -103,6 +106,7 @@ build: project vendor
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Release \
 		-allowProvisioningUpdates \
 		CONFIGURATION_BUILD_DIR=$(BUILD_DIR)/Release build
+	@$(LSREGISTER) -u "$(BUILD_DIR)/Release/$(APP)" >/dev/null 2>&1 || true
 
 ## 编译并安装到 /Applications，随后启动
 install: build stop
@@ -128,5 +132,6 @@ stop:
 	@sleep 1
 
 clean:
+	@$(LSREGISTER) -u "$(BUILD_DIR)/Release/$(APP)" "$(BUILD_DIR)/Debug/$(APP)" >/dev/null 2>&1 || true
 	rm -rf "$(BUILD_DIR)" "$(CURDIR)/build"
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) clean 2>/dev/null || true
