@@ -17,7 +17,9 @@ PROJECT   := Baobox.xcodeproj
 SCHEME    := Baobox
 APP       := Baobox.app
 DEST      := /Applications/$(APP)
-BUILD_DIR := $(CURDIR)/build
+# 目录名以 .noindex 结尾：Spotlight 不索引这种目录，编出来的 Baobox.app 就不会出现在
+# 「应用程序」列表里（每个 worktree 编一次就多一个同名图标）。
+BUILD_DIR := $(CURDIR)/build.noindex
 
 # 离线翻译的推理进程：llama.cpp 官方 macOS 预编译包，构建号与 SHA-256 固定（升级时两个一起改）。
 # 只取 llama-server 和它依赖的 dylib 放进 Vendor/llama/（gitignore），
@@ -96,7 +98,7 @@ $(LLAMA_STAMP):
 	@rm -rf "$(LLAMA_DIR).tmp"
 	@touch "$@"
 
-## 编译 Release 到 build/Release
+## 编译 Release 到 build.noindex/Release
 build: project vendor
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Release \
 		-allowProvisioningUpdates \
@@ -126,5 +128,5 @@ stop:
 	@sleep 1
 
 clean:
-	rm -rf "$(BUILD_DIR)"
+	rm -rf "$(BUILD_DIR)" "$(CURDIR)/build"
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) clean 2>/dev/null || true
