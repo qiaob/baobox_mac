@@ -24,7 +24,8 @@ BUILD_DIR := $(CURDIR)/build.noindex
 # 系统的 App 列表也读那份登记。所以编完再把它注销掉（只按路径注销，不动 /Applications 里那份）。
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 # 连包里嵌着的 .app 一起注销（抓包内核 mitmproxy.app 和它里面的小工具）：xcodebuild 登记外层时把它们也登记了。
-unregister = find "$(1)" -name "*.app" -type d -print0 2>/dev/null | xargs -0 -n1 $(LSREGISTER) -u >/dev/null 2>&1 || true
+# find -d：先里后外。
+unregister = find -d "$(1)" -name "*.app" -type d -print0 2>/dev/null | xargs -0 -n1 $(LSREGISTER) -u >/dev/null 2>&1 || true
 
 # 离线翻译的推理进程：llama.cpp 官方 macOS 预编译包，构建号与 SHA-256 固定（升级时两个一起改）。
 # 只取 llama-server 和它依赖的 dylib 放进 Vendor/llama/（gitignore），
