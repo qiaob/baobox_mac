@@ -18,10 +18,7 @@ targets:
         excludes:
           - "Resources/Pets"
           - "Resources/PhoneTransfer"
-          # 网络抓包（NetCapture）暂缓发布（#103）：里面有 MITM 代理和自签 CA，没注册也不该编进发布包，代码先留在仓库。
-          # 恢复时：删掉这一行；AppDelegate 里取消 `registry.register(NetCaptureTool())` 的注释；
-          # NSLocalNetworkUsageDescription 补回「网络抓包」；按 docs/packet-capture/ 重新过一遍安全评审（CA 私钥存放、代理只听本机）。
-          - "Modules/NetCapture"
+          - "Resources/NetCapture"
       # 内置宠物形象：整个文件夹原样拷进 Resources/Pets/<形象>/（每个形象都有自己的 pet.json，
       # 按普通资源平铺会同名冲突）。见 docs/desktop-pet/PACKS.md。
       - path: Sources/Resources/Pets
@@ -30,6 +27,11 @@ targets:
       # 手机互传的网页（手机页 + 公网模式共享层 + Mac 宿主页）：整个文件夹拷进 Resources/PhoneTransfer/，
       # 局域网服务直接读它，GitHub Pages 工作流也从这里发布。见 docs/phone-transfer/TECH_DESIGN.md。
       - path: Sources/Resources/PhoneTransfer
+        type: folder
+        buildPhase: resources
+      # 网络抓包的桥脚本（mitmdump 用 -s 加载的 Python 插件）：整个文件夹拷进 Resources/NetCapture/。
+      # 见 docs/packet-capture/TECH_DESIGN.md §4。
+      - path: Sources/Resources/NetCapture
         type: folder
         buildPhase: resources
     info:
@@ -48,7 +50,7 @@ targets:
         # 会议记录、实时翻译、语音听写用 Speech 框架做语音识别；缺这条描述，首次请求授权时进程会被系统直接杀掉。
         NSSpeechRecognitionUsageDescription: "会议记录、实时翻译与语音听写需要把语音转成文字（优先在本机识别）。Meeting recording, Live Translate and Dictation convert speech into text (on this Mac when possible)."
         NSAppleEventsUsageDescription: "用于把已在运行的 Claude Code 会话所在的终端窗口切换到前台。Used to bring the terminal window hosting a running Claude Code session to the front."
-        NSLocalNetworkUsageDescription: "手机互传需要使用局域网，让同一 Wi-Fi 下的手机连接这台 Mac。Phone Transfer uses the local network so phones on the same Wi-Fi can connect to this Mac."
+        NSLocalNetworkUsageDescription: "手机互传与网络抓包需要使用局域网，让同一 Wi-Fi 下的手机连接这台 Mac。Phone Transfer and Network Capture use the local network so phones on the same Wi-Fi can connect to this Mac."
         # 会议读本机日历（只读、数据不出本机）：下一场会议、会前提醒、一键入会、会议绑定日历事件。
         # 缺这条描述，申请日历权限时进程会被系统直接杀掉。
         NSCalendarsFullAccessUsageDescription: "会议需要读取你选中的日历，用来显示下一场会议、会前提醒、一键入会，并把会议记录与日历事件对应起来；只读，数据不出本机。Meeting reads the calendars you choose to show your next meeting, remind you before it starts, join it in one click and link recordings to calendar events. Read-only; nothing leaves this Mac."
@@ -128,6 +130,25 @@ targets:
               "${DEST}/BaoboxInterpreter.driver"
           fi
 
+      # 网络抓包的内核（docs/packet-capture/TECH_DESIGN.md §2）：把 `make vendor` 下载的 Vendor/mitmproxy.noindex/mitmproxy.app
+      # 整个拷进 Contents/Helpers/。和上面两个相反，这里**不重签、不删文件**：它带着 mitmproxy 作者的
+      # Developer ID 签名并已公证，签名封住了整个包，动任何一个文件外层的 --deep --strict 校验就过不了。
+      # 用 ditto 保留签名与扩展属性。没有 Vendor 就跳过 —— App 照常可用，抓包模块显示为不可用。
+      - name: Embed mitmproxy
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          SRC="${SRCROOT}/Vendor/mitmproxy.noindex"
+          DEST="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/mitmproxy.app"
+          rm -rf "${DEST}"
+          if [ ! -x "${SRC}/mitmproxy.app/Contents/MacOS/mitmdump" ]; then
+            echo "warning: ${SRC}/mitmproxy.app not found, network capture engine not embedded (run: make vendor)"
+            exit 0
+          fi
+          mkdir -p "$(dirname "${DEST}")"
+          /usr/bin/ditto "${SRC}/mitmproxy.app" "${DEST}"
+          cp "${SRC}/LICENSE" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/mitmproxy-LICENSE.txt"
+
   # 纯逻辑单元测试：只编 Tests/ 与被测的纯逻辑源码，不链接 App、不设 TEST_HOST，由 xctest 直接加载，不启动 Baobox。
   # 要测别的纯逻辑，把那个目录加进 sources（它不能引用 App / 模块类型）。
   # - Core/CLIUsage：Claude Code / Codex 的用量统计
@@ -171,6 +192,7 @@ targets:
       - path: Sources/Core/CLIFormat.swift
       - path: Sources/Core/CLIVersion.swift
       - path: Sources/Core/Translation/OfflineServerPID.swift
+      - path: Sources/Modules/NetCapture/Logic
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

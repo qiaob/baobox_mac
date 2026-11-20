@@ -86,8 +86,8 @@ enum ADBController {
     @discardableResult
     static func pushAndInstallCert(serial: String) -> Bool {
         guard let adb = adbPath() else { return false }
-        let caPath = MITMCertAuthority.shared.caCertURL.path
-        guard FileManager.default.fileExists(atPath: caPath) else { return false }
+        guard CaptureCA.shared.ensureGenerated() else { return false }
+        let caPath = CaptureCA.shared.certURL.path
         let remote = "/sdcard/Download/baobox-ca.crt"
         let push = NetCaptureEnv.run(adb, ["-s", serial, "push", caPath, remote])
         guard push.ok else { return false }

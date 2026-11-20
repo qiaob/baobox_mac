@@ -2,19 +2,16 @@ import Foundation
 
 // MARK: - 模型
 
-/// 一个 HTTP 头字段（保留原始大小写；查询用大小写不敏感辅助方法）。
-/// 用具名 struct 而非 `(String,String)` 元组，便于 Sendable / 迭代 / 导出。
-struct HTTPHeader: Sendable, Hashable {
-    let name: String
-    let value: String
-}
+// `HTTPHeader` 在 Logic/CaptureEvent.swift（纯逻辑，进单元测试）。
 
-extension Array where Element == HTTPHeader {
-    /// 大小写不敏感取首个匹配头的值。
-    func value(for name: String) -> String? {
-        let lower = name.lowercased()
-        return first { $0.name.lowercased() == lower }?.value
-    }
+/// 一条 WebSocket 消息（挂在握手那条 Flow 上）。
+struct FlowMessage: Identifiable, Sendable {
+    let id: Int
+    let fromClient: Bool
+    /// 文本消息的内容；二进制消息为 nil。
+    let text: String?
+    let size: Int
+    let at: Date
 }
 
 /// 一条被捕获的 HTTP 事务（请求 + 响应 + 元数据）。仅内存驻留。
@@ -45,10 +42,18 @@ struct Flow: Identifiable, Sendable {
     /// 源设备局域网 IP（客户端连到代理的 remote 端）。`127.0.0.1`/`::1` → 本机；nil 未知。
     /// 用于多设备区分（§17）：一处在 `ProxyConnection.appendFlow` 统一打标。
     var clientIP: String?
-    /// false = 透传未解密（仅记录 CONNECT 元数据，无明文）。
+    /// false = 透传未解密（只知道域名，没有明文）。
     var decrypted: Bool
-    /// 附注：如「brotli 未解压」「h2 透传」「TLS 握手失败透传」「已截断」。
+    /// 附注：目前只放请求失败时引擎给的错误信息。
     var note: String?
+    /// `HTTP/1.1`、`HTTP/2.0`…（引擎给的原样）。
+    var httpVersion: String = "HTTP/1.1"
+    /// 响应原本的 Content-Encoding；正文已经由引擎解压，这里只用来展示。
+    var responseEncoding: String?
+    /// 没解密的原因（`decrypted == false` 时有值）。
+    var undecryptedReason: CaptureEvent.UndecryptedReason?
+    /// WebSocket 消息（只有 WebSocket 连接有）。
+    var messages: [FlowMessage] = []
 
     init(id: UUID = UUID(),
          method: String = "",
@@ -111,6 +116,22 @@ struct Flow: Identifiable, Sendable {
         return code / 100
     }
 
+    /// 请求发出去了、响应还没回来。
+    var isPending: Bool { decrypted && statusCode == nil && endedAt == nil }
+
+    var isWebSocket: Bool {
+        !messages.isEmpty
+            || (statusCode == 101 && responseHeaders.value(for: "Upgrade")?.lowercased() == "websocket")
+    }
+
+    /// 列表里协议那一格：只有不是 HTTP/1.x 的才标。
+    var protocolBadge: String? {
+        if isWebSocket { return "WS" }
+        if httpVersion.hasPrefix("HTTP/2") { return "h2" }
+        if httpVersion.hasPrefix("HTTP/3") { return "h3" }
+        return nil
+    }
+
     /// 响应 Content-Type（小写主类型），用于 body 渲染选择。
     var responseContentType: String? {
         responseHeaders.value(for: "Content-Type")
@@ -159,14 +180,79 @@ final class FlowStore: ObservableObject {
 
     var maxFlows: Int { NetCaptureEnv.maxFlows }
 
-    /// 追加一条 flow；超上限从头淘汰。回主线程调用（Network 回调里用 `DispatchQueue.main.async`）。
-    func append(_ flow: Flow) {
-        flows.append(flow)
+    /// 单条连接最多留多少条 WebSocket 消息（超了丢最旧的）。
+    static let maxMessagesPerFlow = 500
+
+    /// 把引擎推来的一批事件落到列表里：请求先到就先占一行，响应到了补全。一批只重算一次设备与快照。
+    /// 与流量无关的事件（就绪、新设备）由 `NetCaptureEngine` 自己处理，这里忽略。
+    func apply(_ events: [CaptureEvent]) {
+        var changed = false
+        for event in events {
+            switch event {
+            case .request(let request):
+                var flow = Flow(id: request.id,
+                                method: request.method,
+                                scheme: request.scheme,
+                                host: request.host,
+                                port: request.port,
+                                path: request.path,
+                                requestHeaders: request.headers,
+                                requestBody: request.body,
+                                requestTruncated: request.truncated,
+                                startedAt: request.startedAt,
+                                requestBytes: request.bytes,
+                                clientIP: request.client)
+                flow.httpVersion = request.httpVersion
+                if let index = index(of: request.id) { flows[index] = flow } else { flows.append(flow) }
+                changed = true
+            case .response(let response):
+                guard let index = index(of: response.id) else { continue }
+                flows[index].statusCode = response.status
+                flows[index].responseHeaders = response.headers
+                flows[index].responseBody = response.body
+                flows[index].responseTruncated = response.truncated
+                flows[index].responseEncoding = response.encoding
+                flows[index].responseBytes = response.bytes
+                flows[index].remoteIP = response.remote
+                flows[index].endedAt = response.endedAt ?? Date()
+                if let version = response.httpVersion { flows[index].httpVersion = version }
+                changed = true
+            case .failure(let id, let message, let at):
+                guard let index = index(of: id) else { continue }
+                flows[index].note = message
+                if flows[index].endedAt == nil { flows[index].endedAt = at ?? Date() }
+                changed = true
+            case .webSocket(let message):
+                guard let index = index(of: message.flowID) else { continue }
+                let next = (flows[index].messages.last?.id ?? 0) + 1
+                flows[index].messages.append(FlowMessage(id: next, fromClient: message.fromClient,
+                                                         text: message.text, size: message.size, at: message.at))
+                let overflow = flows[index].messages.count - Self.maxMessagesPerFlow
+                if overflow > 0 { flows[index].messages.removeFirst(overflow) }
+                changed = true
+            case .tls(let client, let host, let reason):
+                // 没解密的连接引擎不会给请求事件，这里补一行，让用户知道这个域名有流量、为什么看不到内容。
+                let now = Date()
+                var flow = Flow(method: "CONNECT", scheme: "https", host: host, port: 443, path: "",
+                                startedAt: now, endedAt: now, clientIP: client, decrypted: false)
+                flow.undecryptedReason = reason
+                flows.append(flow)
+                changed = true
+            case .running, .device:
+                continue
+            }
+        }
+        guard changed else { return }
         if flows.count > maxFlows {
             flows.removeFirst(flows.count - maxFlows)
         }
         recomputeDevices()
         FlowSnapshotStore.shared.set(flows)
+    }
+
+    /// 响应、消息几乎总是落在最近的几条上，从尾部找。
+    private func index(of id: UUID) -> Int? {
+        flows.lastIndex { $0.id == id }
     }
 
     /// 清空并释放所有 body Data。
@@ -229,6 +315,17 @@ final class FlowStore: ObservableObject {
         devices = result
     }
 
+    /// 某个来源（nil = 全部）下各域名的请求数，多的在前；左栏的域名列表用。
+    func hosts(device: String?) -> [(host: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for flow in flows {
+            if let device, (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { continue }
+            counts[flow.host, default: 0] += 1
+        }
+        return counts.map { (host: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.host < $1.host }
+    }
+
     /// 估算内存占用（仅 body 字节，粗略）。
     var estimatedBytes: Int {
         flows.reduce(0) { $0 + ($1.requestBody?.count ?? 0) + ($1.responseBody?.count ?? 0) }
@@ -238,14 +335,16 @@ final class FlowStore: ObservableObject {
 
     /// 过滤：设备（clientIP，nil=全部）、关键字（URL / body 文本）、方法集合、状态码分类集合。空条件即全通过。
     func filtered(query: String, methods: Set<String>, statusClasses: Set<Int>,
-                  device: String? = nil) -> [Flow] {
+                  device: String? = nil, host: String? = nil) -> [Flow] {
         let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
         return flows.filter { flow in
             if let device, (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
+            if let host, flow.host != host { return false }
             if !methods.isEmpty && !methods.contains(flow.method.uppercased()) { return false }
             if !statusClasses.isEmpty && !statusClasses.contains(flow.statusClass) { return false }
             guard !trimmed.isEmpty else { return true }
             if flow.url.lowercased().contains(trimmed) { return true }
+            if flow.messages.contains(where: { $0.text?.lowercased().contains(trimmed) == true }) { return true }
             if let body = flow.responseBody, let text = String(data: body, encoding: .utf8),
                text.lowercased().contains(trimmed) { return true }
             if let body = flow.requestBody, let text = String(data: body, encoding: .utf8),
@@ -268,7 +367,7 @@ final class FlowStore: ObservableObject {
             let request: [String: Any] = [
                 "method": flow.method,
                 "url": flow.url,
-                "httpVersion": "HTTP/1.1",
+                "httpVersion": flow.httpVersion,
                 "headers": reqHeaders,
                 "queryString": [],
                 "cookies": [],
@@ -280,7 +379,7 @@ final class FlowStore: ObservableObject {
             let response: [String: Any] = [
                 "status": flow.statusCode ?? 0,
                 "statusText": "",
-                "httpVersion": "HTTP/1.1",
+                "httpVersion": flow.httpVersion,
                 "headers": respHeaders,
                 "cookies": [],
                 "content": ["size": flow.responseBytes,
@@ -349,14 +448,11 @@ final class FlowStore: ObservableObject {
         lines.append("```")
         for h in flow.responseHeaders.prefix(30) { lines.append("\(h.name): \(h.value)") }
         lines.append("```")
-        if let body = flow.responseBody {
-            let display = HTTPBodyCodec.decodedForDisplay(body: body, headers: flow.responseHeaders)
-            if let text = String(data: display.data, encoding: .utf8), !text.isEmpty {
-                lines.append("**Response body**\(display.note.map { " (\($0.englishText))" } ?? "")")
-                lines.append("```")
-                lines.append(String(text.prefix(8000)))
-                lines.append("```")
-            }
+        if let body = flow.responseBody, let text = String(data: body, encoding: .utf8), !text.isEmpty {
+            lines.append("**Response body**")
+            lines.append("```")
+            lines.append(String(text.prefix(8000)))
+            lines.append("```")
         }
         return lines.joined(separator: "\n")
     }

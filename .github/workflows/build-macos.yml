@@ -62,12 +62,12 @@ jobs:
       - name: Vendor llama.cpp and audio driver
         id: vendor
         # 这条流水线是用来验证代码能编过的：下载失败只告警、继续编（App 缺了它们照样能编，
-        # 只是离线模型 / 送会议不可用）。发版流水线（release.yml）仍然严格，缺了就失败。
+        # 只是离线模型 / 送会议 / 网络抓包不可用）。发版流水线（release.yml）仍然严格，缺了就失败。
         run: |
           if make -k vendor; then
             echo "complete=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::make vendor failed (download error?) — building without the offline-translation helper / virtual mic; this artifact lacks them"
+            echo "::warning::make vendor failed (download error?) — building without the offline-translation helper / virtual mic / network-capture engine; this artifact lacks them"
           fi
 
       - name: Save vendored helpers

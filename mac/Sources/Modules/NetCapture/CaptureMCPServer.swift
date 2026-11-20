@@ -425,25 +425,26 @@ private enum MCPTools {
 
         // MARK: 抓包控制（§16.1）—— 与 UI 互相驱动
         //
-        // `ProxyServer.shared` 是唯一事实源（@MainActor、@Published var state），UI 菜单/窗口都观察它。
+        // `NetCaptureEngine.shared` 是唯一事实源（@MainActor、@Published var state），UI 菜单/窗口都观察它。
         // 本处**不自持任何抓包状态**，只转发对该单例的调用/读取，故：
         //   MCP → UI：写操作 hop 到主线程改单例，UI 因观察同一 state 立即反映；
         //   UI → MCP：capture_status 每次实时读单例 state，UI 手动开关结果对 AI 立即可见。
         case "start_capture":
             let port = NetCaptureEnv.port
-            // 写：hop 主线程调单例（MCP → UI 即时同步）。
-            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.start(port: port) } }
+            // 写：hop 主线程走场景协调（MCP → UI 即时同步）。不带交互：证书已受信才会把系统代理指过来，
+            // 没受信就只起引擎，不替用户弹管理员密码框。
+            DispatchQueue.main.async { MainActor.assumeIsolated { NetCaptureSession.shared.startFromAutomation() } }
             let ip = NetworkInterfaces.primaryIP()
-            return "starting on 0.0.0.0:\(port), LAN \(ip):\(port)"
+            return "starting on port \(port) (LAN address \(ip):\(port) when phone capture is on)"
         case "stop_capture":
-            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.stop() } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { NetCaptureSession.shared.stopAll() } }
             return "stopped"
         case "capture_status":
             // 读：实时取单例 state。用 main.sync 从 MCP 连接队列取一次快照——
             // 主线程从不反向同步等待该连接队列（只向它 async 派发），故 main.sync 不会死锁。
             let snapshot: (label: String, port: UInt16) = DispatchQueue.main.sync {
                 MainActor.assumeIsolated { () -> (label: String, port: UInt16) in
-                    switch ProxyServer.shared.state {
+                    switch NetCaptureEngine.shared.state {
                     case .running(let p): return ("running", p)
                     case .starting: return ("starting", 0)
                     case .failed: return ("failed", 0)
@@ -510,8 +511,8 @@ private enum MCPTools {
         lines.append("-- Response headers --")
         for h in flow.responseHeaders { lines.append("\(h.name): \(redact(name: h.name, value: h.value))") }
         if let body = flow.responseBody {
-            let decoded = HTTPBodyCodec.decodedForDisplay(body: body, headers: flow.responseHeaders)
-            if let text = String(data: decoded.data, encoding: .utf8) {
+            // 正文已由引擎解压。
+            if let text = String(data: body, encoding: .utf8) {
                 lines.append("-- Response body --"); lines.append(String(text.prefix(16000)))
             } else {
                 lines.append("-- Response body -- (binary, \(body.count) bytes)")

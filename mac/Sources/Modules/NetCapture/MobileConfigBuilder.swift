@@ -10,7 +10,7 @@ import Foundation
 /// 外加 `landingPageHTML(...)` 生成给手机浏览器的自适应配置页（内联 CSS、双语、深浅色）。
 ///
 /// 并发：全部为后台可调用的纯字符串拼接 + 子进程读取（`networksetup` 读 SSID），**不**标 `@MainActor`；
-/// 由 `ProxyConnection` 在其连接队列上调用。任何一步失败都降级：拿不到 CA → 返回 nil（调用方回 503），
+/// 由 `ConfigPageServer` 在它的队列上调用。任何一步失败都降级：拿不到 CA → 返回 nil（调用方回 503），
 /// 拿不到 SSID → 网页照常渲染（Android 路径 / iOS 显示手动说明），`/proxy` 回 302，绝不 crash。
 enum MobileConfigBuilder {
 
@@ -43,8 +43,15 @@ enum MobileConfigBuilder {
                 payloads: [wifiPayload(ssid: ssid, proxyType: "None", proxyIP: nil, proxyPort: nil)])
     }
 
-    /// 当前连接的 Wi-Fi SSID（供路由决定 `/proxy` 是否可出描述文件）。非 Wi-Fi / 读取失败 → nil。
-    static func currentSSID() -> String? { currentWiFiSSID() }
+    /// 给 iPhone 代理描述文件用的 Wi-Fi 名称：读得到就用系统的，读不到用用户在手机面板里填的；都没有 → nil
+    /// （`/proxy` 回首页，页面改为手动说明）。macOS 14.4 起没有定位权限读不到当前 Wi-Fi 名，
+    /// 2026-11 在 macOS 27 上实测 networksetup、ipconfig、CoreWLAN 都拿不到，所以实际走的基本是手填这条。
+    static func currentSSID() -> String? {
+        if let detected = currentWiFiSSID() { return detected }
+        let saved = (UserDefaults.standard.string(forKey: NetCaptureEnv.Keys.wifiName) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return saved.isEmpty ? nil : saved
+    }
 
     // MARK: - plist 外壳
 
@@ -265,18 +272,9 @@ enum MobileConfigBuilder {
         """
     }
 
-    // MARK: - CA PEM → DER
+    // MARK: - CA 的 DER 字节
 
-    /// 读 `baobox-ca.pem`，剥离 PEM 头尾（`-----BEGIN/END-----`）后 base64-decode 得 DER 字节。失败 nil。
-    private static func caCertDER() -> Data? {
-        guard let pem = MITMCertAuthority.shared.caCertPEM(),
-              let text = String(data: pem, encoding: .utf8) else { return nil }
-        let base64 = text
-            .components(separatedBy: "\n")
-            .filter { !$0.hasPrefix("-----") }
-            .joined()
-        return Data(base64Encoded: base64)
-    }
+    private static func caCertDER() -> Data? { CaptureCA.shared.certDER() }
 
     // MARK: - 当前 Wi-Fi SSID
 
