@@ -126,35 +126,48 @@ final class NetCaptureSession: ObservableObject {
             return
         }
         working = L("netcapture.working.cert")
+        let origin = interactive ? NSApp.keyWindow : nil
         DispatchQueue.global(qos: .userInitiated).async {
             let ca = CaptureCA.shared
             var trusted = ca.ensureGenerated() && ca.isTrusted()
-            var failure = ""
+            var outcome = CaptureCA.TrustResult(ok: trusted)
             if !trusted, interactive {
-                let result = ca.installTrust()
-                trusted = result.ok && ca.isTrusted()
-                failure = result.message
+                outcome = ca.installTrust()
+                trusted = outcome.ok && ca.isTrusted()
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.caTrusted = trusted
                     self.working = nil
+                    if interactive { self.bringBack(origin) }
                     guard trusted else {
                         if engineOnlyIfUntrusted {
                             self.ensureEngine {}
                             return
                         }
-                        // 用户在密码框点了取消：不算出错，安静地停在原地。
-                        let cancelled = failure.contains("-128") || failure.lowercased().contains("cancel")
-                        if !cancelled {
-                            self.banner = Banner(kind: .problem, text: L("netcapture.problem.certNotTrusted"))
-                        }
+                        self.reportCertFailure(outcome)
                         return
                     }
+                    self.banner = nil
                     self.ensureEngine { [weak self] in self?.pointSystemProxyAtEngine() }
                 }
             }
         }
+    }
+
+    /// 系统的验证框关掉以后，前台会回到之前那个 App，把我们的窗口盖住 —— Baobox 没有 Dock 图标，
+    /// 用户只看到窗口「没了」。所以每次弹过验证框，都把发起操作的那个窗口重新拿到最前面。
+    func bringBack(_ window: NSWindow?) {
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 证书没装成：用户自己点了取消就什么也不说；否则把系统给的原因原样显示出来。
+    private func reportCertFailure(_ outcome: CaptureCA.TrustResult) {
+        guard !outcome.cancelled else { return }
+        var text = L("netcapture.problem.certNotTrusted")
+        if !outcome.message.isEmpty { text += "\n" + outcome.message }
+        banner = Banner(kind: .problem, text: text)
     }
 
     private func pointSystemProxyAtEngine() {
@@ -291,17 +304,20 @@ final class NetCaptureSession: ObservableObject {
         }
     }
 
-    /// 窗口里单独点「安装证书」。
+    /// 单独点「安装证书」（窗口右上角、设置页）。
     func installCert() {
         guard working == nil else { return }
         working = L("netcapture.working.cert")
+        let origin = NSApp.keyWindow
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = CaptureCA.shared.installTrust()
-            let trusted = result.ok && CaptureCA.shared.isTrusted()
+            let outcome = CaptureCA.shared.installTrust()
+            let trusted = outcome.ok && CaptureCA.shared.isTrusted()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.working = nil
                     self.caTrusted = trusted
+                    self.bringBack(origin)
+                    if trusted { self.banner = nil } else { self.reportCertFailure(outcome) }
                 }
             }
         }

@@ -122,6 +122,9 @@ private struct NetCaptureCertSection: View {
                     Button("netcapture.settings.legacyCARemove") { removeLegacy() }.disabled(busy)
                 }
             }
+            if let banner = session.banner, banner.kind == .problem {
+                Text(verbatim: banner.text).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+            }
             Text("netcapture.settings.certHint").font(.caption).foregroundStyle(.secondary)
         }
         .onAppear { session.refreshTrust() }
@@ -129,11 +132,13 @@ private struct NetCaptureCertSection: View {
 
     private func removeTrust() {
         busy = true
+        let origin = NSApp.keyWindow
         DispatchQueue.global(qos: .userInitiated).async {
             _ = CaptureCA.shared.removeTrust()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     busy = false
+                    session.bringBack(origin)
                     session.refreshTrust()
                 }
             }
@@ -142,10 +147,17 @@ private struct NetCaptureCertSection: View {
 
     private func removeLegacy() {
         busy = true
+        let origin = NSApp.keyWindow
         DispatchQueue.global(qos: .userInitiated).async {
             _ = CaptureCA.shared.removeLegacyCA()
             let still = CaptureCA.shared.hasLegacyCA
-            DispatchQueue.main.async { MainActor.assumeIsolated { busy = false; hasLegacy = still } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    busy = false
+                    hasLegacy = still
+                    session.bringBack(origin)
+                }
+            }
         }
     }
 }

@@ -66,26 +66,56 @@ final class CaptureCA: @unchecked Sendable {
         return SecTrustEvaluateWithError(trust, &error)
     }
 
-    /// 安装进系统钥匙串并设为受信任根。要管理员授权，系统会弹密码框；用户取消就返回失败。
-    func installTrust() -> (ok: Bool, message: String) {
-        guard ensureGenerated() else { return (false, "CA not generated") }
-        let shell = "security add-trusted-cert -d -r trustRoot "
-            + "-k /Library/Keychains/System.keychain \(NetCaptureEnv.shellSingleQuote(certURL.path))"
-        let result = runAsAdmin(shell)
-        return (result.ok, result.ok ? "" : result.stderrString)
+    /// 装证书的结果。`cancelled` = 用户在系统的验证框里点了取消，不算出错。
+    struct TrustResult {
+        var ok: Bool
+        var cancelled = false
+        var message = ""
     }
 
-    /// 取消信任并从系统钥匙串删掉。
-    func removeTrust() -> (ok: Bool, message: String) {
-        guard isGenerated else { return (true, "") }
-        let cert = NetCaptureEnv.shellSingleQuote(certURL.path)
-        // remove-trusted-cert 只撤信任设置，证书本身还留在钥匙串里；再按 SHA-1 删掉，不留垃圾。
-        var shell = "security remove-trusted-cert -d \(cert)"
-        if let sha1 = sha1Fingerprint() {
-            shell += "; security delete-certificate -Z \(sha1) /Library/Keychains/System.keychain"
+    /// 当前用户的登录钥匙串。
+    private var loginKeychain: String {
+        NetCaptureEnv.homeDir.appendingPathComponent("Library/Keychains/login.keychain-db").path
+    }
+
+    private static let systemKeychain = "/Library/Keychains/System.keychain"
+
+    /// 把 CA 加进登录钥匙串并设为这个用户信任的根证书。
+    ///
+    /// **以当前用户身份跑，不提权**：改信任设置时系统自己会弹验证框（密码 / Touch ID）。
+    /// v1 的做法是 `osascript … with administrator privileges` 以 root 跑 `add-trusted-cert -d`（管理员域），
+    /// 2026-11-21 在 macOS 27 上实测：证书进了系统钥匙串，但信任设置没写进去（root 的 shell 不在用户的图形会话里，
+    /// 系统要的那次「用户交互」做不了），而且命令不报错地做了一半。用户域的信任对这个用户的所有 App 都生效，够用。
+    func installTrust() -> TrustResult {
+        guard ensureGenerated() else { return TrustResult(ok: false, message: "CA not generated") }
+        let result = NetCaptureEnv.run("/usr/bin/security", [
+            "add-trusted-cert", "-r", "trustRoot", "-k", loginKeychain, certURL.path,
+        ])
+        return Self.trustResult(result)
+    }
+
+    /// 取消信任，并把证书从钥匙串里删掉。
+    func removeTrust() -> TrustResult {
+        guard isGenerated else { return TrustResult(ok: true) }
+        // 先撤信任设置（系统弹验证框）；证书本身还留在钥匙串里，再按指纹删掉。
+        let removed = NetCaptureEnv.run("/usr/bin/security", ["remove-trusted-cert", certURL.path])
+        let outcome = Self.trustResult(removed)
+        guard outcome.ok, let sha1 = sha1Fingerprint() else { return outcome }
+        NetCaptureEnv.run("/usr/bin/security", ["delete-certificate", "-Z", sha1, loginKeychain])
+        // 早先那次没装成的安装可能在系统钥匙串里也留了一份（没有信任设置，不起作用）；有就顺手删掉，这一步要管理员密码。
+        let stray = NetCaptureEnv.run("/usr/bin/security", ["find-certificate", "-a", "-Z", Self.systemKeychain])
+        if stray.stdoutString.contains(sha1) {
+            _ = runAsAdmin("security delete-certificate -Z \(sha1) \(Self.systemKeychain)")
         }
-        let result = runAsAdmin(shell)
-        return (result.ok, result.ok ? "" : result.stderrString)
+        return outcome
+    }
+
+    private static func trustResult(_ result: NetCaptureEnv.ProcessResult) -> TrustResult {
+        if result.ok { return TrustResult(ok: true) }
+        let message = result.stderrString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = message.lowercased()
+        let cancelled = lower.contains("cancel") || lower.contains("-60006") || lower.contains("-128")
+        return TrustResult(ok: false, cancelled: cancelled, message: message)
     }
 
     private func runAsAdmin(_ shell: String) -> NetCaptureEnv.ProcessResult {
@@ -142,21 +172,25 @@ final class CaptureCA: @unchecked Sendable {
         FileManager.default.fileExists(atPath: NetCaptureEnv.legacyCADir.path)
     }
 
-    /// 清掉 v1 的东西：把旧 CA 从钥匙串删掉（连同对它的信任），再删磁盘上的两个旧目录。只在用户点了按钮时做。
-    func removeLegacyCA() -> (ok: Bool, message: String) {
+    /// 清掉 v1 的东西：撤掉对旧 CA 的信任、把它从钥匙串删掉，再删磁盘上的两个旧目录（里面有旧 CA 的私钥）。
+    /// 只在用户点了按钮时做。旧 CA 在登录钥匙串里；系统钥匙串里也有的话才需要管理员密码。
+    func removeLegacyCA() -> TrustResult {
         let pem = NetCaptureEnv.legacyCADir.appendingPathComponent("baobox-ca.pem").path
-        var steps: [String] = []
         if FileManager.default.fileExists(atPath: pem) {
-            steps.append("security remove-trusted-cert -d \(NetCaptureEnv.shellSingleQuote(pem)) || true")
+            // 没有信任设置时这一步会失败，无所谓；用户点了取消就整个停下。
+            let removed = Self.trustResult(NetCaptureEnv.run("/usr/bin/security", ["remove-trusted-cert", pem]))
+            if removed.cancelled { return removed }
         }
-        steps.append("security delete-certificate -c \(NetCaptureEnv.shellSingleQuote(Self.legacyCAName)) "
-            + "/Library/Keychains/System.keychain || true")
-        let admin = runAsAdmin(steps.joined(separator: "; "))
-        guard admin.ok else { return (false, admin.stderrString) }
-        // 登录钥匙串里那份不需要管理员。
-        NetCaptureEnv.run("/usr/bin/security", ["delete-certificate", "-c", Self.legacyCAName])
+        NetCaptureEnv.run("/usr/bin/security", ["delete-certificate", "-c", Self.legacyCAName, loginKeychain])
+        let inSystem = NetCaptureEnv.run("/usr/bin/security",
+                                         ["find-certificate", "-c", Self.legacyCAName, Self.systemKeychain])
+        if inSystem.ok {
+            let admin = runAsAdmin("security delete-certificate -c \(NetCaptureEnv.shellSingleQuote(Self.legacyCAName)) "
+                + Self.systemKeychain)
+            guard admin.ok else { return Self.trustResult(admin) }
+        }
         try? FileManager.default.removeItem(at: NetCaptureEnv.legacyCADir)
         try? FileManager.default.removeItem(at: NetCaptureEnv.legacyLeafDir)
-        return (true, "")
+        return TrustResult(ok: true)
     }
 }

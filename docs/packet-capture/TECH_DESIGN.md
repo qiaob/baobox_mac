@@ -56,7 +56,7 @@ Baobox（Swift）                              mitmdump（子进程）
 
 **还没验证的**：
 
-1. **安装并信任 CA**（`security add-trusted-cert` + 管理员密码框）：代码沿用 v1，要用户输密码，没法自动跑。这是「抓这台 Mac」的第一步。
+1. **安装并信任 CA**：要用户本人验证，没法自动跑。这是「抓这台 Mac」的第一步。v1 的做法（见 §5）在用户第一次试用时就失败了，现在换成用户域，**换完之后还没有成功装上过一次**。
 2. iOS 的 Wi-Fi 代理描述文件在非监管设备上是否生效（v1 就标着未验证），要真机。
 3. 引擎监听局域网时，系统防火墙会不会弹「是否允许传入连接」。
 4. WebSocket 消息：事件解码有单元测试，界面有「消息」页，但没用真实的 WebSocket 连接跑过。
@@ -158,9 +158,13 @@ mitmdump --listen-host <127.0.0.1 | 0.0.0.0> -p <端口>
 
 - CA 由 mitmproxy 生成，放在 `~/Library/Application Support/Baobox/NetCapture/mitmproxy/`。公开证书是 `mitmproxy-ca-cert.pem`，带私钥的是 `mitmproxy-ca.pem`（600）。
 - **还没抓过包就要装证书**：用 `-n` 加桥的 `baobox_oneshot` 选项跑一次引擎，就绪即退，约 1.2 秒。
-- 安装并信任、查询状态、移除：沿用 v1 的实现，只换路径。
+- **安装并信任**：以当前用户身份跑 `security add-trusted-cert -r trustRoot -k <登录钥匙串> <证书>`（用户域），系统自己弹验证框（密码 / Touch ID）。用户域的信任对这个用户的所有 App 生效，够用；这台机器上 OrbStack、Charles 的根证书也都是这么装的。
+- **不能沿用 v1 的做法**（`osascript … with administrator privileges` 以 root 跑 `add-trusted-cert -d`，管理员域）。2026-11-21 用户在 macOS 27.2.1 上试了三次，每次都输了密码：证书进了系统钥匙串，但信任设置没写进去（`security dump-trust-settings -d` 里没有它，`verify-cert` 报 `CSSMERR_TP_NOT_TRUSTED`）。root 的 shell 不在用户的图形会话里，系统要的那次「用户交互」做不了。
+- **查询状态**：对 CA 自己做一次 `SecTrustEvaluateWithError`。**移除**：`remove-trusted-cert` 撤信任，再按 SHA-1 从登录钥匙串删证书；系统钥匙串里要是留着上面那种没装成的残留，顺手删掉（这一步才要管理员密码）。
+- **验证框关掉以后要把窗口拿回来**：前台会回到之前那个 App，把我们的窗口盖住，而 Baobox 没有 Dock 图标，用户看到的是窗口「没了」（用户原话：「抓包的窗口 crash 了」）。每次弹过验证框都 `NSApp.activate` + 把发起操作的窗口 `makeKeyAndOrderFront`。抓包窗口也和别的模块的主窗口一样经 `DesktopSpaceWindow.make` 建，不然从全屏 App 里打开会被塞进那个全屏空间。
+- 装不成时把 `security` 给的原因原样显示在提示条里；用户自己点了取消就什么也不说。
 - 叶子证书的签发、openssl 子进程、p12 口令这些全部删掉，`NetCaptureEnv.opensslPath()` 一并删。
-- **迁移**：启动时如果旧目录 `NetCapture/ca/` 还在，移除旧 CA（`Baobox Proxy CA`）的信任，再删 `ca/` 与 `leaf/` 两个目录。只有 2026-07 用过开发版的机器会走到。
+- **旧证书**：机器上还留着 v1 的 `NetCapture/ca/` 目录时，设置页的证书一栏多一行「旧版证书 · 移除」。用户点了才做：撤掉对 `Baobox Proxy CA` 的信任、从钥匙串删掉、再删 `ca/` 与 `leaf/` 两个目录（里面有旧 CA 的私钥）。不在启动时自动做 —— 那样一启动就弹验证框。只有 2026-07 用过开发版的机器会走到。
 - **已知的表面问题**：证书在设备上显示的名字是「mitmproxy」，不是 Baobox。mitmproxy 支持换成自备的 CA，这一版不做。
 
 ## 6. 五个场景各自怎么实现

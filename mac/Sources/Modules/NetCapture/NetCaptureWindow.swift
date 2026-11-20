@@ -69,7 +69,9 @@ final class NetCaptureWindowController {
     func show() {
         if window == nil {
             let hosting = NSHostingController(rootView: NetCaptureRootView())
-            let created = NSWindow(contentViewController: hosting)
+            // 和别的模块的主窗口一样经 DesktopSpaceWindow 建：否则从全屏 App 里打开时，它会被塞进那个全屏空间，
+            // 系统的验证框一弹（装证书时）就跟着空间切换不见了。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("netcapture.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
             created.setContentSize(NSSize(width: 1080, height: 660))
