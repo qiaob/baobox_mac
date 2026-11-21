@@ -94,7 +94,10 @@ struct NetCaptureRootView: View {
     @ObservedObject private var mockRules = MockRuleStore.shared
 
     @State private var query = ""
+    /// 列表里高亮的那一行。
     @State private var selection: Flow.ID?
+    /// 详情区显示的那一条。和 `selection` 分开：点列表空白处，系统表格会把选中清掉，详情不该跟着消失。
+    @State private var shownID: Flow.ID?
     @State private var phoneSheet: NetCapturePhoneSheet.Platform?
     @State private var renameIP: String?
     @State private var renameText = ""
@@ -192,7 +195,7 @@ struct NetCaptureRootView: View {
 
             Button {
                 store.clear()
-                selection = nil
+                clearSelection()
                 store.updateFilter { $0.host = nil }
             } label: {
                 Image(systemName: "trash")
@@ -417,7 +420,7 @@ struct NetCaptureRootView: View {
                             $0.device = nil
                             $0.host = nil
                         }
-                        selection = nil
+                        clearSelection()
                     }
                     ForEach(store.devices) { device in
                         sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
@@ -427,7 +430,7 @@ struct NetCaptureRootView: View {
                                 $0.device = device.ip
                                 $0.host = nil
                             }
-                            selection = nil
+                            clearSelection()
                         }
                         .contextMenu { deviceMenu(ip: device.ip) }
                     }
@@ -439,7 +442,7 @@ struct NetCaptureRootView: View {
                         sidebarRow(title: entry.host, count: entry.count,
                                    selected: filter.host == entry.host, icon: nil) {
                             store.updateFilter { $0.host = ($0.host == entry.host) ? nil : entry.host }
-                            selection = nil
+                            clearSelection()
                         }
                     }
                 }
@@ -511,7 +514,7 @@ struct NetCaptureRootView: View {
         Button(role: .destructive) {
             store.clearDevice(ip: ip)
             if store.filter.device == ip { store.updateFilter { $0.device = nil } }
-            selection = nil
+            clearSelection()
         } label: { Label("netcapture.device.clear", systemImage: "trash") }
         if !FlowStore.isLoopback(ip), ip != NetCaptureEnv.unknownDeviceKey {
             Button(role: .destructive) {
@@ -563,6 +566,28 @@ struct NetCaptureRootView: View {
                 .alternatingRowBackgrounds(.enabled)
             }
         }
+        .onChange(of: selection) { _, new in
+            keepShownFlow(selected: new, listed: { id in visible.contains { $0.id == id } })
+        }
+    }
+
+    /// 有意关掉详情（清空列表、换设备 / 域名、藏掉正在看的域名）。
+    private func clearSelection() {
+        shownID = nil
+        selection = nil
+    }
+
+    /// 选了一行就显示它；选中被系统清掉（点了列表空白处）而详情还开着，下一拍把那一行选回去。
+    /// 那一行已经不在列表里（被过滤掉了）就不选回去，详情照旧留着。
+    private func keepShownFlow(selected: Flow.ID?, listed: (Flow.ID) -> Bool) {
+        if let selected {
+            shownID = selected
+            return
+        }
+        guard let keep = shownID, listed(keep) else { return }
+        DispatchQueue.main.async {
+            if selection == nil, shownID == keep { selection = keep }
+        }
     }
 
     /// 已经在抓、一条请求都还没有：说一声在等，下面一行小字是在抓什么（和工具条「抓：…」同一句）。
@@ -596,7 +621,7 @@ struct NetCaptureRootView: View {
         }
         Button {
             // 正看着的那条要被藏起来了：详情别还停在一条列表里看不到的请求上。
-            if let id = selection, store.flows.first(where: { $0.id == id })?.host == flow.host { selection = nil }
+            if let id = shownID, store.flows.first(where: { $0.id == id })?.host == flow.host { clearSelection() }
             store.hide(host: flow.host)
         } label: {
             Label("netcapture.filter.hideHost", systemImage: "eye.slash")
@@ -629,7 +654,7 @@ struct NetCaptureRootView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        if let id = selection, let flow = store.flows.first(where: { $0.id == id }) {
+        if let id = shownID, let flow = store.flows.first(where: { $0.id == id }) {
             FlowDetailView(flow: flow, commands: FlowCommands(
                 replay: { replay($0) },
                 editAndReplay: { replayDraft = ReplayDraft(flow: $0) },
