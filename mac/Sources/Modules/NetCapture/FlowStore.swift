@@ -57,6 +57,13 @@ struct Flow: Identifiable, Sendable {
     var undecryptedReason: CaptureEvent.UndecryptedReason?
     /// WebSocket 消息（只有 WebSocket 连接有）。
     var messages: [FlowMessage] = []
+    /// 这条是「重发」发出去的（docs/packet-capture/TOOLS.md §3）。
+    var isReplay = false
+    /// 应答它的 Mock 规则 id；不是 Mock 应答的为 nil（TOOLS.md §4）。
+    var mockRuleID: String?
+    /// Protobuf / gRPC / msgpack 正文由引擎解成的文本（TOOLS.md §5），请求、响应各一份。
+    var requestDecoded: DecodedBody?
+    var responseDecoded: DecodedBody?
 
     init(id: UUID = UUID(),
          method: String = "",
@@ -207,6 +214,8 @@ final class FlowStore: ObservableObject {
                                 clientIP: request.client)
                 flow.httpVersion = request.httpVersion
                 flow.requestSniffed = request.sniffed
+                flow.isReplay = request.isReplay
+                flow.requestDecoded = request.decoded
                 if let index = index(of: request.id) { flows[index] = flow } else { flows.append(flow) }
                 changed = true
             case .response(let response):
@@ -219,6 +228,8 @@ final class FlowStore: ObservableObject {
                 flows[index].responseSniffed = response.sniffed
                 flows[index].responseBytes = response.bytes
                 flows[index].remoteIP = response.remote
+                flows[index].mockRuleID = response.mockRuleID
+                flows[index].responseDecoded = response.decoded
                 flows[index].endedAt = response.endedAt ?? Date()
                 if let version = response.httpVersion { flows[index].httpVersion = version }
                 changed = true
@@ -243,7 +254,7 @@ final class FlowStore: ObservableObject {
                 flow.undecryptedReason = reason
                 flows.append(flow)
                 changed = true
-            case .running, .device:
+            case .running, .device, .replayFailed:
                 continue
             }
         }

@@ -57,12 +57,26 @@ struct DecryptScope: Equatable, Sendable {
     }
 }
 
+/// 让引擎再发一次的请求（docs/packet-capture/TOOLS.md §3）。内容全在指令里，引擎重启过也能发。
+struct ReplayRequest: Equatable, Sendable {
+    /// 新那一行的 id。Swift 这边先生成、引擎照用，所以发之前就知道该选中哪一行。
+    var id: UUID
+    var method: String
+    var url: String
+    var headers: [HTTPHeader]
+    /// 解压后的正文。长度、压缩、分块这几个头桥脚本会丢掉重算。
+    var body: Data?
+}
+
 /// 写进引擎标准输入的一条指令（一行 JSON）。
 enum CaptureCommand: Equatable, Sendable {
     case shutdown
     case scope(DecryptScope)
     case allowDevice(String)
     case denyDevice(String)
+    case replay(ReplayRequest)
+    /// 全量的 Mock 规则（停用的也带上，引擎自己跳过）。
+    case rules([MockRule])
 
     /// 带换行符的一行，直接写进管道。
     var line: Data {
@@ -76,6 +90,23 @@ enum CaptureCommand: Equatable, Sendable {
             object = ["cmd": "allow_device", "client": client]
         case .denyDevice(let client):
             object = ["cmd": "deny_device", "client": client]
+        case .replay(let request):
+            var replay: [String: Any] = [
+                "cmd": "replay",
+                // 小写：和引擎自己生成的 flow id 一个写法。
+                "id": request.id.uuidString.lowercased(),
+                "method": request.method,
+                "url": request.url,
+                "headers": request.headers.map { [$0.name, $0.value] },
+            ]
+            if let body = request.body, !body.isEmpty {
+                replay["body"] = body.base64EncodedString()
+            } else {
+                replay["body"] = NSNull()
+            }
+            object = replay
+        case .rules(let rules):
+            object = ["cmd": "rules", "rules": rules.map(\.commandObject)]
         }
         var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
         data.append(0x0A)

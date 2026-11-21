@@ -120,6 +120,80 @@ final class CaptureEventTests: XCTestCase {
         XCTAssertEqual(plain.encoding, "br")
     }
 
+    // MARK: - 重发 / Mock / 解码（docs/packet-capture/TOOLS.md §6）
+
+    func testReplayedRequestWithDecodedBody() throws {
+        let event = CaptureEvent.parse(line: line("""
+        {"event":"request","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","client":"127.0.0.1","replay":true,\
+        "decoded":{"view":"Protobuf","text":"1: 150  # !sint: 75\\n2: testing\\n"},"method":"POST","scheme":"http",\
+        "host":"127.0.0.1","port":19620,"path":"/proto","http":"HTTP/1.1",\
+        "headers":[["content-type","application/x-protobuf"]],"body":"CJYBEgd0ZXN0aW5n","truncated":false,\
+        "sniffed":null,"bytes":11,"ts":1795200000.5}
+        """))
+        guard case .request(let request)? = event else { return XCTFail("not a request") }
+        XCTAssertTrue(request.isReplay)
+        // 文本取自真引擎（mitmproxy 12.3.1）对同一段 protobuf 的输出：只有字段编号，带它自己的 `# !sint` 注释。
+        XCTAssertEqual(request.decoded, DecodedBody(view: "Protobuf", text: "1: 150  # !sint: 75\n2: testing\n"))
+        XCTAssertEqual(request.body?.count, 12)
+    }
+
+    func testMockedResponseWithDecodedBody() throws {
+        let event = CaptureEvent.parse(line: line("""
+        {"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":418,\
+        "mock":"0c6f4a0e-1d0e-4f8a-9b3c-5a6b7c8d9e0f","decoded":{"view":"MsgPack","text":"a: 1\\nb: x\\n"},\
+        "http":"HTTP/1.1","headers":[["x-mock","yes"]],"body":"aGk=","truncated":false,"sniffed":null,\
+        "encoding":null,"bytes":2,"remote":null,"ts":1795200001.0}
+        """))
+        guard case .response(let response)? = event else { return XCTFail("not a response") }
+        XCTAssertEqual(response.status, 418)
+        XCTAssertEqual(response.mockRuleID, "0c6f4a0e-1d0e-4f8a-9b3c-5a6b7c8d9e0f")
+        XCTAssertEqual(response.decoded?.view, "MsgPack")
+        XCTAssertEqual(response.decoded?.text, "a: 1\nb: x\n")
+        XCTAssertNil(response.remote)
+    }
+
+    /// 新字段缺失、是 null 或形状不对：一律按「没有」，整条事件照常解出来。
+    func testNewFieldsDefaultToAbsent() throws {
+        let requests = [
+            #"{"event":"request","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","method":"GET","host":"x.com"}"#,
+            #"{"event":"request","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","method":"GET","host":"x.com","replay":null,"decoded":null}"#,
+            #"{"event":"request","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","method":"GET","host":"x.com","replay":"yes","decoded":"1: 2"}"#,
+            #"{"event":"request","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","method":"GET","host":"x.com","decoded":{"view":"Protobuf","text":""}}"#,
+        ]
+        for text in requests {
+            guard case .request(let request)? = CaptureEvent.parse(line: line(text)) else { return XCTFail(text) }
+            XCTAssertFalse(request.isReplay, text)
+            XCTAssertNil(request.decoded, text)
+        }
+        let responses = [
+            #"{"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":200}"#,
+            #"{"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":200,"mock":null,"decoded":null}"#,
+            #"{"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":200,"mock":"","decoded":[1]}"#,
+            #"{"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":200,"mock":7}"#,
+        ]
+        for text in responses {
+            guard case .response(let response)? = CaptureEvent.parse(line: line(text)) else { return XCTFail(text) }
+            XCTAssertNil(response.mockRuleID, text)
+            XCTAssertNil(response.decoded, text)
+        }
+        // 只有文本没有视图名：照样算解码了。
+        guard case .response(let unnamed)? = CaptureEvent.parse(line: line(
+            #"{"event":"response","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","status":200,"decoded":{"text":"1: 2"}}"#))
+        else { return XCTFail("not a response") }
+        XCTAssertEqual(unnamed.decoded, DecodedBody(view: "", text: "1: 2"))
+    }
+
+    func testReplayFailed() {
+        XCTAssertEqual(
+            CaptureEvent.parse(line: line(#"{"event":"replay_failed","id":"5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33","message":"Invalid URL"}"#)),
+            .replayFailed(id: UUID(uuidString: "5F0C1A52-3B55-4A5E-9D1F-0E8B7F1C2A33"), message: "Invalid URL"))
+        // 指令里没给 id 时引擎回 null：事件照样解出来，好让界面说明原因。
+        XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"replay_failed","id":null,"message":"'url'"}"#)),
+                       .replayFailed(id: nil, message: "'url'"))
+        XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"replay_failed"}"#)),
+                       .replayFailed(id: nil, message: ""))
+    }
+
     /// 解不出来的行一律返回 nil（跳过），不崩。
     func testMalformedLinesAreSkipped() {
         let bad = [
@@ -199,6 +273,57 @@ final class CaptureEventTests: XCTestCase {
         XCTAssertEqual(allow["cmd"] as? String, "allow_device")
         XCTAssertEqual(allow["client"] as? String, "192.168.0.9")
         XCTAssertEqual(try object(.denyDevice("192.168.0.9"))["cmd"] as? String, "deny_device")
+    }
+
+    func testReplayCommand() throws {
+        let id = try XCTUnwrap(UUID(uuidString: "5F0C1A52-3B55-4A5E-9D1F-0E8B7F1C2A33"))
+        let replay = try object(.replay(ReplayRequest(
+            id: id, method: "POST", url: "https://api.x.com/v1/login?debug=1",
+            headers: [HTTPHeader(name: "content-type", value: "application/json"),
+                      HTTPHeader(name: "x-a", value: "1"), HTTPHeader(name: "x-a", value: "2")],
+            body: Data(#"{"email":"a@x.com"}"#.utf8))))
+        XCTAssertEqual(replay["cmd"] as? String, "replay")
+        // 小写：引擎拿它当 flow id，事件里原样回来，`UUID(uuidString:)` 不分大小写都认。
+        XCTAssertEqual(replay["id"] as? String, "5f0c1a52-3b55-4a5e-9d1f-0e8b7f1c2a33")
+        XCTAssertEqual(replay["method"] as? String, "POST")
+        XCTAssertEqual(replay["url"] as? String, "https://api.x.com/v1/login?debug=1")
+        XCTAssertEqual(replay["headers"] as? [[String]],
+                       [["content-type", "application/json"], ["x-a", "1"], ["x-a", "2"]])
+        let body = try XCTUnwrap(replay["body"] as? String)
+        XCTAssertEqual(Data(base64Encoded: body), Data(#"{"email":"a@x.com"}"#.utf8))
+
+        // 没有正文：body 是 null（桥脚本按「没有」处理）。
+        let empty = try object(.replay(ReplayRequest(id: id, method: "GET", url: "http://x.com/", headers: [], body: nil)))
+        XCTAssertTrue(empty["body"] is NSNull)
+        XCTAssertEqual(empty["headers"] as? [[String]], [])
+        let zeroLength = try object(.replay(ReplayRequest(id: id, method: "GET", url: "http://x.com/", headers: [], body: Data())))
+        XCTAssertTrue(zeroLength["body"] is NSNull)
+    }
+
+    func testRulesCommand() throws {
+        let rules = [
+            MockRule(id: "r1", enabled: true, method: "GET", host: "api.x.com", path: "/v1/user/*", status: 418,
+                     headers: [HTTPHeader(name: "content-type", value: "application/json")],
+                     body: Data(#"{"id":1}"#.utf8)),
+            MockRule(id: "r2", enabled: false, method: "*", host: "cdn.x.com", path: "/", status: 204),
+        ]
+        let command = try object(.rules(rules))
+        XCTAssertEqual(command["cmd"] as? String, "rules")
+        let items = try XCTUnwrap(command["rules"] as? [[String: Any]])
+        XCTAssertEqual(items.count, 2, "停用的规则也发，引擎自己跳过")
+        XCTAssertEqual(items[0]["id"] as? String, "r1")
+        XCTAssertEqual(items[0]["enabled"] as? Bool, true)
+        XCTAssertEqual(items[0]["method"] as? String, "GET")
+        XCTAssertEqual(items[0]["host"] as? String, "api.x.com")
+        XCTAssertEqual(items[0]["path"] as? String, "/v1/user/*")
+        XCTAssertEqual(items[0]["status"] as? Int, 418)
+        XCTAssertEqual(items[0]["headers"] as? [[String]], [["content-type", "application/json"]])
+        XCTAssertEqual((items[0]["body"] as? String).flatMap { Data(base64Encoded: $0) }, Data(#"{"id":1}"#.utf8))
+        XCTAssertEqual(items[1]["enabled"] as? Bool, false)
+        XCTAssertEqual(items[1]["method"] as? String, "*")
+        XCTAssertEqual(items[1]["body"] as? String, "")
+        // 空表也要发：引擎据此清掉旧规则、恢复走真实服务器。
+        XCTAssertEqual((try object(.rules([])))["rules"] as? [String], [])
     }
 
     func testParseDomains() {

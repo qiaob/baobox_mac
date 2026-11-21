@@ -17,6 +17,14 @@ extension Array where Element == HTTPHeader {
     }
 }
 
+/// 结构化二进制正文（Protobuf / gRPC / msgpack）由引擎解成的文本（docs/packet-capture/TOOLS.md §5）。
+/// 没有 .proto，Protobuf 只有字段编号、没有字段名。
+struct DecodedBody: Equatable, Sendable {
+    /// 引擎用的视图名（`Protobuf`、`gRPC`、`MsgPack`…），原样。
+    var view: String
+    var text: String
+}
+
 /// 桥脚本从标准输出推来的一条事件。字段缺失或类型不符的行解不出来，返回 nil，调用方跳过（约定 5：决不 crash）。
 enum CaptureEvent: Equatable, Sendable {
     case running(version: String)
@@ -26,6 +34,8 @@ enum CaptureEvent: Equatable, Sendable {
     case webSocket(WebSocketMessage)
     case tls(client: String?, host: String, reason: UndecryptedReason)
     case device(client: String)
+    /// 重发没发出去（URL 不合法、指令缺字段…）。`id` 是指令里给的那个；引擎没收到 id 时为 nil。
+    case replayFailed(id: UUID?, message: String)
 
     struct Request: Equatable, Sendable {
         var id: UUID
@@ -43,6 +53,10 @@ enum CaptureEvent: Equatable, Sendable {
         var sniffed: String?
         var bytes: Int
         var startedAt: Date
+        /// 这条是 Baobox 让引擎重发出去的（TOOLS.md §3）。
+        var isReplay = false
+        /// 请求正文是 Protobuf / gRPC / msgpack 时引擎解出的文本；解不开或不适用为 nil。
+        var decoded: DecodedBody?
     }
 
     struct Response: Equatable, Sendable {
@@ -60,6 +74,10 @@ enum CaptureEvent: Equatable, Sendable {
         var bytes: Int
         var remote: String?
         var endedAt: Date?
+        /// 应答它的 Mock 规则 id；不是 Mock 应答的为 nil（TOOLS.md §4）。
+        var mockRuleID: String?
+        /// 同 `Request.decoded`。
+        var decoded: DecodedBody?
     }
 
     struct WebSocketMessage: Equatable, Sendable {
@@ -113,7 +131,9 @@ enum CaptureEvent: Equatable, Sendable {
                 truncated: json["truncated"] as? Bool ?? false,
                 sniffed: json["sniffed"] as? String,
                 bytes: int(json["bytes"]) ?? 0,
-                startedAt: date(json["ts"]) ?? Date()))
+                startedAt: date(json["ts"]) ?? Date(),
+                isReplay: json["replay"] as? Bool ?? false,
+                decoded: decoded(json["decoded"])))
         case "response":
             guard let id = uuid(json["id"]), let status = int(json["status"]) else { return nil }
             return .response(Response(
@@ -127,7 +147,9 @@ enum CaptureEvent: Equatable, Sendable {
                 sniffed: json["sniffed"] as? String,
                 bytes: int(json["bytes"]) ?? 0,
                 remote: json["remote"] as? String,
-                endedAt: date(json["ts"])))
+                endedAt: date(json["ts"]),
+                mockRuleID: (json["mock"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                decoded: decoded(json["decoded"])))
         case "error":
             guard let id = uuid(json["id"]) else { return nil }
             return .failure(id: id, message: json["message"] as? String ?? "", at: date(json["ts"]))
@@ -147,6 +169,8 @@ enum CaptureEvent: Equatable, Sendable {
         case "device":
             guard let client = json["client"] as? String, !client.isEmpty else { return nil }
             return .device(client: client)
+        case "replay_failed":
+            return .replayFailed(id: uuid(json["id"]), message: json["message"] as? String ?? "")
         default:
             return nil
         }
@@ -173,6 +197,13 @@ enum CaptureEvent: Equatable, Sendable {
     private static func body(_ value: Any?) -> Data? {
         guard let text = value as? String, !text.isEmpty else { return nil }
         return Data(base64Encoded: text)
+    }
+
+    /// `{"view": …, "text": …}`；没有文本、形状不对或是 null 都算没有。
+    private static func decoded(_ value: Any?) -> DecodedBody? {
+        guard let object = value as? [String: Any],
+              let text = object["text"] as? String, !text.isEmpty else { return nil }
+        return DecodedBody(view: object["view"] as? String ?? "", text: text)
     }
 
     /// `[[name, value], …]`；形状不对的项跳过。
