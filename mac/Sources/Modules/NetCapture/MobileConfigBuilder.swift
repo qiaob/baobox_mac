@@ -4,7 +4,8 @@ import Foundation
 ///
 /// 三个**独立**描述文件构建器（各只含一种 payload，标识固定 → 同类可互相覆盖）：
 /// - `caProfile()`      —— 仅 CA 根证书 payload（`com.apple.security.root`，DER base64）。
-/// - `proxyProfile(...)` —— 仅 Wi-Fi payload（`com.apple.wifi.managed`，`ProxyType=Manual`）。
+/// - `autoProxyProfile(...)` —— 仅 Wi-Fi payload（`com.apple.wifi.managed`，`ProxyType=Auto` + PAC 地址），默认给这个。
+/// - `proxyProfile(...)` —— 同上但 `ProxyType=Manual`（备选）。
 /// - `proxyOffProfile(...)` —— 同 Wi-Fi payload 但 `ProxyType=None`（关代理）。
 ///
 /// 外加 `landingPageHTML(...)` 生成给手机浏览器的自适应配置页（内联 CSS、双语、深浅色）。
@@ -27,7 +28,17 @@ enum MobileConfigBuilder {
                        payloads: [caPayload(der: der)])
     }
 
-    /// 仅 Wi-Fi 手动代理描述文件：为 `ssid` 设 `ProxyType=Manual`，指向 `ip:port`。
+    /// Wi-Fi 自动代理描述文件（默认给这个）：为 `ssid` 设 `ProxyType=Auto`，脚本地址是配置页的 `/proxy.pac`
+    /// （内容见 `ProxyPAC`）。Baobox 没在抓包时手机自动直连。和下面两个标识相同，装哪个都会顶掉另外两个。
+    static func autoProxyProfile(ssid: String, pacURL: String) -> String {
+        profile(displayName: "Baobox Wi-Fi Proxy",
+                description: "Baobox capture Wi-Fi proxy (automatic, falls back to direct)",
+                identifier: "com.baobox.netcapture.proxy",
+                payloads: [wifiPayload(ssid: ssid, proxyType: "Auto", proxyIP: nil, proxyPort: nil, pacURL: pacURL)])
+    }
+
+    /// Wi-Fi 手动代理描述文件（备选）：为 `ssid` 设 `ProxyType=Manual`，指向 `ip:port`。
+    /// Baobox 没开时手机连不上网，要手动关。
     static func proxyProfile(ssid: String, ip: String, port: UInt16) -> String {
         profile(displayName: "Baobox Wi-Fi Proxy",
                 description: "Baobox capture Wi-Fi proxy",
@@ -120,7 +131,7 @@ enum MobileConfigBuilder {
     /// Wi-Fi payload：为 `ssid` 设代理（`Manual` 时带 server/port；`None` 时省略）。
     /// 普通设备用按 SSID 的 Wi-Fi payload，不用监督级全局代理。
     private static func wifiPayload(ssid: String, proxyType: String,
-                                    proxyIP: String?, proxyPort: UInt16?) -> String {
+                                    proxyIP: String?, proxyPort: UInt16?, pacURL: String? = nil) -> String {
         var lines = [
             "        <dict>",
             "          <key>PayloadType</key>",
@@ -149,6 +160,13 @@ enum MobileConfigBuilder {
             lines.append("          <string>\(xmlEscape(ip))</string>")
             lines.append("          <key>ProxyServerPort</key>")
             lines.append("          <integer>\(port)</integer>")
+        }
+        if proxyType == "Auto", let pacURL {
+            lines.append("          <key>ProxyPACURL</key>")
+            lines.append("          <string>\(xmlEscape(pacURL))</string>")
+            // 脚本取不到（Baobox 没开、Mac 不在这个网络）时直连，而不是断网。
+            lines.append("          <key>ProxyPACFallbackAllowed</key>")
+            lines.append("          <true/>")
         }
         lines.append("        </dict>")
         return lines.joined(separator: "\n")
@@ -187,10 +205,13 @@ enum MobileConfigBuilder {
                 proxyCard = card(
                     num: "2", title: "配代理 / Set proxy",
                     body: """
-                    <a class="btn" href="/proxy">一键配置代理 / One-tap set proxy</a>
+                    <a class="btn" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
+                    <a class="btn ghost" href="/proxy-manual">固定代理 / Fixed</a>
                     <a class="btn ghost" href="App-prefs:">打开设置 / Open Settings</a>
                     <p class="addr">\(addrEsc)</p>
-                    <p class="hint">为当前 Wi-Fi 自动设手动代理，指向本机。下载完同样到<b>设置</b>最上面的<b>已下载描述文件</b>里安装。<br>Installs a Manual proxy for the current Wi-Fi pointing to this Mac. Install it from <b>Profile Downloaded</b> at the top of <b>Settings</b>.</p>
+                    <p class="hint"><b>自动代理</b>：Baobox 没在抓包、而这台 Mac 还开着并在同一个 Wi-Fi 时，手机自动直连，不用来回关代理。<br><b>固定代理</b>：所有请求都发给这台 Mac，Baobox 没开手机就上不了网。<br>两种都只对当前这个 Wi-Fi 生效。下载完到<b>设置</b>最上面的<b>已下载描述文件</b>里安装。</p>
+                    <p class="hint"><b>Automatic</b>: while Baobox is not capturing and this Mac is still on and on the same Wi-Fi, the phone connects directly; nothing to switch off. <b>Fixed</b>: everything goes to this Mac, so the phone is offline whenever Baobox is not running. Both apply to this Wi-Fi only. Install from <b>Profile Downloaded</b> at the top of <b>Settings</b>.</p>
+                    <p class="hint">Mac 睡眠、关机或离开这个 Wi-Fi 之后，两种方式下手机联网都会很慢甚至不通，这时请关代理（下面第 3 步）。<br>Once the Mac sleeps, shuts down or leaves this Wi-Fi, the phone's connection becomes very slow or fails with either choice. Turn the proxy off then (step 3 below).</p>
                     """)
             } else {
                 proxyCard = card(
@@ -205,7 +226,7 @@ enum MobileConfigBuilder {
                 num: "3", title: "关代理 / Turn proxy off",
                 body: """
                 <a class="btn ghost" href="/proxy-off">一键关闭代理 / One-tap turn off</a>
-                <p class="hint">或到 <b>设置 › 通用 › VPN与设备管理</b> 删除 Baobox 描述文件。<br>Or delete the Baobox profile in <b>Settings › General › VPN &amp; Device Management</b>.</p>
+                <p class="hint">抓完了，或者 Mac 要睡眠、关机、带走，就关掉。也可以到 <b>设置 › 通用 › VPN与设备管理</b> 删除 Baobox 描述文件。<br>Turn it off when you are done, or before the Mac sleeps, shuts down or leaves. You can also delete the Baobox profile in <b>Settings › General › VPN &amp; Device Management</b>.</p>
                 """)
         } else {
             certCard = card(

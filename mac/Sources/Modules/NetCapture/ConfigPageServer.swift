@@ -6,7 +6,7 @@ import Network
 /// 手机扫码打开 `http://<Mac 的局域网 IP>:<端口>/`，页面里装证书、配代理、关代理。它不经过代理，
 /// 所以手机还没设好代理时也打得开（v1 靠代理拦截一个假域名来给页面，必须先设代理）。
 ///
-/// 只应答四个 GET 路由，内容都由 `MobileConfigBuilder` 生成；只发公开证书和描述文件，不涉及抓到的内容，
+/// 只应答几个 GET 路由（`/`、`/cert`、`/proxy`、`/proxy-manual`、`/proxy-off`、`/proxy.pac`），内容都由 `MobileConfigBuilder` / `ProxyPAC` 生成；只发公开证书和描述文件，不涉及抓到的内容，
 /// 所以不做设备准入。只在听局域网时开着。带着二维码里的口令来开 `/` 的设备，顺手在引擎那边放行。
 final class ConfigPageServer: @unchecked Sendable {
     static let shared = ConfigPageServer()
@@ -115,7 +115,20 @@ final class ConfigPageServer: @unchecked Sendable {
             } else {
                 send(connection, status: "503 Service Unavailable", contentType: "text/plain", body: Data())
             }
+        case "/proxy.pac":
+            // iPhone 的自动代理来取脚本（系统自己取，User-Agent 不是浏览器，所以不看是不是 iOS）。
+            let script = ProxyPAC.script(proxyHost: ip, proxyPort: proxyPort)
+            send(connection, status: "200 OK", contentType: ProxyPAC.contentType, body: Data(script.utf8))
         case "/proxy":
+            if isIOS, let ssid = MobileConfigBuilder.currentSSID() {
+                let pacURL = "http://\(ip):\(NetCaptureEnv.configPagePort)/proxy.pac"
+                let profile = MobileConfigBuilder.autoProxyProfile(ssid: ssid, pacURL: pacURL)
+                send(connection, status: "200 OK", contentType: "application/x-apple-aspen-config",
+                     body: Data(profile.utf8), filename: "baobox-proxy.mobileconfig")
+            } else {
+                redirectHome(connection)
+            }
+        case "/proxy-manual":
             if isIOS, let ssid = MobileConfigBuilder.currentSSID() {
                 let profile = MobileConfigBuilder.proxyProfile(ssid: ssid, ip: ip, port: proxyPort)
                 send(connection, status: "200 OK", contentType: "application/x-apple-aspen-config",
