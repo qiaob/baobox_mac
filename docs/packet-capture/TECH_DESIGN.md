@@ -385,6 +385,33 @@ Baobox（Swift）                              mitmdump（子进程）
 - 设置页新加的「WireGuard 端口」「重新生成 WireGuard 密钥」：只编译过，没渲染、没点过（`regenerateWireGuardKeys` 的换文件逻辑有单元测试）。
 - 真的系统代理（`SystemProxyController.apply` 的 `networksetup` 调用顺序）：按约定没在这台机器上真改过，只有桩记录的调用；改动是把原来一次性的 `enable` 拆成两组各自可选，还原逻辑没变。
 
+**复核时补上的两项（同一天稍后）**
+
+*真的 WireGuard 隧道*：Android 15 模拟器装官方 WireGuard App（1.0.20260315），导入 `get_wireguard_config` 给的配置文本，开隧道（`tun0` = 10.0.0.1）。Mac 这边是用真实源码编的宿主（真 `NetCaptureSession` / 引擎 / 配置页服务 / MCP，系统代理是桩），只开了「WireGuard」和「给其他设备装证书」，「手动代理」关着。
+
+| 做了什么 | 结果 |
+|---|---|
+| 模拟器里 `nc github.com 22` | 「TCP 包」多一条，设备 10.0.0.1，不用点「允许」；收到横幅后协议是 SSH（确定），只发了一个换行就断开的那条是「SSH?（按端口猜）」 |
+| 系统自己的连接（mtalk.google.com、googleapis 等） | HTTP 列表里是未解密的行，设备 10.0.0.1；待放行设备一直为空 |
+| Chrome 打开 `http://<Mac IP>:19641/?k=…` | 隧道版配置页：顶上「已通过 WireGuard 连接」，只有装证书一步；这次访问不进列表 |
+| 在系统设置里装上这份 CA 后重开配置页 | 「证书已信任」自己打勾，并提示不用再装（证书检测是经隧道连 Mac 的代理端口做的） |
+| Chrome 打开 `https://example.com/` | 解密成功：`GET 200 https://example.com/…`，设备 10.0.0.1 |
+| MCP 暂停后发 HTTP 请求、开 SSH 连接 | 都照常通，列表不变（HTTP、TCP 都不多）；恢复后新请求出现 |
+| `stop_capture` | 四个开关全关，19640–19645 和 UDP 19643 都释放 |
+
+*真的系统代理*：把 `SystemProxyController.swift` 原样编进一个小探针，在这台 Mac 的 Wi-Fi 服务上真调 `networksetup`（期间代理端口后面有一个全部直通的引擎顶着，网络不断），每一步之后读 `scutil --proxy`：
+
+| 调用 | HTTP / HTTPS | SOCKS | 快照 |
+|---|---|---|---|
+| 之前 | 关 | 关 | 无 |
+| `apply(http: P, socks: P+2)` | 开，指向 P | 开，指向 P+2 | 有 |
+| `apply(http: nil, socks: P+2)` | 关（还原） | 开 | 有 |
+| `apply(http: P, socks: nil)` | 开 | 关（还原） | 有 |
+| `apply(http: P, socks: P+2)` | 开 | 开 | 有（没有被第二次覆盖） |
+| `apply(http: nil, socks: nil)` | 关 | 关 | 无 |
+
+仍然没验证的：iPhone 上的一切；真机手机（不是模拟器）经隧道的原始 TCP；界面上的点击；设置页的 WireGuard 两项。
+
 ## 2. 引擎怎么带进包里
 
 沿用 llama-server 的做法（`make vendor` 下载，构建时拷进包），有三处不同。
