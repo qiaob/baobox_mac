@@ -513,7 +513,7 @@ final class FlowStore: ObservableObject {
         return parts.joined(separator: " \\\n  ")
     }
 
-    /// 生成 Markdown 摘要（请求行 + 关键头 + body 摘要 + 响应），供「复制」与「发送到 Claude Code」。
+    /// 生成 Markdown 摘要（请求行 + 关键头 + body 摘要 + 响应），供列表右键「复制为 Markdown」。
     nonisolated func markdown(for flow: Flow) -> String {
         var lines: [String] = []
         lines.append("### \(flow.method) \(flow.url)")

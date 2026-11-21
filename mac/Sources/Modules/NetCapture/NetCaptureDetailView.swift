@@ -13,23 +13,6 @@ enum FlowActions {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
-
-    /// 发送到 Claude Code：把这条请求的 Markdown 写临时文件，在终端起 `claude "$(cat file)"`。
-    static func sendToClaude(_ flow: Flow) {
-        let markdown = FlowStore.shared.markdown(for: flow)
-        let dir = NetCaptureEnv.ensureSupportDir().appendingPathComponent("send", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("\(UUID().uuidString).md")
-        do {
-            try Data(markdown.utf8).write(to: file)
-        } catch {
-            StorageWriteFailure.report("netcapture.send", reason: error.localizedDescription)
-            return
-        }
-        let bin = ClaudeEnv.findClaudeBinary() ?? "claude"
-        let command = "\(NetCaptureEnv.shellSingleQuote(bin)) \"$(cat \(NetCaptureEnv.shellSingleQuote(file.path)))\""
-        TerminalLauncher.run(command: command, in: nil)
-    }
 }
 
 /// 详情区和列表右键里对一条请求能做的事。动作要弹的面板在窗口根视图上，所以由它传进来。
@@ -192,7 +175,6 @@ struct FlowDetailView: View {
         if flow.decrypted {
             HStack(spacing: 6) {
                 // 带文字的复制按钮：只放一个图标时看不出是「复制」（用户 2026-11-21）。
-                // 「发送到 Claude Code」不放这里，在列表行的右键菜单里。
                 CopyButton(title: "netcapture.flow.copyCurl") { FlowStore.shared.curl(for: flow) }
                 Button { commands.replay(flow) } label: {
                     Label("netcapture.replay.action", systemImage: "arrow.clockwise")

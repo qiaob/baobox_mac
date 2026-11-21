@@ -619,9 +619,6 @@ struct NetCaptureRootView: View {
             Button { FlowActions.copy(FlowStore.shared.markdown(for: flow)) } label: {
                 Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
             }
-            Button { FlowActions.sendToClaude(flow) } label: {
-                Label("netcapture.flow.sendToClaude", systemImage: "paperplane")
-            }
         }
         Button { FlowActions.copy(flow.decrypted ? flow.url : flow.host) } label: {
             Label("netcapture.flow.copyURL", systemImage: "link")
