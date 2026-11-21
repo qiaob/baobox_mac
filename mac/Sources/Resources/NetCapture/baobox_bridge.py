@@ -13,6 +13,8 @@ import asyncio
 import base64
 import fnmatch
 import json
+import re
+import socket
 import sys
 import threading
 import time
@@ -22,16 +24,51 @@ from mitmproxy import connection, contentviews, ctx, http, tls
 
 PREFIX = "BAOBOX "
 
+# Reloads itself every 3 s: once the device is allowed on the Mac the page the user asked for appears
+# without another tap (a user reported "nothing happens" after clicking Allow, 2026-11-21).
 FORBIDDEN_PAGE = (
+    "<!doctype html><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width, initial-scale=1'>"
+    "<meta http-equiv=refresh content=3>"
+    "<title>Baobox</title>"
+    "<body style='font-family:-apple-system,sans-serif;padding:32px;line-height:1.6'>"
+    "<h2>请在 Mac 上允许这台设备</h2>"
+    "<p>打开 Baobox 的抓包窗口，点「允许」。允许后这个页面会自己刷新。</p>"
+    "<h2>Allow this device on the Mac</h2>"
+    "<p>Open the Baobox capture window and click Allow. This page reloads by itself afterwards.</p>"
+)
+
+SELF_PAGE = (
     "<!doctype html><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width, initial-scale=1'>"
     "<title>Baobox</title>"
     "<body style='font-family:-apple-system,sans-serif;padding:32px;line-height:1.6'>"
-    "<h2>请在 Mac 上允许这台设备</h2>"
-    "<p>打开 Baobox 的抓包窗口，点「允许」后再试。</p>"
-    "<h2>Allow this device on the Mac</h2>"
-    "<p>Open the Baobox capture window, click Allow, then retry.</p>"
+    "<h2>这是 Baobox 的代理地址</h2>"
+    "<p>它不是网页，不能在浏览器里直接打开。请把这个地址填到设备的 Wi-Fi 代理里。</p>"
+    "<h2>This is the Baobox proxy address</h2>"
+    "<p>It is not a web page. Enter it as the Wi-Fi proxy of the device instead.</p>"
 )
+
+
+def bare_host(value):
+    """Lower-case host without brackets, IPv4-mapped prefix or zone id."""
+    host = str(value or "").lower().strip("[]")
+    if host.startswith("::ffff:"):
+        host = host[7:]
+    return host.split("%", 1)[0]
+
+
+def local_names():
+    """Names under which this machine reaches itself (besides the address a client connected to)."""
+    names = {"localhost", "127.0.0.1", "::1"}
+    try:
+        name = socket.gethostname().lower()
+        if name:
+            names.add(name)
+            names.add(name.split(".", 1)[0] + ".local")
+    except OSError:
+        pass
+    return names
 
 
 def emit(obj):
@@ -159,6 +196,9 @@ class Bridge:
         self.reported = set()            # (client ip, host, reason): `tls` already sent
         self.body_cap = 5 * 1024 * 1024
         self.rules = []                  # mock rules, in the order the user keeps them
+        self.listen_ports = set()        # ports this engine listens on
+        self.local_names = local_names()
+        self.page_port = 0               # Baobox's setup page for phones, 0 = not running
 
     # ----- options --------------------------------------------------------
 
@@ -171,6 +211,8 @@ class Bridge:
                           "Initial decrypt scope as JSON: {mode, domains}.")
         loader.add_option("baobox_allowed", str, "",
                           "Initially allowed LAN source IPs, comma separated.")
+        loader.add_option("baobox_page_port", int, 0,
+                          "Port of Baobox's setup page; requests sent to the proxy itself are redirected there.")
 
     def running(self):
         self.body_cap = max(1024, ctx.options.baobox_body_cap)
@@ -180,6 +222,11 @@ class Bridge:
             except ValueError:
                 pass
         self.allowed.update(ip for ip in ctx.options.baobox_allowed.split(",") if ip)
+        self.page_port = max(0, ctx.options.baobox_page_port)
+        for spec in ctx.options.mode:
+            match = re.search(r":(\d+)$", spec)
+            if match:
+                self.listen_ports.add(int(match.group(1)))
 
         version = ""
         try:
@@ -333,8 +380,48 @@ class Bridge:
         return False
 
     def http_connect(self, flow: http.HTTPFlow):
+        if self.addressed_to_proxy(flow):
+            flow.metadata["baobox_self"] = True
+            flow.response = http.Response.make(403, b"", {"Connection": "close"})
+            return
         if not self.admitted(client_ip(flow.client_conn)):
             flow.response = http.Response.make(403, b"", {"Connection": "close"})
+
+    # ----- requests sent to the proxy itself --------------------------------
+
+    def addressed_to_proxy(self, flow):
+        """True when the request's destination is this engine.
+
+        Happens when someone opens the proxy address in a browser. Forwarding it would make the
+        engine connect to itself over and over until the machine runs out of ports (seen
+        2026-11-21: 16000 requests, then 502).
+        """
+        return flow.request.port in self.listen_ports and self.is_this_machine(flow)
+
+    def is_this_machine(self, flow):
+        """True when the request's host is this machine: a loopback name, the host name, or the
+        address the client itself used to reach the engine."""
+        host = bare_host(flow.request.host)
+        if host in self.local_names:
+            return True
+        sock = getattr(flow.client_conn, "sockname", None)
+        return bool(sock) and host == bare_host(sock[0])
+
+    def addressed_to_setup_page(self, flow):
+        """True for the phone setup page fetched through the proxy (the phone already has the proxy set)."""
+        return bool(self.page_port) and flow.request.port == self.page_port and self.is_this_machine(flow)
+
+    def self_response(self, req):
+        """Send a browser that opened the proxy address to the setup page, or say what the address is."""
+        if self.page_port:
+            host = bare_host(req.host)
+            if ":" in host:
+                host = "[" + host + "]"
+            return http.Response.make(
+                302, b"", {"Location": "http://%s:%d/" % (host, self.page_port), "Cache-Control": "no-store"})
+        return http.Response.make(
+            200, SELF_PAGE.encode("utf-8"),
+            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
 
     # ----- decrypt scope + automatic passthrough ---------------------------
 
@@ -442,11 +529,20 @@ class Bridge:
         return [[k, v] for k, v in message.headers.items(multi=True)]
 
     def request(self, flow: http.HTTPFlow):
+        if self.addressed_to_proxy(flow):
+            # Not traffic to capture: no event, no admission prompt.
+            flow.metadata["baobox_self"] = True
+            flow.response = self.self_response(flow.request)
+            return
+        if self.addressed_to_setup_page(flow):
+            # Baobox's own page: pass it on, keep it out of the list, and don't ask to allow the device for it.
+            flow.metadata["baobox_self"] = True
+            return
         ip = client_ip(flow.client_conn)
         if not self.admitted(ip):
             flow.response = http.Response.make(
                 403, FORBIDDEN_PAGE.encode("utf-8"),
-                {"Content-Type": "text/html; charset=utf-8"})
+                {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
             return
         req = flow.request
         body, truncated, sniffed = self.body_fields(req)
@@ -466,7 +562,7 @@ class Bridge:
             flow.response = http.Response.make(rule["status"], rule["body"], http.Headers(rule["headers"]))
 
     def response(self, flow: http.HTTPFlow):
-        if not self.admitted(client_ip(flow.client_conn)):
+        if flow.metadata.get("baobox_self") or not self.admitted(client_ip(flow.client_conn)):
             return
         resp = flow.response
         body, truncated, sniffed = self.body_fields(resp)
@@ -486,6 +582,8 @@ class Bridge:
         })
 
     def error(self, flow: http.HTTPFlow):
+        if flow.metadata.get("baobox_self"):
+            return
         if flow.error and self.admitted(client_ip(flow.client_conn)):
             emit({"event": "error", "id": flow.id, "message": flow.error.msg,
                   "ts": flow.error.timestamp})

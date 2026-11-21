@@ -90,6 +90,8 @@ final class NetCaptureEngine: ObservableObject {
             "--set", "baobox_body_cap=\(bodyCap)",
             "--set", "baobox_scope=\(NetCaptureEnv.decryptScope.json)",
             "--set", "baobox_allowed=\(allowedDevices.sorted().joined(separator: ","))",
+            // 有人在浏览器里直接打开代理地址时，桥把它转到手机配置页（配置页只在听局域网时开着）。
+            "--set", "baobox_page_port=\(lan ? NetCaptureEnv.configPagePort : 0)",
         ]
         let stdin = Pipe()
         let stdout = Pipe()

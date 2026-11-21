@@ -78,7 +78,7 @@ final class ConfigPageServer: @unchecked Sendable {
         let userAgent = lines.dropFirst()
             .first { $0.lowercased().hasPrefix("user-agent:") }
             .map { String($0.dropFirst("user-agent:".count)).trimmingCharacters(in: .whitespaces) } ?? ""
-        let isIOS = userAgent.contains("iPhone") || userAgent.contains("iPad") || userAgent.contains("iPod")
+        let isIOS = PhoneBrowser.isIOS(userAgent: userAgent)
         let ip = NetworkInterfaces.primaryIP()
 
         switch path {

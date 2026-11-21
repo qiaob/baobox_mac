@@ -161,7 +161,10 @@ enum MobileConfigBuilder {
     /// - Android·其它：证书链接 + 主机名 / 端口各带一个复制按钮 + 直达 Wi-Fi 设置的按钮 + 手动步骤（含 ADB 提示）。
     /// `ssid` 为空时 iOS 的「配代理」改为手动说明（因无 SSID 无法出 Wi-Fi 描述文件）。
     static func landingPageHTML(ip: String, port: UInt16, ssid: String?, userAgent: String) -> String {
-        let isIOS = userAgent.contains("iPhone") || userAgent.contains("iPad") || userAgent.contains("iPod")
+        let isIOS = PhoneBrowser.isIOS(userAgent: userAgent)
+        // iOS 上只有 Safari 能装描述文件。相机扫码开的是默认浏览器，默认浏览器是 Chrome 时只会下到一个打不开的文件
+        // （2026-11-21 用户真机遇到）。这种情况不给安装按钮，只请他换到 Safari。
+        let needsSafari = isIOS && !PhoneBrowser.isIOSSafari(userAgent: userAgent)
         let addr = "\(ip):\(port)"
         let addrEsc = htmlEscape(addr)
         let hasSSID = (ssid?.isEmpty == false)
@@ -206,6 +209,7 @@ enum MobileConfigBuilder {
                 num: "1", title: "装证书 / Install CA",
                 body: """
                 <a class="btn" href="/cert">下载证书 / Download CA (.crt)</a>
+                <p class="hint">Chrome 提示「无法安全下载」时选<b>保留</b>。<br>If Chrome says the file can't be downloaded securely, choose <b>Keep</b>.</p>
                 <p class="hint">下载后到系统设置里安装（直接点开下载的文件装不了）：<b>设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</b>，选刚下载的文件。<br>Then install it from Settings (opening the downloaded file won't work): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, and pick the downloaded file.</p>
                 """)
 
@@ -230,11 +234,11 @@ enum MobileConfigBuilder {
         // 复制：这个页面是 http 的局域网地址，不算「安全上下文」，`navigator.clipboard` 在这里不存在
         // （2026-11-21 用户在 Android 上点复制没反应就是这个原因）。所以走老办法：临时文本框 + execCommand。
         // 都不行时把按钮文字换成「长按复制」，数值本身设了 user-select: all，长按就是整段选中。
-        let copyJS = isIOS ? "" : """
+        let copyJS = (isIOS && !needsSafari) ? "" : """
         <script>
         function copyText(id, btn){
           var t = document.getElementById(id).textContent;
-          function done(ok){ btn.textContent = ok ? '已复制 ✓' : '长按数字复制'; }
+          function done(ok){ btn.textContent = ok ? '已复制 ✓' : '长按复制'; }
           function legacy(){
             var ta = document.createElement('textarea');
             ta.value = t; ta.setAttribute('readonly', '');
@@ -254,6 +258,22 @@ enum MobileConfigBuilder {
         }
         </script>
         """
+
+        // 换到 Safari：只能请他复制地址。`x-safari-https://` 能从别的浏览器直接跳到 Safari，但只有 https 这一种；
+        // 这个页面是 http 的，对应的 `x-safari-http://` 系统不认（2026-11-21 在 iOS 18.3 模拟器上试过，没有 App 接这个地址）。
+        let pageHost = "\(ip):\(NetCaptureEnv.configPagePort)/"
+        let cards: String
+        if needsSafari {
+            cards = """
+            <div class="card"><h2>请用 Safari 打开这个页面 / Open this page in Safari</h2>
+            <p class="hint" style="margin:0 0 12px">iOS 只允许 Safari 安装证书和代理的描述文件，这个浏览器下载后装不了。<br>On iOS only Safari can install the certificate and proxy profiles. This browser cannot.</p>
+            <div class="kv"><b id="pageurl" style="font-size:16px">http://\(htmlEscape(pageHost))</b><button class="mini" onclick="copyText('pageurl',this)">复制 Copy</button></div>
+            <p class="hint">复制上面的地址，打开 Safari，粘贴到地址栏。<br>Copy the address above, open Safari and paste it into the address bar.</p>
+            </div>
+            """
+        } else {
+            cards = certCard + "\n" + proxyCard + "\n" + offCard
+        }
 
         return """
         <!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -285,9 +305,7 @@ enum MobileConfigBuilder {
         <h1>Baobox 抓包配置 / Capture Setup</h1>
         <p class="hint" style="text-align:center">当前代理 / Proxy</p>
         <div class="big">\(addrEsc)</div>
-        \(certCard)
-        \(proxyCard)
-        \(offCard)
+        \(cards)
         <p class="foot">仅用于本机调试，请勿抓取他人隐私。<br>For local debugging only.</p>
         </div>\(copyJS)</body></html>
         """
