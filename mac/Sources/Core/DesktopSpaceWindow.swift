@@ -17,14 +17,49 @@ import AppKit
 ///
 /// 窗口必须在 `build` 里**当场建出来**（`NSWindow(contentViewController:)` 就是；自己 init 的用 `defer: false`），
 /// 用完关掉时复用同一个实例（`isReleasedWhenClosed = false`）。浮条、贴图、气泡这类**有意叠在全屏 App 上**的窗口不要用它。
+///
+/// **已经有窗口开着时再建一个**（抓包窗口里点「范围…」第一次打开设置）：这时 App 在前台，切回 `.accessory` 那一下系统会让它
+/// 让出前台、把上一个 App 拉回来，两个窗口都被压到别的 App 后面 —— Baobox 没有 Dock 图标，用户看到的是「窗口没了」
+/// （2026-11-22 探针实测：切完约 10 ms 收到 `didResignActive`，之后前台是上一个 App）。所以切的时候在前台，就在紧接着
+/// 失去前台的那一刻把它拿回来，原来开着的窗口按原顺序放回最前。
 @MainActor
 enum DesktopSpaceWindow {
     static func make<W: NSWindow>(_ build: () -> W) -> W {
         let policy = NSApp.activationPolicy()
         guard policy != .regular else { return build() }
+        let wasActive = NSApp.isActive
         NSApp.setActivationPolicy(.regular)
         let window = build()
         NSApp.setActivationPolicy(policy)
+        if wasActive { reclaimFocusIfLost() }
         return window
+    }
+
+    private static var reclaimObserver: NSObjectProtocol?
+    private static var reclaimsLeft = 0
+
+    /// 接下来 1 秒内失去前台就拿回来（最多 3 次：系统那一下有时分两次来）。过了 1 秒不再管 —— 那是用户自己切走的。
+    private static func reclaimFocusIfLost() {
+        if let reclaimObserver { NotificationCenter.default.removeObserver(reclaimObserver) }
+        reclaimsLeft = 3
+        reclaimObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard reclaimsLeft > 0 else { return }
+                reclaimsLeft -= 1
+                // 调用方在 `make` 之后已经把新窗口显示出来了，所以这里的顺序里它排第一。
+                let windows = NSApp.orderedWindows.filter { $0.isVisible && $0.level == .normal }
+                NSApp.activate(ignoringOtherApps: true)
+                for window in windows.reversed() { window.orderFront(nil) }
+                windows.first?.makeKey()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            MainActor.assumeIsolated {
+                if let reclaimObserver { NotificationCenter.default.removeObserver(reclaimObserver) }
+                reclaimObserver = nil
+            }
+        }
     }
 }

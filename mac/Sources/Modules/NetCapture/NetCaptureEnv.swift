@@ -6,7 +6,7 @@ import Foundation
 /// shell 转义。所有网络/证书子系统只调这里暴露的方法，绝不各自散落硬编码。
 ///
 /// 并发说明：`NetCaptureEnv` 有意**不**标 `@MainActor` —— 它的成员要么是纯路径计算、
-/// 要么是可能阻塞的子进程 IO（openssl / networksetup / adb），这些必须能在后台线程直接调用。
+/// 要么是可能阻塞的子进程 IO（networksetup / adb / security），这些必须能在后台线程直接调用。
 /// 本文件不含用户可见文案（脚本与命令字符串不经 L()）。
 enum NetCaptureEnv {
 
@@ -25,11 +25,47 @@ enum NetCaptureEnv {
         return appSupport.appendingPathComponent("Baobox/NetCapture", isDirectory: true)
     }
 
-    /// CA 目录：`supportDir/ca/`。
-    static var caDir: URL { supportDir.appendingPathComponent("ca", isDirectory: true) }
+    /// 引擎（mitmproxy）的配置目录：CA 证书与私钥由它生成在这里。`supportDir/mitmproxy/`。
+    static var engineConfDir: URL { supportDir.appendingPathComponent("mitmproxy", isDirectory: true) }
 
-    /// 叶子证书缓存目录：`supportDir/leaf/`。
-    static var leafDir: URL { supportDir.appendingPathComponent("leaf", isDirectory: true) }
+    /// v1 自研内核留下的两个目录（旧 CA 与叶子证书缓存）。只在清理旧证书时用，见 `CaptureCA.removeLegacyCA()`。
+    static var legacyCADir: URL { supportDir.appendingPathComponent("ca", isDirectory: true) }
+    static var legacyLeafDir: URL { supportDir.appendingPathComponent("leaf", isDirectory: true) }
+
+    // MARK: - 引擎
+
+    /// 包内的 mitmdump：`Baobox.app/Contents/Helpers/mitmproxy.app/Contents/MacOS/mitmdump`
+    /// （构建时由 project.yml 的「Embed mitmproxy」阶段拷进来，docs/packet-capture/TECH_DESIGN.md §2）。
+    static var engineURL: URL {
+        Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/mitmproxy.app/Contents/MacOS/mitmdump")
+    }
+
+    /// 桥脚本：`Baobox.app/Contents/Resources/NetCapture/baobox_bridge.py`。
+    static var bridgeScriptURL: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("NetCapture/baobox_bridge.py")
+    }
+
+    /// 引擎为什么用不了；nil = 能用。包里只带 Apple 芯片版，开发构建没跑 `make vendor` 时包里没有引擎。
+    enum EngineUnavailable {
+        case needsAppleSilicon
+        case notBundled
+    }
+
+    static var engineUnavailable: EngineUnavailable? {
+        guard isAppleSilicon else { return .needsAppleSilicon }
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: engineURL.path),
+              let script = bridgeScriptURL, fm.fileExists(atPath: script.path) else { return .notBundled }
+        return nil
+    }
+
+    /// 这台机器是不是 Apple 芯片（Baobox 自己跑在 Rosetta 下也算，引擎是另起的原生进程）。
+    private static let isAppleSilicon: Bool = {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("hw.optional.arm64", &value, &size, nil, 0) == 0 && value == 1
+    }()
 
     /// 确保支持目录存在，返回其 URL（幂等）。
     @discardableResult
@@ -43,16 +79,22 @@ enum NetCaptureEnv {
 
     enum Keys {
         static let port = "netcapture.port"
-        static let autoSystemProxy = "netcapture.autoSystemProxy"
         static let serviceName = "netcapture.serviceName"
         static let maxFlows = "netcapture.maxFlows"
         static let bodyCap = "netcapture.bodyCap"
         static let decryptScope = "netcapture.decryptScope"       // "all" | "allowlist"
+        /// 用户手填的 Wi-Fi 名称。新版 macOS 不给定位权限就读不到当前 Wi-Fi 名，而 iPhone 的代理描述文件要按名称匹配网络。
+        static let wifiName = "netcapture.wifiName"
+        /// 「本机」卡片的三个子开关（docs/packet-capture/CONTROL.md §2.2）。总开关不存：App 启动时四张卡片都是关的。
+        static let macHTTP = "netcapture.mac.http"
+        static let macWebSocket = "netcapture.mac.websocket"
+        static let macTCP = "netcapture.mac.tcp"
+        /// 「解密 HTTPS」（证书卡片）。关 = 解密范围用 `DecryptScope.off`。
+        static let decryptHTTPS = "netcapture.decryptHTTPS"
+        /// WireGuard 的 UDP 端口（设置页可改）。
+        static let wireguardPort = "netcapture.wireguardPort"
         static let allowDomains = "netcapture.allowDomains"        // 换行分隔
         static let denyDomains = "netcapture.denyDomains"          // 换行分隔
-        /// 是否解密远程设备（手机等非本机）的 HTTPS。默认关：未装/未信任证书的设备被 MITM 会
-        /// TLS 握手失败且无法回退→表现为断网，故远程默认透传，用户装好证书后再显式开启。
-        static let decryptRemote = "netcapture.decryptRemote"
         static let mcpPort = "netcapture.mcpPort"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
@@ -60,6 +102,14 @@ enum NetCaptureEnv {
         static let deviceAliases = "netcapture.deviceAliases"
         /// 崩溃兜底：开启系统代理前保存的原状态（JSON 编码），停止或下次启动还原。
         static let savedProxyState = "netcapture.savedProxyState"
+        /// 列表里隐藏的域名（精确域名，`[String]`）。噪音域名每次都是那些，所以存着（docs/packet-capture/TOOLS.md §1）。
+        static let hiddenHosts = "netcapture.hiddenHosts"
+        /// 列表里藏起「未解密」的行（Bool，默认 false）。
+        static let hideUndecrypted = "netcapture.hideUndecrypted"
+        /// 左栏「过滤域名」输入框的文字（String）。
+        static let hostFilterText = "netcapture.hostFilterText"
+        /// 请求列表「过滤 URL」输入框的文字（String）。
+        static let urlFilterText = "netcapture.urlFilterText"
     }
 
     /// 未知来源设备的占位标识（clientIP 为 nil 时归入此桶）。
@@ -69,17 +119,20 @@ enum NetCaptureEnv {
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             Keys.port: 9090,
-            Keys.autoSystemProxy: false,
             Keys.serviceName: "",
             Keys.maxFlows: 1000,
             Keys.bodyCap: 5 * 1024 * 1024,
             Keys.decryptScope: "all",
-            Keys.decryptRemote: false,
             Keys.allowDomains: "",
             Keys.denyDomains: "",
             Keys.mcpPort: 9191,
             Keys.mcpRedactAuth: true,
-            Keys.clearOnStop: true,
+            Keys.clearOnStop: false,
+            Keys.macHTTP: true,
+            Keys.macWebSocket: true,
+            Keys.macTCP: false,
+            Keys.decryptHTTPS: true,
+            Keys.wireguardPort: 51820,
         ])
     }
 
@@ -107,17 +160,21 @@ enum NetCaptureEnv {
         return raw > 0 ? raw : 5 * 1024 * 1024
     }
 
-    static var autoSystemProxy: Bool {
-        UserDefaults.standard.object(forKey: Keys.autoSystemProxy) as? Bool ?? false
+    static var macHTTP: Bool { UserDefaults.standard.object(forKey: Keys.macHTTP) as? Bool ?? true }
+    static var macWebSocket: Bool { UserDefaults.standard.object(forKey: Keys.macWebSocket) as? Bool ?? true }
+    static var macTCP: Bool { UserDefaults.standard.object(forKey: Keys.macTCP) as? Bool ?? false }
+    static var decryptHTTPS: Bool { UserDefaults.standard.object(forKey: Keys.decryptHTTPS) as? Bool ?? true }
+
+    static var wireguardPort: UInt16 {
+        let raw = UserDefaults.standard.integer(forKey: Keys.wireguardPort)
+        return UInt16((1024...65535).contains(raw) ? raw : 51820)
     }
 
-    /// 是否解密远程设备（手机等非本机）的 HTTPS。默认关（远程透传，避免未信任证书断网）。
-    static var decryptRemote: Bool {
-        UserDefaults.standard.object(forKey: Keys.decryptRemote) as? Bool ?? false
-    }
+    /// WireGuard 的密钥文件（引擎认的格式，见 `WireGuardKeys`），权限 600。
+    static var wireguardKeyURL: URL { supportDir.appendingPathComponent("wireguard.json") }
 
     static var clearOnStop: Bool {
-        UserDefaults.standard.object(forKey: Keys.clearOnStop) as? Bool ?? true
+        UserDefaults.standard.object(forKey: Keys.clearOnStop) as? Bool ?? false
     }
 
     static var mcpRedactAuth: Bool {
@@ -143,44 +200,25 @@ enum NetCaptureEnv {
         UserDefaults.standard.set(dict, forKey: Keys.deviceAliases)
     }
 
-    // MARK: - 解密范围判定
+    // MARK: - 解密范围
 
-    /// 依据「解密范围」+「是否解密远程设备」判断某 host 是否应尝试 MITM 解密。
-    /// - 远程设备（手机等，非本机）：仅当用户显式开启 `decryptRemote` 才可能解密，否则一律透传。
-    ///   这是「设了代理就断网」的根治点——未装/未信任 CA 的设备被 MITM 会 TLS 握手失败且无法回退。
-    /// - 全部模式（默认）：deny 列表命中则透传，其余解密。
-    /// - 白名单模式：仅 allow 列表命中才解密，其余透传。
-    /// 任何情况下判定为「不解密」都走盲隧道透传，绝不中断连接。
-    static func shouldDecrypt(host: String, isLocalClient: Bool) -> Bool {
-        // 远程设备默认透传：避免未信任证书导致 MITM 握手失败→断网。
-        if !isLocalClient && !decryptRemote { return false }
-        let scope = UserDefaults.standard.string(forKey: Keys.decryptScope) ?? "all"
-        let deny = domainList(Keys.denyDomains)
-        if scope == "allowlist" {
-            let allow = domainList(Keys.allowDomains)
-            return allow.contains { hostMatches(host, pattern: $0) }
-        }
-        // 全部模式：deny 命中则不解密。
-        return !deny.contains { hostMatches(host, pattern: $0) }
+    /// 当前的解密范围（匹配在桥脚本里做，见 `DecryptScope`）：「解密 HTTPS」关着是 `.off`，否则按设置页的范围。
+    static var decryptScope: DecryptScope {
+        guard decryptHTTPS else { return .off }
+        let defaults = UserDefaults.standard
+        return DecryptScope.from(setting: defaults.string(forKey: Keys.decryptScope) ?? "all",
+                                 allowText: defaults.string(forKey: Keys.allowDomains) ?? "",
+                                 denyText: defaults.string(forKey: Keys.denyDomains) ?? "")
     }
 
-    private static func domainList(_ key: String) -> [String] {
-        (UserDefaults.standard.string(forKey: key) ?? "")
-            .split(whereSeparator: { $0 == "\n" || $0 == "," })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
+    /// 手机配置页的端口：代理端口的下一个（docs/packet-capture/TECH_DESIGN.md §7）。
+    static var configPagePort: UInt16 { EngineListeners.neighbour(of: port, offset: 1) }
 
-    /// 域名匹配：支持 `*.example.com` 前缀通配与精确匹配（大小写不敏感）。
-    private static func hostMatches(_ host: String, pattern: String) -> Bool {
-        let h = host.lowercased()
-        let p = pattern.lowercased()
-        if p.hasPrefix("*.") {
-            let suffix = String(p.dropFirst(1)) // ".example.com"
-            return h.hasSuffix(suffix) || h == String(suffix.dropFirst())
-        }
-        return h == p
-    }
+    /// 扫码即放行的口令（见 `PhonePairing`）。每次启动换一个，只出现在二维码和它下面那行地址里。
+    static let pairingToken = PhonePairing.makeToken()
+
+    /// SOCKS5 监听的端口：代理端口 + 2。只听本机，给苹果平台的 WebSocket 用（它不走 HTTP 代理，只走系统的 SOCKS 代理）。
+    static var socksPort: UInt16 { EngineListeners.neighbour(of: port, offset: 2) }
 
     // MARK: - 子进程执行（同步，后台线程调用）
 
@@ -219,22 +257,12 @@ enum NetCaptureEnv {
             inPipe.fileHandleForWriting.write(stdin)
             try? inPipe.fileHandleForWriting.close()
         }
-        // 顺序读干两个管道再等退出（同 ClaudeEnv 惯例）。本模块调用的子进程（openssl /
-        // networksetup / adb / osascript）输出量都很小，不会因单管道写满而死锁。
+        // 顺序读干两个管道再等退出（同 ClaudeEnv 惯例）。本模块调用的子进程（networksetup /
+        // adb / osascript / security）输出量都很小，不会因单管道写满而死锁。
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return ProcessResult(status: process.terminationStatus, stdout: outData, stderr: errData)
-    }
-
-    /// 探测 openssl 可执行路径（macOS 自带 `/usr/bin/openssl`，即 LibreSSL）。
-    static func opensslPath() -> String {
-        let fm = FileManager.default
-        for path in ["/usr/bin/openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"]
-            where fm.isExecutableFile(atPath: path) {
-            return path
-        }
-        return "/usr/bin/openssl"
     }
 
     // MARK: - Shell 转义

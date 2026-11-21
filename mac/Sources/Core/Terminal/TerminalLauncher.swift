@@ -2,7 +2,7 @@ import AppKit
 
 /// 在用户偏好的终端里跑一条命令（续接 CLI 会话等），终端解析见同目录的 `TerminalAppChoice`。
 ///
-/// Claude Code 助手、Codex 助手（还有暂缓、不参与编译的网络抓包）共用，只认「命令 + 目录」。2026-11（#164）从
+/// Claude Code 助手、Codex 助手、网络抓包共用，只认「命令 + 目录」。2026-11（#164）从
 /// `Modules/ClaudeCode/ClaudeEnv.swift` 搬来，名字与签名不变；认得 `claude` 的部分（`claude --resume`、按进程找正在跑的会话）
 /// 留在 Claude 模块的 `ClaudeTerminal`（docs/codex-assistant/DEDUPE-P2.md §2.4 类 5）。
 /// 触碰 NSWorkspace，故标 `@MainActor`，由菜单点击等主线程场景调用。写入的是极小的 `.command` 脚本，主线程落盘可接受。

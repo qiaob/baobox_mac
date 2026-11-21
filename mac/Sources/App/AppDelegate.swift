@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(MenuBarManagerTool())
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
+        registry.register(NetCaptureTool())
         registry.register(KeyboardNavTool())
         // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），菜单、设置、快捷键都在会议里。
         // 会议经 MeetingEngine 协议驱动字幕与同传的引擎，两边只在下面的 `AppDelegate.meetingEngine` 接上。
@@ -38,9 +39,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(DictationTool())
         registry.register(PhoneTransferTool())
         registry.register(DesktopPetTool())
-        // 网络抓包（NetCapture）暂缓发布（#103）：代码留在仓库，但不编译（project.yml 的 excludes）也不注册。
-        // 恢复步骤见 project.yml 里那条 excludes 的注释，最后取消下一行注释。
-        // registry.register(NetCaptureTool())
         registry.activateAll()
         // 开了「开机自启」的本地模型：现在拉起来并常驻（docs/local-models/DESIGN.md §4）。
         LocalModels.startAutostartModels()

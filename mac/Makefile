@@ -23,6 +23,9 @@ BUILD_DIR := $(CURDIR)/build.noindex
 # 光躲开 Spotlight 不够：xcodebuild 每次编完都会把产物登记进 Launch Services，
 # 系统的 App 列表也读那份登记。所以编完再把它注销掉（只按路径注销，不动 /Applications 里那份）。
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+# 连包里嵌着的 .app 一起注销（抓包内核 mitmproxy.app 和它里面的小工具）：xcodebuild 登记外层时把它们也登记了。
+# find -d：先里后外。
+unregister = find -d "$(1)" -name "*.app" -type d -print0 2>/dev/null | xargs -0 -n1 $(LSREGISTER) -u >/dev/null 2>&1 || true
 
 # 离线翻译的推理进程：llama.cpp 官方 macOS 预编译包，构建号与 SHA-256 固定（升级时两个一起改）。
 # 只取 llama-server 和它依赖的 dylib 放进 Vendor/llama/（gitignore），
@@ -52,6 +55,19 @@ DRIVER_NAME       := BaoboxInterpreter
 DRIVER_BUNDLE_ID  := com.baobox.audio.interpreter
 DRIVER_STAMP      := $(DRIVER_DIR)/.$(BLACKHOLE_VERSION)
 
+# 网络抓包的内核：mitmproxy（MIT）官方 macOS 包，版本与 SHA-256 固定（升级时两个一起改，不得低于 12.2.2）。
+# 整个 mitmproxy.app 原样放进 Vendor/mitmproxy.noindex/（gitignore），构建时由 project.yml 的脚本阶段拷进
+# Baobox.app/Contents/Helpers/。它自带 Developer ID 签名并已公证，**不能重签、也不能删里面的文件**
+# （签名封住了整个包）。只带 Apple 芯片版：两个架构都带要多 176 MB，Intel 上抓包模块置灰。
+# 官方包里没有 LICENSE，从 GitHub 同一个标签取。见 docs/packet-capture/TECH_DESIGN.md §2。
+MITM_VERSION := 12.3.1
+MITM_SHA256  := 9b7f7a8e3fd1b1544089c937c579ef1f0f503f0ea598c25bda9eab077c735b93
+MITM_URL     := https://downloads.mitmproxy.org/$(MITM_VERSION)/mitmproxy-$(MITM_VERSION)-macos-arm64.tar.gz
+MITM_LICENSE_URL := https://raw.githubusercontent.com/mitmproxy/mitmproxy/v$(MITM_VERSION)/LICENSE
+# 目录名以 .noindex 结尾：里面是一个完整的 .app，不这样 Spotlight 会把它当成一个应用列出来。
+MITM_DIR     := $(CURDIR)/Vendor/mitmproxy.noindex
+MITM_STAMP   := $(MITM_DIR)/.$(MITM_VERSION)
+
 .PHONY: all project vendor build install dev stop clean
 
 all: install
@@ -62,8 +78,23 @@ project:
 	@test -d "$(DEVELOPER_DIR)" || { echo "找不到 Xcode：$(DEVELOPER_DIR)"; exit 1; }
 	xcodegen generate
 
-## 下载并校验 llama.cpp、编译虚拟麦克风驱动（已是当前版本就跳过）
-vendor: $(LLAMA_STAMP) $(DRIVER_STAMP)
+## 下载并校验 llama.cpp 与 mitmproxy、编译虚拟麦克风驱动（已是当前版本就跳过）
+vendor: $(LLAMA_STAMP) $(DRIVER_STAMP) $(MITM_STAMP)
+
+$(MITM_STAMP):
+	@rm -rf "$(MITM_DIR)" "$(MITM_DIR).tmp"
+	@mkdir -p "$(MITM_DIR).tmp"
+	$(CURL) -o "$(MITM_DIR).tmp/mitmproxy.tar.gz" "$(MITM_URL)"
+	echo "$(MITM_SHA256)  $(MITM_DIR).tmp/mitmproxy.tar.gz" | shasum -a 256 -c -
+	$(CURL) -o "$(MITM_DIR).tmp/LICENSE" "$(MITM_LICENSE_URL)"
+	tar -xzf "$(MITM_DIR).tmp/mitmproxy.tar.gz" -C "$(MITM_DIR).tmp"
+	# 解出来的包必须还带着原签名，否则嵌进去之后外层校验过不了。
+	codesign --verify --deep --strict "$(MITM_DIR).tmp/mitmproxy.app"
+	@mkdir -p "$(MITM_DIR)"
+	ditto "$(MITM_DIR).tmp/mitmproxy.app" "$(MITM_DIR)/mitmproxy.app"
+	cp "$(MITM_DIR).tmp/LICENSE" "$(MITM_DIR)/LICENSE"
+	@rm -rf "$(MITM_DIR).tmp"
+	@touch "$@"
 
 $(DRIVER_STAMP):
 	@rm -rf "$(DRIVER_DIR)" "$(DRIVER_DIR).tmp"
@@ -106,7 +137,7 @@ build: project vendor
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Release \
 		-allowProvisioningUpdates \
 		CONFIGURATION_BUILD_DIR=$(BUILD_DIR)/Release build
-	@$(LSREGISTER) -u "$(BUILD_DIR)/Release/$(APP)" >/dev/null 2>&1 || true
+	@$(call unregister,$(BUILD_DIR)/Release/$(APP))
 
 ## 编译并安装到 /Applications，随后启动
 install: build stop
@@ -115,6 +146,8 @@ install: build stop
 	@codesign --verify --strict "$(DEST)" && echo "签名校验通过"
 	@codesign -dv --verbose=2 "$(DEST)" 2>&1 | grep -E "TeamIdentifier|Authority=Apple Development" || true
 	open "$(DEST)"
+	@# 拷贝、校验签名这几步会让系统把构建目录里嵌着的 mitmproxy.app 又登记一遍，装完再注销一次。
+	@$(call unregister,$(BUILD_DIR)/Release/$(APP))
 	@echo "已安装并启动：$(DEST)"
 
 ## 调试构建并直接运行（不覆盖 /Applications 里的版本）
@@ -132,6 +165,7 @@ stop:
 	@sleep 1
 
 clean:
-	@$(LSREGISTER) -u "$(BUILD_DIR)/Release/$(APP)" "$(BUILD_DIR)/Debug/$(APP)" >/dev/null 2>&1 || true
+	@$(call unregister,$(BUILD_DIR)/Release/$(APP))
+	@$(call unregister,$(BUILD_DIR)/Debug/$(APP))
 	rm -rf "$(BUILD_DIR)" "$(CURDIR)/build"
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) clean 2>/dev/null || true

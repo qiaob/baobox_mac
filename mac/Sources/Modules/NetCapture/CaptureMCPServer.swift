@@ -196,6 +196,9 @@ final class CaptureMCPServer: ObservableObject {
 
 /// 读一个 HTTP 请求（headers + Content-Length body），处理 MCP JSON-RPC，回一个 JSON 响应后关闭。
 /// 在自身连接队列上运行，读 `FlowSnapshotStore.shared.get()`（线程安全）。
+///
+/// 没有别的对象持有它：它活多久靠接收回调强引用自己撑着（每个回调只调一次、调完就放掉），回完响应、连接关掉就释放。
+/// 原来回调里是 `[weak self]`，`start()` 一返回会话就被释放，回调里的 self 永远是 nil —— 服务只建连接、从不应答。
 private final class MCPHTTPSession: @unchecked Sendable {
     private let connection: NWConnection
     private let queue: DispatchQueue
@@ -212,8 +215,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     }
 
     private func readMore() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             if let data { self.buffer.append(data) }
             if error != nil { self.connection.cancel(); return }
             if let (headers, body) = self.tryParseRequest() {
@@ -303,17 +305,19 @@ private final class MCPHTTPSession: @unchecked Sendable {
         head += "Content-Length: \(bodyData.count)\r\n"
         head += "Connection: close\r\n\r\n"
         let response = Data(head.utf8) + bodyData
-        connection.send(content: response, completion: .contentProcessed { [weak self] _ in
-            self?.connection.cancel()
+        connection.send(content: response, completion: .contentProcessed { [connection] _ in
+            connection.cancel()
         })
     }
 
     // MARK: 工具 schema
 
-    static let toolSchemas: [[String: Any]] = [
+    static let toolSchemas: [[String: Any]] = baseToolSchemas + MCPControlTools.schemas
+
+    private static let baseToolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP flows (summaries). Optional filters: limit, host, method, status, device. device = client LAN IP (source device), get it from list_devices. Each summary ends with @<clientIP>.",
+            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = client LAN IP (source device), get it from list_devices. Each summary ends with @<clientIP>.",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
@@ -354,17 +358,17 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "start_capture",
-            "description": "Start capturing HTTP(S) traffic (equivalent to the UI start switch). Returns the listening and LAN proxy address.",
+            "description": "Turn on This Mac (the system proxy points at Baobox). If this Mac does not trust Baobox's certificate yet, only the engine is started (no trust prompt). Other sources: set_config.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
             "name": "stop_capture",
-            "description": "Stop capturing traffic and restore the system proxy.",
+            "description": "Stop All: turn off every master switch on the Config tab; the engine stops and the system proxy is restored.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
             "name": "capture_status",
-            "description": "Report whether capture is running, its proxy address, and the number of captured flows.",
+            "description": "Report whether capture is running (and paused), its proxy address, and the number of HTTP flows and TCP connections. All switches: get_config.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
     ]
@@ -372,7 +376,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
 
 // MARK: - MCP 工具实现（读 FlowStore 快照，输出脱敏文本）
 
-private enum MCPTools {
+enum MCPTools {
 
     /// 分发工具调用，返回文本结果（供 MCP content）。在 MCP 连接队列调用（读线程安全快照）。
     static func call(name: String, arguments: [String: Any]) -> String {
@@ -425,39 +429,44 @@ private enum MCPTools {
 
         // MARK: 抓包控制（§16.1）—— 与 UI 互相驱动
         //
-        // `ProxyServer.shared` 是唯一事实源（@MainActor、@Published var state），UI 菜单/窗口都观察它。
+        // `NetCaptureEngine.shared` 是唯一事实源（@MainActor、@Published var state），UI 菜单/窗口都观察它。
         // 本处**不自持任何抓包状态**，只转发对该单例的调用/读取，故：
         //   MCP → UI：写操作 hop 到主线程改单例，UI 因观察同一 state 立即反映；
         //   UI → MCP：capture_status 每次实时读单例 state，UI 手动开关结果对 AI 立即可见。
         case "start_capture":
             let port = NetCaptureEnv.port
-            // 写：hop 主线程调单例（MCP → UI 即时同步）。
-            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.start(port: port) } }
-            let ip = NetworkInterfaces.primaryIP()
-            return "starting on 0.0.0.0:\(port), LAN \(ip):\(port)"
+            // 写：hop 主线程走开关协调（MCP → UI 即时同步）。不带交互：证书已受信才打开「本机」，
+            // 没受信就只起引擎，不替用户弹验证框。
+            DispatchQueue.main.async { MainActor.assumeIsolated { NetCaptureSession.shared.startFromAutomation() } }
+            return "starting This Mac on port \(port) (only the engine if the certificate is not trusted yet; see get_config)"
         case "stop_capture":
-            DispatchQueue.main.async { MainActor.assumeIsolated { ProxyServer.shared.stop() } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { NetCaptureSession.shared.stopAll() } }
             return "stopped"
         case "capture_status":
             // 读：实时取单例 state。用 main.sync 从 MCP 连接队列取一次快照——
             // 主线程从不反向同步等待该连接队列（只向它 async 派发），故 main.sync 不会死锁。
-            let snapshot: (label: String, port: UInt16) = DispatchQueue.main.sync {
-                MainActor.assumeIsolated { () -> (label: String, port: UInt16) in
-                    switch ProxyServer.shared.state {
-                    case .running(let p): return ("running", p)
-                    case .starting: return ("starting", 0)
-                    case .failed: return ("failed", 0)
-                    case .stopped: return ("stopped", 0)
+            let snapshot: (label: String, address: String) = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { () -> (label: String, address: String) in
+                    let engine = NetCaptureEngine.shared
+                    let host = engine.listeners?.lan == true ? NetworkInterfaces.primaryIP() : "127.0.0.1"
+                    switch engine.state {
+                    case .running(let p):
+                        // 只开着「给其他设备装证书」：引擎在跑但没有抓包来源。
+                        guard NetCaptureSession.shared.capturing else {
+                            return ("not capturing (certificate page on)", "\(host):\(p)")
+                        }
+                        return (NetCaptureSession.shared.paused ? "running (paused)" : "running", "\(host):\(p)")
+                    case .starting: return ("starting", "")
+                    case .failed: return ("failed", "")
+                    case .stopped: return ("stopped", "")
                     }
                 }
             }
-            if snapshot.label == "running" {
-                let ip = NetworkInterfaces.primaryIP()
-                return "running \(ip):\(snapshot.port) · \(flows.count) flows"
-            }
-            return snapshot.label
+            let tcpCount = TCPSnapshotStore.shared.get().count
+            let address = snapshot.address.isEmpty ? "" : " \(snapshot.address)"
+            return "\(snapshot.label)\(address) · \(flows.count) HTTP flows · \(tcpCount) TCP connections"
         default:
-            return "unknown tool: \(name)"
+            return MCPControlTools.call(name: name, arguments: arguments) ?? "unknown tool: \(name)"
         }
     }
 
@@ -490,11 +499,12 @@ private enum MCPTools {
         }.joined(separator: "\n")
     }
 
-    /// MCP 侧设备名（英文，AI 面向）：别名 → This Mac（回环）→ IP。
+    /// MCP 侧设备名（英文，AI 面向）：别名 → This Mac（回环）→ WireGuard 隧道里的手机 → IP。
     private static func deviceLabel(_ ip: String) -> String {
         if ip == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
         if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
         if ip == "127.0.0.1" || ip == "::1" { return "This Mac" }
+        if ip == WireGuardKeys.clientAddress { return "WireGuard device" }
         return ip
     }
 
@@ -503,31 +513,20 @@ private enum MCPTools {
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
         lines.append("Device: \(flow.clientIP ?? NetCaptureEnv.unknownDeviceKey)")
         lines.append("-- Request headers --")
-        for h in flow.requestHeaders { lines.append("\(h.name): \(redact(name: h.name, value: h.value))") }
+        for h in flow.requestHeaders { lines.append("\(h.name): \(MCPRedaction.value(name: h.name, value: h.value))") }
         if let body = flow.requestBody, let text = String(data: body, encoding: .utf8) {
             lines.append("-- Request body --"); lines.append(String(text.prefix(8000)))
         }
         lines.append("-- Response headers --")
-        for h in flow.responseHeaders { lines.append("\(h.name): \(redact(name: h.name, value: h.value))") }
+        for h in flow.responseHeaders { lines.append("\(h.name): \(MCPRedaction.value(name: h.name, value: h.value))") }
         if let body = flow.responseBody {
-            let decoded = HTTPBodyCodec.decodedForDisplay(body: body, headers: flow.responseHeaders)
-            if let text = String(data: decoded.data, encoding: .utf8) {
+            // 正文已由引擎解压。
+            if let text = String(data: body, encoding: .utf8) {
                 lines.append("-- Response body --"); lines.append(String(text.prefix(16000)))
             } else {
                 lines.append("-- Response body -- (binary, \(body.count) bytes)")
             }
         }
         return lines.joined(separator: "\n")
-    }
-
-    /// 「MCP 返回时脱敏鉴权头」（默认开）：对 Authorization / Cookie / Set-Cookie 打码。
-    private static func redact(name: String, value: String) -> String {
-        guard NetCaptureEnv.mcpRedactAuth else { return value }
-        let lower = name.lowercased()
-        if lower == "authorization" || lower == "cookie" || lower == "set-cookie"
-            || lower == "proxy-authorization" {
-            return "<redacted>"
-        }
-        return value
     }
 }

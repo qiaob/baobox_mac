@@ -2,11 +2,12 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 网络抓包中心窗口（Proxyman 式两栏）+ 窗口控制器。
+/// 网络抓包窗口（docs/packet-capture/CONTROL.md §1）：抓包的所有操作都在这里做。
 ///
-/// 控制器仿 `ClaudeCodeCenterController`（NSWindow + NSHostingController，
-/// `isReleasedWhenClosed = false`）。尺寸 980×620，可缩放。所有状态读单例 `@Published`，
-/// UI 只做展示与交互；开始/停止/清空等动作转发到 `ProxyServer` / `FlowStore`。
+/// 最上面一行三个标签页「配置 / HTTP / WebSocket 包 / TCP 包」，右边是引擎状态和两个全局按钮（暂停 / 继续、停止全部）。
+/// 「配置」页在 NetCaptureConfigView.swift，「TCP 包」页在 NetCaptureTCPView.swift；「HTTP / WebSocket 包」页在这里：
+/// 三栏，左 = 来源与域名，中 = 请求列表，右 = 详情（NetCaptureDetailView.swift）。
+/// 所有状态读单例的 `@Published`；动作转给 `NetCaptureSession`（开关）、`FlowStore`（数据与筛选）、`MockRuleStore`（Mock）。
 
 // MARK: - 配色
 
@@ -28,7 +29,7 @@ enum NetCaptureColors {
 
     /// 状态码配色。
     static func status(_ code: Int?) -> Color {
-        guard let code else { return Color(hex: 0xB0524B) } // 无响应/错误：灰红
+        guard let code else { return Color(hex: 0x8E8E93) }
         switch code / 100 {
         case 2: return Color(hex: 0x28A745)
         case 3: return Color(hex: 0x0A84FF)
@@ -39,7 +40,7 @@ enum NetCaptureColors {
     }
 }
 
-private extension Color {
+extension Color {
     init(hex: UInt32) {
         self.init(.sRGB,
                   red: Double((hex >> 16) & 0xFF) / 255,
@@ -61,6 +62,20 @@ private extension Color {
 
 // MARK: - 窗口控制器
 
+/// 窗口当前在哪个标签页。放在窗口外面：打开窗口时控制器要按引擎状态选一个（CONTROL.md §1）。
+enum NetCaptureTab: String {
+    case config, http, tcp
+}
+
+@MainActor
+final class NetCaptureWindowState: ObservableObject {
+    static let shared = NetCaptureWindowState()
+    @Published var tab: NetCaptureTab = .config
+    /// 「配置」页左边选中的那一项。放在这里：切到别的标签页再回来还是它。
+    @Published var configItem: NetCaptureConfigItem = .mac
+    private init() {}
+}
+
 @MainActor
 final class NetCaptureWindowController {
     static let shared = NetCaptureWindowController()
@@ -68,12 +83,19 @@ final class NetCaptureWindowController {
     private init() {}
 
     func show() {
+        // 打开窗口时（新建，或关掉后再打开）：引擎在跑就停在「HTTP / WebSocket 包」，否则停在「配置」。已经开着就不动。
+        if window?.isVisible != true {
+            let capturing = NetCaptureEngine.shared.isActive && NetCaptureSession.shared.capturing
+            NetCaptureWindowState.shared.tab = capturing ? .http : .config
+        }
         if window == nil {
             let hosting = NSHostingController(rootView: NetCaptureRootView())
-            let created = NSWindow(contentViewController: hosting)
+            // 和别的模块的主窗口一样经 DesktopSpaceWindow 建：否则从全屏 App 里打开时，它会被塞进那个全屏空间，
+            // 系统的验证框一弹（装证书时）就跟着空间切换不见了。
+            let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("netcapture.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            created.setContentSize(NSSize(width: 980, height: 620))
+            created.setContentSize(NSSize(width: 1180, height: 700))
             created.isReleasedWhenClosed = false
             created.center()
             window = created
@@ -85,107 +107,538 @@ final class NetCaptureWindowController {
 
 // MARK: - 根视图
 
+/// 选中标签的轮廓：上面两个圆角，底边不封口（描边时底下那条线不画，标签和页面连在一起）。
+struct NetCaptureTabOutline: Shape {
+    var radius: CGFloat = 7
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        return path
+    }
+}
+
 struct NetCaptureRootView: View {
-    @ObservedObject private var server = ProxyServer.shared
+    @ObservedObject private var engine = NetCaptureEngine.shared
+    @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var store = FlowStore.shared
+    @ObservedObject private var tcp = TCPStore.shared
     @ObservedObject private var mcp = CaptureMCPServer.shared
+    @ObservedObject private var mockRules = MockRuleStore.shared
+    @ObservedObject private var windowState = NetCaptureWindowState.shared
 
     @State private var query = ""
-    @State private var methodFilter: Set<String> = []
-    @State private var statusFilter: Set<Int> = []
+    /// 列表里高亮的那一行。
     @State private var selection: Flow.ID?
-    @State private var showQR = false
-
-    // 多设备区分（§17）
-    @State private var deviceFilter: String? = nil     // nil = 全部
-    @State private var showRename = false
-    @State private var renameIP: String? = nil
+    /// 详情区显示的那一条。和 `selection` 分开：点列表空白处，系统表格会把选中清掉，详情不该跟着消失。
+    @State private var shownID: Flow.ID?
+    @State private var renameIP: String?
     @State private var renameText = ""
+    @State private var replayDraft: ReplayDraft?
+    @State private var mockEditing: MockEditing?
+    @State private var showMockRules = false
+    @Environment(\.colorScheme) private var colorScheme
 
-    private var filtered: [Flow] {
-        store.filtered(query: query, methods: methodFilter, statusClasses: statusFilter, device: deviceFilter)
-    }
+    /// 请求列表此刻显示的行（筛选条件在 `store.filter`，全文搜索在 `query`）。
+    private var filtered: [Flow] { store.filtered(query: query) }
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
-            Divider()
-            if store.flows.isEmpty {
-                emptyState
+            if let reason = NetCaptureEnv.engineUnavailable {
+                unavailable(reason)
             } else {
-                deviceTabStrip
-                Divider()
-                HSplitView {
-                    flowList
-                        .frame(minWidth: 360, idealWidth: 420, maxWidth: 620)
-                    detailPane
-                        .frame(minWidth: 380)
+                tabBar
+                notices
+                switch windowState.tab {
+                case .config: NetCaptureConfigView()
+                case .http: httpPage
+                case .tcp: NetCaptureTCPView()
                 }
             }
-            Divider()
-            statusBar
         }
-        .frame(minWidth: 860, minHeight: 520)
-        .sheet(isPresented: $showQR) { qrSheet }
+        // 三栏都到最小宽度时要 862（ColumnLayout.minimumTotal），标签条和工具条在 900 下也不换行。
+        .frame(minWidth: 900, minHeight: 560)
+        .sheet(isPresented: Binding(get: { renameIP != nil }, set: { if !$0 { renameIP = nil } })) { renameSheet }
+        .sheet(item: $replayDraft) { draft in
+            NetCaptureReplaySheet(draft: draft,
+                                  onCancel: { replayDraft = nil },
+                                  onSend: { request in
+                                      replayDraft = nil
+                                      send(request)
+                                  })
+        }
+        .sheet(item: $mockEditing) { editing in
+            MockRuleEditor(editing: editing,
+                           onSave: { rule in
+                               mockRules.save(rule)
+                               mockEditing = nil
+                           },
+                           onDelete: nil,
+                           onCancel: { mockEditing = nil })
+        }
+        .sheet(isPresented: $showMockRules) {
+            MockRulesSheet { showMockRules = false }
+        }
+        .onAppear {
+            session.refreshTrust()
+            mockRules.load()
+        }
     }
 
-    // MARK: 设备 Tab 条（§17）
+    private func unavailable(_ reason: NetCaptureEnv.EngineUnavailable) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "network.slash").font(.system(size: 44)).foregroundStyle(.secondary)
+            Text(reason == .needsAppleSilicon ? "netcapture.unavailable.intel" : "netcapture.unavailable.notBundled")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-    /// 首个「全部 (N)」+ 每设备一个 Tab（label + 计数），超出可横向滚动。选中用 accent 底。
-    private var deviceTabStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                deviceTab(title: L("netcapture.device.all"), count: store.flows.count,
-                          selected: deviceFilter == nil, ip: nil)
-                ForEach(store.devices) { device in
-                    deviceTab(title: device.label, count: device.flowCount,
-                              selected: deviceFilter == device.ip, ip: device.ip)
+    // MARK: 标签条
+
+    /// 三个标签页 + 右边的引擎状态、暂停 / 继续、停止全部。放不下时先收掉状态里的地址文字，标签名不截断。
+    /// 文件夹标签的样子：标签栏底色压暗，选中的标签和下面的页面同色、底边不封口，盖住它那一段分隔线，
+    /// 看得出下面这一页属于哪个标签（原来是一个浮着的小胶囊，像筛选控件，和页面没有关联）。
+    private var tabBar: some View {
+        ZStack(alignment: .bottom) {
+            Divider()
+            ViewThatFits(in: .horizontal) {
+                tabBarRow(showAddress: true)
+                tabBarRow(showAddress: false)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(colorScheme == .dark ? 0.28 : 0.07))
+    }
+
+    private func tabBarRow(showAddress: Bool) -> some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            HStack(spacing: 2) {
+                tabButton(.config, title: "netcapture.tab.config", symbol: "slider.horizontal.3", count: nil)
+                tabButton(.http, title: "netcapture.tab.http", symbol: "arrow.left.arrow.right", count: store.flows.count)
+                tabButton(.tcp, title: "netcapture.tab.tcp", symbol: "point.3.connected.trianglepath.dotted", count: tcp.connections.count)
+            }
+            .fixedSize()
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 10) {
+                engineStatus(showAddress: showAddress)
+
+                Button {
+                    session.setPaused(!session.paused)
+                } label: {
+                    Label(session.paused ? "netcapture.window.resume" : "netcapture.window.pause",
+                          systemImage: session.paused ? "play.fill" : "pause.fill")
+                }
+                .disabled(!(engine.isRunning && session.capturing))
+                .help(Text("netcapture.window.pauseHelp"))
+                .fixedSize()
+
+                if engine.isActive, session.capturing {
+                    Button {
+                        session.stopAll()
+                    } label: {
+                        Label("netcapture.window.stopAll", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .help(Text("netcapture.window.stopAllHelp"))
+                    .fixedSize()
                 }
             }
+            .padding(.vertical, 8)
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private func tabButton(_ tab: NetCaptureTab, title: LocalizedStringKey, symbol: String, count: Int?) -> some View {
+        let selected = windowState.tab == tab
+        return Button {
+            windowState.tab = tab
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(selected ? NetCaptureColors.accent : Color.secondary)
+                Text(title).lineLimit(1)
+                if let count {
+                    Text(verbatim: "\(count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(selected ? NetCaptureColors.accent : Color.secondary)
+                }
+            }
+            .font(.callout.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 7)
+            .padding(.bottom, 8)
+            .background {
+                if selected {
+                    NetCaptureTabOutline().fill(Color(nsColor: .windowBackgroundColor))
+                    NetCaptureTabOutline().stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        // 标签比标签栏矮一截，顶上露出压暗的底色。
+        .padding(.top, 7)
+    }
+
+    /// 「● 运行中 192.168.0.9:9090」。点地址复制。
+    private func engineStatus(showAddress: Bool) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(statusColor).frame(width: 8, height: 8)
+            Text(statusText).font(.callout).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+            if showAddress, engine.isRunning, session.capturing {
+                Button {
+                    FlowActions.copy(proxyAddress)
+                } label: {
+                    Text(verbatim: proxyAddress).font(.callout.monospacedDigit()).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(Text("netcapture.window.copyAddr"))
+                .fixedSize()
+            }
+        }
+    }
+
+    /// 右上角说的是「在不在抓包」。只开着「给其他设备装证书」时引擎也在跑，但没有来源，算已停止。
+    private var shownState: NetCaptureEngine.State {
+        if case .failed = engine.state { return engine.state }
+        return session.capturing ? engine.state : .stopped
+    }
+
+    private var statusText: LocalizedStringKey {
+        switch shownState {
+        case .running: return session.paused ? "netcapture.status.paused" : "netcapture.status.running"
+        case .starting: return "netcapture.status.starting"
+        case .failed: return "netcapture.status.failed"
+        case .stopped: return "netcapture.status.stopped"
+        }
+    }
+
+    private var statusColor: Color {
+        switch shownState {
+        case .running: return session.paused ? Color(hex: 0xF59E0B) : Color(hex: 0x28C840)
+        case .starting: return Color(hex: 0xF59E0B).opacity(0.6)
+        case .failed: return Color(hex: 0xFF3B30)
+        case .stopped: return Color.secondary.opacity(0.5)
+        }
+    }
+
+    /// 代理地址：听局域网时是 Mac 的局域网 IP，否则 127.0.0.1。
+    private var proxyAddress: String {
+        let port = engine.port ?? NetCaptureEnv.port
+        return "\(engine.listeners?.lan == true ? NetworkInterfaces.primaryIP() : "127.0.0.1"):\(port)"
+    }
+
+    // MARK: 提示条（进度 / 暂停 / 待允许的设备 / 成功或失败）
+
+    @ViewBuilder
+    private var notices: some View {
+        if let working = session.working {
+            noticeRow(icon: nil, tint: .secondary) {
+                ProgressView().controlSize(.small)
+                Text(verbatim: working)
+            }
+        }
+        if session.paused, engine.isRunning {
+            noticeRow(icon: "pause.circle.fill", tint: Color(hex: 0xF59E0B)) {
+                Text("netcapture.notice.paused")
+                Spacer()
+                Button("netcapture.window.resume") { session.setPaused(false) }
+            }
+        }
+        ForEach(engine.pendingDevices, id: \.self) { ip in
+            noticeRow(icon: "iphone.radiowaves.left.and.right", tint: NetCaptureColors.accent) {
+                Text("netcapture.device.pending \(ip)")
+                Spacer()
+                Button("netcapture.device.deny") { engine.deny(device: ip) }
+                Button("netcapture.device.allow") { engine.allow(device: ip) }
+                    .buttonStyle(.borderedProminent).tint(NetCaptureColors.accent)
+            }
+        }
+        if let banner = session.banner {
+            noticeRow(icon: banner.kind == .problem ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                      tint: banner.kind == .problem ? .orange : NetCaptureColors.accent) {
+                Text(verbatim: banner.text).textSelection(.enabled)
+                Spacer()
+                Button { session.banner = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func noticeRow<Content: View>(icon: String?, tint: Color,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).foregroundStyle(tint) }
+                content()
+            }
+            .font(.callout)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+            .background(tint.opacity(0.08))
+            Divider()
         }
-        .sheet(isPresented: $showRename) { renameSheet }
     }
 
-    private func deviceTab(title: String, count: Int, selected: Bool, ip: String?) -> some View {
+    // MARK: 「HTTP / WebSocket 包」页
+
+    private var httpPage: some View {
+        // 一次重绘只筛一遍：列表和状态条用同一份。
+        let visible = filtered
+        return VStack(spacing: 0) {
+            httpToolbar
+            Divider()
+            // 详情最宽：左栏和请求列表给定宽度，窗口拉宽时多出来的都给详情（分隔线照样能拖）。
+            NetCaptureColumns {
+                sidebar
+            } list: {
+                flowList(visible)
+            } detail: {
+                detailPane
+            }
+            Divider()
+            statusBar(visibleCount: visible.count)
+        }
+    }
+
+    /// `[🗑] [全文搜索…] GET POST PUT DELETE  2xx 3xx 4xx 5xx  WS        [Mock] [⋯]`。
+    private var httpToolbar: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.clear()
+                clearSelection()
+                store.updateFilter { $0.host = nil }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .help(Text("netcapture.window.clear"))
+            .disabled(store.flows.isEmpty)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("netcapture.window.search", text: $query)
+                    .textFieldStyle(.plain)
+                    .frame(minWidth: 70, idealWidth: 140, maxWidth: 240)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+
+            methodChips
+            statusChips
+            // 「WS」：只看 WebSocket（它们和 HTTP 请求在同一张列表里）。
+            chip(title: "WS", active: store.filter.webSocketOnly, color: NetCaptureColors.accent) {
+                store.updateFilter { $0.webSocketOnly.toggle() }
+            }
+            .help(Text("netcapture.filter.webSocketOnly"))
+
+            Spacer(minLength: 0)
+
+            mockButton
+            moreMenu
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var methodChips: some View {
+        HStack(spacing: 4) {
+            ForEach(["GET", "POST", "PUT", "DELETE"], id: \.self) { method in
+                chip(title: method, active: store.filter.methods.contains(method),
+                     color: NetCaptureColors.method(method)) {
+                    store.updateFilter { $0.methods.formSymmetricDifference([method]) }
+                }
+            }
+        }
+    }
+
+    private var statusChips: some View {
+        HStack(spacing: 4) {
+            ForEach([2, 3, 4, 5], id: \.self) { cls in
+                chip(title: "\(cls)xx", active: store.filter.statusClasses.contains(cls),
+                     color: NetCaptureColors.status(cls * 100)) {
+                    store.updateFilter { $0.statusClasses.formSymmetricDifference([cls]) }
+                }
+            }
+        }
+    }
+
+    private func chip(title: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(active ? color.opacity(0.9) : color.opacity(0.15), in: Capsule())
+                .foregroundStyle(active ? .white : color)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    /// 「Mock」：点开是规则列表；有启用的规则时写成「Mock 2」。
+    private var mockButton: some View {
         Button {
-            deviceFilter = ip
-            selection = nil
+            showMockRules = true
         } label: {
-            HStack(spacing: 5) {
-                Text(verbatim: title).font(.callout.weight(selected ? .semibold : .regular))
+            Text(verbatim: mockRules.enabledCount > 0 ? "Mock \(mockRules.enabledCount)" : "Mock")
+        }
+        .help(Text("netcapture.mock.toolbarHelp"))
+        .fixedSize()
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Toggle("netcapture.mcp.toggle", isOn: Binding(
+                get: { mcp.isRunning },
+                set: { $0 ? mcp.start() : mcp.stop() }))
+            Divider()
+            Button("netcapture.settings.exportHar") { exportHAR() }
+                .disabled(store.flows.isEmpty)
+            Button("netcapture.window.settings") {
+                guard let registry = AppDelegate.shared?.registry else { return }
+                SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    // MARK: 左栏：来源与域名
+
+    /// 顶部固定「过滤域名」；中间来源与域名随内容滚动；底部固定「隐藏未解密」与「已隐藏 N 个域名」（TOOLS.md §1）。
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            NetCaptureFilterField(placeholder: "netcapture.filter.hosts", text: Binding(
+                get: { store.filter.hostTerms.text },
+                set: { text in store.updateFilter { $0.hostTerms = TermFilter(text: text) } }))
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    let filter = store.filter
+                    let counts = store.sidebarCounts
+                    sidebarRow(title: L("netcapture.device.all"), count: counts.total,
+                               selected: filter.device == nil && filter.host == nil, icon: "tray.full") {
+                        store.updateFilter {
+                            $0.device = nil
+                            $0.host = nil
+                        }
+                        clearSelection()
+                    }
+                    ForEach(store.devices) { device in
+                        sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
+                                   selected: filter.device == device.ip && filter.host == nil,
+                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "network") {
+                            store.updateFilter {
+                                $0.device = device.ip
+                                $0.host = nil
+                            }
+                            clearSelection()
+                        }
+                        .contextMenu { deviceMenu(ip: device.ip) }
+                    }
+
+                    Text("netcapture.sidebar.hosts")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.top, 12).padding(.bottom, 2)
+                    ForEach(counts.hosts.prefix(80), id: \.host) { entry in
+                        sidebarRow(title: entry.host, count: entry.count,
+                                   selected: filter.host == entry.host, icon: nil) {
+                            store.updateFilter { $0.host = ($0.host == entry.host) ? nil : entry.host }
+                            clearSelection()
+                        }
+                    }
+                }
+                .padding(6)
+            }
+            Divider()
+            sidebarFooter
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// 左栏底部：「隐藏未解密」开关；有隐藏的域名时多一行「已隐藏 N 个域名」，菜单里逐个显示或全部显示。
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("netcapture.filter.hideUndecrypted", isOn: Binding(
+                get: { store.filter.hideUndecrypted },
+                set: { on in store.updateFilter { $0.hideUndecrypted = on } }))
+                .toggleStyle(.checkbox)
+            let hidden = store.filter.hiddenHosts.sorted()
+            if !hidden.isEmpty {
+                Menu {
+                    ForEach(hidden, id: \.self) { host in
+                        Button(L("netcapture.filter.show \(host)")) { store.unhide(host: host) }
+                    }
+                    Divider()
+                    Button("netcapture.filter.showAll") { store.unhideAll() }
+                } label: {
+                    Text("netcapture.filter.hiddenCount \(hidden.count)")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func sidebarRow(title: String, count: Int, selected: Bool, icon: String?,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon).frame(width: 16).foregroundStyle(selected ? Color.white : Color.secondary)
+                }
+                Text(verbatim: title).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
                 Text(verbatim: "\(count)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
             }
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(selected ? NetCaptureColors.accent : Color(nsColor: .controlBackgroundColor),
-                        in: Capsule())
+            .font(.callout)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? NetCaptureColors.accent : Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .foregroundStyle(selected ? Color.white : Color.primary)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            if let ip { deviceTabMenu(ip: ip) }
-        }
     }
 
     @ViewBuilder
-    private func deviceTabMenu(ip: String) -> some View {
+    private func deviceMenu(ip: String) -> some View {
         Button {
-            deviceFilter = ip
-            selection = nil
-        } label: { Label("netcapture.device.only", systemImage: "line.3.horizontal.decrease.circle") }
-        Button {
-            renameIP = ip
             renameText = store.alias(ip: ip) ?? ""
-            showRename = true
+            renameIP = ip
         } label: { Label("netcapture.device.rename", systemImage: "pencil") }
         Button(role: .destructive) {
             store.clearDevice(ip: ip)
-            if deviceFilter == ip { deviceFilter = nil }
-            selection = nil
+            if store.filter.device == ip { store.updateFilter { $0.device = nil } }
+            clearSelection()
         } label: { Label("netcapture.device.clear", systemImage: "trash") }
+        if !FlowStore.isLoopback(ip), ip != NetCaptureEnv.unknownDeviceKey {
+            Button(role: .destructive) {
+                engine.deny(device: ip)
+            } label: { Label("netcapture.device.block", systemImage: "hand.raised") }
+        }
     }
 
     private var renameSheet: some View {
@@ -196,10 +649,10 @@ struct NetCaptureRootView: View {
                 .frame(width: 240)
             HStack {
                 Spacer()
-                Button("common.cancel") { showRename = false }
+                Button("common.cancel") { renameIP = nil }
                 Button("common.ok") {
                     if let ip = renameIP { store.setAlias(ip: ip, renameText) }
-                    showRename = false
+                    renameIP = nil
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -207,131 +660,125 @@ struct NetCaptureRootView: View {
         .padding(20)
     }
 
-    // MARK: 工具条
+    // MARK: 中栏：请求列表
 
-    private var toolbar: some View {
-        HStack(spacing: 10) {
-            Button {
-                toggleCapture()
-            } label: {
-                Label(server.isRunning ? "netcapture.window.stop" : "netcapture.window.start",
-                      systemImage: server.isRunning ? "stop.fill" : "play.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(server.isRunning ? .red : NetCaptureColors.accent)
-
-            Button {
-                store.clear()
-                selection = nil
-            } label: {
-                Label("netcapture.window.clear", systemImage: "trash")
-            }
-            .disabled(store.flows.isEmpty)
-
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("netcapture.window.search", text: $query)
-                    .textFieldStyle(.plain)
-                    .frame(minWidth: 120, maxWidth: 220)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-
-            methodChips
-            statusChips
-
-            Spacer()
-
-            proxyAddressControls
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-
-    private var methodChips: some View {
-        HStack(spacing: 4) {
-            ForEach(["GET", "POST", "PUT", "DELETE"], id: \.self) { method in
-                chip(title: method, active: methodFilter.contains(method), color: NetCaptureColors.method(method)) {
-                    toggle(&methodFilter, method)
+    /// 顶部固定「过滤 URL」（和左栏的「过滤域名」同一水平线、同样式），下面是列表。
+    private func flowList(_ visible: [Flow]) -> some View {
+        VStack(spacing: 0) {
+            NetCaptureFilterField(placeholder: "netcapture.filter.urls", text: Binding(
+                get: { store.filter.urlTerms.text },
+                set: { text in store.updateFilter { $0.urlTerms = TermFilter(text: text) } }))
+            Divider()
+            // 只有列表空了才去数被藏掉的条数。
+            let hidden = visible.isEmpty ? store.hiddenByFilters(query: query) : 0
+            if store.flows.isEmpty {
+                emptyNotice
+            } else if hidden > 0 {
+                filteredOutNotice(hidden)
+            } else {
+                List(Array(visible.reversed()), selection: $selection) { flow in
+                    FlowRow(flow: flow).tag(flow.id)
+                        .contextMenu { rowMenu(flow) }
                 }
+                .listStyle(.inset)
+                .alternatingRowBackgrounds(.enabled)
             }
         }
+        .onChange(of: selection) { _, new in
+            keepShownFlow(selected: new, listed: { id in visible.contains { $0.id == id } })
+        }
     }
 
-    private var statusChips: some View {
-        HStack(spacing: 4) {
-            ForEach([2, 3, 4, 5], id: \.self) { cls in
-                chip(title: "\(cls)xx", active: statusFilter.contains(cls),
-                     color: NetCaptureColors.status(cls * 100)) {
-                    toggle(&statusFilter, cls)
-                }
+    /// 有意关掉详情（清空列表、换设备 / 域名、藏掉正在看的域名）。
+    private func clearSelection() {
+        shownID = nil
+        selection = nil
+    }
+
+    /// 选了一行就显示它；选中被系统清掉（点了列表空白处）而详情还开着，下一拍把那一行选回去。
+    /// 那一行已经不在列表里（被过滤掉了）就不选回去，详情照旧留着。
+    private func keepShownFlow(selected: Flow.ID?, listed: (Flow.ID) -> Bool) {
+        if let selected {
+            shownID = selected
+            return
+        }
+        guard let keep = shownID, listed(keep) else { return }
+        DispatchQueue.main.async {
+            if selection == nil, shownID == keep { selection = keep }
+        }
+    }
+
+    /// 一条请求都还没有：引擎在跑说在等；没在跑请他去「配置」里打开要抓的来源。
+    @ViewBuilder
+    private var emptyNotice: some View {
+        if engine.isActive, session.capturing {
+            VStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("netcapture.http.waiting").foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            NetCaptureGoToConfig()
+        }
+    }
+
+    /// 有抓到的请求，却被隐藏名单 / 「隐藏未解密」/ 两个过滤输入框滤空了：说清楚，并给一个清掉输入框的按钮。
+    private func filteredOutNotice(_ hidden: Int) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 28)).foregroundStyle(.secondary)
+            Text("netcapture.filter.hiddenFlows \(hidden)").foregroundStyle(.secondary)
+            if !store.filter.hostTerms.text.isEmpty || !store.filter.urlTerms.text.isEmpty {
+                Button("netcapture.filter.clear") { store.clearFilterTexts() }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func chip(title: String, active: Bool, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(verbatim: title)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(active ? color.opacity(0.9) : color.opacity(0.15), in: Capsule())
-                .foregroundStyle(active ? .white : color)
+    @ViewBuilder
+    private func rowMenu(_ flow: Flow) -> some View {
+        Button { store.updateFilter { $0.host = flow.host } } label: {
+            Label("netcapture.filter.onlyHost", systemImage: "scope")
         }
-        .buttonStyle(.plain)
-    }
-
-    private var proxyAddressControls: some View {
-        HStack(spacing: 8) {
-            let addr = "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.port)"
-            Text(verbatim: addr)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(addr, forType: .string)
-            } label: { Image(systemName: "doc.on.doc") }
-                .buttonStyle(.borderless)
-                .help(Text("netcapture.window.copyAddr"))
-            Button { showQR = true } label: { Image(systemName: "qrcode") }
-                .buttonStyle(.borderless)
-                .help(Text("netcapture.window.showQR"))
-            // MCP 徽标。
-            Image(systemName: mcp.isRunning ? "circle.fill" : "circle")
-                .font(.caption2)
-                .foregroundStyle(mcp.isRunning ? NetCaptureColors.accent : .secondary)
-                .help(Text(mcp.isRunning ? "netcapture.mcp.running" : "netcapture.mcp.stopped"))
+        Button {
+            // 正看着的那条要被藏起来了：详情别还停在一条列表里看不到的请求上。
+            if let id = shownID, store.flows.first(where: { $0.id == id })?.host == flow.host { clearSelection() }
+            store.hide(host: flow.host)
+        } label: {
+            Label("netcapture.filter.hideHost", systemImage: "eye.slash")
+        }
+        Divider()
+        if flow.decrypted {
+            Button { replay(flow) } label: {
+                Label("netcapture.replay.action", systemImage: "arrow.clockwise")
+            }
+            Button { replayDraft = ReplayDraft(flow: flow) } label: {
+                Label("netcapture.replay.editAction", systemImage: "square.and.pencil")
+            }
+            Button { mockEditing = MockEditing(flow: flow) } label: {
+                Label("netcapture.mock.action", systemImage: "theatermasks")
+            }
+            Divider()
+            Button { FlowActions.copy(FlowStore.shared.curl(for: flow)) } label: {
+                Label("netcapture.flow.copyCurl", systemImage: "doc.on.doc")
+            }
+            Button { FlowActions.copy(FlowStore.shared.markdown(for: flow)) } label: {
+                Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
+            }
+        }
+        Button { FlowActions.copy(flow.decrypted ? flow.url : flow.host) } label: {
+            Label("netcapture.flow.copyURL", systemImage: "link")
         }
     }
 
-    // MARK: Flow 列表
-
-    private var flowList: some View {
-        List(Array(filtered.reversed()), selection: $selection) { flow in
-            FlowRow(flow: flow, deviceLabel: deviceBadge(for: flow)).tag(flow.id)
-        }
-        .listStyle(.inset)
-        .alternatingRowBackgrounds(.enabled)
-    }
-
-    /// 「全部」视图下给行加设备徽标；选中单设备时返回 nil（冗余不显示）。IP 型标签取末两段缩短。
-    private func deviceBadge(for flow: Flow) -> String? {
-        guard deviceFilter == nil else { return nil }
-        let ip = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
-        guard let device = store.devices.first(where: { $0.ip == ip }) else { return nil }
-        if device.label == device.ip, device.ip.contains(".") {
-            let parts = device.ip.split(separator: ".")
-            if parts.count == 4 { return "…" + parts.suffix(2).joined(separator: ".") }
-        }
-        return device.label
-    }
-
-    // MARK: 详情
+    // MARK: 右栏：详情
 
     @ViewBuilder
     private var detailPane: some View {
-        if let id = selection, let flow = store.flows.first(where: { $0.id == id }) {
-            FlowDetailView(flow: flow)
+        if let id = shownID, let flow = store.flows.first(where: { $0.id == id }) {
+            FlowDetailView(flow: flow, commands: FlowCommands(
+                replay: { replay($0) },
+                editAndReplay: { replayDraft = ReplayDraft(flow: $0) },
+                mock: { mockEditing = MockEditing(flow: $0) }))
         } else {
             VStack {
                 Spacer()
@@ -342,51 +789,16 @@ struct NetCaptureRootView: View {
         }
     }
 
-    // MARK: 空状态
-
-    private var emptyState: some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Image(systemName: "network")
-                .font(.system(size: 56))
-                .foregroundStyle(NetCaptureColors.accent)
-            Text(server.isRunning ? "netcapture.empty.waiting" : "netcapture.empty.title")
-                .font(.title3.weight(.medium))
-            if !server.isRunning {
-                Button {
-                    toggleCapture()
-                } label: {
-                    Label("netcapture.window.start", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(NetCaptureColors.accent)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Label("netcapture.empty.step1", systemImage: "1.circle")
-                Label("netcapture.empty.step2 \(NetworkInterfaces.primaryIP()) \(Int(NetCaptureEnv.port))", systemImage: "2.circle")
-                Label("netcapture.empty.step3", systemImage: "3.circle")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            Button { showQR = true } label: {
-                Label("netcapture.window.showQR", systemImage: "qrcode")
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     // MARK: 状态条
 
-    private var statusBar: some View {
+    /// 条数、MCP、内存。引擎状态和代理地址在最上面的标签条右边。
+    private func statusBar(visibleCount: Int) -> some View {
         HStack(spacing: 12) {
-            Text("netcapture.status.counts \(filtered.count) \(store.flows.count)")
-            Divider().frame(height: 12)
-            Text("netcapture.status.devices \(store.devices.count) \(store.flows.count) \(filtered.count)")
-            Divider().frame(height: 12)
-            Text(serverStatusText)
-            Divider().frame(height: 12)
-            Text(mcp.isRunning ? "netcapture.mcp.running" : "netcapture.mcp.stopped")
+            Text("netcapture.status.counts \(visibleCount) \(store.flows.count)")
+            if mcp.isRunning {
+                Divider().frame(height: 12)
+                Text("netcapture.mcp.running")
+            }
             Spacer()
             Text("netcapture.status.memory \(memoryMB)")
         }
@@ -396,323 +808,152 @@ struct NetCaptureRootView: View {
         .padding(.vertical, 5)
     }
 
-    private var serverStatusText: LocalizedStringKey {
-        switch server.state {
-        case .running: return "netcapture.status.running"
-        case .starting: return "netcapture.status.starting"
-        case .failed: return "netcapture.status.failed"
-        case .stopped: return "netcapture.status.stopped"
-        }
-    }
-
     private var memoryMB: String {
         String(format: "%.1f", Double(store.estimatedBytes) / (1024 * 1024))
     }
 
-    // MARK: QR sheet
-
-    private var qrSheet: some View {
-        VStack(spacing: 16) {
-            Text("netcapture.qr.title").font(.headline)
-            NetCaptureQRPanel()
-            Button("common.ok") { showQR = false }
-        }
-        .padding(28)
-    }
-
     // MARK: 动作
 
-    private func toggleCapture() {
-        if server.isRunning { server.stop() }
-        else { server.start(port: NetCaptureEnv.port) }
+    /// 原样重发。
+    private func replay(_ flow: Flow) {
+        send(ReplayRequest(id: UUID(), method: flow.method, url: flow.url,
+                           headers: flow.requestHeaders, body: flow.requestBody))
     }
 
-    private func toggle(_ set: inout Set<String>, _ value: String) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
+    /// 发出去的请求是列表里新的一行：先选中它（id 是这边定的），并让它看得见 ——
+    /// 重发的来源是本机，正看着别的设备时回到「全部」；改了 URL 换了域名时取消左栏选中的域名。
+    private func send(_ request: ReplayRequest) {
+        let host = URLComponents(string: request.url)?.host?.lowercased()
+        store.updateFilter { filter in
+            if let device = filter.device, !FlowStore.isLoopback(device) { filter.device = nil }
+            if let selected = filter.host, selected != host { filter.host = nil }
+        }
+        selection = request.id
+        session.replay(request)
     }
 
-    private func toggle(_ set: inout Set<Int>, _ value: Int) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
+    private func exportHAR() {
+        let data = store.harData(filtered)
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .json]
+        panel.nameFieldStringValue = "capture.har"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url)
+        } catch {
+            session.banner = NetCaptureSession.Banner(kind: .problem, text: error.localizedDescription)
+        }
     }
 }
 
-// MARK: - Flow 行
+// MARK: - 过滤输入框
+
+/// 左栏顶部「过滤域名」与请求列表顶部「过滤 URL」：同一个样式、同样高，两边并排在一条水平线上。
+/// 每敲一个字列表就跟着变；有内容时右边一个 ×。语法见 Logic/FlowFilter.swift 的 `TermFilter`。
+struct NetCaptureFilterField: View {
+    let placeholder: LocalizedStringKey
+    @Binding var text: String
+
+    /// 两个输入框所在那一条的高度（两栏对齐靠它）。
+    static let rowHeight: CGFloat = 34
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.caption)
+                .foregroundStyle(text.isEmpty ? Color.secondary : NetCaptureColors.accent)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.callout)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(Text("netcapture.filter.clearField"))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+        .padding(.horizontal, 6)
+        .frame(height: Self.rowHeight)
+    }
+}
+
+// MARK: - 请求行
 
 private struct FlowRow: View {
     let flow: Flow
-    /// 「全部」视图下的来源设备徽标；nil 不显示。
-    var deviceLabel: String? = nil
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(verbatim: flow.method)
+            // 没解密的连接只知道域名，方法那一格写 TLS。
+            Text(verbatim: flow.decrypted ? flow.method : "TLS")
                 .font(.caption2.weight(.bold))
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .padding(.horizontal, 5).padding(.vertical, 2)
-                .background(NetCaptureColors.method(flow.method), in: RoundedRectangle(cornerRadius: 4))
+                .frame(width: 58)
+                .background(NetCaptureColors.method(flow.method).opacity(flow.decrypted ? 1 : 0.45),
+                            in: RoundedRectangle(cornerRadius: 4))
                 .foregroundStyle(.white)
-                .frame(width: 52)
 
-            Text(verbatim: flow.statusCode.map(String.init) ?? "—")
+            Text(verbatim: statusText)
                 .font(.caption.monospacedDigit().weight(.medium))
-                .foregroundStyle(NetCaptureColors.status(flow.statusCode))
+                .foregroundStyle(flow.note != nil && flow.statusCode == nil
+                                 ? Color(hex: 0xFF3B30) : NetCaptureColors.status(flow.statusCode))
                 .frame(width: 30, alignment: .leading)
 
-            if let deviceLabel {
-                Text(verbatim: deviceLabel)
-                    .font(.caption2)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.15), in: Capsule())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: flow.host).font(.callout).lineLimit(1)
-                Text(verbatim: flow.path).font(.caption2).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Text(verbatim: flow.host).font(.callout).lineLimit(1)
+                    if let badge = flow.protocolBadge {
+                        Self.badge(Text(verbatim: badge), tint: .secondary)
+                    }
+                    // 「重发」翻译；mock、h2、WS 这类不翻译（TOOLS.md §7）。
+                    if flow.isReplay {
+                        Self.badge(Text("netcapture.flow.replayBadge"), tint: NetCaptureColors.accent)
+                    }
+                    if flow.mockRuleID != nil {
+                        Self.badge(Text(verbatim: "mock"), tint: Color(hex: 0x8B5CF6))
+                    }
+                }
+                if !flow.path.isEmpty {
+                    Text(verbatim: flow.path).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
+            .foregroundStyle(flow.decrypted ? Color.primary : Color.secondary)
             Spacer(minLength: 6)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(verbatim: flow.durationMs.map { "\($0)ms" } ?? "—")
-                    .font(.caption2.monospacedDigit())
-                Text(verbatim: byteString(flow.responseBytes))
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            if !flow.decrypted {
-                Image(systemName: "lock.slash").font(.caption2).foregroundStyle(.secondary)
+            if flow.decrypted {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(verbatim: flow.durationMs.map { "\($0)ms" } ?? "—")
+                        .font(.caption2.monospacedDigit())
+                    Text(verbatim: FlowFormat.bytes(flow.responseBytes))
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            } else {
+                Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
                     .help(Text("netcapture.flow.notDecrypted"))
             }
         }
         .padding(.vertical, 2)
-        .contextMenu { rowMenu }
     }
 
-    @ViewBuilder
-    private var rowMenu: some View {
-        Button { copy(FlowStore.shared.curl(for: flow)) } label: { Label("netcapture.flow.copyCurl", systemImage: "terminal") }
-        Button { copy(FlowStore.shared.markdown(for: flow)) } label: { Label("netcapture.flow.copyMarkdown", systemImage: "doc.text") }
-        Button { sendToClaude() } label: { Label("netcapture.flow.sendToClaude", systemImage: "paperplane") }
+    private static func badge(_ text: Text, tint: Color) -> some View {
+        text
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(tint.opacity(0.15), in: Capsule())
+            .foregroundStyle(tint)
+            .fixedSize()
     }
 
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    /// 发送到 Claude Code：把该 flow 的 Markdown 写临时文件，在终端起 `claude -p "$(cat file)"`。
-    private func sendToClaude() {
-        let markdown = FlowStore.shared.markdown(for: flow)
-        let dir = NetCaptureEnv.ensureSupportDir().appendingPathComponent("send", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("\(UUID().uuidString).md")
-        guard (try? markdown.data(using: .utf8)?.write(to: file)) != nil else { return }
-        let bin = ClaudeEnv.findClaudeBinary() ?? "claude"
-        let command = "\(NetCaptureEnv.shellSingleQuote(bin)) -p \"$(cat \(NetCaptureEnv.shellSingleQuote(file.path)))\""
-        TerminalLauncher.run(command: command, in: nil)
-    }
-
-    private func byteString(_ bytes: Int) -> String {
-        if bytes >= 1024 * 1024 { return String(format: "%.1fMB", Double(bytes) / (1024 * 1024)) }
-        if bytes >= 1024 { return String(format: "%.1fKB", Double(bytes) / 1024) }
-        return "\(bytes)B"
-    }
-}
-
-// MARK: - 详情视图
-
-private struct FlowDetailView: View {
-    let flow: Flow
-    @State private var tab = DetailTab.overview
-
-    enum DetailTab: String, CaseIterable, Identifiable {
-        case overview, request, response, raw
-        var id: String { rawValue }
-        var label: LocalizedStringKey {
-            switch self {
-            case .overview: return "netcapture.detail.overview"
-            case .request: return "netcapture.detail.request"
-            case .response: return "netcapture.detail.response"
-            case .raw: return "netcapture.detail.raw"
-            }
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $tab) {
-                ForEach(DetailTab.allCases) { t in Text(t.label).tag(t) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(8)
-            Divider()
-            ScrollView {
-                Group {
-                    switch tab {
-                    case .overview: overview
-                    case .request: message(headers: flow.requestHeaders, body: flow.requestBody, truncated: flow.requestTruncated, isResponse: false)
-                    case .response: message(headers: flow.responseHeaders, body: flow.responseBody, truncated: flow.responseTruncated, isResponse: true)
-                    case .raw: rawView
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private var overview: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            field("netcapture.detail.method", flow.method)
-            field("netcapture.detail.url", flow.url)
-            field("netcapture.detail.status", flow.statusCode.map(String.init) ?? "—")
-            field("netcapture.detail.remoteIP", flow.remoteIP ?? "—")
-            field("netcapture.detail.duration", flow.durationMs.map { "\($0)ms" } ?? "—")
-            field("netcapture.detail.reqSize", "\(flow.requestBytes) B")
-            field("netcapture.detail.respSize", "\(flow.responseBytes) B")
-            field("netcapture.detail.contentType", flow.responseContentType ?? "—")
-            if let note = flow.note {
-                field("netcapture.detail.note", note)
-            }
-            if !flow.decrypted {
-                Text("netcapture.flow.notDecryptedHint").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func field(_ label: LocalizedStringKey, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(verbatim: value).font(.callout).textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder
-    private func message(headers: [HTTPHeader], body: Data?, truncated: Bool, isResponse: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("netcapture.detail.headers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text(verbatim: header.name + ":").font(.caption.monospaced().weight(.medium))
-                        Text(verbatim: header.value).font(.caption.monospaced()).textSelection(.enabled)
-                    }
-                }
-            }
-            if let body, !body.isEmpty {
-                Text("netcapture.detail.body").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                bodyView(body: body, headers: headers)
-                if truncated {
-                    Text("netcapture.detail.truncated").font(.caption2).foregroundStyle(.orange)
-                }
-            } else {
-                Text("netcapture.detail.noBody").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// 依据 Content-Type 渲染 body：图片直接预览；JSON 美化；其余文本原样。
-    @ViewBuilder
-    private func bodyView(body: Data, headers: [HTTPHeader]) -> some View {
-        let contentType = headers.value(for: "Content-Type")?.lowercased() ?? ""
-        let decoded = HTTPBodyCodec.decodedForDisplay(body: body, headers: headers)
-        if contentType.hasPrefix("image/"), let image = NSImage(data: decoded.data) {
-            Image(nsImage: image)
-                .resizable().aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 320, maxHeight: 320)
-        } else if let text = String(data: decoded.data, encoding: .utf8) {
-            let display = prettyIfJSON(text, contentType: contentType)
-            Text(verbatim: display)
-                .font(.caption.monospaced()).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-            if let note = decoded.note {
-                Text(verbatim: note.localizedText).font(.caption2).foregroundStyle(.secondary)
-            }
-        } else {
-            Text("netcapture.detail.binary \(decoded.data.count)").font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    /// JSON 内容尝试美化（缩进）；非 JSON 原样返回。
-    private func prettyIfJSON(_ text: String, contentType: String) -> String {
-        guard contentType.contains("json") || text.hasPrefix("{") || text.hasPrefix("[") else { return text }
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let pretty = try? JSONSerialization.data(withJSONObject: object,
-                                                       options: [.prettyPrinted, .withoutEscapingSlashes]),
-              let string = String(data: pretty, encoding: .utf8) else { return text }
-        return string
-    }
-
-    private var rawView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("netcapture.detail.rawRequest").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(verbatim: rawText(startLine: "\(flow.method) \(flow.path) HTTP/1.1",
-                                   headers: flow.requestHeaders, body: flow.requestBody))
-                .font(.caption.monospaced()).textSelection(.enabled)
-            Divider()
-            Text("netcapture.detail.rawResponse").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(verbatim: rawText(startLine: "HTTP/1.1 \(flow.statusCode.map(String.init) ?? "")",
-                                   headers: flow.responseHeaders, body: flow.responseBody))
-                .font(.caption.monospaced()).textSelection(.enabled)
-        }
-    }
-
-    private func rawText(startLine: String, headers: [HTTPHeader], body: Data?) -> String {
-        var lines = [startLine]
-        for h in headers { lines.append("\(h.name): \(h.value)") }
-        lines.append("")
-        if let body, let text = String(data: body, encoding: .utf8) {
-            lines.append(String(text.prefix(20000)))
-        }
-        return lines.joined(separator: "\n")
-    }
-}
-
-// MARK: - 单一配置网页二维码面板（§16.2）
-
-/// 一个二维码，编码 `http://baobox.proxy/`——手机扫码打开自适应配置页（装证书 / 配代理 / 关代理）。
-/// 下方展示代理 `IP:端口`（可复制）与「ADB 一键（Android）」入口（打开抓包窗口，ADB 操作在设置里）。
-///
-/// 复用于窗口 QR sheet、设置页 QR sheet、菜单证书二维码浮层。
-struct NetCaptureQRPanel: View {
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("netcapture.qr.page.title").font(.subheadline.weight(.medium))
-                .multilineTextAlignment(.center).frame(maxWidth: 300)
-            Text(verbatim: NetworkInterfaces.landingPageURL)
-                .font(.caption.monospaced()).foregroundStyle(.secondary)
-            qrImage(NetworkInterfaces.landingPageURL)
-            HStack(spacing: 6) {
-                Text(verbatim: proxyAddr).font(.caption.monospaced())
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(proxyAddr, forType: .string)
-                } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.borderless)
-                    .help(Text("netcapture.window.copyAddr"))
-            }
-            Text("netcapture.qr.page.hint").font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 300)
-            Button("netcapture.menu.cert.adbPush") {
-                NetCaptureWindowController.shared.show()
-            }
-            .buttonStyle(.link)
-        }
-    }
-
-    private var proxyAddr: String { "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.port)" }
-
-    @ViewBuilder
-    private func qrImage(_ text: String) -> some View {
-        if let cg = QRCodeGenerator.image(for: text, minPixels: 300) {
-            Image(decorative: cg, scale: 1).resizable().interpolation(.none)
-                .frame(width: 240, height: 240)
-                .background(Color.white).padding(6)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-        }
+    /// 状态码那一格：有响应显示状态码；还在等显示「⋯」；失败显示「✕」；没解密的显示「—」。
+    private var statusText: String {
+        if let code = flow.statusCode { return String(code) }
+        if !flow.decrypted { return "—" }
+        if flow.note != nil { return "✕" }
+        return "⋯"
     }
 }

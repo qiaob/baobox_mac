@@ -1,6 +1,10 @@
 import Foundation
 
-/// 用 `networksetup`（用户级，无需管理员）读/设/还原当前网络服务的 HTTP/HTTPS 系统代理。
+/// 用 `networksetup`（用户级，无需管理员）读/设/还原当前网络服务的 HTTP / HTTPS / SOCKS 系统代理。
+/// HTTP（含 HTTPS）和 SOCKS 两组各自可选：「本机」的 HTTP / HTTPS 子开关管前一组，WebSocket、TCP 子开关管后一组。
+///
+/// SOCKS 那一项是给 WebSocket 的：苹果平台的 WebSocket 不走 HTTP 代理，只走系统的 SOCKS 代理
+/// （2026-11-21 在 iOS 模拟器上实测，见 docs/packet-capture/TECH_DESIGN.md §1）。
 ///
 /// 崩溃兜底：开启前先读并保存原状态到 UserDefaults；停止或下次启动都能还原（防残留代理导致断网）。
 /// 本类不标 `@MainActor`：`networksetup` 子进程同步阻塞，须后台调用。
@@ -15,15 +19,13 @@ enum SystemProxyController {
         var secureEnabled: Bool
         var secureHost: String
         var securePort: Int
+        // 可选：早先存下来的状态里没有这三项（那时只管 HTTP / HTTPS），解出来是 nil，还原时就不碰 SOCKS。
+        var socksEnabled: Bool?
+        var socksHost: String?
+        var socksPort: Int?
     }
 
     private static let networksetup = "/usr/sbin/networksetup"
-
-    /// 当前是否已把系统代理指向本机（存在开启前保存的原状态即表示「本机正走代理」）。
-    /// 供菜单「本机网络走代理」开关读初始态。
-    static var isEnabled: Bool {
-        UserDefaults.standard.data(forKey: NetCaptureEnv.Keys.savedProxyState) != nil
-    }
 
     // MARK: - 网络服务解析
 
@@ -63,6 +65,14 @@ enum SystemProxyController {
         if secure.ok {
             parse(secure.stdoutString, into: &state.secureEnabled, &state.secureHost, &state.securePort)
         }
+        let socks = NetCaptureEnv.run(networksetup, ["-getsocksfirewallproxy", service])
+        if socks.ok {
+            var enabled = false, host = "", port = 0
+            parse(socks.stdoutString, into: &enabled, &host, &port)
+            state.socksEnabled = enabled
+            state.socksHost = host
+            state.socksPort = port
+        }
         return state
     }
 
@@ -85,38 +95,66 @@ enum SystemProxyController {
 
     // MARK: - 启用 / 还原
 
-    /// 把当前活跃服务的 HTTP/HTTPS 代理指向 `127.0.0.1:port`。开启前保存原状态。**后台线程调用**。
-    static func enable(port: UInt16) {
-        guard let service = activeServiceName() else { return }
-        // 仅在没有已保存状态时保存（避免多次 enable 覆盖真正的原始状态）。
-        if UserDefaults.standard.data(forKey: NetCaptureEnv.Keys.savedProxyState) == nil {
-            let state = readState(service: service)
-            if let data = try? JSONEncoder().encode(state) {
+    /// 把当前活跃服务的系统代理指向引擎：`httpPort` 不为 nil 时 HTTP / HTTPS 代理指向 `127.0.0.1:httpPort`，
+    /// `socksPort` 不为 nil 时 SOCKS 代理指向 `127.0.0.1:socksPort`；为 nil 的那一项还原成开启前的样子。
+    /// 两个都是 nil 等于 `restore()`。抓包中「本机」的子开关一变就再调一次（docs/packet-capture/CONTROL.md §2.2）。
+    ///
+    /// 「开启前的快照」只在还没有快照时拍一次：再次调用时系统代理已经是我们设的了，不能把它当成原状态存下来，
+    /// 否则还原时还原成的是指向引擎的代理（整机断网）。**后台线程调用**。
+    static func apply(httpPort: UInt16?, socksPort: UInt16?) {
+        guard httpPort != nil || socksPort != nil else {
+            restore()
+            return
+        }
+        guard let service = savedState()?.service ?? activeServiceName() else { return }
+        let original: ProxyState
+        if let saved = savedState() {
+            original = saved
+        } else {
+            original = readState(service: service)
+            if let data = try? JSONEncoder().encode(original) {
                 UserDefaults.standard.set(data, forKey: NetCaptureEnv.Keys.savedProxyState)
             }
         }
-        let portStr = String(port)
-        NetCaptureEnv.run(networksetup, ["-setwebproxy", service, "127.0.0.1", portStr])
-        NetCaptureEnv.run(networksetup, ["-setsecurewebproxy", service, "127.0.0.1", portStr])
-        NetCaptureEnv.run(networksetup, ["-setwebproxystate", service, "on"])
-        NetCaptureEnv.run(networksetup, ["-setsecurewebproxystate", service, "on"])
+        if let httpPort {
+            let portStr = String(httpPort)
+            NetCaptureEnv.run(networksetup, ["-setwebproxy", service, "127.0.0.1", portStr])
+            NetCaptureEnv.run(networksetup, ["-setsecurewebproxy", service, "127.0.0.1", portStr])
+            NetCaptureEnv.run(networksetup, ["-setwebproxystate", service, "on"])
+            NetCaptureEnv.run(networksetup, ["-setsecurewebproxystate", service, "on"])
+        } else {
+            restoreWeb(original)
+        }
+        if let socksPort {
+            NetCaptureEnv.run(networksetup, ["-setsocksfirewallproxy", service, "127.0.0.1", String(socksPort)])
+            NetCaptureEnv.run(networksetup, ["-setsocksfirewallproxystate", service, "on"])
+        } else {
+            restoreSocks(original)
+        }
     }
 
     /// 还原为开启前保存的状态；无保存状态则不动。**后台线程调用**。
     static func restore() {
-        guard let data = UserDefaults.standard.data(forKey: NetCaptureEnv.Keys.savedProxyState),
-              let state = try? JSONDecoder().decode(ProxyState.self, from: data) else {
-            return
-        }
+        guard let state = savedState() else { return }
+        restoreWeb(state)
+        restoreSocks(state)
+        UserDefaults.standard.removeObject(forKey: NetCaptureEnv.Keys.savedProxyState)
+    }
+
+    private static func savedState() -> ProxyState? {
+        guard let data = UserDefaults.standard.data(forKey: NetCaptureEnv.Keys.savedProxyState) else { return nil }
+        return try? JSONDecoder().decode(ProxyState.self, from: data)
+    }
+
+    /// HTTP、HTTPS 两项还原成快照里的样子。
+    private static func restoreWeb(_ state: ProxyState) {
         let service = state.service
-        // 还原 web 代理。
         if state.webEnabled, !state.webHost.isEmpty {
             NetCaptureEnv.run(networksetup, ["-setwebproxy", service, state.webHost, String(state.webPort)])
             NetCaptureEnv.run(networksetup, ["-setwebproxystate", service, "on"])
         } else {
             NetCaptureEnv.run(networksetup, ["-setwebproxystate", service, "off"])
         }
-        // 还原 secure 代理。
         if state.secureEnabled, !state.secureHost.isEmpty {
             NetCaptureEnv.run(networksetup,
                               ["-setsecurewebproxy", service, state.secureHost, String(state.securePort)])
@@ -124,7 +162,18 @@ enum SystemProxyController {
         } else {
             NetCaptureEnv.run(networksetup, ["-setsecurewebproxystate", service, "off"])
         }
-        UserDefaults.standard.removeObject(forKey: NetCaptureEnv.Keys.savedProxyState)
+    }
+
+    /// SOCKS 还原成快照里的样子（早先存下的快照里没有这一项就不碰）。
+    private static func restoreSocks(_ state: ProxyState) {
+        guard let wasOn = state.socksEnabled else { return }
+        let service = state.service
+        if wasOn, let host = state.socksHost, !host.isEmpty {
+            NetCaptureEnv.run(networksetup, ["-setsocksfirewallproxy", service, host, String(state.socksPort ?? 0)])
+            NetCaptureEnv.run(networksetup, ["-setsocksfirewallproxystate", service, "on"])
+        } else {
+            NetCaptureEnv.run(networksetup, ["-setsocksfirewallproxystate", service, "off"])
+        }
     }
 
     /// 崩溃残留还原：`activate()` 启动时调一次。有保存状态即说明上次异常退出没还原，补还原。

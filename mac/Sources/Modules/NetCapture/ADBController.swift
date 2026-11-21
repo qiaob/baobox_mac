@@ -81,25 +81,35 @@ enum ADBController {
         return result.ok
     }
 
-    /// 推送 CA 证书到设备下载目录并尝试拉起安装界面。后台线程调用。
-    /// 返回是否推送成功；安装界面因 ROM 而异，仅尽力拉起。
+    /// 把 CA 证书推到设备的下载目录，再把人带到系统设置里离「安装证书」最近的一页。后台线程调用。
+    /// 返回是否推送成功。
+    ///
+    /// Android 11 起 CA 证书**只能在系统设置里装**，别的入口系统都会拒绝。2026-11-21 在 Android 15 模拟器上实测：
+    /// - 用 VIEW 打开 `file://` 的证书文件（v1 的做法）：提示「无法读取证书文件」。
+    /// - 从系统的证书安装器里选这个文件：提示「CA 证书必须在设置里安装」。
+    /// - 设置 → 更多安全和隐私 → 加密与凭据 → 安装证书 → CA 证书 → 仍然安装 → 选文件：装上了，不需要先设锁屏密码。
+    /// 所以这里不再试图拉起安装器，只打开「更多安全和隐私」那一页（AOSP 的 action；厂商系统上可能没有，退回安全设置首页），
+    /// 剩下三步由界面上的文字告诉用户。
     @discardableResult
     static func pushAndInstallCert(serial: String) -> Bool {
         guard let adb = adbPath() else { return false }
-        let caPath = MITMCertAuthority.shared.caCertURL.path
-        guard FileManager.default.fileExists(atPath: caPath) else { return false }
-        let remote = "/sdcard/Download/baobox-ca.crt"
-        let push = NetCaptureEnv.run(adb, ["-s", serial, "push", caPath, remote])
+        guard CaptureCA.shared.ensureGenerated() else { return false }
+        let caPath = CaptureCA.shared.certURL.path
+        let push = NetCaptureEnv.run(adb, ["-s", serial, "push", caPath, certRemotePath])
         guard push.ok else { return false }
-        // 尝试打开证书文件的安装 intent（不同 ROM 行为不一，失败退回打开安全设置）。
-        let view = NetCaptureEnv.run(adb, ["-s", serial, "shell", "am", "start",
-                                           "-a", "android.intent.action.VIEW",
-                                           "-d", "file://\(remote)",
-                                           "-t", "application/x-x509-ca-cert"])
-        if !view.ok {
-            NetCaptureEnv.run(adb, ["-s", serial, "shell", "am", "start",
-                                    "-a", "android.settings.SECURITY_SETTINGS"])
+        if !startActivity(adb: adb, serial: serial, action: "com.android.settings.security.SECURITY_ADVANCED_SETTINGS") {
+            startActivity(adb: adb, serial: serial, action: "android.settings.SECURITY_SETTINGS")
         }
         return true
+    }
+
+    /// 证书在设备上的位置（「下载」目录）。
+    static let certRemotePath = "/sdcard/Download/baobox-ca.crt"
+
+    /// `am start -a <action>`。解析不了时 `am` 的退出码仍是 0，只在输出里写 Error，所以两样都看。
+    @discardableResult
+    private static func startActivity(adb: String, serial: String, action: String) -> Bool {
+        let result = NetCaptureEnv.run(adb, ["-s", serial, "shell", "am", "start", "-a", action])
+        return result.ok && !result.stdoutString.contains("Error") && !result.stderrString.contains("Error")
     }
 }

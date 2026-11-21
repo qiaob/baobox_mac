@@ -1,46 +1,49 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
-/// 网络抓包设置：代理 / HTTPS 证书 / 解密范围 / MCP / ADB / 隐私。
-/// 重操作（CA 生成、信任安装、adb、MCP 注册）在后台队列执行，完成回主线程更新状态。
+/// 网络抓包设置（docs/packet-capture/REQUIREMENTS.md §5.3）：一项一行。
+/// 抓什么、怎么接设备这些开关都在抓包窗口的「配置」页里，这里只放不常改的东西（端口、上限、解密范围、证书、WireGuard 密钥、MCP）。
+/// 重操作（证书安装、MCP 注册）在后台队列执行，完成回主线程更新状态。
 struct NetCaptureSettingsView: View {
     var body: some View {
         Form {
-            NetCaptureProxySection()
-            NetCaptureCertSection()
-            NetCaptureScopeSection()
-            NetCaptureMCPSection()
-            NetCaptureADBSection()
-            NetCapturePrivacySection()
+            if let reason = NetCaptureEnv.engineUnavailable {
+                SwiftUI.Section {
+                    Text(reason == .needsAppleSilicon ? "netcapture.unavailable.intel" : "netcapture.unavailable.notBundled")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                SwiftUI.Section {
+                    Button("netcapture.menu.openWindow") { NetCaptureWindowController.shared.show() }
+                    Text("netcapture.settings.intro").font(.caption).foregroundStyle(.secondary)
+                }
+                NetCaptureGeneralSection()
+                NetCaptureScopeSection()
+                NetCaptureCertSection()
+                NetCaptureMCPSection()
+            }
         }
         .formStyle(.grouped)
     }
 }
 
-// MARK: - 代理
+// MARK: - 通用
 
-private struct NetCaptureProxySection: View {
+private struct NetCaptureGeneralSection: View {
     @AppStorage(NetCaptureEnv.Keys.port) private var port = 9090
-    @AppStorage(NetCaptureEnv.Keys.autoSystemProxy) private var autoProxy = false
-    @AppStorage(NetCaptureEnv.Keys.serviceName) private var serviceName = ""
     @AppStorage(NetCaptureEnv.Keys.maxFlows) private var maxFlows = 1000
     @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
+    @AppStorage(NetCaptureEnv.Keys.clearOnStop) private var clearOnStop = false
+    @AppStorage(NetCaptureEnv.Keys.wireguardPort) private var wireguardPort = 51820
+    @State private var confirmRegenerate = false
 
     var body: some View {
-        SwiftUI.Section("netcapture.settings.proxy") {
+        SwiftUI.Section("netcapture.settings.general") {
             HStack {
                 Text("netcapture.settings.port")
                 Spacer()
                 TextField("", value: $port, format: .number.grouping(.never))
                     .frame(width: 80).multilineTextAlignment(.trailing)
-            }
-            Toggle("netcapture.settings.autoProxy", isOn: $autoProxy)
-            HStack {
-                Text("netcapture.settings.serviceName")
-                Spacer()
-                TextField("netcapture.settings.serviceAuto", text: $serviceName)
-                    .frame(width: 160).multilineTextAlignment(.trailing)
             }
             Stepper(value: $maxFlows, in: 200...5000, step: 100) {
                 Text("netcapture.settings.maxFlows \(maxFlows)")
@@ -50,100 +53,28 @@ private struct NetCaptureProxySection: View {
                 Text(verbatim: "5 MB").tag(5 * 1024 * 1024)
                 Text(verbatim: "20 MB").tag(20 * 1024 * 1024)
             }
-            Text("netcapture.settings.portHint").font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - HTTPS 证书
-
-private struct NetCaptureCertSection: View {
-    @State private var caGenerated = MITMCertAuthority.shared.isCAGenerated
-    @State private var trusted = false
-    @State private var busy = false
-    @State private var showQR = false
-
-    var body: some View {
-        SwiftUI.Section("netcapture.settings.cert") {
+            Toggle("netcapture.settings.clearOnStop", isOn: $clearOnStop)
             HStack {
-                Text("netcapture.settings.caStatus")
+                Text("netcapture.settings.wireguardPort")
                 Spacer()
-                Text(caGenerated ? "netcapture.settings.caGenerated" : "netcapture.settings.caMissing")
-                    .foregroundStyle(caGenerated ? .green : .secondary)
-                if !caGenerated {
-                    Button("netcapture.settings.generateCA") { generateCA() }
-                        .disabled(busy)
-                }
+                TextField("", value: $wireguardPort, format: .number.grouping(.never))
+                    .frame(width: 80).multilineTextAlignment(.trailing)
             }
             HStack {
-                Text("netcapture.settings.trustStatus")
+                Text("netcapture.settings.wireguardKeys")
                 Spacer()
-                Text(trusted ? "netcapture.settings.trusted" : "netcapture.settings.untrusted")
-                    .foregroundStyle(trusted ? .green : .orange)
-                Button("netcapture.common.recheck") { recheckTrust() }.disabled(busy)
+                Button("netcapture.settings.wireguardRegenerate") { confirmRegenerate = true }
+                    .alert(Text("netcapture.settings.wireguardRegenerateTitle"), isPresented: $confirmRegenerate) {
+                        Button("netcapture.settings.wireguardRegenerateConfirm", role: .destructive) {
+                            NetCaptureSession.shared.regenerateWireGuardKeys()
+                        }
+                        Button("common.cancel", role: .cancel) {}
+                    } message: {
+                        Text("netcapture.settings.wireguardRegenerateMessage")
+                    }
             }
-            if trusted {
-                Button("netcapture.settings.removeTrust", role: .destructive) { removeTrust() }.disabled(busy)
-            } else {
-                Button("netcapture.settings.installTrust") { installTrust() }.disabled(busy)
-            }
-            Button("netcapture.window.showQR") { showQR = true }
-            Text("netcapture.settings.certHint").font(.caption).foregroundStyle(.secondary)
+            Text("netcapture.settings.generalHint").font(.caption).foregroundStyle(.secondary)
         }
-        .onAppear { recheckTrust() }
-        .sheet(isPresented: $showQR) {
-            VStack(spacing: 14) {
-                Text("netcapture.qr.title").font(.headline)
-                NetCaptureQRPanel()
-                Button("common.ok") { showQR = false }
-            }.padding(24)
-        }
-    }
-
-    private func generateCA() {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok = MITMCertAuthority.shared.ensureCA()
-            DispatchQueue.main.async { MainActor.assumeIsolated { caGenerated = ok; busy = false } }
-        }
-    }
-
-    private func recheckTrust() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let generated = MITMCertAuthority.shared.isCAGenerated
-            let isTrusted = generated && MITMCertAuthority.shared.isTrusted()
-            DispatchQueue.main.async { MainActor.assumeIsolated { caGenerated = generated; trusted = isTrusted } }
-        }
-    }
-
-    private func installTrust() {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = MITMCertAuthority.shared.installTrust()
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    busy = false
-                    if result.ok { recheckTrust() }
-                    else { alert(L("netcapture.settings.trustFailed"), result.message) }
-                }
-            }
-        }
-    }
-
-    private func removeTrust() {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = MITMCertAuthority.shared.removeTrust()
-            DispatchQueue.main.async { MainActor.assumeIsolated { busy = false; recheckTrust(); _ = result } }
-        }
-    }
-
-    private func alert(_ title: String, _ message: String) {
-        let a = NSAlert()
-        a.messageText = title
-        if !message.isEmpty { a.informativeText = message }
-        a.addButton(withTitle: L("common.ok"))
-        a.runModal()
     }
 }
 
@@ -153,7 +84,6 @@ private struct NetCaptureScopeSection: View {
     @AppStorage(NetCaptureEnv.Keys.decryptScope) private var scope = "all"
     @AppStorage(NetCaptureEnv.Keys.allowDomains) private var allowDomains = ""
     @AppStorage(NetCaptureEnv.Keys.denyDomains) private var denyDomains = ""
-    @AppStorage(NetCaptureEnv.Keys.decryptRemote) private var decryptRemote = false
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.scope") {
@@ -161,17 +91,17 @@ private struct NetCaptureScopeSection: View {
                 Text("netcapture.settings.scopeAll").tag("all")
                 Text("netcapture.settings.scopeAllowlist").tag("allowlist")
             }
-            .pickerStyle(.radioGroup)
             if scope == "allowlist" {
                 domainEditor("netcapture.settings.allowDomains", text: $allowDomains)
             } else {
                 domainEditor("netcapture.settings.denyDomains", text: $denyDomains)
             }
             Text("netcapture.settings.scopeHint").font(.caption).foregroundStyle(.secondary)
-            Divider()
-            Toggle("netcapture.settings.decryptRemote", isOn: $decryptRemote)
-            Text("netcapture.settings.decryptRemoteHint").font(.caption).foregroundStyle(.secondary)
         }
+        // 正在抓的时候改范围，立即告诉引擎。
+        .onChange(of: scope) { _, _ in NetCaptureEngine.shared.applyScopeFromSettings() }
+        .onChange(of: allowDomains) { _, _ in NetCaptureEngine.shared.applyScopeFromSettings() }
+        .onChange(of: denyDomains) { _, _ in NetCaptureEngine.shared.applyScopeFromSettings() }
     }
 
     private func domainEditor(_ label: LocalizedStringKey, text: Binding<String>) -> some View {
@@ -179,8 +109,121 @@ private struct NetCaptureScopeSection: View {
             Text(label).font(.caption).foregroundStyle(.secondary)
             TextEditor(text: text)
                 .font(.caption.monospaced())
-                .frame(height: 70)
+                .frame(height: 64)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.1)))
+        }
+    }
+}
+
+// MARK: - 证书
+
+private struct NetCaptureCertSection: View {
+    @ObservedObject private var session = NetCaptureSession.shared
+    @State private var busy = false
+    @State private var hasLegacy = CaptureCA.shared.hasLegacyCA
+    @State private var certName = CaptureCA.shared.commonName
+    @State private var confirmRegenerate = false
+    /// 点「重新生成…」那一刻的窗口（设置窗口），验证框关掉后要把它拿回前台。
+    @State private var regenerateOrigin: NSWindow?
+
+    var body: some View {
+        SwiftUI.Section("netcapture.settings.cert") {
+            HStack {
+                Text("netcapture.settings.trustStatus")
+                Spacer()
+                Text(session.caTrusted ? "netcapture.settings.trusted" : "netcapture.settings.untrusted")
+                    .foregroundStyle(session.caTrusted ? .green : .secondary)
+                if session.caTrusted {
+                    Button("netcapture.settings.removeTrust", role: .destructive) { removeTrust() }.disabled(busy)
+                } else {
+                    Button("netcapture.settings.installTrust") { session.installCert() }
+                        .disabled(busy || session.working != nil)
+                }
+            }
+            HStack {
+                Text("netcapture.settings.certName")
+                Spacer()
+                Text(verbatim: certName ?? "—").foregroundStyle(.secondary).textSelection(.enabled)
+                Button("netcapture.settings.regenerate") {
+                    regenerateOrigin = NSApp.keyWindow
+                    confirmRegenerate = true
+                }
+                    .disabled(busy || session.working != nil)
+                    .alert(Text("netcapture.settings.regenerateTitle"), isPresented: $confirmRegenerate) {
+                        Button("netcapture.settings.regenerateConfirm", role: .destructive) { regenerate() }
+                        Button("common.cancel", role: .cancel) {}
+                    } message: {
+                        Text("netcapture.settings.regenerateMessage")
+                    }
+            }
+            if hasLegacy {
+                HStack {
+                    Text("netcapture.settings.legacyCA")
+                    Spacer()
+                    Button("netcapture.settings.legacyCARemove") { removeLegacy() }.disabled(busy)
+                }
+            }
+            if let banner = session.banner, banner.kind == .problem {
+                Text(verbatim: banner.text).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+            }
+            Text("netcapture.settings.certHint").font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            session.refreshTrust()
+            certName = CaptureCA.shared.commonName
+        }
+    }
+
+    /// 换一张新证书（名字是 Baobox Capture CA）。先停抓包：引擎只在启动时读证书。
+    private func regenerate() {
+        busy = true
+        // 不能在这里取 `NSApp.keyWindow`：这个方法是从确认框的按钮里调的，那一刻的前台窗口是确认框自己。
+        // 之后再把它「拿回前台」，已经关掉的确认框就又冒出来了（2026-11-21 用户遇到：做完了还在弹；
+        // 探针里确认过，取到的是 `_NSAlertPanel`，对它 `makeKeyAndOrderFront` 后它重新可见）。
+        let origin = regenerateOrigin
+        session.stopAll()
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = CaptureCA.shared.regenerate()
+            let name = CaptureCA.shared.commonName
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    busy = false
+                    certName = name
+                    session.bringBack(origin)
+                    session.refreshTrust()
+                }
+            }
+        }
+    }
+
+    private func removeTrust() {
+        busy = true
+        let origin = NSApp.keyWindow
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = CaptureCA.shared.removeTrust()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    busy = false
+                    session.bringBack(origin)
+                    session.refreshTrust()
+                }
+            }
+        }
+    }
+
+    private func removeLegacy() {
+        busy = true
+        let origin = NSApp.keyWindow
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = CaptureCA.shared.removeLegacyCA()
+            let still = CaptureCA.shared.hasLegacyCA
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    busy = false
+                    hasLegacy = still
+                    session.bringBack(origin)
+                }
+            }
         }
     }
 }
@@ -206,28 +249,36 @@ private struct NetCaptureMCPSection: View {
                 TextField("", value: $mcpPort, format: .number.grouping(.never))
                     .frame(width: 80).multilineTextAlignment(.trailing)
             }
-            HStack {
-                Text("netcapture.settings.registerClaude")
-                Spacer()
-                if inClaude {
-                    Button("netcapture.settings.unregister", role: .destructive) { unregisterClaude() }
-                } else {
-                    Button("netcapture.settings.register") { registerClaude() }
-                }
-            }
-            HStack {
-                Text("netcapture.settings.registerCodex")
-                Spacer()
-                if inCodex {
-                    Button("netcapture.settings.unregister", role: .destructive) { unregisterCodex() }
-                } else {
-                    Button("netcapture.settings.register") { registerCodex() }
-                }
-            }
+            registrationRow("netcapture.settings.registerClaude", registered: inClaude,
+                            register: { try? CaptureMCPServer.registerInClaude() },
+                            unregister: { try? CaptureMCPServer.unregisterFromClaude() })
+            registrationRow("netcapture.settings.registerCodex", registered: inCodex,
+                            register: { try? CaptureMCPServer.registerInCodex() },
+                            unregister: { try? CaptureMCPServer.unregisterFromCodex() })
             Toggle("netcapture.settings.mcpRedact", isOn: $redact)
             Text("netcapture.settings.mcpHint \(mcp.endpointURL)").font(.caption).foregroundStyle(.secondary)
         }
         .onAppear { refreshRegistration() }
+    }
+
+    private func registrationRow(_ title: LocalizedStringKey, registered: Bool,
+                                 register: @escaping () -> Void, unregister: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if registered {
+                Button("netcapture.settings.unregister", role: .destructive) { run(unregister) }
+            } else {
+                Button("netcapture.settings.register") { run(register) }
+            }
+        }
+    }
+
+    private func run(_ work: @escaping () -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            work()
+            refreshRegistration()
+        }
     }
 
     private func refreshRegistration() {
@@ -236,127 +287,5 @@ private struct NetCaptureMCPSection: View {
             let codex = CaptureMCPServer.isRegisteredInCodex()
             DispatchQueue.main.async { MainActor.assumeIsolated { inClaude = claude; inCodex = codex } }
         }
-    }
-
-    private func registerClaude() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CaptureMCPServer.registerInClaude(); refreshRegistration()
-        }
-    }
-    private func unregisterClaude() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CaptureMCPServer.unregisterFromClaude(); refreshRegistration()
-        }
-    }
-    private func registerCodex() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CaptureMCPServer.registerInCodex(); refreshRegistration()
-        }
-    }
-    private func unregisterCodex() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            try? CaptureMCPServer.unregisterFromCodex(); refreshRegistration()
-        }
-    }
-}
-
-// MARK: - ADB
-
-private struct NetCaptureADBSection: View {
-    @State private var adbPath: String?
-    @State private var devices: [ADBController.Device] = []
-    @State private var busy = false
-
-    var body: some View {
-        SwiftUI.Section("netcapture.settings.adb") {
-            HStack {
-                Text("netcapture.settings.adbStatus")
-                Spacer()
-                if let path = adbPath {
-                    Text(verbatim: path).font(.caption.monospaced()).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
-                } else {
-                    Text("netcapture.settings.adbMissing").foregroundStyle(.orange)
-                }
-                Button("netcapture.common.refresh") { refresh() }.disabled(busy)
-            }
-            if adbPath == nil {
-                Text("netcapture.settings.adbHint").font(.caption).foregroundStyle(.secondary)
-            } else if devices.isEmpty {
-                Text("netcapture.settings.adbNoDevice").font(.caption).foregroundStyle(.secondary)
-            } else {
-                ForEach(devices) { device in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(verbatim: device.model.isEmpty ? device.serial : "\(device.model) (\(device.serial))")
-                            .font(.callout)
-                        HStack {
-                            Button("netcapture.settings.adbSetProxy") { setProxy(device) }.disabled(busy)
-                            Button("netcapture.settings.adbClearProxy") { clearProxy(device) }.disabled(busy)
-                            Button("netcapture.settings.adbPushCert") { pushCert(device) }.disabled(busy)
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear { refresh() }
-    }
-
-    private func refresh() {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let path = ADBController.adbPath()
-            let list = path != nil ? ADBController.devices() : []
-            DispatchQueue.main.async { MainActor.assumeIsolated { adbPath = path; devices = list; busy = false } }
-        }
-    }
-
-    private func setProxy(_ device: ADBController.Device) {
-        busy = true
-        let ip = NetworkInterfaces.primaryIP()
-        let port = NetCaptureEnv.port
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = ADBController.setProxy(serial: device.serial, ip: ip, port: port)
-            DispatchQueue.main.async { MainActor.assumeIsolated { busy = false } }
-        }
-    }
-    private func clearProxy(_ device: ADBController.Device) {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = ADBController.clearProxy(serial: device.serial)
-            DispatchQueue.main.async { MainActor.assumeIsolated { busy = false } }
-        }
-    }
-    private func pushCert(_ device: ADBController.Device) {
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = MITMCertAuthority.shared.ensureCA()
-            _ = ADBController.pushAndInstallCert(serial: device.serial)
-            DispatchQueue.main.async { MainActor.assumeIsolated { busy = false } }
-        }
-    }
-}
-
-// MARK: - 隐私
-
-private struct NetCapturePrivacySection: View {
-    @AppStorage(NetCaptureEnv.Keys.clearOnStop) private var clearOnStop = true
-
-    var body: some View {
-        SwiftUI.Section("netcapture.settings.privacy") {
-            Toggle("netcapture.settings.clearOnStop", isOn: $clearOnStop)
-            Button("netcapture.settings.exportHar") { exportHAR() }
-                .disabled(FlowStore.shared.flows.isEmpty)
-            Text("netcapture.settings.privacyStatement").font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private func exportHAR() {
-        let flows = FlowStore.shared.flows
-        let data = FlowStore.shared.harData(flows)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .json]
-        panel.nameFieldStringValue = "capture.har"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? data.write(to: url)
     }
 }
