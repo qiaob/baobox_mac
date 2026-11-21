@@ -585,9 +585,15 @@ struct NetCaptureScenarioCards: View {
                             openPhoneSheet(.android)
                         }
                     }
+                    // 两个平台的模拟器都从这张卡片进。Android 模拟器在 adb 看来就是一台设备，
+                    // 所以它的按钮打开的是和「Android」卡片同一个面板（里面会列出模拟器）。
                     card(icon: "macwindow.on.rectangle", title: "netcapture.card.simulator.title",
-                         detail: "netcapture.card.simulator.detail", note: "netcapture.card.simulator.note") {
+                         detail: "netcapture.card.simulator.detail", note: nil) {
                         primary("netcapture.source.simulator") { session.installSimulatorCert() }
+                        Button("netcapture.card.simulator.android") {
+                            session.setLAN(true)
+                            openPhoneSheet(.android)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
