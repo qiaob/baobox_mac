@@ -39,6 +39,8 @@ enum CaptureEvent: Equatable, Sendable {
         var headers: [HTTPHeader]
         var body: Data?
         var truncated: Bool
+        /// 正文是压缩的但请求头没声明，桥脚本按内容特征认出来并解开了：这里是压缩方式的名字（gzip / zlib / zstd）。
+        var sniffed: String?
         var bytes: Int
         var startedAt: Date
     }
@@ -53,6 +55,8 @@ enum CaptureEvent: Equatable, Sendable {
         var truncated: Bool
         /// 原始的 Content-Encoding，只用于展示。
         var encoding: String?
+        /// 同 `Request.sniffed`：头里没声明、按内容认出来的压缩方式。
+        var sniffed: String?
         var bytes: Int
         var remote: String?
         var endedAt: Date?
@@ -107,6 +111,7 @@ enum CaptureEvent: Equatable, Sendable {
                 headers: headers(json["headers"]),
                 body: body(json["body"]),
                 truncated: json["truncated"] as? Bool ?? false,
+                sniffed: json["sniffed"] as? String,
                 bytes: int(json["bytes"]) ?? 0,
                 startedAt: date(json["ts"]) ?? Date()))
         case "response":
@@ -119,6 +124,7 @@ enum CaptureEvent: Equatable, Sendable {
                 body: body(json["body"]),
                 truncated: json["truncated"] as? Bool ?? false,
                 encoding: json["encoding"] as? String,
+                sniffed: json["sniffed"] as? String,
                 bytes: int(json["bytes"]) ?? 0,
                 remote: json["remote"] as? String,
                 endedAt: date(json["ts"])))
@@ -198,5 +204,17 @@ struct CaptureLineBuffer {
             pending = Data(pending[start...])
         }
         return lines
+    }
+}
+
+/// 引擎自己的日志里能认出来的东西。
+enum CaptureEngineLog {
+    /// 「端口被占」的报错里是哪个端口。引擎的原话形如
+    /// `HTTP(S) proxy failed to listen on 127.0.0.1:9090 with [Errno 48] …`；认不出来返回 nil。
+    static func busyPort(in text: String) -> UInt16? {
+        guard let marker = text.range(of: "failed to listen on ") else { return nil }
+        let address = text[marker.upperBound...].prefix { !$0.isWhitespace }
+        guard let colon = address.lastIndex(of: ":") else { return nil }
+        return UInt16(address[address.index(after: colon)...])
     }
 }

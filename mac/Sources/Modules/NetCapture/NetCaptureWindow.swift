@@ -810,9 +810,9 @@ private struct FlowDetailView: View {
                     switch currentTab {
                     case .overview: overview
                     case .request: message(headers: flow.requestHeaders, body: flow.requestBody,
-                                           truncated: flow.requestTruncated)
+                                           truncated: flow.requestTruncated, sniffed: flow.requestSniffed)
                     case .response: message(headers: flow.responseHeaders, body: flow.responseBody,
-                                            truncated: flow.responseTruncated)
+                                            truncated: flow.responseTruncated, sniffed: flow.responseSniffed)
                     case .messages: messages
                     case .raw: rawView
                     }
@@ -863,7 +863,7 @@ private struct FlowDetailView: View {
     }
 
     @ViewBuilder
-    private func message(headers: [HTTPHeader], body: Data?, truncated: Bool) -> some View {
+    private func message(headers: [HTTPHeader], body: Data?, truncated: Bool, sniffed: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("netcapture.detail.headers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -877,6 +877,9 @@ private struct FlowDetailView: View {
             if let body, !body.isEmpty {
                 Text("netcapture.detail.body").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 bodyView(body: body, headers: headers)
+                if let sniffed {
+                    Text("netcapture.detail.sniffed \(sniffed)").font(.caption2).foregroundStyle(.secondary)
+                }
             } else if !truncated {
                 Text("netcapture.detail.noBody").font(.caption).foregroundStyle(.secondary)
             }

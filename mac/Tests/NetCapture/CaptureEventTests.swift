@@ -105,6 +105,21 @@ final class CaptureEventTests: XCTestCase {
         XCTAssertEqual(frame.size, 128)
     }
 
+    /// 头里没声明的压缩由桥脚本认出来解开，事件里带上压缩方式的名字；没有这回事时是 nil。
+    func testSniffedCompressionName() throws {
+        let request = CaptureEvent.parse(line: line(
+            #"{"event":"request","id":"9b80df6e-85cc-4743-9198-58c843904676","method":"POST","host":"x.com","body":"e30=","sniffed":"gzip"}"#))
+        guard case .request(let sniffed)? = request else { return XCTFail("not a request") }
+        XCTAssertEqual(sniffed.sniffed, "gzip")
+        XCTAssertEqual(sniffed.body, Data("{}".utf8))
+
+        let response = CaptureEvent.parse(line: line(
+            #"{"event":"response","id":"9b80df6e-85cc-4743-9198-58c843904676","status":200,"sniffed":null,"encoding":"br"}"#))
+        guard case .response(let plain)? = response else { return XCTFail("not a response") }
+        XCTAssertNil(plain.sniffed)
+        XCTAssertEqual(plain.encoding, "br")
+    }
+
     /// 解不出来的行一律返回 nil（跳过），不崩。
     func testMalformedLinesAreSkipped() {
         let bad = [
@@ -210,6 +225,18 @@ final class CaptureEventTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         XCTAssertEqual(object["mode"] as? String, "deny")
         XCTAssertEqual(object["domains"] as? [String], ["bank.com"])
+    }
+
+    // MARK: - 引擎日志
+
+    func testBusyPortFromEngineError() {
+        let real = "[00:21:39.285] [Errno 48] HTTP(S) proxy failed to listen on 127.0.0.1:19412 with [Errno 48] error while attempting to bind on address ('127.0.0.1', 19412): [errno 48] address already in use"
+        XCTAssertEqual(CaptureEngineLog.busyPort(in: real), 19412)
+        XCTAssertEqual(CaptureEngineLog.busyPort(in: "SOCKS v5 proxy failed to listen on 127.0.0.1:9092 with [Errno 48]"), 9092)
+        XCTAssertEqual(CaptureEngineLog.busyPort(in: "proxy failed to listen on *:9090 with …"), 9090)
+        XCTAssertNil(CaptureEngineLog.busyPort(in: "Error logged during startup, exiting..."))
+        XCTAssertNil(CaptureEngineLog.busyPort(in: "failed to listen on somewhere"))
+        XCTAssertNil(CaptureEngineLog.busyPort(in: "failed to listen on 127.0.0.1:notaport"))
     }
 
     // MARK: - 终端的环境变量

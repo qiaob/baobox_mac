@@ -50,6 +50,9 @@ struct Flow: Identifiable, Sendable {
     var httpVersion: String = "HTTP/1.1"
     /// 响应原本的 Content-Encoding；正文已经由引擎解压，这里只用来展示。
     var responseEncoding: String?
+    /// 正文是压缩的但头里没声明、被自动认出来解开时，压缩方式的名字（请求 / 响应各一个）。
+    var requestSniffed: String?
+    var responseSniffed: String?
     /// 没解密的原因（`decrypted == false` 时有值）。
     var undecryptedReason: CaptureEvent.UndecryptedReason?
     /// WebSocket 消息（只有 WebSocket 连接有）。
@@ -203,6 +206,7 @@ final class FlowStore: ObservableObject {
                                 requestBytes: request.bytes,
                                 clientIP: request.client)
                 flow.httpVersion = request.httpVersion
+                flow.requestSniffed = request.sniffed
                 if let index = index(of: request.id) { flows[index] = flow } else { flows.append(flow) }
                 changed = true
             case .response(let response):
@@ -212,6 +216,7 @@ final class FlowStore: ObservableObject {
                 flows[index].responseBody = response.body
                 flows[index].responseTruncated = response.truncated
                 flows[index].responseEncoding = response.encoding
+                flows[index].responseSniffed = response.sniffed
                 flows[index].responseBytes = response.bytes
                 flows[index].remoteIP = response.remote
                 flows[index].endedAt = response.endedAt ?? Date()

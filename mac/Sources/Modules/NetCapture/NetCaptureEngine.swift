@@ -76,8 +76,11 @@ final class NetCaptureEngine: ObservableObject {
         let process = Process()
         process.executableURL = NetCaptureEnv.engineURL
         process.arguments = [
-            "--listen-host", lan ? "0.0.0.0" : "127.0.0.1",
-            "-p", String(port),
+            // 普通代理：有手机要抓时听局域网，否则只听本机。
+            "--mode", "regular@\(lan ? "0.0.0.0" : "127.0.0.1"):\(port)",
+            // SOCKS5：永远只听本机。苹果平台（Mac、iOS 模拟器）的 WebSocket 不走 HTTP 代理，只走系统的 SOCKS 代理，
+            // 「这台 Mac」场景会把系统的 SOCKS 代理指到这里。
+            "--mode", "socks5@127.0.0.1:\(NetCaptureEnv.neighbour(of: port, offset: 2))",
             "--set", "confdir=\(confDir.path)",
             // 超过上限的正文直接流过去，不在引擎里攒着；这样的请求标「已截断」。
             "--set", "stream_large_bodies=\(bodyCap)",
@@ -195,8 +198,10 @@ final class NetCaptureEngine: ObservableObject {
     private static func explain(_ stderr: String, port: UInt16) -> String {
         let lower = stderr.lowercased()
         if lower.contains("address already in use") || lower.contains("errno 48") {
+            // 引擎开了两个端口（代理、SOCKS），报错里写着是哪一个；认不出来就说代理端口。
             // 端口号当字符串传：按数字格式化会带千分位（「9,090」）。
-            return L("netcapture.error.portInUse \(String(port))")
+            let busy = CaptureEngineLog.busyPort(in: stderr) ?? port
+            return L("netcapture.error.portInUse \(String(busy))")
         }
         // 认不出来的：给第一行（引擎把具体原因放在前面，最后一行只是「启动出错，退出」）。
         return stderr.split(separator: "\n").first.map(String.init) ?? ""

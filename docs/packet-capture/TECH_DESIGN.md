@@ -75,14 +75,22 @@ Baobox（Swift）                              mitmdump（子进程）
 | 系统代理指向引擎（`SystemProxyController`），Safari 打开 HTTPS 页 | 解开了，HTTP/2，UA 是 iPhone，正文可见 |
 | 还原系统代理 | `scutil --proxy` 两项都关，直连正常 |
 | 来源 | 和 Android 模拟器一样显示在「本机」下（模拟器用的就是这台 Mac 的网络和系统代理） |
-| **WebSocket** | **没抓到**，见下 |
+| **WebSocket** | 只设 HTTP 代理时**没抓到**；补了 SOCKS 之后抓到了，见下 |
 
 **苹果平台的 WebSocket 不走 HTTP 代理，只走 SOCKS 代理**（2026-11-21 实测）。只设系统的 HTTP / HTTPS 代理时，模拟器里 Safari 的 WebSocket 页面照常工作（页面上收发了十几条消息），但没有一条经过引擎，是直连出去的。做了对照实验：引擎加一个 `--mode socks5@<端口>` 的监听，系统只设 SOCKS 代理（HTTP 代理关着），同一个页面的 101 握手和 17 条消息全部抓到。Android 的 Chrome 没有这个问题（上表：经 HTTP 代理就抓到了）。
 
-所以现在的实现在 Mac、iOS 模拟器、（大概率）真机 iPhone 上**抓不到 WebSocket**。要补的话：
-- 引擎多开一个 SOCKS5 监听（比如代理端口 + 2），「这台 Mac」场景把系统的 SOCKS 代理也指过去、停止时一并还原（`SystemProxyController` 现在只管 HTTP / HTTPS 两项）。代价是所有认系统 SOCKS 代理的 App 的 TCP 流量都会经过引擎（引擎对认不出的协议原样转发），影响面比现在大。
-- 真机 iPhone 的 Wi-Fi 代理界面只有 HTTP 代理，没有 SOCKS；要走 SOCKS 得用「自动」代理配置（PAC 文件里写 `SOCKS5 …`），描述文件的 `ProxyType` 换成 `Auto`。没有真机，没验证。
-- **这一项还没做，等用户定。**
+**已补上 Mac 和模拟器这部分**（用户 2026-11-21：「把 Mac 和模拟器的 WebSocket 补上吧」）：
+
+- 引擎多开一个 SOCKS5 监听，端口 = 代理端口 + 2，**永远只听本机**（`--mode socks5@127.0.0.1:<端口>`）。
+- 「这台 Mac」场景把系统的 SOCKS 代理也指过去，停止时和 HTTP / HTTPS 一起还原（`SystemProxyController` 现在管三项；早先存下的状态里没有 SOCKS 那几项，还原时就不碰它）。
+- **控制影响面**：系统的 SOCKS 代理一开，所有认它的 App 的 TCP 流量都会进来（邮件、聊天…）。桥脚本对经 SOCKS 进来的连接**只解密 443 端口**，别的端口的 TLS 原样放行、不解密、不进列表。实测：经 SOCKS 访问 `imap.gmail.com:993`，客户端看到的证书仍是 Google 的。
+- 端口被占的提示现在说的是实际被占的那个端口（引擎开了两个）。
+
+实测（产品代码，同一个宿主程序）：一个用系统 WebSocket 接口的 Mac 程序连回显服务，101 握手 + 3 条消息（带方向）进了列表；iOS 模拟器里 Safari 的 WebSocket 页面，握手 + 13 条消息进了列表；还原后 `scutil --proxy` 的 HTTP、HTTPS、SOCKS 三项都是关。
+
+**还没做的**：真机 iPhone。它的 Wi-Fi 代理界面只有 HTTP 代理，没有 SOCKS；要走 SOCKS 得用「自动」代理配置（PAC 文件里写 `SOCKS5 …`，描述文件的 `ProxyType` 换成 `Auto`），而且 SOCKS 监听得开到局域网上。没有真机，没验证，所以没动。
+
+**正文压缩**（2026-11-21，用户：「http 流量还有一些是压缩的，我看你没有自动解压」）。头里声明了的 `Content-Encoding`（gzip、deflate、br 实测都解开了）由引擎处理。漏掉的是**正文是压缩的、头里却没声明**的情况 —— 不少 App 和 SDK 把正文 gzip 之后按 `application/octet-stream` 发。现在桥脚本按内容特征认：gzip（`1f 8b`）、zlib（`78 01/5e/9c/da`）、zstd（`28 b5 2f fd`），认出来就解开，事件里带上名字（`sniffed`），详情里标一句「头里没有声明，已自动解压」。解压输出按正文上限封顶（30 MB 的 gzip 炸弹实测只展开到 5 MB 并标截断）；只有魔数对、实际解不开的数据原样不动。brotli 没有魔数，认不出来；头里声明 zstd 的情况没找到会这么回的服务器，没实测。
 
 **新发现的系统限制**：这台 macOS（27.2.1）上读不到当前 Wi-Fi 名称 —— `networksetup -getairportnetwork`、`ipconfig getsummary`、`system_profiler`、CoreWLAN 都返回空或 `<redacted>`（要定位权限）。iPhone 的代理描述文件按 Wi-Fi 名匹配网络，所以手机面板里加了一个手填 Wi-Fi 名称的输入框（`netcapture.wifiName`）；不填就在手机上手动填代理。
 
@@ -135,7 +143,8 @@ func allow(device:) / deny(device:)
 **启动参数**：
 
 ```
-mitmdump --listen-host <127.0.0.1 | 0.0.0.0> -p <端口>
+mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
+         --mode socks5@127.0.0.1:<端口 + 2>
          --set confdir=<支持目录>/mitmproxy
          --set stream_large_bodies=<正文上限>
          -q -s <桥脚本>
@@ -163,7 +172,7 @@ mitmdump --listen-host <127.0.0.1 | 0.0.0.0> -p <端口>
 | `event` | 时机 | 主要字段 |
 |---|---|---|
 | `running` | 就绪 | `version` |
-| `request` | 请求头和正文到齐 | `id`、`client`（来源 IP）、`method`、`scheme`、`host`、`port`、`path`、`http`、`headers`、`body`、`truncated`、`ts` |
+| `request` | 请求头和正文到齐 | `id`、`client`（来源 IP）、`method`、`scheme`、`host`、`port`、`path`、`http`、`headers`、`body`、`truncated`、`sniffed`（头里没声明、按内容认出来的压缩方式）、`ts` |
 | `response` | 响应到齐 | `id`、`status`、`headers`、`body`（已解压）、`encoding`（原始编码，仅展示）、`truncated`、`remote`、`ts`、`bytes` |
 | `error` | 请求失败 | `id`、`message` |
 | `ws` | 一条 WebSocket 消息 | `id`、`from_client`、`text` 或 `size`、`ts` |
@@ -205,7 +214,7 @@ mitmdump --listen-host <127.0.0.1 | 0.0.0.0> -p <端口>
 
 | 场景 | 开 | 关 |
 |---|---|---|
-| 这台 Mac | `SystemProxyController.enable`（v1 现成，含崩溃后还原）；CA 未受信就调安装 | `restore()` |
+| 这台 Mac | `SystemProxyController.enable`：HTTP / HTTPS 代理指向代理端口，SOCKS 代理指向 SOCKS 端口（含崩溃后还原）；CA 未受信就调安装 | `restore()` |
 | 终端 / 脚本 | 生成合并证书文件（系统根证书 + CA，见下），经 `TerminalLauncher.run` 开一个会话，先 `export` 再进用户的 shell | 无（关掉那个终端即可） |
 | iPhone / iPad | 引擎以 `lan: true` 运行（已在跑就重启一次）；起配置页服务（§7）；显示二维码 | 停配置页服务，引擎改回只听本机 |
 | Android | 同上；有 adb 设备时用 `ADBController`（v1 现成）设代理、推证书 | `ADBController` 清代理 |

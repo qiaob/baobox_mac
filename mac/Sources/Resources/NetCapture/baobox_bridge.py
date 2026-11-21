@@ -14,6 +14,7 @@ import base64
 import json
 import sys
 import threading
+import zlib
 
 from mitmproxy import ctx, http, tls
 
@@ -53,6 +54,58 @@ def client_ip(conn):
 
 def is_loopback(ip):
     return ip in (None, "127.0.0.1", "::1", "localhost")
+
+
+def sniff_decompress(content, limit):
+    """Undo compression that the headers do not declare.
+
+    Plenty of apps and SDKs gzip a body and send it as application/octet-stream with no
+    Content-Encoding, so the engine has nothing to go on and passes the bytes through. Recognise the
+    common containers by their magic bytes instead. Returns (bytes, name, truncated); name is None when
+    nothing was recognised or the data did not actually decompress. Output is capped at `limit` bytes so
+    a small body cannot blow up into gigabytes.
+    """
+    if len(content) < 4:
+        return content, None, False
+    name, wbits = None, None
+    if content[:2] == b"\x1f\x8b":
+        name, wbits = "gzip", 16 + zlib.MAX_WBITS
+    elif content[0] == 0x78 and content[1] in (0x01, 0x5E, 0x9C, 0xDA):
+        name, wbits = "zlib", zlib.MAX_WBITS
+    if name:
+        try:
+            decoder = zlib.decompressobj(wbits)
+            out = decoder.decompress(content, limit + 1)
+        except zlib.error:
+            return content, None, False
+        if not out:
+            return content, None, False
+        return out[:limit], name, len(out) > limit
+    if content[:4] == b"\x28\xb5\x2f\xfd":
+        try:
+            import zstandard
+            reader = zstandard.ZstdDecompressor().stream_reader(content)
+            out = reader.read(limit + 1)
+        except Exception:
+            return content, None, False
+        if not out:
+            return content, None, False
+        return out[:limit], "zstd", len(out) > limit
+    return content, None, False
+
+
+def via_socks(client):
+    """True when the client connection came in through the SOCKS5 listener."""
+    mode = getattr(client, "proxy_mode", None)
+    return getattr(mode, "type_name", "") == "socks5"
+
+
+def server_port(server):
+    address = getattr(server, "address", None)
+    try:
+        return int(address[1]) if address else None
+    except (TypeError, ValueError, IndexError):
+        return None
 
 
 def host_in(host, domains):
@@ -192,6 +245,12 @@ class Bridge:
         if not host:
             return
         ip = client_ip(data.context.client)
+        # The SOCKS listener exists for WebSocket: Apple's WebSocket stack ignores the HTTP proxy and only
+        # uses the system SOCKS proxy. But every SOCKS-aware app sends all of its TCP through it (mail,
+        # chat, ...). Only web traffic (443) is of interest here; leave everything else untouched.
+        if via_socks(data.context.client) and server_port(data.context.server) != 443:
+            data.ignore_connection = True
+            return
         if (ip, host) in self.failed:
             data.ignore_connection = True
             self.report_tls(ip, host, "handshake_failed")
@@ -210,20 +269,26 @@ class Bridge:
     # ----- flows ----------------------------------------------------------
 
     def body_fields(self, message):
-        """(base64 or None, truncated). Uses the decoded content (gzip/br/zstd undone)."""
+        """(base64 or None, truncated, sniffed).
+
+        Uses the decoded content: the engine undoes whatever Content-Encoding declares (gzip, deflate,
+        br, zstd). `sniffed` names a compression that was *not* declared but recognised from the bytes.
+        """
         try:
             content = message.content
         except ValueError:
+            # Declared encoding does not match the bytes; fall back to what was on the wire.
             content = message.raw_content
         if content is None:
             # Streamed past `stream_large_bodies`: not captured.
-            return None, True
+            return None, True, None
         if not content:
-            return None, False
-        truncated = len(content) > self.body_cap
-        if truncated:
+            return None, False, None
+        content, sniffed, truncated = sniff_decompress(content, self.body_cap)
+        if len(content) > self.body_cap:
             content = content[: self.body_cap]
-        return base64.b64encode(content).decode("ascii"), truncated
+            truncated = True
+        return base64.b64encode(content).decode("ascii"), truncated, sniffed
 
     @staticmethod
     def wire_size(message):
@@ -248,12 +313,12 @@ class Bridge:
                 {"Content-Type": "text/html; charset=utf-8"})
             return
         req = flow.request
-        body, truncated = self.body_fields(req)
+        body, truncated, sniffed = self.body_fields(req)
         emit({
             "event": "request", "id": flow.id, "client": ip,
             "method": req.method, "scheme": req.scheme, "host": req.pretty_host,
             "port": req.port, "path": req.path, "http": req.http_version,
-            "headers": self.headers(req), "body": body, "truncated": truncated,
+            "headers": self.headers(req), "body": body, "truncated": truncated, "sniffed": sniffed,
             "bytes": self.wire_size(req), "ts": req.timestamp_start,
         })
 
@@ -261,7 +326,7 @@ class Bridge:
         if not self.admitted(client_ip(flow.client_conn)):
             return
         resp = flow.response
-        body, truncated = self.body_fields(resp)
+        body, truncated, sniffed = self.body_fields(resp)
         remote = None
         peer = getattr(flow.server_conn, "peername", None)
         if peer:
@@ -269,7 +334,7 @@ class Bridge:
         emit({
             "event": "response", "id": flow.id, "status": resp.status_code,
             "http": resp.http_version, "headers": self.headers(resp),
-            "body": body, "truncated": truncated,
+            "body": body, "truncated": truncated, "sniffed": sniffed,
             "encoding": resp.headers.get("content-encoding"),
             "bytes": self.wire_size(resp), "remote": remote,
             "ts": resp.timestamp_end or resp.timestamp_start,
