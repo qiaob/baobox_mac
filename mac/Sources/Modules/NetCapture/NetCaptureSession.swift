@@ -177,9 +177,12 @@ final class NetCaptureSession: ObservableObject {
 
     /// 系统的验证框关掉以后，前台会回到之前那个 App，把我们的窗口盖住 —— Baobox 没有 Dock 图标，
     /// 用户只看到窗口「没了」。所以每次弹过验证框，都把发起操作的那个窗口重新拿到最前面。
+    /// 只拿回还开着的窗口：被别的 App 盖住的窗口仍然算「可见」，而已经关掉的（用户关了，或是一个点完就消失的
+    /// 确认框）不是 —— 对后者 `makeKeyAndOrderFront` 会让它重新冒出来。
     func bringBack(_ window: NSWindow?) {
         NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        guard let window, window.isVisible else { return }
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// 证书没装成：用户自己点了取消就什么也不说；否则把系统给的原因原样显示出来。

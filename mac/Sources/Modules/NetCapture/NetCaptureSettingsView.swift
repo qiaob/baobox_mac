@@ -107,6 +107,8 @@ private struct NetCaptureCertSection: View {
     @State private var hasLegacy = CaptureCA.shared.hasLegacyCA
     @State private var certName = CaptureCA.shared.commonName
     @State private var confirmRegenerate = false
+    /// 点「重新生成…」那一刻的窗口（设置窗口），验证框关掉后要把它拿回前台。
+    @State private var regenerateOrigin: NSWindow?
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.cert") {
@@ -126,8 +128,17 @@ private struct NetCaptureCertSection: View {
                 Text("netcapture.settings.certName")
                 Spacer()
                 Text(verbatim: certName ?? "—").foregroundStyle(.secondary).textSelection(.enabled)
-                Button("netcapture.settings.regenerate") { confirmRegenerate = true }
+                Button("netcapture.settings.regenerate") {
+                    regenerateOrigin = NSApp.keyWindow
+                    confirmRegenerate = true
+                }
                     .disabled(busy || session.working != nil)
+                    .alert(Text("netcapture.settings.regenerateTitle"), isPresented: $confirmRegenerate) {
+                        Button("netcapture.settings.regenerateConfirm", role: .destructive) { regenerate() }
+                        Button("common.cancel", role: .cancel) {}
+                    } message: {
+                        Text("netcapture.settings.regenerateMessage")
+                    }
             }
             if hasLegacy {
                 HStack {
@@ -145,18 +156,15 @@ private struct NetCaptureCertSection: View {
             session.refreshTrust()
             certName = CaptureCA.shared.commonName
         }
-        .alert(Text("netcapture.settings.regenerateTitle"), isPresented: $confirmRegenerate) {
-            Button("netcapture.settings.regenerateConfirm", role: .destructive) { regenerate() }
-            Button("common.cancel", role: .cancel) {}
-        } message: {
-            Text("netcapture.settings.regenerateMessage")
-        }
     }
 
     /// 换一张新证书（名字是 Baobox Capture CA）。先停抓包：引擎只在启动时读证书。
     private func regenerate() {
         busy = true
-        let origin = NSApp.keyWindow
+        // 不能在这里取 `NSApp.keyWindow`：这个方法是从确认框的按钮里调的，那一刻的前台窗口是确认框自己。
+        // 之后再把它「拿回前台」，已经关掉的确认框就又冒出来了（2026-11-21 用户遇到：做完了还在弹；
+        // 探针里确认过，取到的是 `_NSAlertPanel`，对它 `makeKeyAndOrderFront` 后它重新可见）。
+        let origin = regenerateOrigin
         session.stopAll()
         DispatchQueue.global(qos: .userInitiated).async {
             _ = CaptureCA.shared.regenerate()
