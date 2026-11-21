@@ -74,7 +74,8 @@ final class NetCaptureWindowController {
             let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("netcapture.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            created.setContentSize(NSSize(width: 1080, height: 660))
+            // 1180：工具条上「抓：这台 Mac / 手机」「设备设置」「证书已信任」都带着文字时刚好放得下。
+            created.setContentSize(NSSize(width: 1180, height: 660))
             created.isReleasedWhenClosed = false
             created.center()
             window = created
@@ -99,6 +100,10 @@ struct NetCaptureRootView: View {
     /// 详情区显示的那一条。和 `selection` 分开：点列表空白处，系统表格会把选中清掉，详情不该跟着消失。
     @State private var shownID: Flow.ID?
     @State private var phoneSheet: NetCapturePhoneSheet.Platform?
+    @State private var showDeviceSetup = false
+    /// 两个来源开关在没抓包时的取值（要抓什么是记着的，下次点「开始」照这个来）。
+    @AppStorage(NetCaptureEnv.Keys.lastMacCapture) private var wantsMac = true
+    @AppStorage(NetCaptureEnv.Keys.phoneEnabled) private var wantsPhone = false
     @State private var renameIP: String?
     @State private var renameText = ""
     @State private var replayDraft: ReplayDraft?
@@ -179,7 +184,41 @@ struct NetCaptureRootView: View {
 
     // MARK: 工具条
 
+    /// 工具条按窗口宽度逐级收缩，不换行、不挤掉按钮：先去掉「抓：」和证书的文字，再把「设备设置」收成图标，
+    /// 最后把两个来源开关收成图标。`ViewThatFits` 取第一个放得下的。
+    private enum ToolbarDensity {
+        case full, noCertText, setupIcon, sourceIcons
+    }
+
     private var toolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            toolbarRow(.full)
+            toolbarRow(.noCertText)
+            toolbarRow(.setupIcon)
+            toolbarRow(.sourceIcons)
+        }
+        .frame(maxWidth: .infinity)
+        // 面板挂在整条工具条上（靠右、朝下），不挂在某一档的按钮上：四档的按钮各有一份，挂在按钮上面板也会有四份。
+        .popover(isPresented: $showDeviceSetup, attachmentAnchor: .point(UnitPoint(x: 0.88, y: 1)), arrowEdge: .bottom) {
+            NetCaptureDeviceSetup { action in
+                showDeviceSetup = false
+                switch action {
+                case .iOS:
+                    // 手机扫码要访问的配置页只在接受手机连接时开着，所以这里顺手把「手机」打开。
+                    session.setLAN(true)
+                    phoneSheet = .iOS
+                case .android:
+                    session.setLAN(true)
+                    phoneSheet = .android
+                case .iosSimulator: session.installSimulatorCert()
+                case .terminal: session.openTerminal()
+                case .copyEnv: session.copyShellEnv()
+                }
+            }
+        }
+    }
+
+    private func toolbarRow(_ density: ToolbarDensity) -> some View {
         HStack(spacing: 8) {
             Button {
                 engine.isActive ? session.stopAll() : session.start()
@@ -190,8 +229,9 @@ struct NetCaptureRootView: View {
             .buttonStyle(.borderedProminent)
             .tint(engine.isActive ? .red : NetCaptureColors.accent)
             .disabled(session.working != nil && !engine.isActive)
+            .fixedSize()
 
-            sourceMenu
+            sourceToggles(showLabel: density == .full, showText: density != .sourceIcons)
 
             Button {
                 store.clear()
@@ -207,7 +247,7 @@ struct NetCaptureRootView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("netcapture.window.search", text: $query)
                     .textFieldStyle(.plain)
-                    .frame(minWidth: 70, maxWidth: 220)
+                    .frame(minWidth: 70, idealWidth: 100, maxWidth: 220)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -216,46 +256,82 @@ struct NetCaptureRootView: View {
             methodChips
             statusChips
 
-            Spacer()
+            Spacer(minLength: 0)
 
             mockButton
-            certBadge
+            deviceSetupButton(labelled: density == .full || density == .noCertText)
+            certBadge(labelled: density == .full)
             moreMenu
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
-    /// 「抓：…」下拉：现在在抓哪些来源，随时增减。
-    private var sourceMenu: some View {
-        Menu {
-            Toggle("netcapture.source.mac", isOn: Binding(
-                get: { session.macCaptureOn },
-                set: { $0 ? session.startMac() : session.stopMac() }))
-            Divider()
-            // 手机这边没有开关：点开配置就开始听局域网，并且记住（关在设置页）。
-            Button("netcapture.source.showQR") {
-                session.setLAN(true)
-                phoneSheet = .iOS
+    /// 「抓：这台 Mac / 手机」两个开关：**在抓谁**。亮着就是在抓；没抓包时点它只是改「下次开始抓谁」。
+    /// 怎么把设备接进来（扫码、装证书、终端）是另一回事，在右边的「设备设置」里
+    /// （2026-11-21 用户：「扫码设置页，和正在抓哪个应该是不同的配置」。原来是一个下拉框，开关和操作混在一起）。
+    private func sourceToggles(showLabel: Bool, showText: Bool) -> some View {
+        HStack(spacing: 6) {
+            if showLabel {
+                Text("netcapture.toolbar.capture").font(.callout).foregroundStyle(.secondary).fixedSize()
             }
-            // 卡片页上「Android」「模拟器」两张卡片的按钮：切到三栏以后卡片看不见了，入口在这里。
-            Button("netcapture.card.android.start") {
-                session.setLAN(true)
-                phoneSheet = .android
+            sourceChip(title: "netcapture.source.mac", icon: "laptopcomputer", isOn: macOn, showText: showText,
+                       help: "netcapture.toolbar.macHelp") {
+                if engine.isActive {
+                    macOn ? session.stopMac() : session.startMac()
+                } else {
+                    wantsMac.toggle()
+                }
             }
-            Divider()
-            Button("netcapture.source.terminal") { session.openTerminal() }
-            Button("netcapture.source.copyEnv") { session.copyShellEnv() }
-            Divider()
-            Button("netcapture.source.simulator") { session.installSimulatorCert() }
-            Button("netcapture.card.simulator.android") {
-                session.setLAN(true)
-                phoneSheet = .android
+            sourceChip(title: "netcapture.source.phoneShort", icon: "iphone", isOn: phoneOn, showText: showText,
+                       help: "netcapture.toolbar.phoneHelp") {
+                if engine.isActive {
+                    session.setLAN(!phoneOn)
+                } else {
+                    wantsPhone.toggle()
+                }
             }
+        }
+        .disabled(session.working != nil)
+    }
+
+    /// 在抓包：实际在不在抓。没在抓：下次开始时抓不抓。
+    private var macOn: Bool { engine.isActive ? session.macCaptureOn : wantsMac }
+    private var phoneOn: Bool { engine.isActive ? session.phonePageOn : wantsPhone }
+
+    private func sourceChip(title: LocalizedStringKey, icon: String, isOn: Bool, showText: Bool,
+                            help: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(isOn ? NetCaptureColors.accent : Color.clear)
+                    .overlay(Circle().strokeBorder(isOn ? NetCaptureColors.accent : Color.secondary.opacity(0.6), lineWidth: 1.2))
+                    .frame(width: 8, height: 8)
+                Image(systemName: icon).font(.caption)
+                if showText { Text(title).font(.callout).lineLimit(1) }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(isOn ? NetCaptureColors.accent.opacity(0.18) : Color.secondary.opacity(0.12), in: Capsule())
+            .foregroundStyle(isOn ? NetCaptureColors.accent : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(Text(help))
+    }
+
+    /// 「设备设置」：把设备接进来要做的事，一次性的。点开是一个按设备分的面板（面板挂在工具条上，见 `toolbar`）。
+    private func deviceSetupButton(labelled: Bool) -> some View {
+        Button {
+            showDeviceSetup = true
         } label: {
-            Text(sourceSummary)
+            if labelled {
+                Label("netcapture.setup.button", systemImage: "gearshape.2")
+            } else {
+                Image(systemName: "gearshape.2")
+            }
         }
         .fixedSize()
+        .help(Text("netcapture.setup.help"))
         .disabled(session.working != nil)
     }
 
@@ -314,17 +390,20 @@ struct NetCaptureRootView: View {
     }
 
     /// 证书状态：没装时点一下就装。
-    private var certBadge: some View {
+    private func certBadge(labelled: Bool) -> some View {
         Button {
             if !session.caTrusted { session.installCert() }
         } label: {
             // 窗口窄时只留图标（悬停仍有说明），工具条不换行。
-            ViewThatFits(in: .horizontal) {
-                Label(session.caTrusted ? "netcapture.cert.trusted" : "netcapture.cert.untrusted",
-                      systemImage: session.caTrusted ? "checkmark.seal.fill" : "seal")
-                    .fixedSize()
-                Image(systemName: session.caTrusted ? "checkmark.seal.fill" : "seal")
+            Group {
+                if labelled {
+                    Label(session.caTrusted ? "netcapture.cert.trusted" : "netcapture.cert.untrusted",
+                          systemImage: session.caTrusted ? "checkmark.seal.fill" : "seal")
+                } else {
+                    Image(systemName: session.caTrusted ? "checkmark.seal.fill" : "seal")
+                }
             }
+            .fixedSize()
             .foregroundStyle(session.caTrusted ? NetCaptureColors.accent : Color.secondary)
         }
         .buttonStyle(.borderless)

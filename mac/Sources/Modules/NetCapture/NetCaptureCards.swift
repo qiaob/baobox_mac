@@ -282,3 +282,52 @@ struct NetCapturePhoneSheet: View {
         }
     }
 }
+
+// MARK: - 设备设置面板
+
+/// 工具条「设备设置」点开的面板：按设备列出接进来要做的事。只负责「怎么配」，不改变正在抓谁。
+struct NetCaptureDeviceSetup: View {
+    enum Action { case iOS, android, iosSimulator, terminal, copyEnv }
+
+    let perform: (Action) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("netcapture.setup.title").font(.headline).padding(.bottom, 8)
+            row(icon: "iphone", title: "netcapture.card.ios.title", detail: "netcapture.setup.ios.detail") {
+                Button("netcapture.setup.ios.action") { perform(.iOS) }
+            }
+            Divider()
+            row(icon: "candybarphone", title: "netcapture.setup.android.title", detail: "netcapture.setup.android.detail") {
+                Button("netcapture.setup.android.action") { perform(.android) }
+            }
+            Divider()
+            row(icon: "macwindow.on.rectangle", title: "netcapture.setup.simulator.title",
+                detail: "netcapture.setup.simulator.detail") {
+                Button("netcapture.setup.simulator.ios") { perform(.iosSimulator) }
+                Button("netcapture.setup.simulator.android") { perform(.android) }
+            }
+            Divider()
+            row(icon: "terminal", title: "netcapture.card.terminal.title", detail: "netcapture.setup.terminal.detail") {
+                Button("netcapture.source.terminal") { perform(.terminal) }
+                Button("netcapture.source.copyEnv") { perform(.copyEnv) }
+            }
+        }
+        .padding(16)
+        .frame(width: 440)
+    }
+
+    private func row<Buttons: View>(icon: String, title: LocalizedStringKey, detail: LocalizedStringKey,
+                                    @ViewBuilder buttons: () -> Buttons) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon).font(.title3).foregroundStyle(NetCaptureColors.accent).frame(width: 26)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) { buttons() }.controlSize(.small).padding(.top, 2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+    }
+}
