@@ -188,8 +188,12 @@ enum MobileConfigBuilder {
         let hasSSID = (ssid?.isEmpty == false)
 
         let certCard: String
+        /// 只有 iOS 有这一张：描述文件装完，还要到「证书信任设置」里打开开关，是单独的一步。
+        var trustCard = ""
         let proxyCard: String
         let offCard: String
+        // 证书上的名字（手机的「证书信任设置」里按它找开关）。
+        let caName = htmlEscape(CaptureCA.shared.commonName ?? "Baobox Capture CA")
 
         // iOS 的「打开设置」用 `com.apple.Preferences://`。2026-11-21 请用户在真 iPhone（Safari 27.2）上把九种写法
         // 逐个点过：只有这一种能跳出去，Safari 弹「在"设置"中打开此页？」后到设置首页；`App-prefs:`（各种写法）、
@@ -197,18 +201,30 @@ enum MobileConfigBuilder {
         // 所以模拟器上的结果不能当真机的。到的是首页：下载描述文件后，首页最上面就是「已下载描述文件」。
         let openSettings = #"<a class="btn ghost" href="com.apple.Preferences://">打开设置 / Open Settings</a>"#
         if isIOS {
+            // 装证书在 iPhone 上是两件事：装描述文件、打开信任开关。原来写在一张卡片里，看上去像一步
+            // （2026-11-21 用户指出不明显），很容易装完就以为好了。拆成两张，第二张自己显示信任了没有。
             certCard = card(
-                num: "1", title: "装证书 / Install CA",
+                num: "1", title: "安装证书 / Install the certificate",
                 body: """
                 <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
                 <a class="btn" id="certbtn" href="/cert">安装证书描述文件 / Install CA profile</a>
                 \(openSettings)
-                <p class="hint">点「允许」下载完，再点<b>打开设置</b>：最上面会出现<b>已下载描述文件</b>，点进去安装。装完到 <b>通用 › 关于本机 › 证书信任设置</b> 打开开关。<br>After allowing the download, tap <b>Open Settings</b>: <b>Profile Downloaded</b> appears at the top, tap it to install. Then turn the switch on in <b>General › About › Certificate Trust Settings</b>.</p>
+                <p class="hint">点「允许」下载完，点<b>打开设置</b>：最上面会出现<b>已下载描述文件</b>，点进去，再点右上角的<b>安装</b>。<br>After allowing the download, tap <b>Open Settings</b>: <b>Profile Downloaded</b> appears at the top. Open it and tap <b>Install</b> in the top right.</p>
+                <p class="hint"><b>装完还不能用，要接着做第 2 步。</b><br><b>Installing is not enough. Continue with step 2.</b></p>
+                """)
+
+            trustCard = card(
+                num: "2", title: "信任证书 / Trust the certificate",
+                body: """
+                <p class="ok" id="trusted2" hidden>✓ 已信任，这一步完成了。<br>Trusted. This step is done.</p>
+                <p class="warn" id="untrusted" hidden>还没信任。只安装、不信任，HTTPS 抓不到。<br>Not trusted yet. Without this step HTTPS cannot be captured.</p>
+                \(openSettings)
+                <p class="hint">在<b>设置</b>里进 <b>通用 › 关于本机</b>，拉到最下面进<b>证书信任设置</b>，打开 <b>\(caName)</b> 的开关。做完回到这个页面，这里会自己变成已信任。<br>In <b>Settings</b> go to <b>General › About</b>, scroll to the bottom, open <b>Certificate Trust Settings</b> and turn on the switch for <b>\(caName)</b>. Come back to this page and it updates by itself.</p>
                 """)
 
             if hasSSID {
                 proxyCard = card(
-                    num: "2", title: "配代理 / Set proxy",
+                    num: "3", title: "配代理 / Set proxy",
                     body: """
                     <a class="btn" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
                     <a class="btn ghost" href="/proxy-manual">固定代理 / Fixed</a>
@@ -216,11 +232,11 @@ enum MobileConfigBuilder {
                     <p class="addr">\(addrEsc)</p>
                     <p class="hint"><b>自动代理</b>：Baobox 没在抓包、而这台 Mac 还开着并在同一个 Wi-Fi 时，手机自动直连，不用来回关代理。<br><b>固定代理</b>：所有请求都发给这台 Mac，Baobox 没开手机就上不了网。<br>两种都只对当前这个 Wi-Fi 生效。下载完点<b>打开设置</b>，到最上面的<b>已下载描述文件</b>里安装。</p>
                     <p class="hint"><b>Automatic</b>: while Baobox is not capturing and this Mac is still on and on the same Wi-Fi, the phone connects directly; nothing to switch off. <b>Fixed</b>: everything goes to this Mac, so the phone is offline whenever Baobox is not running. Both apply to this Wi-Fi only. Then tap <b>Open Settings</b> and install from <b>Profile Downloaded</b> at the top.</p>
-                    <p class="hint">Mac 睡眠、关机或离开这个 Wi-Fi 之后，两种方式下手机联网都会很慢甚至不通，这时请关代理（下面第 3 步）。<br>Once the Mac sleeps, shuts down or leaves this Wi-Fi, the phone's connection becomes very slow or fails with either choice. Turn the proxy off then (step 3 below).</p>
+                    <p class="hint">Mac 睡眠、关机或离开这个 Wi-Fi 之后，两种方式下手机联网都会很慢甚至不通，这时请关代理（下面第 4 步）。<br>Once the Mac sleeps, shuts down or leaves this Wi-Fi, the phone's connection becomes very slow or fails with either choice. Turn the proxy off then (step 4 below).</p>
                     """)
             } else {
                 proxyCard = card(
-                    num: "2", title: "配代理 / Set proxy",
+                    num: "3", title: "配代理 / Set proxy",
                     body: """
                     <p class="addr">\(addrEsc)</p>
                     <p class="hint">未能读取本机 Wi-Fi 名称，请到 <b>设置 › Wi-Fi › （当前网络）› 配置代理 › 手动</b> 填入上面的地址。<br>Could not read this Mac's Wi-Fi name; set it manually in <b>Settings › Wi-Fi › (current) › Configure Proxy › Manual</b> with the address above.</p>
@@ -228,7 +244,7 @@ enum MobileConfigBuilder {
             }
 
             offCard = card(
-                num: "3", title: "关代理 / Turn proxy off",
+                num: "4", title: "关代理 / Turn proxy off",
                 body: """
                 <a class="btn ghost" href="/proxy-off">一键关闭代理 / One-tap turn off</a>
                 <p class="hint">抓完了，或者 Mac 要睡眠、关机、带走，就关掉。也可以到 <b>设置 › 通用 › VPN与设备管理</b> 删除 Baobox 描述文件。<br>Turn it off when you are done, or before the Mac sleeps, shuts down or leaves. You can also delete the Baobox profile in <b>Settings › General › VPN &amp; Device Management</b>.</p>
@@ -303,7 +319,7 @@ enum MobileConfigBuilder {
             </div>
             """
         } else {
-            cards = certCard + "\n" + proxyCard + "\n" + offCard
+            cards = [certCard, trustCard, proxyCard, offCard].filter { !$0.isEmpty }.joined(separator: "\n")
         }
 
         // 三项状态自己查、自己打勾，每 3 秒一次（都好了以后放慢到 10 秒）：
@@ -335,6 +351,9 @@ enum MobileConfigBuilder {
             mark('st-cert', state.cert); mark('st-proxy', state.proxy); mark('st-allow', state.allow);
             var note = document.getElementById('trusted'), btn = document.getElementById('certbtn');
             if (note) note.hidden = !state.cert;
+            var done = document.getElementById('trusted2'), todo = document.getElementById('untrusted');
+            if (done) done.hidden = !state.cert;
+            if (todo) todo.hidden = state.cert;
             if (btn && state.cert) { btn.className = 'btn ghost'; btn.textContent = '重新下载 / Download again'; }
             var ready = document.getElementById('ready');
             if (ready) ready.hidden = !(state.cert && state.proxy && state.allow);
@@ -381,6 +400,7 @@ enum MobileConfigBuilder {
         .mini{flex:0 0 auto;padding:8px 12px;border-radius:8px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);font-size:13px;font-weight:600}
         .card .btn{margin:0 8px 8px 0}
         .ok{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
+        .warn{color:#d9730d;font-weight:600;font-size:15px;margin:0 0 12px}
         .st{display:flex;align-items:center;gap:10px;padding:5px 0;color:var(--sub);font-size:15px}
         .st i{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);flex:0 0 auto;font-style:normal;font-size:13px;line-height:16px;text-align:center;color:#fff}
         .st.on{color:var(--fg)}

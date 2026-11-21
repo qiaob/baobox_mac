@@ -174,6 +174,7 @@ struct NetCapturePhoneSheet: View {
             step(2, "netcapture.phone.ios.step2")
             step(3, "netcapture.phone.ios.step3")
             step(4, "netcapture.phone.ios.step4")
+            step(5, "netcapture.phone.ios.step5")
             Divider()
             HStack {
                 Text("netcapture.phone.wifiName")
