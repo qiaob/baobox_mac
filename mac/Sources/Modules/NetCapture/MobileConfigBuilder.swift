@@ -191,16 +191,19 @@ enum MobileConfigBuilder {
         let proxyCard: String
         let offCard: String
 
-        // iOS 这边不放「打开设置」按钮：`App-prefs:` 在 iOS 18.3 模拟器的 Safari 里能弹「在"设置"中打开此页？」，
-        // 但 2026-11-21 用户在真 iPhone 上点了是「Safari 浏览器打不开该网页，因为网址无效」。这个地址苹果没有
-        // 公开支持过，各版本行为不一；一个点了报错的按钮比没有更糟，所以只留文字说明。
+        // iOS 的「打开设置」用 `com.apple.Preferences://`。2026-11-21 请用户在真 iPhone（Safari 27.2）上把九种写法
+        // 逐个点过：只有这一种能跳出去，Safari 弹「在"设置"中打开此页？」后到设置首页；`App-prefs:`（各种写法）、
+        // `prefs:`、`settings-navigation://`、`app-settings:` 都报「网址无效」。iOS 18.3 模拟器上 `App-prefs:` 是能用的，
+        // 所以模拟器上的结果不能当真机的。到的是首页：下载描述文件后，首页最上面就是「已下载描述文件」。
+        let openSettings = #"<a class="btn ghost" href="com.apple.Preferences://">打开设置 / Open Settings</a>"#
         if isIOS {
             certCard = card(
                 num: "1", title: "装证书 / Install CA",
                 body: """
                 <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
                 <a class="btn" id="certbtn" href="/cert">安装证书描述文件 / Install CA profile</a>
-                <p class="hint">点「允许」下载完，回到主屏幕打开<b>设置</b>：最上面会出现<b>已下载描述文件</b>，点进去安装。装完到 <b>通用 › 关于本机 › 证书信任设置</b> 打开开关。<br>After allowing the download, go to the Home Screen and open <b>Settings</b>: <b>Profile Downloaded</b> appears at the top, tap it to install. Then turn the switch on in <b>General › About › Certificate Trust Settings</b>.</p>
+                \(openSettings)
+                <p class="hint">点「允许」下载完，再点<b>打开设置</b>：最上面会出现<b>已下载描述文件</b>，点进去安装。装完到 <b>通用 › 关于本机 › 证书信任设置</b> 打开开关。<br>After allowing the download, tap <b>Open Settings</b>: <b>Profile Downloaded</b> appears at the top, tap it to install. Then turn the switch on in <b>General › About › Certificate Trust Settings</b>.</p>
                 """)
 
             if hasSSID {
@@ -209,9 +212,10 @@ enum MobileConfigBuilder {
                     body: """
                     <a class="btn" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
                     <a class="btn ghost" href="/proxy-manual">固定代理 / Fixed</a>
+                    \(openSettings)
                     <p class="addr">\(addrEsc)</p>
-                    <p class="hint"><b>自动代理</b>：Baobox 没在抓包、而这台 Mac 还开着并在同一个 Wi-Fi 时，手机自动直连，不用来回关代理。<br><b>固定代理</b>：所有请求都发给这台 Mac，Baobox 没开手机就上不了网。<br>两种都只对当前这个 Wi-Fi 生效。下载完到<b>设置</b>最上面的<b>已下载描述文件</b>里安装。</p>
-                    <p class="hint"><b>Automatic</b>: while Baobox is not capturing and this Mac is still on and on the same Wi-Fi, the phone connects directly; nothing to switch off. <b>Fixed</b>: everything goes to this Mac, so the phone is offline whenever Baobox is not running. Both apply to this Wi-Fi only. Install from <b>Profile Downloaded</b> at the top of <b>Settings</b>.</p>
+                    <p class="hint"><b>自动代理</b>：Baobox 没在抓包、而这台 Mac 还开着并在同一个 Wi-Fi 时，手机自动直连，不用来回关代理。<br><b>固定代理</b>：所有请求都发给这台 Mac，Baobox 没开手机就上不了网。<br>两种都只对当前这个 Wi-Fi 生效。下载完点<b>打开设置</b>，到最上面的<b>已下载描述文件</b>里安装。</p>
+                    <p class="hint"><b>Automatic</b>: while Baobox is not capturing and this Mac is still on and on the same Wi-Fi, the phone connects directly; nothing to switch off. <b>Fixed</b>: everything goes to this Mac, so the phone is offline whenever Baobox is not running. Both apply to this Wi-Fi only. Then tap <b>Open Settings</b> and install from <b>Profile Downloaded</b> at the top.</p>
                     <p class="hint">Mac 睡眠、关机或离开这个 Wi-Fi 之后，两种方式下手机联网都会很慢甚至不通，这时请关代理（下面第 3 步）。<br>Once the Mac sleeps, shuts down or leaves this Wi-Fi, the phone's connection becomes very slow or fails with either choice. Turn the proxy off then (step 3 below).</p>
                     """)
             } else {

@@ -182,7 +182,7 @@ Baobox（Swift）                              mitmdump（子进程）
 | **扫码即放行** | 二维码里的地址带一个口令 `?k=xxxxxx`（`PhonePairing`，6 位，每次启动换一个，只显示在 Mac 屏幕上）。带着对的口令来开 `/` 的设备，`ConfigPageServer` 直接让引擎放行，不用再到 Mac 上点「允许」。手机已经设了代理时，请求是经引擎转过来的，对端看上去是 Mac 自己，所以桥在转发配置页请求时写上 `X-Baobox-Client`（每次都覆盖），配置页只在对端是本机时认这个头。手输地址没带口令的，照旧走「允许」 |
 | **实时清单** | 页面最上面三行：证书已信任 / 代理已生效 / Mac 已允许这台设备，每 3 秒自己查一次（都好了以后 10 秒），全好了显示「全部就绪」 |
 | **已装证书就提醒** | 证书那一行查出来是已信任时，卡片上写「这台设备已经信任 Baobox 的证书，不用再装」，安装按钮变成次要的「重新下载」 |
-| **跳到设置** | Android：`intent:#Intent;action=android.settings.SECURITY_SETTINGS;end`（「打开安全设置」）。iOS 原来有「打开设置」（`App-prefs:`），真机上点了报「网址无效」，去掉了（见下表） |
+| **跳到设置** | iOS：`com.apple.Preferences://`（「打开设置」，到首页）；Android：`intent:#Intent;action=android.settings.SECURITY_SETTINGS;end`（「打开安全设置」）。iOS 一开始用的是 `App-prefs:`，真机上报「网址无效」，换成了真机上试出来的这个（见下表） |
 
 两项检测的做法：
 
@@ -199,7 +199,9 @@ Baobox（Swift）                              mitmdump（子进程）
 
 | 地址 | 结果 |
 |---|---|
-| iOS `App-prefs:`（网页里点 / 脚本跳） | iOS 18.3 **模拟器**的 Safari 弹「在"设置"中打开此页？」，打开的是设置首页。**真 iPhone 上不行**：同一天用户点了是「Safari 浏览器打不开该网页，因为网址无效」。这个地址苹果没公开支持过，按钮已经去掉，只留文字「回到主屏幕打开设置」 |
+| iOS `com.apple.Preferences://` | **真 iPhone（Safari 27.2）上唯一能用的**：Safari 弹「在"设置"中打开此页？」，到设置首页。「打开设置」按钮用的就是它。下载描述文件后首页最上面是「已下载描述文件」 |
+| iOS `App-prefs:`（含 `App-Prefs:root=General`、`App-prefs://`、带 `path=` 的、用脚本跳的） | iOS 18.3 **模拟器**的 Safari 能弹「在"设置"中打开此页？」；**真 iPhone 上全部报「网址无效」**（用户逐个点过，页面自动记录了哪个让 Safari 退到后台）。模拟器的结果不能当真机的 |
+| iOS `prefs:root=General`、`settings-navigation://…`、`app-settings:` | 真 iPhone 上报「网址无效」 |
 | iOS `App-prefs:General&path=ManagedConfigurationList`、`…About/CERT_TRUST_SETTINGS`、`root=…` 的写法 | 都只到设置首页，深层路径不认（iOS 18.3） |
 | iOS `prefs:root=…` | 没有 App 接（-10814） |
 | Android `android.settings.WIFI_SETTINGS` | 到 Wi-Fi 设置（这个按钮之前就有，这次才验证） |
