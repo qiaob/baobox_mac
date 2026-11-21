@@ -177,8 +177,10 @@ enum MobileConfigBuilder {
             certCard = card(
                 num: "1", title: "装证书 / Install CA",
                 body: """
-                <a class="btn" href="/cert">安装证书描述文件 / Install CA profile</a>
-                <p class="hint">安装后到 <b>设置 › 通用 › VPN与设备管理</b> 完成安装，再到 <b>设置 › 通用 › 关于本机 › 证书信任设置</b> 开启完全信任。<br>After installing, finish in <b>Settings › General › VPN &amp; Device Management</b>, then enable full trust in <b>Settings › General › About › Certificate Trust Settings</b>.</p>
+                <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
+                <a class="btn" id="certbtn" href="/cert">安装证书描述文件 / Install CA profile</a>
+                <a class="btn ghost" href="App-prefs:">打开设置 / Open Settings</a>
+                <p class="hint">点「允许」下载完，再点<b>打开设置</b>：最上面会出现<b>已下载描述文件</b>，点进去安装。装完到 <b>通用 › 关于本机 › 证书信任设置</b> 打开开关（网页没法直接跳到这一页）。<br>After allowing the download, tap <b>Open Settings</b>: <b>Profile Downloaded</b> appears at the top, tap it to install. Then turn the switch on in <b>General › About › Certificate Trust Settings</b> (a web page cannot jump there).</p>
                 """)
 
             if hasSSID {
@@ -186,8 +188,9 @@ enum MobileConfigBuilder {
                     num: "2", title: "配代理 / Set proxy",
                     body: """
                     <a class="btn" href="/proxy">一键配置代理 / One-tap set proxy</a>
+                    <a class="btn ghost" href="App-prefs:">打开设置 / Open Settings</a>
                     <p class="addr">\(addrEsc)</p>
-                    <p class="hint">为当前 Wi-Fi 自动设手动代理，指向本机。<br>Installs a Manual proxy for the current Wi-Fi pointing to this Mac.</p>
+                    <p class="hint">为当前 Wi-Fi 自动设手动代理，指向本机。下载完同样到<b>设置</b>最上面的<b>已下载描述文件</b>里安装。<br>Installs a Manual proxy for the current Wi-Fi pointing to this Mac. Install it from <b>Profile Downloaded</b> at the top of <b>Settings</b>.</p>
                     """)
             } else {
                 proxyCard = card(
@@ -208,9 +211,11 @@ enum MobileConfigBuilder {
             certCard = card(
                 num: "1", title: "装证书 / Install CA",
                 body: """
-                <a class="btn" href="/cert">下载证书 / Download CA (.crt)</a>
+                <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
+                <a class="btn" id="certbtn" href="/cert">下载证书 / Download CA (.crt)</a>
+                <a class="btn ghost" href="intent:#Intent;action=android.settings.SECURITY_SETTINGS;end">打开安全设置 / Open security settings</a>
                 <p class="hint">Chrome 提示「无法安全下载」时选<b>保留</b>。<br>If Chrome says the file can't be downloaded securely, choose <b>Keep</b>.</p>
-                <p class="hint">下载后到系统设置里安装（直接点开下载的文件装不了）：<b>设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</b>，选刚下载的文件。<br>Then install it from Settings (opening the downloaded file won't work): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, and pick the downloaded file.</p>
+                <p class="hint">下载后到系统设置里安装（直接点开下载的文件装不了）。点<b>打开安全设置</b>能直接到「安全和隐私」，剩下几层浏览器不让直接跳：<b>设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</b>，选刚下载的文件。<br>Then install it from Settings (opening the downloaded file won't work): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, and pick the downloaded file.</p>
                 """)
 
             // Android 没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应的东西），只能手填。
@@ -261,7 +266,7 @@ enum MobileConfigBuilder {
 
         // 换到 Safari：只能请他复制地址。`x-safari-https://` 能从别的浏览器直接跳到 Safari，但只有 https 这一种；
         // 这个页面是 http 的，对应的 `x-safari-http://` 系统不认（2026-11-21 在 iOS 18.3 模拟器上试过，没有 App 接这个地址）。
-        let pageHost = "\(ip):\(NetCaptureEnv.configPagePort)/"
+        let pageHost = "\(ip):\(NetCaptureEnv.configPagePort)/?k=\(NetCaptureEnv.pairingToken)"
         let cards: String
         if needsSafari {
             cards = """
@@ -274,6 +279,56 @@ enum MobileConfigBuilder {
         } else {
             cards = certCard + "\n" + proxyCard + "\n" + offCard
         }
+
+        // 三项状态自己查、自己打勾，每 3 秒一次（都好了以后放慢到 10 秒）：
+        // - 证书：向引擎的代理端口发一个 https 请求。引擎对直接连上来的 TLS 用自己的 CA 现签一张证书
+        //   （SAN 是这台 Mac 的地址），握手成得了就是已经信任，桥对这个路径回 204。没装、或者 iPhone 上装了
+        //   但没在「证书信任设置」里打开开关，握手都失败。
+        // - 代理、放行：请求一个不存在的域名 `check.baobox.invalid`。设了代理它才到得了引擎，桥直接应答
+        //   `{"proxy":true,"allowed":…}`；没设代理就是解析失败。
+        let statusCard = needsSafari ? "" : """
+        <div class="card">
+        <div class="st" id="st-cert"><i></i>证书已信任 / Certificate trusted</div>
+        <div class="st" id="st-proxy"><i></i>代理已生效 / Proxy in use</div>
+        <div class="st" id="st-allow"><i></i>Mac 已允许这台设备 / Allowed on the Mac</div>
+        <p class="ok" id="ready" style="margin:10px 0 0" hidden>全部就绪，可以开始抓包了。<br>All set. Start capturing.</p>
+        </div>
+        """
+        let trustJS = needsSafari ? "" : """
+        <script>
+        (function(){
+          if (!window.fetch) return;
+          var state = {cert: false, proxy: false, allow: false};
+          function get(url, ms){
+            var ctl = window.AbortController ? new AbortController() : null;
+            if (ctl) setTimeout(function(){ ctl.abort(); }, ms);
+            return fetch(url, {cache: 'no-store', signal: ctl ? ctl.signal : undefined});
+          }
+          function mark(id, on){ var e = document.getElementById(id); if (e) e.className = on ? 'st on' : 'st'; }
+          function render(){
+            mark('st-cert', state.cert); mark('st-proxy', state.proxy); mark('st-allow', state.allow);
+            var note = document.getElementById('trusted'), btn = document.getElementById('certbtn');
+            if (note) note.hidden = !state.cert;
+            if (btn && state.cert) { btn.className = 'btn ghost'; btn.textContent = '重新下载 / Download again'; }
+            var ready = document.getElementById('ready');
+            if (ready) ready.hidden = !(state.cert && state.proxy && state.allow);
+          }
+          function check(){
+            var cert = get('https://\(addr)/baobox-trust-check?' + Date.now(), 4000)
+              .then(function(r){ state.cert = r.status === 204; }, function(){ state.cert = false; });
+            var proxy = get('http://check.baobox.invalid/status?' + Date.now(), 4000)
+              .then(function(r){ return r.json(); })
+              .then(function(j){ state.proxy = true; state.allow = !!j.allowed; },
+                    function(){ state.proxy = false; state.allow = false; });
+            Promise.all([cert, proxy]).then(function(){
+              render();
+              setTimeout(check, (state.cert && state.proxy && state.allow) ? 10000 : 3000);
+            });
+          }
+          check();
+        })();
+        </script>
+        """
 
         return """
         <!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -298,16 +353,23 @@ enum MobileConfigBuilder {
         .kv span{color:var(--sub);font-size:13px;flex:0 0 auto}
         .kv b{font-size:19px;flex:1;white-space:nowrap;-webkit-user-select:all;user-select:all}
         .mini{flex:0 0 auto;padding:8px 12px;border-radius:8px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);font-size:13px;font-weight:600}
-        .card .btn.ghost{margin-top:4px}
+        .card .btn{margin:0 8px 8px 0}
+        .ok{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
+        .st{display:flex;align-items:center;gap:10px;padding:5px 0;color:var(--sub);font-size:15px}
+        .st i{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);flex:0 0 auto;font-style:normal;font-size:13px;line-height:16px;text-align:center;color:#fff}
+        .st.on{color:var(--fg)}
+        .st.on i{background:var(--accent);border-color:var(--accent)}
+        .st.on i::after{content:"✓"}
         .foot{font-size:12px;color:var(--sub);text-align:center;margin-top:24px}
         </style></head>
         <body><div class="wrap">
         <h1>Baobox 抓包配置 / Capture Setup</h1>
         <p class="hint" style="text-align:center">当前代理 / Proxy</p>
         <div class="big">\(addrEsc)</div>
+        \(statusCard)
         \(cards)
         <p class="foot">仅用于本机调试，请勿抓取他人隐私。<br>For local debugging only.</p>
-        </div>\(copyJS)</body></html>
+        </div>\(copyJS)\(trustJS)</body></html>
         """
     }
 

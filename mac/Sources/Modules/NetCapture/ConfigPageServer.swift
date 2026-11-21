@@ -7,7 +7,7 @@ import Network
 /// 所以手机还没设好代理时也打得开（v1 靠代理拦截一个假域名来给页面，必须先设代理）。
 ///
 /// 只应答四个 GET 路由，内容都由 `MobileConfigBuilder` 生成；只发公开证书和描述文件，不涉及抓到的内容，
-/// 所以不做设备准入。只在有手机要抓时开着。
+/// 所以不做设备准入。只在听局域网时开着。带着二维码里的口令来开 `/` 的设备，顺手在引擎那边放行。
 final class ConfigPageServer: @unchecked Sendable {
     static let shared = ConfigPageServer()
 
@@ -40,6 +40,19 @@ final class ConfigPageServer: @unchecked Sendable {
         queue.async {
             self.listener?.cancel()
             self.listener = nil
+        }
+    }
+
+    // MARK: - 扫码即放行
+
+    /// 带着二维码里的口令来开配置页的设备直接放行（`PhonePairing`）。
+    private func admitIfPaired(_ connection: NWConnection, requestTarget: String, forwardedClient: String?, localIP: String) {
+        guard PhonePairing.tokenMatches(requestTarget: requestTarget, token: NetCaptureEnv.pairingToken),
+              case .hostPort(let host, _) = connection.endpoint,
+              let address = PhonePairing.deviceToAdmit(remote: "\(host)", forwardedClient: forwardedClient,
+                                                       localAddresses: [localIP]) else { return }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { NetCaptureEngine.shared.allow(device: address) }
         }
     }
 
@@ -83,6 +96,10 @@ final class ConfigPageServer: @unchecked Sendable {
 
         switch path {
         case "/":
+            let forwarded = lines.dropFirst()
+                .first { $0.lowercased().hasPrefix("x-baobox-client:") }
+                .map { String($0.dropFirst("x-baobox-client:".count)).trimmingCharacters(in: .whitespaces) }
+            admitIfPaired(connection, requestTarget: String(requestLine[1]), forwardedClient: forwarded, localIP: ip)
             let html = MobileConfigBuilder.landingPageHTML(ip: ip, port: proxyPort,
                                                            ssid: MobileConfigBuilder.currentSSID(),
                                                            userAgent: userAgent)

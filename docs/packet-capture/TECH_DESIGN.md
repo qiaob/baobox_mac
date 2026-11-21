@@ -171,8 +171,58 @@ Baobox（Swift）                              mitmdump（子进程）
 | 别的浏览器在 iOS 上拿到的页面（用 Chrome for iOS 的 UA 取回，在模拟器 Safari 里渲染） | 只有「请用 Safari 打开这个页面」和可复制的地址，没有安装按钮 |
 | `x-safari-http://` 能不能从别的浏览器跳到 Safari | **不能**：iOS 18.3 上没有 App 接这个地址（`simctl openurl` 报 -10814）；`x-safari-https://` 有，但配置页是 http 的，用不上。所以页面只给复制地址 |
 
+### 1.y 让手机配置更省事（2026-11-21，同一天稍后）
+
+用户的话：「下载完证书后，可以有按钮，一键跳到对应的设置页面吗」「已经安装了证书，就提醒一下，减少重复下载」「便捷跳转，自动配置什么，都考虑一下，使用便捷非常重要」。
+
+做了四件事：
+
+| 做了什么 | 怎么做的 |
+|---|---|
+| **扫码即放行** | 二维码里的地址带一个口令 `?k=xxxxxx`（`PhonePairing`，6 位，每次启动换一个，只显示在 Mac 屏幕上）。带着对的口令来开 `/` 的设备，`ConfigPageServer` 直接让引擎放行，不用再到 Mac 上点「允许」。手机已经设了代理时，请求是经引擎转过来的，对端看上去是 Mac 自己，所以桥在转发配置页请求时写上 `X-Baobox-Client`（每次都覆盖），配置页只在对端是本机时认这个头。手输地址没带口令的，照旧走「允许」 |
+| **实时清单** | 页面最上面三行：证书已信任 / 代理已生效 / Mac 已允许这台设备，每 3 秒自己查一次（都好了以后 10 秒），全好了显示「全部就绪」 |
+| **已装证书就提醒** | 证书那一行查出来是已信任时，卡片上写「这台设备已经信任 Baobox 的证书，不用再装」，安装按钮变成次要的「重新下载」 |
+| **跳到设置** | iOS：`App-prefs:`（「打开设置」）；Android：`intent:#Intent;action=android.settings.SECURITY_SETTINGS;end`（「打开安全设置」） |
+
+两项检测的做法：
+
+- **证书**：页面向 `https://<Mac 地址>:<代理端口>/baobox-trust-check` 发请求。引擎对直接连到代理端口上的 TLS 会用自己的 CA 现签一张证书（没有 SNI 时 SAN 是客户端连进来用的那个地址），握手成得了就是已经信任，桥回 204。没装、或者 iPhone 上装了但没打开「证书信任设置」的开关，握手都失败。
+- **代理、放行**：页面请求一个不存在的域名 `http://check.baobox.invalid/status`。设了代理它才到得了引擎，桥直接回 `{"proxy":true,"allowed":…}`（顺带把这台设备报成待放行，Mac 上马上能看到）；没设代理就是解析失败。
+- 这些请求都不进抓包列表，也不要求先放行。
+
+踩到的两个坑：
+
+- 手机设了代理以后，证书检测那个 https 请求也走代理，变成 `CONNECT <Mac>:<代理端口>`，正好撞上「不转发给自己」那条，于是「证书已信任」在设好代理的瞬间掉回未打勾。改成：这种 CONNECT 照样接下来，隧道的另一头改指向本机的配置页端口（只是找个不是引擎自己的地方挂着，什么都不会发过去），在隧道里的请求上直接应答。
+- 引擎默认会先和隧道另一头握 TLS。配置页是明文 HTTP、收到 TLS 握手包就一直等，手机这头就卡死不返回。脚本在 `tls_clienthello` 里把 `data.context.server.tls` 置假 —— 引擎自己的 TLS 插件排在脚本后面跑，「先和服务器握手」是它从这个标记算出来的，只改 `establish_server_tls_first` 会被它盖掉。
+
+跳转能跳多深（都在模拟器上试过）：
+
+| 地址 | 结果 |
+|---|---|
+| iOS `App-prefs:`（网页里点 / 脚本跳） | Safari 弹「在"设置"中打开此页？」，打开的是设置首页。下载描述文件后首页最上面就是「已下载描述文件」，所以够用 |
+| iOS `App-prefs:General&path=ManagedConfigurationList`、`…About/CERT_TRUST_SETTINGS`、`root=…` 的写法 | 都只到设置首页，深层路径不认（iOS 18.3） |
+| iOS `prefs:root=…` | 没有 App 接（-10814） |
+| Android `android.settings.WIFI_SETTINGS` | 到 Wi-Fi 设置（这个按钮之前就有，这次才验证） |
+| Android `android.settings.SECURITY_SETTINGS` | 到「安全和隐私」首页 |
+| Android `…SECURITY_ADVANCED_SETTINGS`、`com.android.credentials.INSTALL`、`…TRUSTED_CREDENTIALS_USER`（带不带 `package=`） | Chrome 不放行：不带包名没反应，带包名被带去应用商店。所以到「安装证书」那一页还得手点三层 |
+
+验证（同一个宿主程序，端口 19611 / 19612）：
+
+| 项 | 结果 |
+|---|---|
+| curl：证书检测，直连 / 经代理 / 经代理且不信任 CA | 204 / 204（6 毫秒）/ 握手失败 |
+| curl：`check.baobox.invalid` 经代理 | `{"proxy": true, "allowed": false}`，宿主收到待放行设备 |
+| Android 模拟器，没设代理，开带口令的地址 | 证书 ✓（之前装过），另两项未打勾；安装按钮变成「重新下载」 |
+| 设上代理（adb） | 9 秒内三项全 ✓，显示「全部就绪」；随后开 `https://example.com/` 直接能上、被抓到，宿主**没有**收到待放行设备 |
+| 代理已设时重新开带口令的地址 | 同上，三项全 ✓ |
+| iOS 18.3 模拟器 Safari | 装证书前三项都未打勾；用 `simctl keychain add-root-cert` 把 CA 加成受信后，**页面没刷新**，8 秒内「证书已信任」自己打上勾、卡片换成「不用再装」 |
+| 抓包列表 | 上面这些检测请求一条都没进去 |
+
 **这一轮没验证的**
 
+- 真 iPhone 上「打开设置」之后，首页是不是真的出现「已下载描述文件」（模拟器里下载不了描述文件，点不了「允许」）。
+- 真机的扫码放行：模拟器经 NAT 出来的地址和 Mac 自己一样，「手机经代理转过来」和「手机直连」在这里分不开，这条只有单元测试（`PhonePairingTests.testDeviceToAdmit`）。
+- iPhone 上证书装了但没开信任开关时，清单确实显示未信任（按原理应当如此，没有真机）。
 - iOS 模拟器里点不了屏幕：系统自动化没权限；`xcodebuild test` 的界面测试连不上 iOS 18.3 模拟器（Xcode 16.2 报 `DTServiceHubClient failed to bless service hub`）。所以「允许 → 设置里安装描述文件 → 证书信任设置里打开开关」这三下**没走**，要在真 iPhone 上看。
 - Wi-Fi 代理描述文件在模拟器上装不了（模拟器没有 Wi-Fi 设置，走的是 Mac 的系统代理），真机上是否生效没验证。
 - 真 iPhone 上的 Chrome 实际显示那一页（UA 是按 Chrome for iOS 的格式写的，没拿真机的 UA 对过）。
@@ -310,6 +360,7 @@ v1 靠代理拦截 `baobox.proxy` 这个域名来给页面，手机必须先设�
 - 四个 GET 路由，精确匹配（v1 是子串匹配）：`/`（配置页）、`/cert`、`/proxy`、`/proxy-off`。内容生成全部沿用 `MobileConfigBuilder`，只是 CA 路径换成 §5 的。
 - 二维码编码 `http://<Mac 的局域网 IP>:<端口>/`。
 - 这个服务只发公开证书和描述文件，不涉及抓到的内容，所以不做设备准入。
+- **二维码里的地址带口令**（`?k=…`），带着它来的设备直接放行；页面顶部是自己刷新的三行状态；证书已信任时不再催着装。做法和验证见 §1.y。
 - **iOS 上只有 Safari 能装描述文件**，而相机扫码开的是默认浏览器。`PhoneBrowser.isIOSSafari(userAgent:)` 认不出是 Safari 时（Chrome、Firefox、Edge、微信等），`/` 不给安装按钮，只请他把配置页地址复制到 Safari 打开。
 - **页面是 http 的局域网地址，不是「安全上下文」**：`navigator.clipboard` 在这里不存在。2026-11-21 用户在 Android 上点「复制」没反应就是这个原因（在 Chromium 里对同一个地址实测：`isSecureContext` 为 false、`navigator.clipboard` 为 undefined）。复制改用临时文本框 + `document.execCommand('copy')`，实测可用；再不行按钮提示长按，数值设了 `user-select: all`。
 - **Android 页没法「自动配置」**：系统没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应物）。页面能做的是把手填做到最省事：主机名、端口分开各一个复制按钮（系统的代理表单就是这两个框），外加一个 `intent:` 链接直达 Wi-Fi 设置（只有 Chrome 系浏览器认，**没在真机上验证**）。真正不用手填的两条路：连 USB 用 ADB 一键（已有），或 WireGuard 模式（见下）。

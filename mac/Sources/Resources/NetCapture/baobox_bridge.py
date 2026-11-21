@@ -49,6 +49,12 @@ SELF_PAGE = (
     "<p>It is not a web page. Enter it as the Wi-Fi proxy of the device instead.</p>"
 )
 
+# The setup page asks for this host to learn whether the phone's traffic already goes through the
+# proxy (the name does not exist, so the request only gets anywhere with the proxy set).
+CHECK_HOST = "check.baobox.invalid"
+TRUST_CHECK_PATH = "/baobox-trust-check"
+
+
 
 def bare_host(value):
     """Lower-case host without brackets, IPv4-mapped prefix or zone id."""
@@ -382,7 +388,15 @@ class Bridge:
     def http_connect(self, flow: http.HTTPFlow):
         if self.addressed_to_proxy(flow):
             flow.metadata["baobox_self"] = True
-            flow.response = http.Response.make(403, b"", {"Connection": "close"})
+            if self.page_port:
+                # The setup page's trust check, sent by a phone that already has the proxy set: it wants
+                # TLS with the engine itself. Accept the tunnel and answer inside it (`request`). The
+                # tunnel needs somewhere to point that is not the engine; the setup page's listener on
+                # this machine will do, nothing is ever sent to it (see `tls_clienthello`).
+                flow.request.host = "127.0.0.1"
+                flow.request.port = self.page_port
+            else:
+                flow.response = http.Response.make(403, b"", {"Connection": "close"})
             return
         if not self.admitted(client_ip(flow.client_conn)):
             flow.response = http.Response.make(403, b"", {"Connection": "close"})
@@ -440,6 +454,15 @@ class Bridge:
         emit({"event": "tls", "client": ip, "host": host, "reason": reason})
 
     def tls_clienthello(self, data: tls.ClientHelloData):
+        server = getattr(data.context.server, "address", None)
+        if self.page_port and server and server[1] == self.page_port and bare_host(server[0]) in self.local_names:
+            # Tunnel parked on the setup page listener (see `http_connect`): that listener speaks plain
+            # HTTP and would sit on a TLS hello forever, stalling the phone. Mark the server side as
+            # not TLS: the engine's own TLS addon runs after this hook and derives "handshake with the
+            # server first" from that flag. Only the handshake with the phone matters here.
+            data.context.server.tls = False
+            data.establish_server_tls_first = False
+            return
         host = data.client_hello.sni
         if not host:
             return
@@ -529,14 +552,33 @@ class Bridge:
         return [[k, v] for k, v in message.headers.items(multi=True)]
 
     def request(self, flow: http.HTTPFlow):
+        if flow.request.path.split("?", 1)[0] == TRUST_CHECK_PATH and self.is_this_machine(flow):
+            # The setup page asks over https whether this device trusts the CA. Getting here at all
+            # means the handshake with a certificate signed by the CA succeeded.
+            flow.metadata["baobox_self"] = True
+            flow.response = http.Response.make(
+                204, b"", {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
+            return
         if self.addressed_to_proxy(flow):
             # Not traffic to capture: no event, no admission prompt.
             flow.metadata["baobox_self"] = True
             flow.response = self.self_response(flow.request)
             return
+        if flow.request.pretty_host == CHECK_HOST:
+            # Asking also announces the device, so the Mac shows "allow" as soon as the proxy is set.
+            flow.metadata["baobox_self"] = True
+            allowed = self.admitted(client_ip(flow.client_conn))
+            flow.response = http.Response.make(
+                200, json.dumps({"proxy": True, "allowed": allowed}).encode("utf-8"),
+                {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
+                 "Cache-Control": "no-store"})
+            return
         if self.addressed_to_setup_page(flow):
             # Baobox's own page: pass it on, keep it out of the list, and don't ask to allow the device for it.
+            # The page server would otherwise only see this Mac as the sender; tell it who really asked
+            # (it uses that for scan-to-allow). Always overwritten, so a client cannot claim to be another.
             flow.metadata["baobox_self"] = True
+            flow.request.headers["X-Baobox-Client"] = client_ip(flow.client_conn) or ""
             return
         ip = client_ip(flow.client_conn)
         if not self.admitted(ip):
