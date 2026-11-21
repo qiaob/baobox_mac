@@ -358,8 +358,10 @@ mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
 
 ## 5. 证书（`CaptureCA`，取代 `MITMCertAuthority`）
 
-- CA 由 mitmproxy 生成，放在 `~/Library/Application Support/Baobox/NetCapture/mitmproxy/`。公开证书是 `mitmproxy-ca-cert.pem`，带私钥的是 `mitmproxy-ca.pem`（600）。
-- **还没抓过包就要装证书**：用 `-n` 加桥的 `baobox_oneshot` 选项跑一次引擎，就绪即退，约 1.2 秒。
+- CA 放在 `~/Library/Application Support/Baobox/NetCapture/mitmproxy/`。文件名是引擎认的那一套：公开证书 `mitmproxy-ca-cert.pem`，带私钥的 `mitmproxy-ca.pem`（600）。
+- **证书上的名字是「Baobox Capture CA」（组织 Baobox）**。引擎自己生成的固定叫 mitmproxy；2026-11-21 用户在 iPhone 上看到描述文件写着 Baobox、点进去的警告却是 mitmproxy。引擎在加载脚本**之前**就把证书生成了（实测：脚本的 `load` 跑到时文件已经在了），抢不到前面，所以做法是：没有证书时，用 `-n` 加桥的 `baobox_new_ca` 选项空跑一次引擎，桥调引擎自己的 `certs.CertStore.create_store(…, organization="Baobox", cn="Baobox Capture CA")` 另做一套、换上去，然后退出，约 1 秒。`NetCaptureEngine.start` 在第一次启动引擎前先走这一步，所以新装的用户不会见到 mitmproxy 这个名字。不叫「Baobox Proxy CA」，那是 v1 的证书，下面的「旧证书」是按这个名字删的。实测：新证书 `CN=Baobox Capture CA, O=Baobox`，引擎用它签出的站点证书签发者是它，只信任它的 curl 经引擎访问 https 得 200。
+- **已经有证书的不动**（设备上装过的还认它）。要换名字：设置页证书一栏的「证书名称 · 重新生成…」，确认后停掉抓包、撤掉这台 Mac 对旧证书的信任、删旧文件、重新生成；这台 Mac 要重新信任，手机和模拟器上的旧证书要删掉重装。重新生成这一条只编译过，按钮没点过。
+- 描述文件的名字跟着改成「Baobox Capture CA」。
 - **安装并信任**：以当前用户身份跑 `security add-trusted-cert -r trustRoot -k <登录钥匙串> <证书>`（用户域），系统自己弹验证框（密码 / Touch ID）。用户域的信任对这个用户的所有 App 生效，够用；这台机器上 OrbStack、Charles 的根证书也都是这么装的。
 - **不能沿用 v1 的做法**（`osascript … with administrator privileges` 以 root 跑 `add-trusted-cert -d`，管理员域）。2026-11-21 用户在 macOS 27.2.1 上试了三次，每次都输了密码：证书进了系统钥匙串，但信任设置没写进去（`security dump-trust-settings -d` 里没有它，`verify-cert` 报 `CSSMERR_TP_NOT_TRUSTED`）。root 的 shell 不在用户的图形会话里，系统要的那次「用户交互」做不了。
 - **查询状态**：对 CA 自己做一次 `SecTrustEvaluateWithError`。**移除**：`remove-trusted-cert` 撤信任，再按 SHA-1 从登录钥匙串删证书；系统钥匙串里要是留着上面那种没装成的残留，顺手删掉（这一步才要管理员密码）。

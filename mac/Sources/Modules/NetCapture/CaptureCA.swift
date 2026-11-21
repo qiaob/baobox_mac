@@ -4,8 +4,9 @@ import Security
 
 /// 抓包用的根证书（CA）：在哪、装没装、怎么装进 Mac。
 ///
-/// CA 由引擎（mitmproxy）自己生成，放在 `NetCaptureEnv.engineConfDir`：`mitmproxy-ca-cert.pem` 是公开证书，
-/// `mitmproxy-ca.pem` 带私钥（引擎写成 600）。叶子证书也由引擎签，Baobox 不碰。
+/// CA 用引擎（mitmproxy）自己的生成函数做，名字是「Baobox Capture CA」（见 `ensureGenerated`），放在
+/// `NetCaptureEnv.engineConfDir`。文件名是引擎认的那一套：`mitmproxy-ca-cert.pem` 是公开证书，
+/// `mitmproxy-ca.pem` 带私钥（600）。叶子证书由引擎签，Baobox 不碰。
 /// 见 docs/packet-capture/TECH_DESIGN.md §5。
 ///
 /// 并发：不标 `@MainActor`。这里的方法要么是路径计算，要么会起子进程同步等（`security`、`osascript`、引擎），
@@ -37,21 +38,50 @@ final class CaptureCA: @unchecked Sendable {
 
     // MARK: - 生成
 
-    /// 确保 CA 已生成。没有就让引擎空跑一次：桥脚本的 `baobox_oneshot` 选项让它就绪后立刻退出，约 1 秒。
+    /// 确保 CA 已生成。没有就让引擎空跑一次，约 1 秒。
+    ///
+    /// 引擎自己生成的证书名字固定叫 mitmproxy（手机上描述文件写的是 Baobox、点进去却是 mitmproxy，
+    /// 2026-11-21 用户指出）。它在加载脚本之前就生成了，抢不到前面，所以空跑这一次带 `baobox_new_ca`：
+    /// 桥脚本用引擎自己的生成函数另做一张名字是「Baobox Capture CA」的换上去，然后退出。
+    /// 引擎启动前一定先走到这里（`NetCaptureEngine.start`），所以新装的用户看不到 mitmproxy 这个名字。
+    /// 已经有证书的不动 —— 设备上装过的还认它；要换名字走 `regenerate()`。
     @discardableResult
     func ensureGenerated() -> Bool {
         if isGenerated { return true }
         guard NetCaptureEnv.engineUnavailable == nil, let script = NetCaptureEnv.bridgeScriptURL else { return false }
         let confDir = NetCaptureEnv.engineConfDir
         try? FileManager.default.createDirectory(at: confDir, withIntermediateDirectories: true)
-        // -n：不起代理监听，只初始化（生成证书）。
+        // -n：不起代理监听，只初始化。
         NetCaptureEnv.run(NetCaptureEnv.engineURL.path, [
             "-n", "-q",
             "--set", "confdir=\(confDir.path)",
             "-s", script.path,
-            "--set", "baobox_oneshot=true",
+            "--set", "baobox_new_ca=true",
         ], stdin: Data())
         return isGenerated
+    }
+
+    /// 证书上的名字（钥匙串、手机的证书详情里看到的那个）。旧证书是 `mitmproxy`，新生成的是 `Baobox Capture CA`。
+    var commonName: String? {
+        guard let der = certDER(), let cert = SecCertificateCreateWithData(nil, der as CFData) else { return nil }
+        return SecCertificateCopySubjectSummary(cert) as String?
+    }
+
+    /// 换一张新证书：先取消这台 Mac 对旧证书的信任并从钥匙串删掉，再删掉旧文件、重新生成。
+    /// 调用前引擎必须已经停了。装过旧证书的手机、模拟器都要重装，这台 Mac 也要重新信任。
+    /// 用户在系统的验证框里点了取消就什么都不动。
+    func regenerate() -> TrustResult {
+        if isGenerated, isTrusted() {
+            let removed = removeTrust()
+            guard removed.ok else { return removed }
+        }
+        let confDir = NetCaptureEnv.engineConfDir
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: confDir.path)) ?? []
+        for name in names where name.hasPrefix("mitmproxy-") {
+            try? FileManager.default.removeItem(at: confDir.appendingPathComponent(name))
+        }
+        try? FileManager.default.removeItem(at: bundleURL)
+        return ensureGenerated() ? TrustResult(ok: true) : TrustResult(ok: false, message: "CA not generated")
     }
 
     // MARK: - Mac 上的信任

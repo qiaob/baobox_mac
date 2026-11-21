@@ -13,14 +13,17 @@ import asyncio
 import base64
 import fnmatch
 import json
+import os
 import re
+import shutil
 import socket
 import sys
 import threading
 import time
 import zlib
+from pathlib import Path
 
-from mitmproxy import connection, contentviews, ctx, http, tls
+from mitmproxy import certs, connection, contentviews, ctx, http, tls
 
 PREFIX = "BAOBOX "
 
@@ -75,6 +78,34 @@ def local_names():
     except OSError:
         pass
     return names
+
+# The name people see when they install or inspect the root certificate (iOS profile details, Android's
+# credential list, Keychain Access). Not "Baobox Proxy CA": that was the first version's certificate,
+# which Baobox removes by that name.
+CA_COMMON_NAME = "Baobox Capture CA"
+CA_ORGANIZATION = "Baobox"
+
+
+def replace_ca(confdir):
+    """Replace the root certificate in `confdir` with a new one under Baobox's name.
+
+    The engine creates its own, called "mitmproxy", before any script is loaded, so there is no way to
+    get in first. Baobox therefore runs the engine once without listeners (`baobox_new_ca`) whenever
+    there is no certificate yet, or the user asks for a new one: by then the engine has made its
+    default, and this swaps it for one made by the engine's own generator under the right name. The
+    engine picks it up on its next start. Returns the common name on success.
+    """
+    staging = confdir / ".baobox-new-ca"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        certs.CertStore.create_store(
+            staging, "mitmproxy", 2048, organization=CA_ORGANIZATION, cn=CA_COMMON_NAME)
+        for item in sorted(staging.iterdir()):
+            os.replace(item, confdir / item.name)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return CA_COMMON_NAME
 
 
 def emit(obj):
@@ -219,6 +250,8 @@ class Bridge:
                           "Initially allowed LAN source IPs, comma separated.")
         loader.add_option("baobox_page_port", int, 0,
                           "Port of Baobox's setup page; requests sent to the proxy itself are redirected there.")
+        loader.add_option("baobox_new_ca", bool, False,
+                          "Replace the root certificate with a new one named after Baobox, then exit.")
 
     def running(self):
         self.body_cap = max(1024, ctx.options.baobox_body_cap)
@@ -242,6 +275,14 @@ class Bridge:
             pass
         emit({"event": "running", "version": version})
 
+        if ctx.options.baobox_new_ca:
+            try:
+                name = replace_ca(Path(os.path.expanduser(ctx.options.confdir)))
+                emit({"event": "ca", "name": name})
+            except Exception as error:
+                emit({"event": "ca", "error": str(error)})
+            ctx.master.shutdown()
+            return
         if ctx.options.baobox_oneshot:
             ctx.master.shutdown()
             return

@@ -105,6 +105,8 @@ private struct NetCaptureCertSection: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @State private var busy = false
     @State private var hasLegacy = CaptureCA.shared.hasLegacyCA
+    @State private var certName = CaptureCA.shared.commonName
+    @State private var confirmRegenerate = false
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.cert") {
@@ -120,6 +122,13 @@ private struct NetCaptureCertSection: View {
                         .disabled(busy || session.working != nil)
                 }
             }
+            HStack {
+                Text("netcapture.settings.certName")
+                Spacer()
+                Text(verbatim: certName ?? "—").foregroundStyle(.secondary).textSelection(.enabled)
+                Button("netcapture.settings.regenerate") { confirmRegenerate = true }
+                    .disabled(busy || session.working != nil)
+            }
             if hasLegacy {
                 HStack {
                     Text("netcapture.settings.legacyCA")
@@ -132,7 +141,35 @@ private struct NetCaptureCertSection: View {
             }
             Text("netcapture.settings.certHint").font(.caption).foregroundStyle(.secondary)
         }
-        .onAppear { session.refreshTrust() }
+        .onAppear {
+            session.refreshTrust()
+            certName = CaptureCA.shared.commonName
+        }
+        .alert(Text("netcapture.settings.regenerateTitle"), isPresented: $confirmRegenerate) {
+            Button("netcapture.settings.regenerateConfirm", role: .destructive) { regenerate() }
+            Button("common.cancel", role: .cancel) {}
+        } message: {
+            Text("netcapture.settings.regenerateMessage")
+        }
+    }
+
+    /// 换一张新证书（名字是 Baobox Capture CA）。先停抓包：引擎只在启动时读证书。
+    private func regenerate() {
+        busy = true
+        let origin = NSApp.keyWindow
+        session.stopAll()
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = CaptureCA.shared.regenerate()
+            let name = CaptureCA.shared.commonName
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    busy = false
+                    certName = name
+                    session.bringBack(origin)
+                    session.refreshTrust()
+                }
+            }
+        }
     }
 
     private func removeTrust() {

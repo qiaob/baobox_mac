@@ -69,6 +69,24 @@ final class NetCaptureEngine: ObservableObject {
         pendingDevices = []
         state = .starting
 
+        // 证书要在引擎第一次启动之前就按 Baobox 的名字做好，否则引擎会自己生成一张叫 mitmproxy 的
+        // （`CaptureCA.ensureGenerated`）。只有头一次会走后台这一支，多等约 1 秒。
+        if CaptureCA.shared.isGenerated {
+            launch(script: script, port: port, lan: lan, generation: current)
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async {
+                CaptureCA.shared.ensureGenerated()
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard self.generation == current, self.state == .starting else { return }
+                        self.launch(script: script, port: port, lan: lan, generation: current)
+                    }
+                }
+            }
+        }
+    }
+
+    private func launch(script: URL, port: UInt16, lan: Bool, generation current: Int) {
         let confDir = NetCaptureEnv.engineConfDir
         try? FileManager.default.createDirectory(at: confDir, withIntermediateDirectories: true)
         let bodyCap = NetCaptureEnv.bodyCap

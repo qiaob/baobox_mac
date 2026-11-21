@@ -22,7 +22,7 @@ enum MobileConfigBuilder {
     /// CA-only 描述文件（`application/x-apple-aspen-config`）。CA 未生成返回 nil。
     static func caProfile() -> String? {
         guard let der = caCertDER() else { return nil }
-        return profile(displayName: "Baobox Proxy CA",
+        return profile(displayName: "Baobox Capture CA",
                        description: "Baobox capture root CA",
                        identifier: "com.baobox.netcapture.ca",
                        payloads: [caPayload(der: der)])
@@ -115,7 +115,7 @@ enum MobileConfigBuilder {
               <key>PayloadDescription</key>
               <string>Baobox root CA</string>
               <key>PayloadDisplayName</key>
-              <string>Baobox Proxy CA</string>
+              <string>Baobox Capture CA</string>
               <key>PayloadIdentifier</key>
               <string>com.baobox.netcapture.ca</string>
               <key>PayloadType</key>
