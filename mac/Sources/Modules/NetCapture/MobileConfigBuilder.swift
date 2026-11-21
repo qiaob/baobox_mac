@@ -222,26 +222,20 @@ enum MobileConfigBuilder {
                 <p class="hint">在<b>设置</b>里进 <b>通用 › 关于本机</b>，拉到最下面进<b>证书信任设置</b>，打开 <b>\(caName)</b> 的开关。做完回到这个页面，这里会自己变成已信任。<br>In <b>Settings</b> go to <b>General › About</b>, scroll to the bottom, open <b>Certificate Trust Settings</b> and turn on the switch for <b>\(caName)</b>. Come back to this page and it updates by itself.</p>
                 """)
 
-            // 代理只用装一次。装的是自动代理的话，开关都在 Mac 上：开始抓包手机就走代理，停止就直连
-            // （2026-11-21 用苹果的网络栈实测，两个方向都是下一个请求就切过去）。原来的页面是「开」「关」各一个
-            // 描述文件，用户关掉以后不知道怎么再开 —— 其实平时根本不用关。所以这张卡片按现在的状态显示：
-            // 代理没生效时给安装按钮；生效了就说明以后不用动手机。「移除」单独放在最后，写明一般不需要。
+            // 以手动代理（iOS 的说法，就是固定指向这台 Mac）为主：点一下配上，用完点一下关掉，两步都看得见。
+            // 自动代理（PAC，装一次、开关跟着 Mac 走）折叠在最后的「高级」里。2026-11-21 用户在真机上试自动代理，
+            // 觉得绕（开、关、再开各要装一个描述文件，装完页面还让他下载），要求「把自动代理单独隐藏，以手动为主，
+            // 自动也保留」。手动代理按 IP 配（最稳）；按名字配只留给自动代理。
             if hasSSID {
                 proxyCard = card(
-                    num: "3", title: "配代理（只用装一次） / Set proxy (once)",
+                    num: "3", title: "配代理 / Set proxy",
                     body: """
-                    <div id="proxy-on" hidden>
-                    <p class="ok">✓ 代理已生效，手机上不用再操作。<br>The proxy is in use. Nothing more to do on the phone.</p>
-                    <p class="hint">以后开关都在 Mac 上：<b>停止抓包，手机自动直连；再开始抓包，手机又走代理。</b>（这是自动代理的行为；装的是固定代理的话，Baobox 没开时手机上不了网。）<br>From now on you switch it on the Mac: <b>stop capturing and the phone connects directly, start again and it goes through the proxy.</b> (That is the automatic proxy. With the fixed proxy the phone is offline while Baobox is not running.)</p>
-                    </div>
-                    <div id="proxy-setup">
-                    <a class="btn" id="proxyauto" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
-                    <a class="btn ghost" id="proxyfixed" href="/proxy-manual">固定代理 / Fixed</a>
+                    <p class="ok" id="proxy-on" hidden>✓ 代理已生效。<br>The proxy is in use.</p>
+                    <a class="btn" href="/proxy-manual">一键配置代理 / One-tap set proxy</a>
                     \(openSettings)
-                    <p class="hint">点一个 → 允许 → <b>打开设置</b> → 最上面的<b>已下载描述文件</b> → 安装。系统会要锁屏密码，可能还要这个 Wi-Fi 的密码，都是正常的。<br>Tap one → Allow → <b>Open Settings</b> → <b>Profile Downloaded</b> at the top → Install. iOS asks for the passcode and maybe this Wi-Fi's password; both are expected.</p>
-                    <p class="hint"><b>自动代理装一次就行</b>：以后在 Mac 上开始、停止抓包，手机自动跟着切换。固定代理在 Baobox 没开时手机上不了网。<br><b>Automatic is install-once</b>: the phone follows the capture being started and stopped on the Mac. With Fixed the phone is offline while Baobox is not running.</p>
-                    <p class="hint" id="hostnote">代理按这台 Mac 现在的 IP（\(htmlEscape(ip))）配置，IP 变了要回这个页面重装。<br>Set up with this Mac's current IP (\(htmlEscape(ip))). Reinstall from this page if it changes.</p>
-                    </div>
+                    <p class="addr">\(addrEsc)</p>
+                    <p class="hint">点「一键配置代理」→ 允许 → <b>打开设置</b> → 最上面的<b>已下载描述文件</b> → 安装。系统会要锁屏密码，可能还要这个 Wi-Fi 的密码，都是正常的。<br>Tap the button → Allow → <b>Open Settings</b> → <b>Profile Downloaded</b> at the top → Install. iOS asks for the passcode and maybe this Wi-Fi's password; both are expected.</p>
+                    <p class="hint">给当前这个 Wi-Fi 设手动代理，指向这台 Mac。Mac 的 IP 变了要回来重装。<br>Sets a manual proxy for this Wi-Fi pointing to this Mac. Reinstall from here if the Mac's IP changes.</p>
                     """)
             } else {
                 proxyCard = card(
@@ -252,13 +246,21 @@ enum MobileConfigBuilder {
                     """)
             }
 
+            let autoBlock = hasSSID ? """
+            <details class="adv"><summary>高级：自动代理 / Advanced: automatic proxy</summary>
+            <p class="hint">装一次，以后在 Mac 上开始、停止抓包，手机自动跟着切换；Baobox 没在抓包时手机直连，不用关代理。Mac 睡眠、关机或不在这个 Wi-Fi 时，手机联网会变得很慢。<br>Install once; the phone then follows the capture being started and stopped on the Mac, and connects directly while Baobox is not capturing. It gets very slow when the Mac sleeps, shuts down or leaves this Wi-Fi.</p>
+            <a class="btn ghost" id="proxyauto" href="/proxy">安装自动代理 / Install the automatic proxy</a>
+            <p class="hint" id="hostnote">按这台 Mac 现在的 IP（\(htmlEscape(ip))）配置，IP 变了要回这个页面重装。<br>Set up with this Mac's current IP (\(htmlEscape(ip))). Reinstall from this page if it changes.</p>
+            <p class="hint">不用了同样点上面的「一键关闭代理」。<br>Turn it off with the same button above.</p>
+            </details>
+            """ : ""
+
             offCard = card(
-                num: "4", title: "移除代理（一般不需要） / Remove the proxy (rarely needed)",
+                num: "4", title: "关代理 / Turn proxy off",
                 body: """
-                <p class="hint" style="margin-top:0">装的是自动代理就不用移除：Mac 上停止抓包，手机就是直连。<b>不再用了</b>，或者 <b>Mac 要睡眠、关机、带走</b>（手机留在这个 Wi-Fi 会变得很慢）时再移除。<br>Nothing to remove with the automatic proxy: stop capturing on the Mac and the phone connects directly. Remove it when you are done for good, or before the Mac sleeps, shuts down or leaves (the phone gets very slow on this Wi-Fi then).</p>
-                <a class="btn ghost" href="/proxy-off">移除代理 / Remove the proxy</a>
-                <p class="hint"><b>以后要再用，回到这个页面重新点「自动代理」。</b>也可以到 <b>设置 › 通用 › VPN与设备管理</b> 删除 <b>Baobox Wi-Fi Proxy</b>。<br><b>To use it again, come back to this page and tap Automatic.</b> You can also delete <b>Baobox Wi-Fi Proxy</b> in <b>Settings › General › VPN &amp; Device Management</b>.</p>
-                """)
+                <a class="btn ghost" href="/proxy-off">一键关闭代理 / One-tap turn off</a>
+                <p class="hint">抓完就关：Baobox 没在抓包时，手机连不上代理会上不了网。这也是装一个描述文件；或者到 <b>设置 › 通用 › VPN与设备管理</b> 删除 <b>Baobox Wi-Fi Proxy</b>。要再抓，回第 3 步重新配。<br>Turn it off when you are done: while Baobox is not capturing the phone cannot reach the proxy and is offline. This installs a profile too; or delete <b>Baobox Wi-Fi Proxy</b> in <b>Settings › General › VPN &amp; Device Management</b>. To capture again, repeat step 3.</p>
+                """) + autoBlock
         } else {
             certCard = card(
                 num: "1", title: "装证书 / Install CA",
@@ -348,7 +350,7 @@ enum MobileConfigBuilder {
         """
         // 手机能按名字（xxx.local）找到这台 Mac 的话，代理就按名字配：Mac 换了 IP 不用重装。
         // 能不能找到要在手机上试（有的网络不放行这种名字解析），所以由页面去请求一下 `/ping`，
-        // 通了才把两个按钮的链接换成带 `?h=local` 的。
+        // 通了才把「安装自动代理」的链接换成带 `?h=local` 的。只用在自动代理上；手动代理一律按 IP。
         let localName = NetworkInterfaces.localHostName ?? ""
         let nameJS = (needsSafari || !isIOS || localName.isEmpty) ? "" : """
         <script>
@@ -360,12 +362,10 @@ enum MobileConfigBuilder {
           fetch('http://' + name + ':\(NetCaptureEnv.configPagePort)/ping?' + Date.now(),
                 {mode: 'no-cors', cache: 'no-store', signal: ctl ? ctl.signal : undefined})
             .then(function(){
-              ['proxyauto', 'proxyfixed'].forEach(function(id){
-                var a = document.getElementById(id);
-                if (a && a.href.indexOf('h=local') < 0) a.href += '?h=local';
-              });
+              var a = document.getElementById('proxyauto');
+              if (a && a.href.indexOf('h=local') < 0) a.href += '?h=local';
               var note = document.getElementById('hostnote');
-              if (note) note.innerHTML = '代理按这台 Mac 的名字（' + name + '）配置，Mac 换了 IP 也不用重装。<br>Set up with this Mac\\'s name (' + name + '); it keeps working when the IP changes.';
+              if (note) note.innerHTML = '按这台 Mac 的名字（' + name + '）配置，Mac 换了 IP 也不用重装。<br>Set up with this Mac\\'s name (' + name + '); it keeps working when the IP changes.';
             }, function(){});
         })();
         </script>
@@ -386,9 +386,8 @@ enum MobileConfigBuilder {
             mark('st-cert', state.cert); mark('st-proxy', state.proxy); mark('st-allow', state.allow);
             var note = document.getElementById('trusted'), btn = document.getElementById('certbtn');
             if (note) note.hidden = !state.cert;
-            var on = document.getElementById('proxy-on'), setup = document.getElementById('proxy-setup');
+            var on = document.getElementById('proxy-on');
             if (on) on.hidden = !state.proxy;
-            if (setup) setup.hidden = state.proxy;
             var done = document.getElementById('trusted2'), todo = document.getElementById('untrusted');
             if (done) done.hidden = !state.cert;
             if (todo) todo.hidden = state.cert;
@@ -439,6 +438,9 @@ enum MobileConfigBuilder {
         .card .btn{margin:0 8px 8px 0}
         .ok{color:var(--accent);font-weight:600;font-size:15px;margin:0 0 12px}
         .warn{color:#d9730d;font-weight:600;font-size:15px;margin:0 0 12px}
+        .adv{margin:14px 4px;font-size:14px;color:var(--sub)}
+        .adv summary{cursor:pointer;padding:6px 0;font-weight:600}
+        .adv .btn{margin:8px 8px 8px 0}
         .st{display:flex;align-items:center;gap:10px;padding:5px 0;color:var(--sub);font-size:15px}
         .st i{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);flex:0 0 auto;font-style:normal;font-size:13px;line-height:16px;text-align:center;color:#fff}
         .st.on{color:var(--fg)}
