@@ -71,6 +71,8 @@ enum NetCaptureTab: String {
 final class NetCaptureWindowState: ObservableObject {
     static let shared = NetCaptureWindowState()
     @Published var tab: NetCaptureTab = .config
+    /// 「配置」页左边选中的那一项。放在这里：切到别的标签页再回来还是它。
+    @Published var configItem: NetCaptureConfigItem = .mac
     private init() {}
 }
 
