@@ -251,8 +251,24 @@ Baobox（Swift）                              mitmdump（子进程）
 - **Mac 不在网络上**（睡眠、关机、带走）：连接没人应答，系统只能等超时，表现是很慢、部分失败。这种情况自动代理并不比手动代理体面多少，页面上写明了「这时请关代理」。`.local` 名字能改善一部分（只有头一次慢），但要多依赖一层组播域名解析，这次没做。
 - 一开始对用户说的是「Mac 关机时偶尔卡几秒」，实测不是，已经更正。
 
+**按名字配代理（同一天，用户问「电脑 IP 变了怎么重新安装」）**
+
+描述文件里写死 IP 的话，Mac 换了 IP 就得回配置页重装一次，而且每次装 Wi-Fi 的描述文件系统都要问锁屏密码、还可能问这个 Wi-Fi 的密码。所以能用名字就用名字：这台 Mac 在局域网里的名字 `<本地主机名>.local`（`scutil --get LocalHostName`），靠组播域名解析，不用在路由器上登记。
+
+- 名字不是哪个网络都解析得了（访客网络、开了设备隔离的 Wi-Fi 会拦组播）。所以由配置页在手机上试：脚本用名字请求一下 `/ping`，通了才把两个代理按钮的链接换成带 `?h=local` 的，并把说明换成「Mac 换了 IP 也不用重装」；不通就还是按 IP 配，说明是「IP 变了回来重装」。
+- `/proxy?h=local`：`ProxyPACURL` 是 `http://<名字>:<端口>/proxy.pac?h=local`；`/proxy.pac?h=local` 给出的脚本里代理写的是名字；`/proxy-manual?h=local` 的 `ProxyServer` 是名字。
+- 脚本里发给这台 Mac 自己（IP、名字都算）和任何 `.local` 名字的请求直连。
+
+| 项 | 结果 |
+|---|---|
+| 脚本逻辑（JS 引擎里算） | 普通域名 → `PROXY <名字>:端口; DIRECT`；Mac 的 IP、名字（大小写都行）、别的 `.local`、不带点的名字 → `DIRECT` |
+| 苹果的网络栈，脚本地址和代理都按名字，对着真实的配置页服务 | 请求经引擎（没放行时 403，放行后 200 并进列表）；https 被接管；和按 IP 配耗时没有差别（都在 0.1 秒内） |
+| 系统 WebKit（和 iPhone 的 Safari 同一个引擎）按 iPhone 的身份打开配置页 | 页面自己把两个按钮换成了 `/proxy?h=local`、`/proxy-manual?h=local`，说明换成了按名字的那句 |
+| Chromium 打开同一页 | 这个浏览器解析不了 `.local`（`ERR_NAME_NOT_RESOLVED`），按钮保持按 IP —— 回退那一支 |
+
 **这一轮没验证的**
 
+- 真 iPhone 能不能按名字找到这台 Mac（在用户的网络上）；按名字装的描述文件在 iPhone 上是否生效。
 - iPhone 上的一切：自动代理的描述文件能不能装、装上后抓不抓得到、Baobox 退出后是否立刻直连、Mac 睡眠后到底卡成什么样、系统多久重新取一次脚本。
 - 真 iPhone 上的 WebSocket：仍然抓不到。脚本里现在没有 SOCKS 那一路 —— 引擎的 SOCKS 只听本机，要放到局域网得先给它补上设备准入（现在非 443 端口的 SOCKS 流量是直接放过去的）。
 - 真 iPhone 上「打开设置」之后，首页是不是真的出现「已下载描述文件」（模拟器里下载不了描述文件，点不了「允许」）。
@@ -397,7 +413,7 @@ v1 靠代理拦截 `baobox.proxy` 这个域名来给页面，手机必须先设�
 - 四个 GET 路由，精确匹配（v1 是子串匹配）：`/`（配置页）、`/cert`、`/proxy`、`/proxy-off`。内容生成全部沿用 `MobileConfigBuilder`，只是 CA 路径换成 §5 的。
 - 二维码编码 `http://<Mac 的局域网 IP>:<端口>/`。
 - 这个服务只发公开证书和描述文件，不涉及抓到的内容，所以不做设备准入。
-- 路由现在是 `/`、`/cert`、`/proxy`（自动代理）、`/proxy-manual`（固定代理）、`/proxy-off`、`/proxy.pac`。
+- 路由现在是 `/`、`/cert`、`/proxy`（自动代理）、`/proxy-manual`（固定代理）、`/proxy-off`、`/proxy.pac`、`/ping`；`/proxy*` 带 `?h=local` 时按这台 Mac 的局域网名字配（见 §1.z）。
 - **二维码里的地址带口令**（`?k=…`），带着它来的设备直接放行；页面顶部是自己刷新的三行状态；证书已信任时不再催着装。做法和验证见 §1.y。
 - **iOS 上只有 Safari 能装描述文件**，而相机扫码开的是默认浏览器。`PhoneBrowser.isIOSSafari(userAgent:)` 认不出是 Safari 时（Chrome、Firefox、Edge、微信等），`/` 不给安装按钮，只请他把配置页地址复制到 Safari 打开。
 - **页面是 http 的局域网地址，不是「安全上下文」**：`navigator.clipboard` 在这里不存在。2026-11-21 用户在 Android 上点「复制」没反应就是这个原因（在 Chromium 里对同一个地址实测：`isSecureContext` 为 false、`navigator.clipboard` 为 undefined）。复制改用临时文本框 + `document.execCommand('copy')`，实测可用；再不行按钮提示长按，数值设了 `user-select: all`。

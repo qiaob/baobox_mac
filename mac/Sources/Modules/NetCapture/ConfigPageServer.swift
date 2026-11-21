@@ -6,7 +6,7 @@ import Network
 /// 手机扫码打开 `http://<Mac 的局域网 IP>:<端口>/`，页面里装证书、配代理、关代理。它不经过代理，
 /// 所以手机还没设好代理时也打得开（v1 靠代理拦截一个假域名来给页面，必须先设代理）。
 ///
-/// 只应答几个 GET 路由（`/`、`/cert`、`/proxy`、`/proxy-manual`、`/proxy-off`、`/proxy.pac`），内容都由 `MobileConfigBuilder` / `ProxyPAC` 生成；只发公开证书和描述文件，不涉及抓到的内容，
+/// 只应答几个 GET 路由（`/`、`/cert`、`/proxy`、`/proxy-manual`、`/proxy-off`、`/proxy.pac`、`/ping`），内容都由 `MobileConfigBuilder` / `ProxyPAC` 生成；只发公开证书和描述文件，不涉及抓到的内容，
 /// 所以不做设备准入。只在听局域网时开着。带着二维码里的口令来开 `/` 的设备，顺手在引擎那边放行。
 final class ConfigPageServer: @unchecked Sendable {
     static let shared = ConfigPageServer()
@@ -41,6 +41,13 @@ final class ConfigPageServer: @unchecked Sendable {
             self.listener?.cancel()
             self.listener = nil
         }
+    }
+
+    /// 代理写成什么：请求带 `h=local` 且取得到这台 Mac 的局域网名字就用名字，否则用 IP。
+    private func proxyHost(for requestTarget: String, ip: String) -> String {
+        guard PhonePairing.queryValue("h", in: requestTarget) == "local",
+              let name = NetworkInterfaces.localHostName else { return ip }
+        return name
     }
 
     // MARK: - 扫码即放行
@@ -86,7 +93,8 @@ final class ConfigPageServer: @unchecked Sendable {
             send(connection, status: "405 Method Not Allowed", contentType: "text/plain", body: Data())
             return
         }
-        // 只看路径，查询串忽略。
+        // 路由只看路径；查询串里只认两个参数：`k`（扫码即放行的口令）和 `h=local`（代理按名字配）。
+        let target = String(requestLine[1])
         let path = requestLine[1].split(separator: "?", maxSplits: 1).first.map(String.init) ?? "/"
         let userAgent = lines.dropFirst()
             .first { $0.lowercased().hasPrefix("user-agent:") }
@@ -115,13 +123,20 @@ final class ConfigPageServer: @unchecked Sendable {
             } else {
                 send(connection, status: "503 Service Unavailable", contentType: "text/plain", body: Data())
             }
+        case "/ping":
+            // 配置页用它试手机能不能按名字（xxx.local）找到这台 Mac。
+            send(connection, status: "204 No Content", contentType: "text/plain", body: Data())
         case "/proxy.pac":
             // iPhone 的自动代理来取脚本（系统自己取，User-Agent 不是浏览器，所以不看是不是 iOS）。
-            let script = ProxyPAC.script(proxyHost: ip, proxyPort: proxyPort)
+            let script = ProxyPAC.script(proxyHost: proxyHost(for: target, ip: ip), proxyPort: proxyPort,
+                                         ownHosts: [ip, NetworkInterfaces.localHostName ?? ""])
             send(connection, status: "200 OK", contentType: ProxyPAC.contentType, body: Data(script.utf8))
         case "/proxy":
             if isIOS, let ssid = MobileConfigBuilder.currentSSID() {
-                let pacURL = "http://\(ip):\(NetCaptureEnv.configPagePort)/proxy.pac"
+                // 脚本地址里带着同一个选择（`?h=local`），手机以后来取脚本时还按名字给。
+                let host = proxyHost(for: target, ip: ip)
+                let suffix = host == ip ? "" : "?h=local"
+                let pacURL = "http://\(host):\(NetCaptureEnv.configPagePort)/proxy.pac\(suffix)"
                 let profile = MobileConfigBuilder.autoProxyProfile(ssid: ssid, pacURL: pacURL)
                 send(connection, status: "200 OK", contentType: "application/x-apple-aspen-config",
                      body: Data(profile.utf8), filename: "baobox-proxy.mobileconfig")
@@ -130,7 +145,8 @@ final class ConfigPageServer: @unchecked Sendable {
             }
         case "/proxy-manual":
             if isIOS, let ssid = MobileConfigBuilder.currentSSID() {
-                let profile = MobileConfigBuilder.proxyProfile(ssid: ssid, ip: ip, port: proxyPort)
+                let profile = MobileConfigBuilder.proxyProfile(ssid: ssid, ip: proxyHost(for: target, ip: ip),
+                                                               port: proxyPort)
                 send(connection, status: "200 OK", contentType: "application/x-apple-aspen-config",
                      body: Data(profile.utf8), filename: "baobox-proxy.mobileconfig")
             } else {

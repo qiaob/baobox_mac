@@ -13,15 +13,20 @@ enum PhonePairing {
         return String((0..<6).map { _ in alphabet[Int.random(in: 0..<alphabet.count, using: &generator)] })
     }
 
-    /// 请求行里的目标（如 `/?k=abc234`）带的口令对不对。口令为空一律不对。
-    static func tokenMatches(requestTarget: String, token: String) -> Bool {
-        guard !token.isEmpty, let mark = requestTarget.firstIndex(of: "?") else { return false }
+    /// 请求行里的目标（如 `/?k=abc234&h=local`）里某个参数的值。没有这个参数返回 nil。
+    static func queryValue(_ name: String, in requestTarget: String) -> String? {
+        guard let mark = requestTarget.firstIndex(of: "?") else { return nil }
         let query = requestTarget[requestTarget.index(after: mark)...]
         for pair in query.split(separator: "&") {
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            if parts.count == 2, parts[0] == "k", parts[1] == token { return true }
+            if parts.count == 2, parts[0] == name { return String(parts[1]) }
         }
-        return false
+        return nil
+    }
+
+    /// 请求行里的目标（如 `/?k=abc234`）带的口令对不对。口令为空一律不对。
+    static func tokenMatches(requestTarget: String, token: String) -> Bool {
+        !token.isEmpty && queryValue("k", in: requestTarget) == token
     }
 
     /// 连接对端的地址整理成引擎那边用的写法：去掉网卡后缀（`%en0`）和 IPv4 映射前缀（`::ffff:`）。

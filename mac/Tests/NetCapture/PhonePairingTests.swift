@@ -18,6 +18,15 @@ final class PhonePairingTests: XCTestCase {
         XCTAssertFalse(PhonePairing.tokenMatches(requestTarget: "/abc234", token: "abc234"))
     }
 
+    func testQueryValue() {
+        XCTAssertEqual(PhonePairing.queryValue("h", in: "/proxy?h=local"), "local")
+        XCTAssertEqual(PhonePairing.queryValue("h", in: "/proxy.pac?k=abc&h=local"), "local")
+        XCTAssertEqual(PhonePairing.queryValue("k", in: "/?k="), "")
+        XCTAssertNil(PhonePairing.queryValue("h", in: "/proxy"))
+        XCTAssertNil(PhonePairing.queryValue("h", in: "/proxy?hh=local"))
+        XCTAssertNil(PhonePairing.queryValue("h", in: "/h=local"))
+    }
+
     func testEmptyTokenNeverMatches() {
         XCTAssertFalse(PhonePairing.tokenMatches(requestTarget: "/?k=", token: ""))
         XCTAssertFalse(PhonePairing.tokenMatches(requestTarget: "/", token: ""))

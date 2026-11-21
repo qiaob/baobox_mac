@@ -13,17 +13,35 @@ import Foundation
 enum ProxyPAC {
     static let contentType = "application/x-ns-proxy-autoconfig"
 
-    static func script(proxyHost: String, proxyPort: UInt16) -> String {
+    /// - `proxyHost`：代理写成什么。这台 Mac 的 IP，或者它在局域网里的名字（`xxx.local`）——
+    ///   用名字的话 Mac 换了 IP 也不用重装描述文件。
+    /// - `ownHosts`：这台 Mac 自己的各种写法（IP、名字），发给它们的请求直连。
+    static func script(proxyHost: String, proxyPort: UInt16, ownHosts: [String] = []) -> String {
         let host = jsString(proxyHost)
+        var own = [host.lowercased()]
+        for extra in ownHosts.map({ jsString($0).lowercased() }) where !extra.isEmpty && !own.contains(extra) {
+            own.append(extra)
+        }
+        let list = own.map { "\"\($0)\"" }.joined(separator: ", ")
+        // `.local` 是局域网里的名字，也直连：它们本来就只在这个网络里有意义。
         return """
         function FindProxyForURL(url, host) {
-          if (host === "\(host)" || host === "localhost" || host === "127.0.0.1" || isPlainHostName(host)) {
+          var h = host.toLowerCase();
+          var own = [\(list)];
+          if (own.indexOf(h) >= 0 || h === "localhost" || h === "127.0.0.1" || isPlainHostName(h) || shExpMatch(h, "*.local")) {
             return "DIRECT";
           }
           return "PROXY \(host):\(proxyPort); DIRECT";
         }
 
         """
+    }
+
+    /// 能不能当主机名写进脚本和描述文件：字母、数字、连字符、点。
+    static func isSafeHostName(_ name: String) -> Bool {
+        !name.isEmpty && name.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "."
+        }
     }
 
     /// 地址只会是 IP 或主机名；仍然把会破坏字符串字面量的字符去掉，免得拼出坏脚本。

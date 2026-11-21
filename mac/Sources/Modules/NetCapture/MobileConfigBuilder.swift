@@ -226,12 +226,14 @@ enum MobileConfigBuilder {
                 proxyCard = card(
                     num: "3", title: "配代理 / Set proxy",
                     body: """
-                    <a class="btn" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
-                    <a class="btn ghost" href="/proxy-manual">固定代理 / Fixed</a>
+                    <a class="btn" id="proxyauto" href="/proxy">自动代理（推荐） / Automatic (recommended)</a>
+                    <a class="btn ghost" id="proxyfixed" href="/proxy-manual">固定代理 / Fixed</a>
                     \(openSettings)
                     <p class="addr">\(addrEsc)</p>
                     <p class="hint"><b>自动代理</b>：Baobox 没在抓包、而这台 Mac 还开着并在同一个 Wi-Fi 时，手机自动直连，不用来回关代理。<br><b>固定代理</b>：所有请求都发给这台 Mac，Baobox 没开手机就上不了网。<br>两种都只对当前这个 Wi-Fi 生效。下载完点<b>打开设置</b>，到最上面的<b>已下载描述文件</b>里安装。</p>
                     <p class="hint"><b>Automatic</b>: while Baobox is not capturing and this Mac is still on and on the same Wi-Fi, the phone connects directly; nothing to switch off. <b>Fixed</b>: everything goes to this Mac, so the phone is offline whenever Baobox is not running. Both apply to this Wi-Fi only. Then tap <b>Open Settings</b> and install from <b>Profile Downloaded</b> at the top.</p>
+                    <p class="hint" id="hostnote">代理按这台 Mac 现在的 IP（\(htmlEscape(ip))）配置。Mac 的 IP 变了以后，回到这个页面重新装一次。<br>The proxy is set up with this Mac's current IP (\(htmlEscape(ip))). If the IP changes, come back to this page and install again.</p>
+                    <p class="hint">安装时系统会要你输入<b>手机的锁屏密码</b>，还可能要<b>这个 Wi-Fi 的密码</b>（描述文件里带着这个 Wi-Fi 的设置），都是正常的。<br>While installing, iOS asks for the <b>phone's passcode</b> and may ask for <b>this Wi-Fi's password</b> (the profile carries this Wi-Fi's settings). Both are expected.</p>
                     <p class="hint">Mac 睡眠、关机或离开这个 Wi-Fi 之后，两种方式下手机联网都会很慢甚至不通，这时请关代理（下面第 4 步）。<br>Once the Mac sleeps, shuts down or leaves this Wi-Fi, the phone's connection becomes very slow or fails with either choice. Turn the proxy off then (step 4 below).</p>
                     """)
             } else {
@@ -336,6 +338,31 @@ enum MobileConfigBuilder {
         <p class="ok" id="ready" style="margin:10px 0 0" hidden>全部就绪，可以开始抓包了。<br>All set. Start capturing.</p>
         </div>
         """
+        // 手机能按名字（xxx.local）找到这台 Mac 的话，代理就按名字配：Mac 换了 IP 不用重装。
+        // 能不能找到要在手机上试（有的网络不放行这种名字解析），所以由页面去请求一下 `/ping`，
+        // 通了才把两个按钮的链接换成带 `?h=local` 的。
+        let localName = NetworkInterfaces.localHostName ?? ""
+        let nameJS = (needsSafari || !isIOS || localName.isEmpty) ? "" : """
+        <script>
+        (function(){
+          if (!window.fetch) return;
+          var name = "\(localName)";
+          var ctl = window.AbortController ? new AbortController() : null;
+          if (ctl) setTimeout(function(){ ctl.abort(); }, 4000);
+          fetch('http://' + name + ':\(NetCaptureEnv.configPagePort)/ping?' + Date.now(),
+                {mode: 'no-cors', cache: 'no-store', signal: ctl ? ctl.signal : undefined})
+            .then(function(){
+              ['proxyauto', 'proxyfixed'].forEach(function(id){
+                var a = document.getElementById(id);
+                if (a && a.href.indexOf('h=local') < 0) a.href += '?h=local';
+              });
+              var note = document.getElementById('hostnote');
+              if (note) note.innerHTML = '代理按这台 Mac 的名字（' + name + '）配置，Mac 换了 IP 也不用重装。<br>The proxy is set up with this Mac\\'s name (' + name + '), so it keeps working when the Mac\\'s IP changes.';
+            }, function(){});
+        })();
+        </script>
+        """
+
         let trustJS = needsSafari ? "" : """
         <script>
         (function(){
@@ -415,7 +442,7 @@ enum MobileConfigBuilder {
         \(statusCard)
         \(cards)
         <p class="foot">仅用于本机调试，请勿抓取他人隐私。<br>For local debugging only.</p>
-        </div>\(copyJS)\(trustJS)</body></html>
+        </div>\(copyJS)\(trustJS)\(nameJS)</body></html>
         """
     }
 
