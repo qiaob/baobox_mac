@@ -261,6 +261,29 @@ enum MobileConfigBuilder {
                 <a class="btn ghost" href="/proxy-off">一键关闭代理 / One-tap turn off</a>
                 <p class="hint">抓完就关：Baobox 没在抓包时，手机连不上代理会上不了网。这也是装一个描述文件；或者到 <b>设置 › 通用 › VPN与设备管理</b> 删除 <b>Baobox Wi-Fi Proxy</b>。要再抓，回第 3 步重新配。<br>Turn it off when you are done: while Baobox is not capturing the phone cannot reach the proxy and is offline. This installs a profile too; or delete <b>Baobox Wi-Fi Proxy</b> in <b>Settings › General › VPN &amp; Device Management</b>. To capture again, repeat step 3.</p>
                 """) + autoBlock
+        } else if !userAgent.contains("Android") {
+            // 别的电脑（或认不出来的设备）：没有能点一下就跳的地方，写清楚要做的两件事。
+            certCard = card(
+                num: "1", title: "装证书 / Install CA",
+                body: """
+                <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
+                <a class="btn" id="certbtn" href="/cert">下载证书 / Download CA (.crt)</a>
+                <p class="hint">下载后把它设成<b>受信任的根证书</b>。macOS：双击加进钥匙串，在「钥匙串访问」里打开它，把「信任」改成<b>始终信任</b>。Windows：双击 → 安装证书 → 放进<b>受信任的根证书颁发机构</b>。Firefox 要在它自己的设置里导入。<br>Make it a <b>trusted root certificate</b>. macOS: double-click to add it to the keychain, open it in Keychain Access and set Trust to <b>Always Trust</b>. Windows: double-click → Install Certificate → <b>Trusted Root Certification Authorities</b>. Firefox needs it imported in its own settings.</p>
+                """)
+
+            proxyCard = card(
+                num: "2", title: "配代理 / Set proxy",
+                body: """
+                <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
+                <div class="kv"><span>端口 Port</span><b id="port">\(port)</b><button class="mini" onclick="copyText('port',this)">复制 Copy</button></div>
+                <p class="hint">在系统（或浏览器）的代理设置里，把 <b>HTTP</b> 和 <b>HTTPS</b> 代理都设成上面的主机名和端口。<br>In the system's (or the browser's) proxy settings, set both the <b>HTTP</b> and <b>HTTPS</b> proxy to the host and port above.</p>
+                """)
+
+            offCard = card(
+                num: "3", title: "关代理 / Turn proxy off",
+                body: """
+                <p class="hint">抓完把代理设置改回原样：Baobox 没在抓包时，这台设备连不上代理会上不了网。<br>Put the proxy settings back when you are done: while Baobox is not capturing this device cannot reach the proxy and is offline.</p>
+                """)
         } else {
             certCard = card(
                 num: "1", title: "装证书 / Install CA",

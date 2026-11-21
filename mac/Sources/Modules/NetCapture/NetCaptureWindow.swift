@@ -210,6 +210,10 @@ struct NetCaptureRootView: View {
                 case .android:
                     session.setLAN(true)
                     phoneSheet = .android
+                case .otherDevice:
+                    // 别的电脑：面板里只是复制地址，面板不关；先把「其他设备」打开，地址才连得上。
+                    showDeviceSetup = true
+                    session.setLAN(true)
                 case .iosSimulator: session.installSimulatorCert()
                 case .terminal: session.openTerminal()
                 case .copyEnv: session.copyShellEnv()
@@ -267,7 +271,7 @@ struct NetCaptureRootView: View {
         .padding(.vertical, 8)
     }
 
-    /// 「抓：这台 Mac / 手机」两个开关：**在抓谁**。亮着就是在抓；没抓包时点它只是改「下次开始抓谁」。
+    /// 「抓：这台 Mac / 其他设备」两个开关：**在抓谁**。「其他设备」= 局域网里的手机、平板、别的电脑。亮着就是在抓；没抓包时点它只是改「下次开始抓谁」。
     /// 怎么把设备接进来（扫码、装证书、终端）是另一回事，在右边的「设备设置」里
     /// （2026-11-21 用户：「扫码设置页，和正在抓哪个应该是不同的配置」。原来是一个下拉框，开关和操作混在一起）。
     private func sourceToggles(showLabel: Bool, showText: Bool) -> some View {
@@ -283,7 +287,7 @@ struct NetCaptureRootView: View {
                     wantsMac.toggle()
                 }
             }
-            sourceChip(title: "netcapture.source.phoneShort", icon: "iphone", isOn: phoneOn, showText: showText,
+            sourceChip(title: "netcapture.source.phoneShort", icon: "laptopcomputer.and.iphone", isOn: phoneOn, showText: showText,
                        help: "netcapture.toolbar.phoneHelp") {
                 if engine.isActive {
                     session.setLAN(!phoneOn)
@@ -500,7 +504,7 @@ struct NetCaptureRootView: View {
                     ForEach(store.devices) { device in
                         sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
                                    selected: filter.device == device.ip && filter.host == nil,
-                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "iphone") {
+                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "network") {
                             store.updateFilter {
                                 $0.device = device.ip
                                 $0.host = nil

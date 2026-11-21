@@ -287,7 +287,10 @@ struct NetCapturePhoneSheet: View {
 
 /// 工具条「设备设置」点开的面板：按设备列出接进来要做的事。只负责「怎么配」，不改变正在抓谁。
 struct NetCaptureDeviceSetup: View {
-    enum Action { case iOS, android, iosSimulator, terminal, copyEnv }
+    enum Action { case iOS, android, otherDevice, iosSimulator, terminal, copyEnv }
+
+    @ObservedObject private var engine = NetCaptureEngine.shared
+    private var proxyAddress: String { "\(NetworkInterfaces.primaryIP()):\(engine.port ?? NetCaptureEnv.port)" }
 
     let perform: (Action) -> Void
 
@@ -300,6 +303,17 @@ struct NetCaptureDeviceSetup: View {
             Divider()
             row(icon: "candybarphone", title: "netcapture.setup.android.title", detail: "netcapture.setup.android.detail") {
                 Button("netcapture.setup.android.action") { perform(.android) }
+            }
+            Divider()
+            row(icon: "desktopcomputer", title: "netcapture.setup.other.title", detail: "netcapture.setup.other.detail") {
+                CopyButton(title: "netcapture.setup.other.copyProxy") {
+                    perform(.otherDevice)
+                    return proxyAddress
+                }
+                CopyButton(title: "netcapture.setup.other.copyPage") {
+                    perform(.otherDevice)
+                    return NetworkInterfaces.landingPageURL
+                }
             }
             Divider()
             row(icon: "macwindow.on.rectangle", title: "netcapture.setup.simulator.title",
