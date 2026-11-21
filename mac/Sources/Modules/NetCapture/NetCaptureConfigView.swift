@@ -1,25 +1,42 @@
 import AppKit
 import SwiftUI
 
-// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2）：2×2 四张主卡片（本机、手动代理、WireGuard、证书），
-// 每张右上角一个总开关（证书卡片的总开关是里面的「给其他设备装证书」）；下面一排三张次要卡片（模拟器、终端 / 脚本、Android USB），
-// 只有按钮。打开开关不切标签页：在这一页上通常要连着开几个。
+// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2）：第一行是证书卡片，单独占一整行（它是另外三张的前提，不是抓包来源）；
+// 第二行三张抓包来源：本机、手动代理、WireGuard，每张右上角一个总开关（证书卡片的总开关是里面的「给其他设备装证书」）；
+// 最下面一排三张次要卡片（模拟器、终端 / 脚本、Android USB），只有按钮。打开开关不切标签页：在这一页上通常要连着开几个。
 
 struct NetCaptureConfigView: View {
+    /// 窗口够宽时三张抓包来源排一行；窄了 WireGuard 另起一行（一行三张时每张不到 300 宽，二维码旁边放不下字）。
+    private static let threeColumnWidth: CGFloat = 1080
+
     var body: some View {
+        GeometryReader { proxy in
+            page(threeColumns: proxy.size.width >= Self.threeColumnWidth)
+        }
+    }
+
+    private func page(threeColumns: Bool) -> some View {
         ScrollView {
             VStack(spacing: 14) {
-                // 同一行的两张卡片一样高。
-                HStack(alignment: .top, spacing: 14) {
-                    MacCard()
-                    ManualProxyCard()
+                CertificateCard()
+                    .fixedSize(horizontal: false, vertical: true)
+                // 同一行的卡片一样高。
+                if threeColumns {
+                    HStack(alignment: .top, spacing: 14) {
+                        MacCard()
+                        ManualProxyCard()
+                        WireGuardCard(stacked: true)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(alignment: .top, spacing: 14) {
+                        MacCard()
+                        ManualProxyCard()
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    WireGuardCard(stacked: false)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .top, spacing: 14) {
-                    WireGuardCard()
-                    CertificateCard()
-                }
-                .fixedSize(horizontal: false, vertical: true)
                 HStack(alignment: .top, spacing: 14) {
                     SimulatorCard()
                     TerminalCard()
@@ -108,18 +125,53 @@ private struct CopyValueRow: View {
     }
 }
 
-/// 二维码；内容为空时是一个虚线占位框，里面一句说明。
+/// 二维码；内容为空时是一个虚线占位框，里面一句说明。点一下放大（卡片上的太小，手机隔着屏幕不好扫），再点或点别处收起。
 private struct QRBox: View {
     let text: String?
     let side: CGFloat
     let placeholder: LocalizedStringKey
+    /// 放大后写在二维码下面的一行（端点、网址），让人知道扫的是哪个。
+    var caption: String?
+
+    @State private var enlarged = false
+    private static let enlargedSide: CGFloat = 380
 
     var body: some View {
-        if let text, let image = QRCodeGenerator.image(for: text, minPixels: Int(side * 2)) {
-            Image(decorative: image, scale: 1).resizable().interpolation(.none)
-                .frame(width: side, height: side)
-                .padding(5)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
+        if let text, let image = QRCodeGenerator.image(for: text, minPixels: Int(Self.enlargedSide * 2)) {
+            Button {
+                enlarged.toggle()
+            } label: {
+                Image(decorative: image, scale: 1).resizable().interpolation(.none)
+                    .frame(width: side, height: side)
+                    .padding(5)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "plus.magnifyingglass")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(4)
+                            .background(Circle().fill(Color.black.opacity(0.55)))
+                            .padding(3)
+                    }
+            }
+            .buttonStyle(.plain)
+            .help(Text("netcapture.config.qrEnlarge"))
+            .popover(isPresented: $enlarged, arrowEdge: .trailing) {
+                VStack(spacing: 10) {
+                    Image(decorative: image, scale: 1).resizable().interpolation(.none)
+                        .frame(width: Self.enlargedSide, height: Self.enlargedSide)
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
+                    if let caption, !caption.isEmpty {
+                        Text(verbatim: caption).font(.callout.monospaced()).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: Self.enlargedSide + 28)
+                    }
+                }
+                .padding(16)
+                .contentShape(Rectangle())
+                .onTapGesture { enlarged = false }
+            }
         } else {
             Text(placeholder)
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -209,80 +261,122 @@ private struct ManualProxyCard: View {
 // MARK: - WireGuard
 
 private struct WireGuardCard: View {
+    /// 三张一行时卡片窄：二维码在上、说明在下；单独一行时左右排。
+    let stacked: Bool
     @ObservedObject private var session = NetCaptureSession.shared
 
     var body: some View {
         ConfigCard(icon: "lock.shield", title: "netcapture.config.wg.title", detail: "netcapture.config.wg.detail",
                    isOn: Binding(get: { session.wireguardOn }, set: { session.setWireGuard($0) })) {
-            HStack(alignment: .top, spacing: 12) {
-                // 关着时不显示任何和密钥有关的东西。
-                QRBox(text: session.wireguardOn ? session.wireguardClientConfig() : nil, side: 132,
-                      placeholder: "netcapture.config.qrPlaceholder")
-                VStack(alignment: .leading, spacing: 6) {
-                    if session.wireguardOn {
-                        Text("netcapture.config.wg.endpoint").font(.caption).foregroundStyle(.secondary)
-                        Text(verbatim: session.wireguardEndpoint).font(.body.monospaced()).textSelection(.enabled)
-                        CopyButton(title: "netcapture.config.wg.copy") { session.wireguardClientConfig() ?? "" }
-                            .controlSize(.small)
+            if stacked {
+                HStack(alignment: .top, spacing: 12) {
+                    qr
+                    if session.wireguardOn { endpoint }
+                }
+                note
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    qr
+                    VStack(alignment: .leading, spacing: 6) {
+                        if session.wireguardOn { endpoint }
+                        note
                     }
-                    Text("netcapture.config.wg.note").font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    // 关着时不显示任何和密钥有关的东西。
+    private var qr: some View {
+        QRBox(text: session.wireguardOn ? session.wireguardClientConfig() : nil, side: 132,
+              placeholder: "netcapture.config.qrPlaceholder", caption: session.wireguardEndpoint)
+    }
+
+    private var endpoint: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("netcapture.config.wg.endpoint").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: session.wireguardEndpoint).font(.body.monospaced()).textSelection(.enabled)
+                .lineLimit(1).minimumScaleFactor(0.8)
+            CopyButton(title: "netcapture.config.wg.copy") { session.wireguardClientConfig() ?? "" }
+                .controlSize(.small)
+        }
+    }
+
+    private var note: some View {
+        Text("netcapture.config.wg.note").font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 // MARK: - 证书
 
+/// 单独占第一行，里面也只有一行：左边是这台 Mac 的两项（信任、解密 HTTPS），右边是「给其他设备装证书」和它的二维码。
 private struct CertificateCard: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @AppStorage(NetCaptureEnv.Keys.decryptHTTPS) private var decrypt = true
 
     var body: some View {
         ConfigCard(icon: "checkmark.seal", title: "netcapture.config.cert.title", detail: "netcapture.config.cert.detail") {
-            HStack(spacing: 8) {
-                Text("netcapture.config.cert.thisMac").font(.callout)
-                Spacer(minLength: 8)
-                if session.caTrusted {
-                    Label("netcapture.config.cert.trusted", systemImage: "checkmark.seal.fill")
-                        .font(.callout).foregroundStyle(NetCaptureColors.accent)
-                } else {
-                    Button("netcapture.config.cert.install") { session.installCert() }
-                        .controlSize(.small)
-                        .disabled(session.working != nil)
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    thisMac
+                    decryptRow
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                Divider()
+                otherDevices
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            HStack(spacing: 8) {
-                Text("netcapture.config.cert.decrypt").font(.callout)
-                Button("netcapture.config.cert.scope") {
-                    guard let registry = AppDelegate.shared?.registry else { return }
-                    SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
+        }
+    }
+
+    private var thisMac: some View {
+        HStack(spacing: 8) {
+            Text("netcapture.config.cert.thisMac").font(.callout)
+            Spacer(minLength: 8)
+            if session.caTrusted {
+                Label("netcapture.config.cert.trusted", systemImage: "checkmark.seal.fill")
+                    .font(.callout).foregroundStyle(NetCaptureColors.accent)
+            } else {
+                Button("netcapture.config.cert.install") { session.installCert() }
+                    .controlSize(.small)
+                    .disabled(session.working != nil)
+            }
+        }
+    }
+
+    private var decryptRow: some View {
+        HStack(spacing: 8) {
+            Text("netcapture.config.cert.decrypt").font(.callout)
+            Button("netcapture.config.cert.scope") {
+                guard let registry = AppDelegate.shared?.registry else { return }
+                SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
+            }
+            .buttonStyle(.link).controlSize(.small)
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(get: { decrypt }, set: { session.setDecryptHTTPS($0) }))
+                .toggleStyle(.switch).labelsHidden().controlSize(.small)
+        }
+    }
+
+    private var otherDevices: some View {
+        HStack(alignment: .top, spacing: 12) {
+            QRBox(text: session.certPageOn ? NetworkInterfaces.landingPageURL : nil, side: 84,
+                  placeholder: "netcapture.config.qrPlaceholder", caption: NetworkInterfaces.landingPageURL)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("netcapture.config.cert.otherDevices").font(.callout.weight(.medium))
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: Binding(get: { session.certPageOn }, set: { session.setCertPage($0) }))
+                        .toggleStyle(.switch).labelsHidden()
                 }
-                .buttonStyle(.link).controlSize(.small)
-                Spacer(minLength: 8)
-                Toggle("", isOn: Binding(get: { decrypt }, set: { session.setDecryptHTTPS($0) }))
-                    .toggleStyle(.switch).labelsHidden().controlSize(.small)
-            }
-            Divider()
-            HStack(spacing: 8) {
-                Text("netcapture.config.cert.otherDevices").font(.callout.weight(.medium))
-                Spacer(minLength: 8)
-                Toggle("", isOn: Binding(get: { session.certPageOn }, set: { session.setCertPage($0) }))
-                    .toggleStyle(.switch).labelsHidden()
-            }
-            HStack(alignment: .top, spacing: 12) {
-                QRBox(text: session.certPageOn ? NetworkInterfaces.landingPageURL : nil, side: 104,
-                      placeholder: "netcapture.config.qrPlaceholder")
-                VStack(alignment: .leading, spacing: 6) {
-                    if session.certPageOn {
-                        Text(verbatim: NetworkInterfaces.landingPageURL)
-                            .font(.caption.monospaced()).textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Text("netcapture.config.cert.pageNote").font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if session.certPageOn {
+                    Text(verbatim: NetworkInterfaces.landingPageURL)
+                        .font(.caption.monospaced()).textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
                 }
+                Text("netcapture.config.cert.pageNote").font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
