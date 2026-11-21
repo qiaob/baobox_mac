@@ -196,7 +196,7 @@ final class NetCaptureSession: ObservableObject {
     private func pointSystemProxyAtEngine() {
         guard let port = engine.port else { return }
         DispatchQueue.global(qos: .userInitiated).async {
-            SystemProxyController.enable(port: port, socksPort: NetCaptureEnv.neighbour(of: port, offset: 2))
+            SystemProxyController.enable(port: port, socksPort: EngineListeners.neighbour(of: port, offset: 2))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.macCaptureOn = true

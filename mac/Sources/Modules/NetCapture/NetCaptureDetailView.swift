@@ -221,12 +221,20 @@ struct FlowDetailView: View {
             } else {
                 field("netcapture.detail.host", flow.host)
                 field("netcapture.detail.started", FlowFormat.time(flow.startedAt))
-                Text(flow.undecryptedReason == .outOfScope
-                     ? "netcapture.flow.reason.outOfScope" : "netcapture.flow.reason.handshake")
+                Text(Self.reasonText(flow.undecryptedReason))
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 4)
             }
+        }
+    }
+
+    /// 没解密的原因：握手失败、不在解密范围、关了解密，三种说法分开。
+    private static func reasonText(_ reason: CaptureEvent.UndecryptedReason?) -> LocalizedStringKey {
+        switch reason {
+        case .outOfScope: return "netcapture.flow.reason.outOfScope"
+        case .decryptOff: return "netcapture.flow.reason.decryptOff"
+        case .handshakeFailed, nil: return "netcapture.flow.reason.handshake"
         }
     }
 

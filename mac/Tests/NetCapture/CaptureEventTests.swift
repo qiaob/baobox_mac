@@ -381,3 +381,72 @@ final class CaptureEventTests: XCTestCase {
         XCTAssertEqual(lines[2], #"export NODE_EXTRA_CA_CERTS='/Users/o'\''brien/ca.pem'"#)
     }
 }
+
+/// 「配置 / HTTP / TCP」一批加的事件与指令（docs/packet-capture/CONTROL.md §2、§4、§5）。
+/// 事件样本取自真引擎（mitmproxy 12.3.1）经 SOCKS 转发原始 TCP 时桥的实际输出。
+final class CaptureControlEventTests: XCTestCase {
+
+    private func line(_ json: String) -> Data { Data(("BAOBOX " + json).utf8) }
+    private let id = "be704a7c-d720-4793-9f07-39bd4f54a61f"
+
+    func testTCPOpen() {
+        let event = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_open","id":"\#(id)","client":"127.0.0.1","host":"127.0.0.1","port":19660,"sni":null,"ts":1795191546.5}"#))
+        XCTAssertEqual(event, .tcpOpen(CaptureEvent.TCPOpen(
+            id: UUID(uuidString: id) ?? UUID(), client: "127.0.0.1", host: "127.0.0.1", port: 19660, sni: nil,
+            startedAt: Date(timeIntervalSince1970: 1795191546.5))))
+    }
+
+    func testTCPOpenEmptySNIIsNil() {
+        guard case .tcpOpen(let open)? = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_open","id":"\#(id)","host":"10.1.2.3","port":5222,"sni":""}"#)) else { return XCTFail() }
+        XCTAssertNil(open.sni)
+        XCTAssertNil(open.client)
+    }
+
+    func testTCPData() {
+        guard case .tcpData(let data)? = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_data","id":"\#(id)","from_client":false,"size":28,"data":"MjIwIHJlYWR5DQo=","truncated":false,"ts":1795191547}"#))
+        else { return XCTFail() }
+        XCTAssertFalse(data.fromClient)
+        XCTAssertEqual(data.size, 28)
+        XCTAssertEqual(data.data, Data("220 ready\r\n".utf8))
+        XCTAssertFalse(data.truncated)
+    }
+
+    /// 超过正文上限后只有大小、没有数据。
+    func testTCPDataSizeOnly() {
+        guard case .tcpData(let data)? = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_data","id":"\#(id)","from_client":true,"size":70000,"truncated":false}"#))
+        else { return XCTFail() }
+        XCTAssertNil(data.data)
+        XCTAssertEqual(data.size, 70000)
+    }
+
+    func testTCPDataNeedsDirection() {
+        XCTAssertNil(CaptureEvent.parse(line: line(#"{"event":"tcp_data","id":"\#(id)","size":3}"#)))
+    }
+
+    func testTCPClose() {
+        XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"tcp_close","id":"\#(id)","error":null,"ts":1795191550}"#)),
+                       .tcpClose(id: UUID(uuidString: id) ?? UUID(), error: nil, at: Date(timeIntervalSince1970: 1795191550)))
+        guard case .tcpClose(_, let error, _)? = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_close","id":"\#(id)","error":"Connection reset by peer"}"#)) else { return XCTFail() }
+        XCTAssertEqual(error, "Connection reset by peer")
+    }
+
+    func testDecryptOffReason() {
+        XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"tls","client":"10.0.0.1","host":"x.com","reason":"decrypt_off"}"#)),
+                       .tls(client: "10.0.0.1", host: "x.com", reason: .decryptOff))
+    }
+
+    func testNewCommands() {
+        func text(_ command: CaptureCommand) -> String { String(decoding: command.line, as: UTF8.self) }
+        XCTAssertEqual(text(.record(false)), "{\"cmd\":\"record\",\"on\":false}\n")
+        XCTAssertEqual(text(.lanProxy(true)), "{\"cmd\":\"lan_proxy\",\"on\":true}\n")
+        XCTAssertEqual(text(.macTCP(true)), "{\"cmd\":\"mac_tcp\",\"on\":true}\n")
+        XCTAssertEqual(text(.pagePort(9091)), "{\"cmd\":\"page_port\",\"port\":9091}\n")
+        XCTAssertEqual(text(.scope(.off)), "{\"cmd\":\"scope\",\"domains\":[],\"mode\":\"none\"}\n")
+        XCTAssertEqual(DecryptScope.off.json, #"{"domains":[],"mode":"none"}"#)
+    }
+}

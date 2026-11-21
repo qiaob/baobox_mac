@@ -41,6 +41,20 @@ FORBIDDEN_PAGE = (
     "<p>Open the Baobox capture window and click Allow. This page reloads by itself afterwards.</p>"
 )
 
+# Manual Proxy is off on the Mac: the engine still listens on the LAN (the setup page's certificate
+# check needs it), but other devices may not use it as their proxy.
+LAN_PROXY_OFF_PAGE = (
+    "<!doctype html><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width, initial-scale=1'>"
+    "<title>Baobox</title>"
+    "<body style='font-family:-apple-system,sans-serif;padding:32px;line-height:1.6'>"
+    "<h2>手动代理没有打开</h2>"
+    "<p>这台 Mac 上 Baobox 的「手动代理」是关着的，不能拿它当代理上网。要抓这台设备，请在 Mac 的抓包窗口里打开「手动代理」；不抓了就把设备的代理改回去。</p>"
+    "<h2>Manual Proxy is off</h2>"
+    "<p>Manual Proxy is turned off in Baobox on this Mac, so it cannot be used as a proxy. To capture this device, "
+    "turn on Manual Proxy in the capture window on the Mac; otherwise set the device's proxy back.</p>"
+)
+
 SELF_PAGE = (
     "<!doctype html><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width, initial-scale=1'>"
@@ -57,7 +71,8 @@ SELF_PAGE = (
 CHECK_HOST = "check.baobox.invalid"
 TRUST_CHECK_PATH = "/baobox-trust-check"
 
-
+# Raw TCP (Baobox's "TCP" tab): at most this much of one read travels in a `tcp_data` event.
+TCP_CHUNK = 16 * 1024
 
 def bare_host(value):
     """Lower-case host without brackets, IPv4-mapped prefix or zone id."""
@@ -198,10 +213,27 @@ def header_pairs(raw):
     return pairs
 
 
+def mode_name(client):
+    mode = getattr(client, "proxy_mode", None)
+    return getattr(mode, "type_name", "")
+
+
 def via_socks(client):
     """True when the client connection came in through the SOCKS5 listener."""
-    mode = getattr(client, "proxy_mode", None)
-    return getattr(mode, "type_name", "") == "socks5"
+    return mode_name(client) == "socks5"
+
+
+def via_wireguard(client):
+    """True when the client is a device inside the WireGuard tunnel (it needed the key to get here)."""
+    return mode_name(client) == "wireguard"
+
+
+def address_fields(address):
+    """(host, port) of a server address, or (None, None)."""
+    try:
+        return str(address[0]), int(address[1])
+    except (TypeError, ValueError, IndexError):
+        return None, None
 
 
 def server_port(server):
@@ -236,6 +268,10 @@ class Bridge:
         self.listen_ports = set()        # ports this engine listens on
         self.local_names = local_names()
         self.page_port = 0               # Baobox's setup page for phones, 0 = not running
+        self.lan_ip = ""                 # this Mac's LAN address (what a tunnel device uses to reach it)
+        self.recording = True            # False = paused: nothing new is reported
+        self.lan_proxy = True            # False = LAN devices may not use the engine as a proxy
+        self.mac_tcp = False             # report raw TCP from this Mac (it arrives through SOCKS)
 
     # ----- options --------------------------------------------------------
 
@@ -252,6 +288,14 @@ class Bridge:
                           "Port of Baobox's setup page; requests sent to the proxy itself are redirected there.")
         loader.add_option("baobox_new_ca", bool, False,
                           "Replace the root certificate with a new one named after Baobox, then exit.")
+        loader.add_option("baobox_lan_ip", str, "",
+                          "This Mac's LAN address; a request to it from inside the tunnel is for this machine.")
+        loader.add_option("baobox_record", bool, True,
+                          "Report new traffic (False = capture paused).")
+        loader.add_option("baobox_lan_proxy", bool, True,
+                          "Let allowed LAN devices use the engine as their proxy.")
+        loader.add_option("baobox_mac_tcp", bool, False,
+                          "Report raw TCP connections that come from this Mac.")
 
     def running(self):
         self.body_cap = max(1024, ctx.options.baobox_body_cap)
@@ -262,6 +306,10 @@ class Bridge:
                 pass
         self.allowed.update(ip for ip in ctx.options.baobox_allowed.split(",") if ip)
         self.page_port = max(0, ctx.options.baobox_page_port)
+        self.lan_ip = bare_host(ctx.options.baobox_lan_ip)
+        self.recording = ctx.options.baobox_record
+        self.lan_proxy = ctx.options.baobox_lan_proxy
+        self.mac_tcp = ctx.options.baobox_mac_tcp
         for spec in ctx.options.mode:
             match = re.search(r":(\d+)$", spec)
             if match:
@@ -330,14 +378,25 @@ class Bridge:
             if ip:
                 self.denied.add(ip)
                 self.allowed.discard(ip)
+        elif name == "record":
+            self.recording = bool(cmd.get("on"))
+        elif name == "lan_proxy":
+            self.lan_proxy = bool(cmd.get("on"))
+        elif name == "mac_tcp":
+            self.mac_tcp = bool(cmd.get("on"))
+        elif name == "page_port":
+            port = cmd.get("port")
+            if isinstance(port, int) and 0 <= port <= 65535:
+                self.page_port = port
 
     def apply_scope(self, cmd):
         mode = cmd.get("mode")
         domains = cmd.get("domains")
-        if mode in ("all", "allow", "deny") and isinstance(domains, list):
+        # none = decrypt nothing (Baobox's "Decrypt HTTPS" switch is off).
+        if mode in ("all", "allow", "deny", "none") and isinstance(domains, list):
             self.scope_mode = mode
             self.scope_domains = [d for d in domains if isinstance(d, str) and d.strip()]
-            self.reported = {r for r in self.reported if r[2] != "out_of_scope"}
+            self.reported = {r for r in self.reported if r[2] not in ("out_of_scope", "decrypt_off")}
 
     # ----- mock rules ------------------------------------------------------
 
@@ -426,9 +485,13 @@ class Bridge:
             emit({"event": "device", "client": ip})
         return False
 
+    def proxy_refused(self, client):
+        """A LAN device using the engine as its proxy while Manual Proxy is off. Tunnel devices and this
+        Mac are never refused."""
+        return not self.lan_proxy and not is_loopback(client_ip(client)) and not via_wireguard(client)
+
     def http_connect(self, flow: http.HTTPFlow):
         if self.addressed_to_proxy(flow):
-            flow.metadata["baobox_self"] = True
             if self.page_port:
                 # The setup page's trust check, sent by a phone that already has the proxy set: it wants
                 # TLS with the engine itself. Accept the tunnel and answer inside it (`request`). The
@@ -438,6 +501,9 @@ class Bridge:
                 flow.request.port = self.page_port
             else:
                 flow.response = http.Response.make(403, b"", {"Connection": "close"})
+            return
+        if self.proxy_refused(flow.client_conn):
+            flow.response = http.Response.make(403, b"", {"Connection": "close"})
             return
         if not self.admitted(client_ip(flow.client_conn)):
             flow.response = http.Response.make(403, b"", {"Connection": "close"})
@@ -454,13 +520,24 @@ class Bridge:
         return flow.request.port in self.listen_ports and self.is_this_machine(flow)
 
     def is_this_machine(self, flow):
-        """True when the request's host is this machine: a loopback name, the host name, or the
-        address the client itself used to reach the engine."""
+        """True when the request's host is this machine: a loopback name, the host name, this Mac's LAN
+        address (how a device inside the tunnel reaches it), or the address the client itself used to
+        reach the engine."""
         host = bare_host(flow.request.host)
-        if host in self.local_names:
+        if host in self.local_names or (self.lan_ip and host == self.lan_ip):
             return True
         sock = getattr(flow.client_conn, "sockname", None)
         return bool(sock) and host == bare_host(sock[0])
+
+    def engine_itself(self, address):
+        """True when a TLS connection is aimed at the engine itself (the setup page's certificate check):
+        connected straight to the proxy port (no destination yet), or, from inside the tunnel, to this
+        Mac's address on one of the engine's ports."""
+        if not address:
+            return True
+        host, port = address_fields(address)
+        host = bare_host(host)
+        return port in self.listen_ports and (host in self.local_names or (bool(self.lan_ip) and host == self.lan_ip))
 
     def addressed_to_setup_page(self, flow):
         """True for the phone setup page fetched through the proxy (the phone already has the proxy set)."""
@@ -489,7 +566,9 @@ class Bridge:
 
     def report_tls(self, ip, host, reason):
         key = (ip, host, reason)
-        if key in self.reported:
+        # Paused: nothing is reported, and nothing is remembered as reported, so the row shows up once
+        # capture resumes and the host is seen again.
+        if key in self.reported or not self.recording:
             return
         self.reported.add(key)
         emit({"event": "tls", "client": ip, "host": host, "reason": reason})
@@ -505,14 +584,21 @@ class Bridge:
             data.establish_server_tls_first = False
             return
         host = data.client_hello.sni
-        if not host:
-            return
         ip = client_ip(data.context.client)
         # The SOCKS listener exists for WebSocket: Apple's WebSocket stack ignores the HTTP proxy and only
         # uses the system SOCKS proxy. But every SOCKS-aware app sends all of its TCP through it (mail,
         # chat, ...). Only web traffic (443) is of interest here; leave everything else untouched.
         if via_socks(data.context.client) and server_port(data.context.server) != 443:
             data.ignore_connection = True
+            return
+        if self.scope_mode == "none" and not self.engine_itself(server):
+            # Decrypt HTTPS is off: pass every TLS connection through untouched. The certificate check
+            # still needs its handshake with the engine, so connections to the engine itself are kept.
+            data.ignore_connection = True
+            if host:
+                self.report_tls(ip, host, "decrypt_off")
+            return
+        if not host:
             return
         if (ip, host) in self.failed:
             data.ignore_connection = True
@@ -596,19 +682,21 @@ class Bridge:
         if flow.request.path.split("?", 1)[0] == TRUST_CHECK_PATH and self.is_this_machine(flow):
             # The setup page asks over https whether this device trusts the CA. Getting here at all
             # means the handshake with a certificate signed by the CA succeeded.
-            flow.metadata["baobox_self"] = True
             flow.response = http.Response.make(
                 204, b"", {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
             return
         if self.addressed_to_proxy(flow):
             # Not traffic to capture: no event, no admission prompt.
-            flow.metadata["baobox_self"] = True
             flow.response = self.self_response(flow.request)
             return
         if flow.request.pretty_host == CHECK_HOST:
-            # Asking also announces the device, so the Mac shows "allow" as soon as the proxy is set.
-            flow.metadata["baobox_self"] = True
-            allowed = self.admitted(client_ip(flow.client_conn))
+            # Asking also announces the device, so the Mac shows "allow" as soon as the proxy is set. Not while
+            # Manual Proxy is off: the device could not use the proxy anyway.
+            ip = client_ip(flow.client_conn)
+            if self.proxy_refused(flow.client_conn):
+                allowed = ip in self.allowed
+            else:
+                allowed = self.admitted(ip)
             flow.response = http.Response.make(
                 200, json.dumps({"proxy": True, "allowed": allowed}).encode("utf-8"),
                 {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
@@ -618,8 +706,13 @@ class Bridge:
             # Baobox's own page: pass it on, keep it out of the list, and don't ask to allow the device for it.
             # The page server would otherwise only see this Mac as the sender; tell it who really asked
             # (it uses that for scan-to-allow). Always overwritten, so a client cannot claim to be another.
-            flow.metadata["baobox_self"] = True
             flow.request.headers["X-Baobox-Client"] = client_ip(flow.client_conn) or ""
+            return
+        if self.proxy_refused(flow.client_conn):
+            # No `device` event: the device is not waiting to be allowed, Manual Proxy is simply off.
+            flow.response = http.Response.make(
+                403, LAN_PROXY_OFF_PAGE.encode("utf-8"),
+                {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
             return
         ip = client_ip(flow.client_conn)
         if not self.admitted(ip):
@@ -628,24 +721,35 @@ class Bridge:
                 {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
             return
         req = flow.request
-        body, truncated, sniffed = self.body_fields(req)
         rule = self.match_rule(req)
+        replay = bool(flow.metadata.get("baobox_replay"))
+        # Paused: the request still goes out (and a mock still answers it), it just is not reported.
+        # A replay is something the user clicked, so it is reported anyway. Only flows whose request was
+        # reported get their response, error and WebSocket messages reported (`baobox_rec`), so nothing
+        # shows up half after resuming.
+        if self.recording or replay:
+            self.emit_request(flow, ip, replay)
+        if rule is not None:
+            # Answer from the rule; the request never reaches the server.
+            flow.metadata["baobox_mock"] = rule["id"]
+            flow.response = http.Response.make(rule["status"], rule["body"], http.Headers(rule["headers"]))
+
+    def emit_request(self, flow, ip, replay):
+        flow.metadata["baobox_rec"] = True
+        req = flow.request
+        body, truncated, sniffed = self.body_fields(req)
         emit({
             "event": "request", "id": flow.id, "client": ip,
-            "replay": bool(flow.metadata.get("baobox_replay")),
+            "replay": replay,
             "decoded": self.structured_text(req, flow),
             "method": req.method, "scheme": req.scheme, "host": req.pretty_host,
             "port": req.port, "path": req.path, "http": req.http_version,
             "headers": self.headers(req), "body": body, "truncated": truncated, "sniffed": sniffed,
             "bytes": self.wire_size(req), "ts": req.timestamp_start,
         })
-        if rule is not None:
-            # Answer from the rule; the request never reaches the server.
-            flow.metadata["baobox_mock"] = rule["id"]
-            flow.response = http.Response.make(rule["status"], rule["body"], http.Headers(rule["headers"]))
 
     def response(self, flow: http.HTTPFlow):
-        if flow.metadata.get("baobox_self") or not self.admitted(client_ip(flow.client_conn)):
+        if not flow.metadata.get("baobox_rec"):
             return
         resp = flow.response
         body, truncated, sniffed = self.body_fields(resp)
@@ -665,14 +769,12 @@ class Bridge:
         })
 
     def error(self, flow: http.HTTPFlow):
-        if flow.metadata.get("baobox_self"):
-            return
-        if flow.error and self.admitted(client_ip(flow.client_conn)):
+        if flow.error and flow.metadata.get("baobox_rec"):
             emit({"event": "error", "id": flow.id, "message": flow.error.msg,
                   "ts": flow.error.timestamp})
 
     def websocket_message(self, flow: http.HTTPFlow):
-        if flow.websocket is None or not flow.websocket.messages:
+        if flow.websocket is None or not flow.websocket.messages or not flow.metadata.get("baobox_rec"):
             return
         message = flow.websocket.messages[-1]
         event = {"event": "ws", "id": flow.id, "from_client": message.from_client,
@@ -680,6 +782,58 @@ class Bridge:
         if message.is_text:
             event["text"] = message.text[:65536]
         emit(event)
+
+
+    # ----- raw TCP (Baobox's "TCP" tab) -------------------------------------
+    #
+    # The engine treats a connection as raw TCP when it is neither HTTP nor TLS it decrypted into HTTP.
+    # TLS it passes through untouched (handshake failed, out of scope, Decrypt HTTPS off, SOCKS on a port
+    # other than 443) creates no TCP flow at all, so none of it shows up here; UDP and DNS have hooks of
+    # their own and are left alone.
+
+    def tcp_start(self, flow):
+        client = flow.client_conn
+        ip = client_ip(client)
+        if not self.recording:
+            return
+        # From this Mac (through SOCKS, or a CONNECT tunnel on the HTTP proxy) only with "This Mac → TCP"
+        # on; tunnel devices always.
+        if is_loopback(ip) and not via_wireguard(client) and not self.mac_tcp:
+            return
+        flow.metadata["baobox_rec"] = True
+        flow.metadata["baobox_tcp_bytes"] = 0
+        host, port = address_fields(getattr(flow.server_conn, "address", None))
+        emit({"event": "tcp_open", "id": flow.id, "client": ip, "host": host or "", "port": port or 0,
+              "sni": getattr(client, "sni", None), "ts": getattr(flow, "timestamp_created", None) or time.time()})
+
+    def tcp_message(self, flow):
+        message = flow.messages[-1]
+        # The engine keeps every message of a TCP flow for the life of the connection. Nothing in this
+        # process reads the older ones (the layer forwards its own reference to the newest), so drop them
+        # and keep memory flat on long-lived connections.
+        del flow.messages[:-1]
+        if not flow.metadata.get("baobox_rec"):
+            return
+        content = message.content
+        event = {"event": "tcp_data", "id": flow.id, "from_client": message.from_client, "size": len(content),
+                 "truncated": False, "ts": message.timestamp}
+        sent = flow.metadata.get("baobox_tcp_bytes", 0)
+        # Past the body cap only the size travels; below it at most TCP_CHUNK bytes of each read.
+        if sent < self.body_cap and content:
+            chunk = content[: min(TCP_CHUNK, self.body_cap - sent)]
+            flow.metadata["baobox_tcp_bytes"] = sent + len(chunk)
+            event["data"] = base64.b64encode(chunk).decode("ascii")
+            event["truncated"] = len(chunk) < len(content)
+        emit(event)
+
+    def tcp_end(self, flow):
+        if flow.metadata.get("baobox_rec"):
+            emit({"event": "tcp_close", "id": flow.id, "error": None, "ts": time.time()})
+
+    def tcp_error(self, flow):
+        if flow.metadata.get("baobox_rec"):
+            message = getattr(flow.error, "msg", None) or str(flow.error or "")
+            emit({"event": "tcp_close", "id": flow.id, "error": message or "error", "ts": time.time()})
 
 
 addons = [Bridge()]

@@ -98,7 +98,7 @@ final class NetCaptureEngine: ObservableObject {
             "--mode", "regular@\(lan ? "0.0.0.0" : "127.0.0.1"):\(port)",
             // SOCKS5：永远只听本机。苹果平台（Mac、iOS 模拟器）的 WebSocket 不走 HTTP 代理，只走系统的 SOCKS 代理，
             // 「这台 Mac」场景会把系统的 SOCKS 代理指到这里。
-            "--mode", "socks5@127.0.0.1:\(NetCaptureEnv.neighbour(of: port, offset: 2))",
+            "--mode", "socks5@127.0.0.1:\(EngineListeners.neighbour(of: port, offset: 2))",
             "--set", "confdir=\(confDir.path)",
             // 超过上限的正文直接流过去，不在引擎里攒着；这样的请求标「已截断」。
             "--set", "stream_large_bodies=\(bodyCap)",

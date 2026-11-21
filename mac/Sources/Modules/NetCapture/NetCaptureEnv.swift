@@ -193,18 +193,13 @@ enum NetCaptureEnv {
     }
 
     /// 手机配置页的端口：代理端口的下一个（docs/packet-capture/TECH_DESIGN.md §7）。
-    static var configPagePort: UInt16 { neighbour(of: port, offset: 1) }
+    static var configPagePort: UInt16 { EngineListeners.neighbour(of: port, offset: 1) }
 
     /// 扫码即放行的口令（见 `PhonePairing`）。每次启动换一个，只出现在二维码和它下面那行地址里。
     static let pairingToken = PhonePairing.makeToken()
 
     /// SOCKS5 监听的端口：代理端口 + 2。只听本机，给苹果平台的 WebSocket 用（它不走 HTTP 代理，只走系统的 SOCKS 代理）。
-    static var socksPort: UInt16 { neighbour(of: port, offset: 2) }
-
-    /// 代理端口旁边的端口；紧贴上限时往下取，保证不溢出、也不和代理端口重合。
-    static func neighbour(of port: UInt16, offset: UInt16) -> UInt16 {
-        port <= UInt16.max - offset ? port + offset : port - offset
-    }
+    static var socksPort: UInt16 { EngineListeners.neighbour(of: port, offset: 2) }
 
     // MARK: - 子进程执行（同步，后台线程调用）
 

@@ -16,6 +16,8 @@ protocol FilterableFlow {
     var decrypted: Bool { get }
     /// 来源设备（客户端 IP；不知道来源的归一个占位桶）。
     var deviceKey: String { get }
+    /// 是 WebSocket 连接（工具条的「WS」筛选看它）。
+    var isWebSocket: Bool { get }
 }
 
 /// 两个过滤输入框（「过滤域名」「过滤 URL」）共用的语法：
@@ -70,6 +72,8 @@ struct FlowFilter: Equatable, Sendable {
     var host: String?
     var methods: Set<String> = []
     var statusClasses: Set<Int> = []
+    /// 工具条的「WS」：只看 WebSocket。
+    var webSocketOnly = false
     /// 精确域名。
     var hiddenHosts: Set<String> = []
     var hideUndecrypted = false
@@ -79,16 +83,9 @@ struct FlowFilter: Equatable, Sendable {
     var urlTerms = TermFilter()
 
     /// 这一行在请求列表里出现吗。
-    func includes(host: String, url: String, method: String, statusClass: Int,
-                  decrypted: Bool, device: String) -> Bool {
-        passesNoise(host: host, decrypted: decrypted)
-            && selects(host: host, method: method, statusClass: statusClass, device: device)
-            && urlTerms.matches(url)
-    }
-
     func includes<F: FilterableFlow>(_ flow: F) -> Bool {
         passesNoise(host: flow.host, decrypted: flow.decrypted)
-            && selects(host: flow.host, method: flow.method, statusClass: flow.statusClass, device: flow.deviceKey)
+            && selects(flow)
             && (urlTerms.isEmpty || urlTerms.matches(flow.url))   // URL 要现拼，没写过滤词就不拼
     }
 
@@ -99,12 +96,13 @@ struct FlowFilter: Equatable, Sendable {
         return hostTerms.matches(host)
     }
 
-    /// 符合用户挑的来源、域名、方法、状态码类别。
-    func selects(host: String, method: String, statusClass: Int, device: String) -> Bool {
-        if let selected = self.device, selected != device { return false }
-        if let selected = self.host, selected != host { return false }
-        if !methods.isEmpty && !methods.contains(method.uppercased()) { return false }
-        if !statusClasses.isEmpty && !statusClasses.contains(statusClass) { return false }
+    /// 符合用户挑的来源、域名、方法、状态码类别、「WS」。
+    func selects<F: FilterableFlow>(_ flow: F) -> Bool {
+        if let selected = device, selected != flow.deviceKey { return false }
+        if let selected = host, selected != flow.host { return false }
+        if !methods.isEmpty && !methods.contains(flow.method.uppercased()) { return false }
+        if !statusClasses.isEmpty && !statusClasses.contains(flow.statusClass) { return false }
+        if webSocketOnly && !flow.isWebSocket { return false }
         return true
     }
 
@@ -123,8 +121,7 @@ struct FlowFilter: Equatable, Sendable {
     /// 列表空了而这个数不是 0 时，列表区说明「N 条请求被过滤条件隐藏」。`extra` 是调用方另加的条件（全文搜索）。
     func hiddenCount<F: FilterableFlow>(_ flows: [F], where extra: (F) -> Bool = { _ in true }) -> Int {
         flows.reduce(0) { count, flow in
-            guard selects(host: flow.host, method: flow.method, statusClass: flow.statusClass, device: flow.deviceKey),
-                  extra(flow) else { return count }
+            guard selects(flow), extra(flow) else { return count }
             let shown = passesNoise(host: flow.host, decrypted: flow.decrypted)
                 && (urlTerms.isEmpty || urlTerms.matches(flow.url))
             return shown ? count : count + 1

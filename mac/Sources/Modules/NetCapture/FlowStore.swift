@@ -271,7 +271,7 @@ final class FlowStore: ObservableObject {
                 flow.undecryptedReason = reason
                 flows.append(flow)
                 changed = true
-            case .running, .device, .replayFailed:
+            case .running, .device, .replayFailed, .tcpOpen, .tcpData, .tcpClose:
                 continue
             }
         }

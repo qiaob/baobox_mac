@@ -12,15 +12,17 @@ final class FlowFilterTests: XCTestCase {
         var statusClass = 2
         var decrypted = true
         var deviceKey = "127.0.0.1"
+        var isWebSocket = false
 
         init(_ host: String, _ path: String = "/", method: String = "GET", status: Int = 2,
-             decrypted: Bool = true, device: String = "127.0.0.1") {
+             decrypted: Bool = true, device: String = "127.0.0.1", webSocket: Bool = false) {
             self.host = host
             self.url = "https://\(host)\(path)"
             self.method = method
             self.statusClass = status
             self.decrypted = decrypted
             self.deviceKey = device
+            self.isWebSocket = webSocket
         }
     }
 
@@ -225,6 +227,20 @@ final class FlowFilterTests: XCTestCase {
         counts = SidebarCounts.compute(rows, filter: filter)
         XCTAssertEqual(counts.total, 3)
         XCTAssertEqual(counts.hosts, [SidebarCounts.HostCount(host: "api.example.com", count: 1)])
+    }
+
+    /// 工具条的「WS」：只留 WebSocket；和别的条件是「且」；不影响左栏数字。
+    func testWebSocketOnly() {
+        let mixed = rows + [Row("chat.example.com", "/socket", status: 1, webSocket: true),
+                            Row("api.example.com", "/live", status: 1, device: "192.168.0.9", webSocket: true)]
+        var filter = FlowFilter()
+        let before = SidebarCounts.compute(mixed, filter: filter)
+        filter.webSocketOnly = true
+        XCTAssertEqual(filter.visible(mixed).map(\.host), ["chat.example.com", "api.example.com"])
+        filter.device = "192.168.0.9"
+        XCTAssertEqual(filter.visible(mixed).map(\.url), ["https://api.example.com/live"])
+        filter.device = nil
+        XCTAssertEqual(SidebarCounts.compute(mixed, filter: filter), before)
     }
 
     /// 左栏的数字不随「过滤 URL」、选中的域名、方法、状态码变。

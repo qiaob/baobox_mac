@@ -36,6 +36,12 @@ enum CaptureEvent: Equatable, Sendable {
     case device(client: String)
     /// 重发没发出去（URL 不合法、指令缺字段…）。`id` 是指令里给的那个；引擎没收到 id 时为 nil。
     case replayFailed(id: UUID?, message: String)
+    /// 一条原始 TCP 连接开始了（docs/packet-capture/CONTROL.md §4.1）。
+    case tcpOpen(TCPOpen)
+    /// 原始 TCP 连接上读到的一段数据。
+    case tcpData(TCPData)
+    /// 原始 TCP 连接结束；`error` 为 nil 是正常关闭。
+    case tcpClose(id: UUID, error: String?, at: Date?)
 
     struct Request: Equatable, Sendable {
         var id: UUID
@@ -89,12 +95,37 @@ enum CaptureEvent: Equatable, Sendable {
         var at: Date
     }
 
+    struct TCPOpen: Equatable, Sendable {
+        var id: UUID
+        var client: String?
+        /// 目标地址（多半是 IP）。
+        var host: String
+        var port: Int
+        /// 连接是解开过的 TLS 时客户端给的域名。
+        var sni: String?
+        var startedAt: Date
+    }
+
+    struct TCPData: Equatable, Sendable {
+        var connectionID: UUID
+        var fromClient: Bool
+        /// 这一段实际的字节数。
+        var size: Int
+        /// 带过来的内容：最多 16 KB；整条连接累计超过正文上限后为 nil，只有 `size`。
+        var data: Data?
+        /// `data` 比 `size` 短（这一段超过 16 KB，只带了前面）。
+        var truncated: Bool
+        var at: Date
+    }
+
     /// 一个域名为什么没被解密。
     enum UndecryptedReason: String, Sendable {
         /// 客户端拒绝了我们的证书（没装 / 没信任 CA，或 App 做了证书固定）。
         case handshakeFailed = "handshake_failed"
         /// 用户设的解密范围不包含它。
         case outOfScope = "out_of_scope"
+        /// 用户关了「解密 HTTPS」。
+        case decryptOff = "decrypt_off"
     }
 
     /// 每行事件的前缀；引擎自己偶尔打到标准输出的别的东西没有这个前缀，一律丢弃。
@@ -171,6 +202,29 @@ enum CaptureEvent: Equatable, Sendable {
             return .device(client: client)
         case "replay_failed":
             return .replayFailed(id: uuid(json["id"]), message: json["message"] as? String ?? "")
+        case "tcp_open":
+            guard let id = uuid(json["id"]) else { return nil }
+            return .tcpOpen(TCPOpen(
+                id: id,
+                client: json["client"] as? String,
+                host: json["host"] as? String ?? "",
+                port: int(json["port"]) ?? 0,
+                sni: (json["sni"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                startedAt: date(json["ts"]) ?? Date()))
+        case "tcp_data":
+            guard let id = uuid(json["id"]), let fromClient = json["from_client"] as? Bool else { return nil }
+            let data = body(json["data"])
+            return .tcpData(TCPData(
+                connectionID: id,
+                fromClient: fromClient,
+                size: int(json["size"]) ?? data?.count ?? 0,
+                data: data,
+                truncated: json["truncated"] as? Bool ?? false,
+                at: date(json["ts"]) ?? Date()))
+        case "tcp_close":
+            guard let id = uuid(json["id"]) else { return nil }
+            let error = (json["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return .tcpClose(id: id, error: error, at: date(json["ts"]))
         default:
             return nil
         }

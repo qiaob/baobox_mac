@@ -12,12 +12,16 @@ struct DecryptScope: Equatable, Sendable {
         case allow
         /// 列出的域名不解密，其余解密。
         case deny
+        /// 什么都不解密（「解密 HTTPS」关着）。
+        case none
     }
 
     var mode: Mode
     var domains: [String]
 
     static let all = DecryptScope(mode: .all, domains: [])
+    /// 「解密 HTTPS」关着：所有 TLS 原样放行，列表里这种行的说明是「关了解密」。
+    static let off = DecryptScope(mode: .none, domains: [])
 
     /// 从设置里的三个值得到范围。`setting` 是 `all` 或 `allowlist`（v1 的键值，沿用）：
     /// - `allowlist`：只解密 `allowText` 里的域名。名单空着等于什么都不解密，照字面执行。
@@ -77,6 +81,14 @@ enum CaptureCommand: Equatable, Sendable {
     case replay(ReplayRequest)
     /// 全量的 Mock 规则（停用的也带上，引擎自己跳过）。
     case rules([MockRule])
+    /// 记录 / 暂停（docs/packet-capture/CONTROL.md §5）。
+    case record(Bool)
+    /// 局域网设备能不能拿引擎当代理（「手动代理」开关，CONTROL.md §2.1）。
+    case lanProxy(Bool)
+    /// 记不记这台 Mac 发出的原始 TCP（「本机 → TCP」，CONTROL.md §4.1）。
+    case macTCP(Bool)
+    /// 手机配置页的端口，0 = 没开（「给其他设备装证书」）。桥据此把打开代理地址的浏览器转过去、接证书检测。
+    case pagePort(UInt16)
 
     /// 带换行符的一行，直接写进管道。
     var line: Data {
@@ -107,6 +119,14 @@ enum CaptureCommand: Equatable, Sendable {
             object = replay
         case .rules(let rules):
             object = ["cmd": "rules", "rules": rules.map(\.commandObject)]
+        case .record(let on):
+            object = ["cmd": "record", "on": on]
+        case .lanProxy(let on):
+            object = ["cmd": "lan_proxy", "on": on]
+        case .macTCP(let on):
+            object = ["cmd": "mac_tcp", "on": on]
+        case .pagePort(let port):
+            object = ["cmd": "page_port", "port": Int(port)]
         }
         var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
         data.append(0x0A)
