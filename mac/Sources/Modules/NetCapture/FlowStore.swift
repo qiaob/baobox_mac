@@ -148,6 +148,11 @@ struct Flow: Identifiable, Sendable {
     }
 }
 
+/// 列表筛选看的那几样（Logic/FlowFilter.swift）。
+extension Flow: FilterableFlow {
+    var deviceKey: String { clientIP ?? NetCaptureEnv.unknownDeviceKey }
+}
+
 // MARK: - 设备（多设备区分，§17）
 
 /// 一个抓包来源设备。身份 = 客户端源 LAN IP（手机 / 本机）。
@@ -186,7 +191,19 @@ final class FlowStore: ObservableObject {
     /// 当前所有来源设备（按末次活动降序，本机固定最前）；`append`/`clear` 后重算。
     @Published private(set) var devices: [DeviceInfo] = []
 
-    private init() {}
+    /// 列表的筛选条件（docs/packet-capture/TOOLS.md §1）。只影响显示：照常抓、照常存。
+    /// 改它走 `updateFilter`，那里会存盘、重算左栏数字、在选中的域名被藏掉时取消选中。
+    @Published private(set) var filter = FlowFilter()
+    /// 左栏的数字。只在 `apply` / 清空 / 筛选条件变化时算一次，不在每次重绘时算。
+    @Published private(set) var sidebarCounts = SidebarCounts()
+
+    private init() {
+        let defaults = UserDefaults.standard
+        filter.hiddenHosts = Set(defaults.stringArray(forKey: NetCaptureEnv.Keys.hiddenHosts) ?? [])
+        filter.hideUndecrypted = defaults.bool(forKey: NetCaptureEnv.Keys.hideUndecrypted)
+        filter.hostTerms = TermFilter(text: defaults.string(forKey: NetCaptureEnv.Keys.hostFilterText) ?? "")
+        filter.urlTerms = TermFilter(text: defaults.string(forKey: NetCaptureEnv.Keys.urlFilterText) ?? "")
+    }
 
     var maxFlows: Int { NetCaptureEnv.maxFlows }
 
@@ -263,6 +280,7 @@ final class FlowStore: ObservableObject {
             flows.removeFirst(flows.count - maxFlows)
         }
         recomputeDevices()
+        recomputeCounts()
         FlowSnapshotStore.shared.set(flows)
     }
 
@@ -275,6 +293,7 @@ final class FlowStore: ObservableObject {
     func clear() {
         flows.removeAll(keepingCapacity: false)
         recomputeDevices()
+        recomputeCounts()
         FlowSnapshotStore.shared.set(flows)
     }
 
@@ -282,7 +301,64 @@ final class FlowStore: ObservableObject {
     func clearDevice(ip: String) {
         flows.removeAll { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == ip }
         recomputeDevices()
+        recomputeCounts()
         FlowSnapshotStore.shared.set(flows)
+    }
+
+    // MARK: - 筛选条件（TOOLS.md §1）
+
+    /// 改筛选条件的唯一入口：选中的域名被隐藏名单或「过滤域名」藏掉了就回到「全部」；
+    /// 隐藏名单、「隐藏未解密」、两个过滤输入框的文字存盘；影响左栏数字的条件变了才重算。
+    func updateFilter(_ change: (inout FlowFilter) -> Void) {
+        var next = filter
+        change(&next)
+        if next.selectedHostIsHidden { next.host = nil }
+        guard next != filter else { return }
+        let previous = filter
+        filter = next
+
+        let defaults = UserDefaults.standard
+        if next.hiddenHosts != previous.hiddenHosts {
+            defaults.set(next.hiddenHosts.sorted(), forKey: NetCaptureEnv.Keys.hiddenHosts)
+        }
+        if next.hideUndecrypted != previous.hideUndecrypted {
+            defaults.set(next.hideUndecrypted, forKey: NetCaptureEnv.Keys.hideUndecrypted)
+        }
+        if next.hostTerms.text != previous.hostTerms.text {
+            defaults.set(next.hostTerms.text, forKey: NetCaptureEnv.Keys.hostFilterText)
+        }
+        if next.urlTerms.text != previous.urlTerms.text {
+            defaults.set(next.urlTerms.text, forKey: NetCaptureEnv.Keys.urlFilterText)
+        }
+        // 左栏的数字只看「藏噪音」与来源（不看选中的域名、方法、状态码、「过滤 URL」）。
+        if next.device != previous.device || next.hiddenHosts != previous.hiddenHosts
+            || next.hideUndecrypted != previous.hideUndecrypted || next.hostTerms != previous.hostTerms {
+            recomputeCounts()
+        }
+    }
+
+    func hide(host: String) {
+        updateFilter { $0.hiddenHosts.insert(host) }
+    }
+
+    func unhide(host: String) {
+        updateFilter { $0.hiddenHosts.remove(host) }
+    }
+
+    func unhideAll() {
+        updateFilter { $0.hiddenHosts.removeAll() }
+    }
+
+    /// 列表区「清除过滤」：清两个过滤输入框的文字。隐藏名单不动，它在左栏脚注的菜单里恢复。
+    func clearFilterTexts() {
+        updateFilter {
+            $0.hostTerms = TermFilter()
+            $0.urlTerms = TermFilter()
+        }
+    }
+
+    private func recomputeCounts() {
+        sidebarCounts = SidebarCounts.compute(flows, filter: filter)
     }
 
     // MARK: - 设备聚合与别名（§17）
@@ -331,17 +407,6 @@ final class FlowStore: ObservableObject {
         devices = result
     }
 
-    /// 某个来源（nil = 全部）下各域名的请求数，多的在前；左栏的域名列表用。
-    func hosts(device: String?) -> [(host: String, count: Int)] {
-        var counts: [String: Int] = [:]
-        for flow in flows {
-            if let device, (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { continue }
-            counts[flow.host, default: 0] += 1
-        }
-        return counts.map { (host: $0.key, count: $0.value) }
-            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.host < $1.host }
-    }
-
     /// 估算内存占用（仅 body 字节，粗略）。
     var estimatedBytes: Int {
         flows.reduce(0) { $0 + ($1.requestBody?.count ?? 0) + ($1.responseBody?.count ?? 0) }
@@ -349,24 +414,30 @@ final class FlowStore: ObservableObject {
 
     // MARK: - 过滤 / 搜索
 
-    /// 过滤：设备（clientIP，nil=全部）、关键字（URL / body 文本）、方法集合、状态码分类集合。空条件即全通过。
-    func filtered(query: String, methods: Set<String>, statusClasses: Set<Int>,
-                  device: String? = nil, host: String? = nil) -> [Flow] {
+    /// 请求列表显示的行：`filter`（来源、域名、方法、状态码、隐藏名单、「隐藏未解密」、两个过滤输入框）
+    /// 再叠加工具条的全文搜索（URL / 正文 / WebSocket 消息）。`flows` 本身不动。
+    func filtered(query: String) -> [Flow] {
         let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return flows.filter { flow in
-            if let device, (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
-            if let host, flow.host != host { return false }
-            if !methods.isEmpty && !methods.contains(flow.method.uppercased()) { return false }
-            if !statusClasses.isEmpty && !statusClasses.contains(flow.statusClass) { return false }
-            guard !trimmed.isEmpty else { return true }
-            if flow.url.lowercased().contains(trimmed) { return true }
-            if flow.messages.contains(where: { $0.text?.lowercased().contains(trimmed) == true }) { return true }
-            if let body = flow.responseBody, let text = String(data: body, encoding: .utf8),
-               text.lowercased().contains(trimmed) { return true }
-            if let body = flow.requestBody, let text = String(data: body, encoding: .utf8),
-               text.lowercased().contains(trimmed) { return true }
-            return false
-        }
+        let visible = filter.visible(flows)
+        guard !trimmed.isEmpty else { return visible }
+        return visible.filter { Self.matchesSearch($0, trimmed) }
+    }
+
+    /// 列表空了的时候用：有多少条是被隐藏名单 / 「隐藏未解密」/ 两个过滤输入框藏掉的（方法、状态码、全文搜索滤掉的不算）。
+    func hiddenByFilters(query: String) -> Int {
+        let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return filter.hiddenCount(flows) { trimmed.isEmpty || Self.matchesSearch($0, trimmed) }
+    }
+
+    /// 全文搜索：URL、WebSocket 消息、请求和响应正文（`query` 已小写）。
+    private static func matchesSearch(_ flow: Flow, _ query: String) -> Bool {
+        if flow.url.lowercased().contains(query) { return true }
+        if flow.messages.contains(where: { $0.text?.lowercased().contains(query) == true }) { return true }
+        if let body = flow.responseBody, let text = String(data: body, encoding: .utf8),
+           text.lowercased().contains(query) { return true }
+        if let body = flow.requestBody, let text = String(data: body, encoding: .utf8),
+           text.lowercased().contains(query) { return true }
+        return false
     }
 
     // MARK: - 导出

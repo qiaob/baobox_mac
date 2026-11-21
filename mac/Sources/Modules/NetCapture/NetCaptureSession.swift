@@ -101,8 +101,9 @@ final class NetCaptureSession: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { SystemProxyController.restore() }
     }
 
-    /// 引擎没在跑就起，就绪后执行 `then`；已经在跑就直接执行。
-    private func ensureEngine(lan: Bool? = nil, then: @escaping () -> Void) {
+    /// 引擎没在跑就只起引擎（**不动系统代理**），就绪后执行 `then`；已经在跑就直接执行。
+    /// 重发用它（docs/packet-capture/TOOLS.md §3）；各个场景的开始也都先走这里。
+    func ensureEngine(lan: Bool? = nil, then: @escaping () -> Void) {
         if engine.isRunning {
             then()
             return
@@ -113,6 +114,20 @@ final class NetCaptureSession: ObservableObject {
             whenRunning.append { [weak self] in self?.working = nil }
             engine.start(port: NetCaptureEnv.port, lan: lan ?? phonePageOn)
         }
+    }
+
+    // MARK: - 重发（TOOLS.md §3）
+
+    /// 让引擎把这条请求再发一次。引擎没在跑就先只起引擎，就绪后再发。
+    /// 发出去的请求是列表里新的一行，id 就是 `request.id`（调用方据此先选中它）。
+    func replay(_ request: ReplayRequest) {
+        ensureEngine { [weak self] in self?.engine.send(.replay(request)) }
+    }
+
+    /// 引擎说重发没发出去（URL 不合法等）：顶部提示条显示原因。
+    func replayDidFail(id: UUID?, message: String) {
+        let reason = message.isEmpty ? L("netcapture.replay.failedUnknown") : message
+        banner = Banner(kind: .problem, text: L("netcapture.replay.failed \(reason)"))
     }
 
     // MARK: - 这台 Mac

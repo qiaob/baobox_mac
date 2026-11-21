@@ -20,6 +20,8 @@ final class NetCaptureTool: ToolModule {
 
     func activate() {
         NetCaptureEnv.registerDefaults()
+        // Mock 规则在后台读进来，引擎起来时要发给它（docs/packet-capture/TOOLS.md §4）。
+        MockRuleStore.shared.load()
         // 上次崩溃时系统代理可能还指着已经不存在的引擎，那样整机断网；启动时补一次还原。
         DispatchQueue.global(qos: .utility).async {
             SystemProxyController.restoreIfLeftover()

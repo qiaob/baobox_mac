@@ -240,11 +240,15 @@ final class NetCaptureEngine: ObservableObject {
             switch event {
             case .running(let version):
                 engineVersion = version
+                // 引擎每次起来都是空的 Mock 规则表：先把规则发过去，再让等着就绪的事（重发…）去跑。
+                MockRuleStore.shared.pushToEngine()
                 if state == .starting { state = .running(startingPort) }
             case .device(let client):
                 guard !allowedDevices.contains(client), !pendingDevices.contains(client) else { continue }
                 pendingDevices.append(client)
                 NetCaptureSession.shared.announcePendingDevice(client)
+            case .replayFailed(let id, let message):
+                NetCaptureSession.shared.replayDidFail(id: id, message: message)
             default:
                 continue
             }

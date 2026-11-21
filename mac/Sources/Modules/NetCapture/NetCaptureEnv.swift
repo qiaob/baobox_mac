@@ -96,6 +96,14 @@ enum NetCaptureEnv {
         static let deviceAliases = "netcapture.deviceAliases"
         /// 崩溃兜底：开启系统代理前保存的原状态（JSON 编码），停止或下次启动还原。
         static let savedProxyState = "netcapture.savedProxyState"
+        /// 列表里隐藏的域名（精确域名，`[String]`）。噪音域名每次都是那些，所以存着（docs/packet-capture/TOOLS.md §1）。
+        static let hiddenHosts = "netcapture.hiddenHosts"
+        /// 列表里藏起「未解密」的行（Bool，默认 false）。
+        static let hideUndecrypted = "netcapture.hideUndecrypted"
+        /// 左栏「过滤域名」输入框的文字（String）。
+        static let hostFilterText = "netcapture.hostFilterText"
+        /// 请求列表「过滤 URL」输入框的文字（String）。
+        static let urlFilterText = "netcapture.urlFilterText"
     }
 
     /// 未知来源设备的占位标识（clientIP 为 nil 时归入此桶）。

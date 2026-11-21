@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 /// 网络抓包窗口（docs/packet-capture/REQUIREMENTS.md §5.1）：抓包的所有操作都在这里做。
 ///
-/// 三栏：左 = 来源与域名，中 = 请求列表，右 = 详情。还没抓到东西时，中间换成「你想抓什么」的五张卡片。
-/// 所有状态读单例的 `@Published`；动作转给 `NetCaptureSession`（场景）与 `FlowStore`（数据）。
+/// 三栏：左 = 来源与域名，中 = 请求列表，右 = 详情（NetCaptureDetailView.swift）。还没抓到东西时，中间换成「你想抓什么」的五张卡片。
+/// 所有状态读单例的 `@Published`；动作转给 `NetCaptureSession`（场景）、`FlowStore`（数据与筛选）、`MockRuleStore`（Mock）。
 
 // MARK: - 配色
 
@@ -38,7 +38,7 @@ enum NetCaptureColors {
     }
 }
 
-private extension Color {
+extension Color {
     init(hex: UInt32) {
         self.init(.sRGB,
                   red: Double((hex >> 16) & 0xFF) / 255,
@@ -91,49 +91,78 @@ struct NetCaptureRootView: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var store = FlowStore.shared
     @ObservedObject private var mcp = CaptureMCPServer.shared
+    @ObservedObject private var mockRules = MockRuleStore.shared
 
     @State private var query = ""
-    @State private var methodFilter: Set<String> = []
-    @State private var statusFilter: Set<Int> = []
     @State private var selection: Flow.ID?
-    @State private var deviceFilter: String?      // nil = 全部
-    @State private var hostFilter: String?        // nil = 全部域名
     @State private var phoneSheet: NetCapturePhoneSheet.Platform?
     @State private var renameIP: String?
     @State private var renameText = ""
+    @State private var replayDraft: ReplayDraft?
+    @State private var mockEditing: MockEditing?
+    @State private var showMockRules = false
 
-    private var filtered: [Flow] {
-        store.filtered(query: query, methods: methodFilter, statusClasses: statusFilter,
-                       device: deviceFilter, host: hostFilter)
-    }
+    /// 请求列表此刻显示的行（筛选条件在 `store.filter`，全文搜索在 `query`）。
+    private var filtered: [Flow] { store.filtered(query: query) }
 
     var body: some View {
         VStack(spacing: 0) {
             if let reason = NetCaptureEnv.engineUnavailable {
                 unavailable(reason)
             } else {
+                // 一次重绘只筛一遍：列表和状态条用同一份。
+                let visible = filtered
                 toolbar
                 Divider()
                 notices
-                if store.flows.isEmpty {
+                // 卡片页只在「没在抓、列表也空」时出现；一开始抓（引擎进入 starting）就切到三栏，不等第一条请求。
+                // 启动失败且列表为空：留在卡片页，失败原因在上面的提示条里。
+                if store.flows.isEmpty && !engine.isActive {
                     NetCaptureScenarioCards(openPhoneSheet: { phoneSheet = $0 })
                 } else {
-                    HSplitView {
-                        sidebar.frame(minWidth: 150, idealWidth: 190, maxWidth: 280)
-                        flowList.frame(minWidth: 340, idealWidth: 440)
-                        detailPane.frame(minWidth: 340)
+                    // 详情最宽：左栏和请求列表给定宽度，窗口拉宽时多出来的都给详情（分隔线照样能拖）。
+                    NetCaptureColumns {
+                        sidebar
+                    } list: {
+                        flowList(visible)
+                    } detail: {
+                        detailPane
                     }
                 }
                 Divider()
-                statusBar
+                statusBar(visibleCount: visible.count)
             }
         }
+        // 三栏都到最小宽度时要 862（ColumnLayout.minimumTotal），工具条在 900 下也不换行。
         .frame(minWidth: 900, minHeight: 540)
         .sheet(item: $phoneSheet) { platform in
             NetCapturePhoneSheet(platform: platform) { phoneSheet = nil }
         }
         .sheet(isPresented: Binding(get: { renameIP != nil }, set: { if !$0 { renameIP = nil } })) { renameSheet }
-        .onAppear { session.refreshTrust() }
+        .sheet(item: $replayDraft) { draft in
+            NetCaptureReplaySheet(draft: draft,
+                                  onCancel: { replayDraft = nil },
+                                  onSend: { request in
+                                      replayDraft = nil
+                                      send(request)
+                                  })
+        }
+        .sheet(item: $mockEditing) { editing in
+            MockRuleEditor(editing: editing,
+                           onSave: { rule in
+                               mockRules.save(rule)
+                               mockEditing = nil
+                           },
+                           onDelete: nil,
+                           onCancel: { mockEditing = nil })
+        }
+        .sheet(isPresented: $showMockRules) {
+            MockRulesSheet { showMockRules = false }
+        }
+        .onAppear {
+            session.refreshTrust()
+            mockRules.load()
+        }
     }
 
     private func unavailable(_ reason: NetCaptureEnv.EngineUnavailable) -> some View {
@@ -148,7 +177,7 @@ struct NetCaptureRootView: View {
     // MARK: 工具条
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button {
                 engine.isActive ? session.stopAll() : session.start()
             } label: {
@@ -164,7 +193,7 @@ struct NetCaptureRootView: View {
             Button {
                 store.clear()
                 selection = nil
-                hostFilter = nil
+                store.updateFilter { $0.host = nil }
             } label: {
                 Image(systemName: "trash")
             }
@@ -175,7 +204,7 @@ struct NetCaptureRootView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("netcapture.window.search", text: $query)
                     .textFieldStyle(.plain)
-                    .frame(minWidth: 120, maxWidth: 220)
+                    .frame(minWidth: 70, maxWidth: 220)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -186,6 +215,7 @@ struct NetCaptureRootView: View {
 
             Spacer()
 
+            mockButton
             certBadge
             moreMenu
         }
@@ -199,19 +229,29 @@ struct NetCaptureRootView: View {
             Toggle("netcapture.source.mac", isOn: Binding(
                 get: { session.macCaptureOn },
                 set: { $0 ? session.startMac() : session.stopMac() }))
+            Divider()
             Toggle("netcapture.source.phone", isOn: Binding(
                 get: { session.phonePageOn },
                 set: { on in
                     session.setLAN(on)
                     if on { phoneSheet = .iOS }
                 }))
+            if session.phonePageOn {
+                Button("netcapture.source.showQR") { phoneSheet = .iOS }
+            }
+            // 卡片页上「Android」「模拟器」两张卡片的按钮：切到三栏以后卡片看不见了，入口在这里。
+            Button("netcapture.card.android.start") {
+                session.setLAN(true)
+                phoneSheet = .android
+            }
             Divider()
             Button("netcapture.source.terminal") { session.openTerminal() }
             Button("netcapture.source.copyEnv") { session.copyShellEnv() }
+            Divider()
             Button("netcapture.source.simulator") { session.installSimulatorCert() }
-            if session.phonePageOn {
-                Divider()
-                Button("netcapture.source.showQR") { phoneSheet = .iOS }
+            Button("netcapture.card.simulator.android") {
+                session.setLAN(true)
+                phoneSheet = .android
             }
         } label: {
             Text(sourceSummary)
@@ -231,8 +271,9 @@ struct NetCaptureRootView: View {
     private var methodChips: some View {
         HStack(spacing: 4) {
             ForEach(["GET", "POST", "PUT", "DELETE"], id: \.self) { method in
-                chip(title: method, active: methodFilter.contains(method), color: NetCaptureColors.method(method)) {
-                    toggle(&methodFilter, method)
+                chip(title: method, active: store.filter.methods.contains(method),
+                     color: NetCaptureColors.method(method)) {
+                    store.updateFilter { $0.methods.formSymmetricDifference([method]) }
                 }
             }
         }
@@ -241,9 +282,9 @@ struct NetCaptureRootView: View {
     private var statusChips: some View {
         HStack(spacing: 4) {
             ForEach([2, 3, 4, 5], id: \.self) { cls in
-                chip(title: "\(cls)xx", active: statusFilter.contains(cls),
+                chip(title: "\(cls)xx", active: store.filter.statusClasses.contains(cls),
                      color: NetCaptureColors.status(cls * 100)) {
-                    toggle(&statusFilter, cls)
+                    store.updateFilter { $0.statusClasses.formSymmetricDifference([cls]) }
                 }
             }
         }
@@ -253,11 +294,24 @@ struct NetCaptureRootView: View {
         Button(action: action) {
             Text(verbatim: title)
                 .font(.caption.weight(.medium))
+                .lineLimit(1)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(active ? color.opacity(0.9) : color.opacity(0.15), in: Capsule())
                 .foregroundStyle(active ? .white : color)
         }
         .buttonStyle(.plain)
+        .fixedSize()
+    }
+
+    /// 「Mock」：点开是规则列表；有启用的规则时写成「Mock 2」。
+    private var mockButton: some View {
+        Button {
+            showMockRules = true
+        } label: {
+            Text(verbatim: mockRules.enabledCount > 0 ? "Mock \(mockRules.enabledCount)" : "Mock")
+        }
+        .help(Text("netcapture.mock.toolbarHelp"))
+        .fixedSize()
     }
 
     /// 证书状态：没装时点一下就装。
@@ -265,9 +319,14 @@ struct NetCaptureRootView: View {
         Button {
             if !session.caTrusted { session.installCert() }
         } label: {
-            Label(session.caTrusted ? "netcapture.cert.trusted" : "netcapture.cert.untrusted",
-                  systemImage: session.caTrusted ? "checkmark.seal.fill" : "seal")
-                .foregroundStyle(session.caTrusted ? NetCaptureColors.accent : Color.secondary)
+            // 窗口窄时只留图标（悬停仍有说明），工具条不换行。
+            ViewThatFits(in: .horizontal) {
+                Label(session.caTrusted ? "netcapture.cert.trusted" : "netcapture.cert.untrusted",
+                      systemImage: session.caTrusted ? "checkmark.seal.fill" : "seal")
+                    .fixedSize()
+                Image(systemName: session.caTrusted ? "checkmark.seal.fill" : "seal")
+            }
+            .foregroundStyle(session.caTrusted ? NetCaptureColors.accent : Color.secondary)
         }
         .buttonStyle(.borderless)
         .help(Text(session.caTrusted ? "netcapture.cert.trustedHelp" : "netcapture.cert.untrustedHelp"))
@@ -341,40 +400,83 @@ struct NetCaptureRootView: View {
 
     // MARK: 左栏：来源与域名
 
+    /// 顶部固定「过滤域名」；中间来源与域名随内容滚动；底部固定「隐藏未解密」与「已隐藏 N 个域名」（TOOLS.md §1）。
     private var sidebar: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                sidebarRow(title: L("netcapture.device.all"), count: store.flows.count,
-                           selected: deviceFilter == nil && hostFilter == nil, icon: "tray.full") {
-                    deviceFilter = nil
-                    hostFilter = nil
-                    selection = nil
-                }
-                ForEach(store.devices) { device in
-                    sidebarRow(title: device.label, count: device.flowCount,
-                               selected: deviceFilter == device.ip && hostFilter == nil,
-                               icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "iphone") {
-                        deviceFilter = device.ip
-                        hostFilter = nil
+        VStack(spacing: 0) {
+            NetCaptureFilterField(placeholder: "netcapture.filter.hosts", text: Binding(
+                get: { store.filter.hostTerms.text },
+                set: { text in store.updateFilter { $0.hostTerms = TermFilter(text: text) } }))
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    let filter = store.filter
+                    let counts = store.sidebarCounts
+                    sidebarRow(title: L("netcapture.device.all"), count: counts.total,
+                               selected: filter.device == nil && filter.host == nil, icon: "tray.full") {
+                        store.updateFilter {
+                            $0.device = nil
+                            $0.host = nil
+                        }
                         selection = nil
                     }
-                    .contextMenu { deviceMenu(ip: device.ip) }
-                }
+                    ForEach(store.devices) { device in
+                        sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
+                                   selected: filter.device == device.ip && filter.host == nil,
+                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "iphone") {
+                            store.updateFilter {
+                                $0.device = device.ip
+                                $0.host = nil
+                            }
+                            selection = nil
+                        }
+                        .contextMenu { deviceMenu(ip: device.ip) }
+                    }
 
-                Text("netcapture.sidebar.hosts")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).padding(.top, 12).padding(.bottom, 2)
-                ForEach(store.hosts(device: deviceFilter).prefix(80), id: \.host) { entry in
-                    sidebarRow(title: entry.host, count: entry.count,
-                               selected: hostFilter == entry.host, icon: nil) {
-                        hostFilter = (hostFilter == entry.host) ? nil : entry.host
-                        selection = nil
+                    Text("netcapture.sidebar.hosts")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.top, 12).padding(.bottom, 2)
+                    ForEach(counts.hosts.prefix(80), id: \.host) { entry in
+                        sidebarRow(title: entry.host, count: entry.count,
+                                   selected: filter.host == entry.host, icon: nil) {
+                            store.updateFilter { $0.host = ($0.host == entry.host) ? nil : entry.host }
+                            selection = nil
+                        }
                     }
                 }
+                .padding(6)
             }
-            .padding(6)
+            Divider()
+            sidebarFooter
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// 左栏底部：「隐藏未解密」开关；有隐藏的域名时多一行「已隐藏 N 个域名」，菜单里逐个显示或全部显示。
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("netcapture.filter.hideUndecrypted", isOn: Binding(
+                get: { store.filter.hideUndecrypted },
+                set: { on in store.updateFilter { $0.hideUndecrypted = on } }))
+                .toggleStyle(.checkbox)
+            let hidden = store.filter.hiddenHosts.sorted()
+            if !hidden.isEmpty {
+                Menu {
+                    ForEach(hidden, id: \.self) { host in
+                        Button(L("netcapture.filter.show \(host)")) { store.unhide(host: host) }
+                    }
+                    Divider()
+                    Button("netcapture.filter.showAll") { store.unhideAll() }
+                } label: {
+                    Text("netcapture.filter.hiddenCount \(hidden.count)")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func sidebarRow(title: String, count: Int, selected: Bool, icon: String?,
@@ -408,7 +510,7 @@ struct NetCaptureRootView: View {
         } label: { Label("netcapture.device.rename", systemImage: "pencil") }
         Button(role: .destructive) {
             store.clearDevice(ip: ip)
-            if deviceFilter == ip { deviceFilter = nil }
+            if store.filter.device == ip { store.updateFilter { $0.device = nil } }
             selection = nil
         } label: { Label("netcapture.device.clear", systemImage: "trash") }
         if !FlowStore.isLoopback(ip), ip != NetCaptureEnv.unknownDeviceKey {
@@ -439,12 +541,91 @@ struct NetCaptureRootView: View {
 
     // MARK: 中栏：请求列表
 
-    private var flowList: some View {
-        List(Array(filtered.reversed()), selection: $selection) { flow in
-            FlowRow(flow: flow).tag(flow.id)
+    /// 顶部固定「过滤 URL」（和左栏的「过滤域名」同一水平线、同样式），下面是列表。
+    private func flowList(_ visible: [Flow]) -> some View {
+        VStack(spacing: 0) {
+            NetCaptureFilterField(placeholder: "netcapture.filter.urls", text: Binding(
+                get: { store.filter.urlTerms.text },
+                set: { text in store.updateFilter { $0.urlTerms = TermFilter(text: text) } }))
+            Divider()
+            // 只有列表空了才去数被藏掉的条数。
+            let hidden = visible.isEmpty ? store.hiddenByFilters(query: query) : 0
+            if store.flows.isEmpty {
+                waitingNotice
+            } else if hidden > 0 {
+                filteredOutNotice(hidden)
+            } else {
+                List(Array(visible.reversed()), selection: $selection) { flow in
+                    FlowRow(flow: flow).tag(flow.id)
+                        .contextMenu { rowMenu(flow) }
+                }
+                .listStyle(.inset)
+                .alternatingRowBackgrounds(.enabled)
+            }
         }
-        .listStyle(.inset)
-        .alternatingRowBackgrounds(.enabled)
+    }
+
+    /// 已经在抓、一条请求都还没有：说一声在等，下面一行小字是在抓什么（和工具条「抓：…」同一句）。
+    private var waitingNotice: some View {
+        VStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("netcapture.cards.waiting").foregroundStyle(.secondary)
+            if session.macCaptureOn || session.phonePageOn {
+                Text(verbatim: sourceSummary).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 有抓到的请求，却被隐藏名单 / 「隐藏未解密」/ 两个过滤输入框滤空了：说清楚，并给一个清掉输入框的按钮。
+    private func filteredOutNotice(_ hidden: Int) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 28)).foregroundStyle(.secondary)
+            Text("netcapture.filter.hiddenFlows \(hidden)").foregroundStyle(.secondary)
+            if !store.filter.hostTerms.text.isEmpty || !store.filter.urlTerms.text.isEmpty {
+                Button("netcapture.filter.clear") { store.clearFilterTexts() }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ flow: Flow) -> some View {
+        Button { store.updateFilter { $0.host = flow.host } } label: {
+            Label("netcapture.filter.onlyHost", systemImage: "scope")
+        }
+        Button {
+            // 正看着的那条要被藏起来了：详情别还停在一条列表里看不到的请求上。
+            if let id = selection, store.flows.first(where: { $0.id == id })?.host == flow.host { selection = nil }
+            store.hide(host: flow.host)
+        } label: {
+            Label("netcapture.filter.hideHost", systemImage: "eye.slash")
+        }
+        Divider()
+        if flow.decrypted {
+            Button { replay(flow) } label: {
+                Label("netcapture.replay.action", systemImage: "arrow.clockwise")
+            }
+            Button { replayDraft = ReplayDraft(flow: flow) } label: {
+                Label("netcapture.replay.editAction", systemImage: "square.and.pencil")
+            }
+            Button { mockEditing = MockEditing(flow: flow) } label: {
+                Label("netcapture.mock.action", systemImage: "theatermasks")
+            }
+            Divider()
+            Button { FlowActions.copy(FlowStore.shared.curl(for: flow)) } label: {
+                Label("netcapture.flow.copyCurl", systemImage: "doc.on.doc")
+            }
+            Button { FlowActions.copy(FlowStore.shared.markdown(for: flow)) } label: {
+                Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
+            }
+            Button { FlowActions.sendToClaude(flow) } label: {
+                Label("netcapture.flow.sendToClaude", systemImage: "paperplane")
+            }
+        }
+        Button { FlowActions.copy(flow.decrypted ? flow.url : flow.host) } label: {
+            Label("netcapture.flow.copyURL", systemImage: "link")
+        }
     }
 
     // MARK: 右栏：详情
@@ -452,7 +633,10 @@ struct NetCaptureRootView: View {
     @ViewBuilder
     private var detailPane: some View {
         if let id = selection, let flow = store.flows.first(where: { $0.id == id }) {
-            FlowDetailView(flow: flow)
+            FlowDetailView(flow: flow, commands: FlowCommands(
+                replay: { replay($0) },
+                editAndReplay: { replayDraft = ReplayDraft(flow: $0) },
+                mock: { mockEditing = MockEditing(flow: $0) }))
         } else {
             VStack {
                 Spacer()
@@ -465,7 +649,7 @@ struct NetCaptureRootView: View {
 
     // MARK: 状态条
 
-    private var statusBar: some View {
+    private func statusBar(visibleCount: Int) -> some View {
         HStack(spacing: 12) {
             HStack(spacing: 5) {
                 Circle().fill(engine.isRunning ? Color(hex: 0x28C840) : Color.secondary.opacity(0.5))
@@ -484,7 +668,7 @@ struct NetCaptureRootView: View {
                 .help(Text("netcapture.window.copyAddr"))
             }
             Divider().frame(height: 12)
-            Text("netcapture.status.counts \(filtered.count) \(store.flows.count)")
+            Text("netcapture.status.counts \(visibleCount) \(store.flows.count)")
             if mcp.isRunning {
                 Divider().frame(height: 12)
                 Text("netcapture.mcp.running")
@@ -519,6 +703,24 @@ struct NetCaptureRootView: View {
 
     // MARK: 动作
 
+    /// 原样重发。
+    private func replay(_ flow: Flow) {
+        send(ReplayRequest(id: UUID(), method: flow.method, url: flow.url,
+                           headers: flow.requestHeaders, body: flow.requestBody))
+    }
+
+    /// 发出去的请求是列表里新的一行：先选中它（id 是这边定的），并让它看得见 ——
+    /// 重发的来源是本机，正看着别的设备时回到「全部」；改了 URL 换了域名时取消左栏选中的域名。
+    private func send(_ request: ReplayRequest) {
+        let host = URLComponents(string: request.url)?.host?.lowercased()
+        store.updateFilter { filter in
+            if let device = filter.device, !FlowStore.isLoopback(device) { filter.device = nil }
+            if let selected = filter.host, selected != host { filter.host = nil }
+        }
+        selection = request.id
+        session.replay(request)
+    }
+
     private func exportHAR() {
         let data = store.harData(filtered)
         let panel = NSSavePanel()
@@ -531,13 +733,40 @@ struct NetCaptureRootView: View {
             session.banner = NetCaptureSession.Banner(kind: .problem, text: error.localizedDescription)
         }
     }
+}
 
-    private func toggle(_ set: inout Set<String>, _ value: String) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
-    }
+// MARK: - 过滤输入框
 
-    private func toggle(_ set: inout Set<Int>, _ value: Int) {
-        if set.contains(value) { set.remove(value) } else { set.insert(value) }
+/// 左栏顶部「过滤域名」与请求列表顶部「过滤 URL」：同一个样式、同样高，两边并排在一条水平线上。
+/// 每敲一个字列表就跟着变；有内容时右边一个 ×。语法见 Logic/FlowFilter.swift 的 `TermFilter`。
+struct NetCaptureFilterField: View {
+    let placeholder: LocalizedStringKey
+    @Binding var text: String
+
+    /// 两个输入框所在那一条的高度（两栏对齐靠它）。
+    static let rowHeight: CGFloat = 34
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.caption)
+                .foregroundStyle(text.isEmpty ? Color.secondary : NetCaptureColors.accent)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.callout)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(Text("netcapture.filter.clearField"))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+        .padding(.horizontal, 6)
+        .frame(height: Self.rowHeight)
     }
 }
 
@@ -663,11 +892,14 @@ private struct FlowRow: View {
                 HStack(spacing: 5) {
                     Text(verbatim: flow.host).font(.callout).lineLimit(1)
                     if let badge = flow.protocolBadge {
-                        Text(verbatim: badge)
-                            .font(.system(size: 9, weight: .semibold))
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15), in: Capsule())
-                            .foregroundStyle(.secondary)
+                        Self.badge(Text(verbatim: badge), tint: .secondary)
+                    }
+                    // 「重发」翻译；mock、h2、WS 这类不翻译（TOOLS.md §7）。
+                    if flow.isReplay {
+                        Self.badge(Text("netcapture.flow.replayBadge"), tint: NetCaptureColors.accent)
+                    }
+                    if flow.mockRuleID != nil {
+                        Self.badge(Text(verbatim: "mock"), tint: Color(hex: 0x8B5CF6))
                     }
                 }
                 if !flow.path.isEmpty {
@@ -690,7 +922,15 @@ private struct FlowRow: View {
             }
         }
         .padding(.vertical, 2)
-        .contextMenu { rowMenu }
+    }
+
+    private static func badge(_ text: Text, tint: Color) -> some View {
+        text
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(tint.opacity(0.15), in: Capsule())
+            .foregroundStyle(tint)
+            .fixedSize()
     }
 
     /// 状态码那一格：有响应显示状态码；还在等显示「⋯」；失败显示「✕」；没解密的显示「—」。
@@ -699,302 +939,6 @@ private struct FlowRow: View {
         if !flow.decrypted { return "—" }
         if flow.note != nil { return "✕" }
         return "⋯"
-    }
-
-    @ViewBuilder
-    private var rowMenu: some View {
-        if flow.decrypted {
-            Button { FlowActions.copy(FlowStore.shared.curl(for: flow)) } label: {
-                Label("netcapture.flow.copyCurl", systemImage: "doc.on.doc")
-            }
-            Button { FlowActions.copy(FlowStore.shared.markdown(for: flow)) } label: {
-                Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
-            }
-            Button { FlowActions.sendToClaude(flow) } label: {
-                Label("netcapture.flow.sendToClaude", systemImage: "paperplane")
-            }
-        }
-        Button { FlowActions.copy(flow.decrypted ? flow.url : flow.host) } label: {
-            Label("netcapture.flow.copyURL", systemImage: "link")
-        }
-    }
-}
-
-@MainActor
-private enum FlowActions {
-    static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    /// 发送到 Claude Code：把这条请求的 Markdown 写临时文件，在终端起 `claude "$(cat file)"`。
-    static func sendToClaude(_ flow: Flow) {
-        let markdown = FlowStore.shared.markdown(for: flow)
-        let dir = NetCaptureEnv.ensureSupportDir().appendingPathComponent("send", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("\(UUID().uuidString).md")
-        do {
-            try Data(markdown.utf8).write(to: file)
-        } catch {
-            StorageWriteFailure.report("netcapture.send", reason: error.localizedDescription)
-            return
-        }
-        let bin = ClaudeEnv.findClaudeBinary() ?? "claude"
-        let command = "\(NetCaptureEnv.shellSingleQuote(bin)) \"$(cat \(NetCaptureEnv.shellSingleQuote(file.path)))\""
-        TerminalLauncher.run(command: command, in: nil)
-    }
-}
-
-/// 复制按钮：复制图标 + 文字，点了之后短暂变成「已复制」，让人知道确实复制上了。
-private struct CopyButton: View {
-    let title: LocalizedStringKey
-    /// 点的时候才取内容（cURL 要现拼，不在每次重绘时算）。
-    let content: () -> String
-    @State private var copied = false
-
-    var body: some View {
-        Button {
-            FlowActions.copy(content())
-            copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-        } label: {
-            Label(copied ? "netcapture.common.copied" : title,
-                  systemImage: copied ? "checkmark" : "doc.on.doc")
-        }
-    }
-}
-
-private enum FlowFormat {
-    static func bytes(_ bytes: Int) -> String {
-        if bytes >= 1024 * 1024 { return String(format: "%.1fMB", Double(bytes) / (1024 * 1024)) }
-        if bytes >= 1024 { return String(format: "%.1fKB", Double(bytes) / 1024) }
-        return "\(bytes)B"
-    }
-
-    private static let clock: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        return formatter
-    }()
-
-    static func time(_ date: Date) -> String { clock.string(from: date) }
-}
-
-// MARK: - 详情视图
-
-private struct FlowDetailView: View {
-    let flow: Flow
-    @State private var tab = DetailTab.overview
-
-    enum DetailTab: String, Identifiable {
-        case overview, request, response, messages, raw
-        var id: String { rawValue }
-        var label: LocalizedStringKey {
-            switch self {
-            case .overview: return "netcapture.detail.overview"
-            case .request: return "netcapture.detail.request"
-            case .response: return "netcapture.detail.response"
-            case .messages: return "netcapture.detail.messages"
-            case .raw: return "netcapture.detail.raw"
-            }
-        }
-    }
-
-    private var tabs: [DetailTab] {
-        guard flow.decrypted else { return [.overview] }
-        return flow.isWebSocket ? [.overview, .request, .response, .messages, .raw]
-                                : [.overview, .request, .response, .raw]
-    }
-
-    /// 换了一条请求后，上一条选的页签这条可能没有。
-    private var currentTab: DetailTab { tabs.contains(tab) ? tab : .overview }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Picker("", selection: Binding(get: { currentTab }, set: { tab = $0 })) {
-                    ForEach(tabs) { t in Text(t.label).tag(t) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                if flow.decrypted {
-                    // 带文字的复制按钮：只放一个图标时看不出是「复制」（用户 2026-11-21）。
-                    // 「发送到 Claude Code」不放这里，在列表行的右键菜单里。
-                    CopyButton(title: "netcapture.flow.copyCurl") { FlowStore.shared.curl(for: flow) }
-                }
-            }
-            .padding(8)
-            Divider()
-            ScrollView {
-                Group {
-                    switch currentTab {
-                    case .overview: overview
-                    case .request: message(headers: flow.requestHeaders, body: flow.requestBody,
-                                           truncated: flow.requestTruncated, sniffed: flow.requestSniffed)
-                    case .response: message(headers: flow.responseHeaders, body: flow.responseBody,
-                                            truncated: flow.responseTruncated, sniffed: flow.responseSniffed)
-                    case .messages: messages
-                    case .raw: rawView
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private var overview: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if flow.decrypted {
-                field("netcapture.detail.method", flow.method)
-                field("netcapture.detail.url", flow.url)
-                field("netcapture.detail.status", flow.statusCode.map(String.init) ?? "—")
-                field("netcapture.detail.protocol", flow.isWebSocket ? "WebSocket (\(flow.httpVersion))" : flow.httpVersion)
-                field("netcapture.detail.remoteIP", flow.remoteIP ?? "—")
-                field("netcapture.detail.started", FlowFormat.time(flow.startedAt))
-                field("netcapture.detail.duration", flow.durationMs.map { "\($0)ms" } ?? "—")
-                field("netcapture.detail.reqSize", FlowFormat.bytes(flow.requestBytes))
-                field("netcapture.detail.respSize", FlowFormat.bytes(flow.responseBytes))
-                field("netcapture.detail.contentType", flow.responseContentType ?? "—")
-                if let encoding = flow.responseEncoding, !encoding.isEmpty {
-                    field("netcapture.detail.encoding", encoding)
-                }
-                if let note = flow.note {
-                    field("netcapture.detail.error", note)
-                }
-            } else {
-                field("netcapture.detail.host", flow.host)
-                field("netcapture.detail.started", FlowFormat.time(flow.startedAt))
-                Text(flow.undecryptedReason == .outOfScope
-                     ? "netcapture.flow.reason.outOfScope" : "netcapture.flow.reason.handshake")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
-            }
-        }
-    }
-
-    private func field(_ label: LocalizedStringKey, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(verbatim: value).font(.callout).textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder
-    private func message(headers: [HTTPHeader], body: Data?, truncated: Bool, sniffed: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("netcapture.detail.headers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text(verbatim: header.name + ":").font(.caption.monospaced().weight(.medium))
-                        Text(verbatim: header.value).font(.caption.monospaced()).textSelection(.enabled)
-                    }
-                }
-            }
-            if let body, !body.isEmpty {
-                HStack {
-                    Text("netcapture.detail.body").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Spacer()
-                    if let text = String(data: body, encoding: .utf8) {
-                        CopyButton(title: "netcapture.detail.copyBody") { text }
-                            .controlSize(.small)
-                    }
-                }
-                bodyView(body: body, headers: headers)
-                if let sniffed {
-                    Text("netcapture.detail.sniffed \(sniffed)").font(.caption2).foregroundStyle(.secondary)
-                }
-            } else if !truncated {
-                Text("netcapture.detail.noBody").font(.caption).foregroundStyle(.secondary)
-            }
-            if truncated {
-                Text("netcapture.detail.truncated").font(.caption2).foregroundStyle(.orange)
-            }
-        }
-    }
-
-    /// 依据 Content-Type 渲染正文：图片直接预览；JSON 美化；其余文本原样。正文已由引擎解压。
-    @ViewBuilder
-    private func bodyView(body: Data, headers: [HTTPHeader]) -> some View {
-        let contentType = headers.value(for: "Content-Type")?.lowercased() ?? ""
-        if contentType.hasPrefix("image/"), let image = NSImage(data: body) {
-            Image(nsImage: image)
-                .resizable().aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 320, maxHeight: 320)
-        } else if let text = String(data: body, encoding: .utf8) {
-            Text(verbatim: Self.pretty(text, contentType: contentType))
-                .font(.caption.monospaced()).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-        } else {
-            Text("netcapture.detail.binary \(body.count)").font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    /// 展示用的文本：JSON 缩进美化；太长只显示前面一段（SwiftUI 的 Text 排几 MB 文字会卡住窗口）。
-    private static func pretty(_ text: String, contentType: String) -> String {
-        var display = text
-        if contentType.contains("json") || text.hasPrefix("{") || text.hasPrefix("["),
-           let data = text.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let formatted = try? JSONSerialization.data(withJSONObject: object,
-                                                       options: [.prettyPrinted, .withoutEscapingSlashes]),
-           let string = String(data: formatted, encoding: .utf8) {
-            display = string
-        }
-        let limit = 200_000
-        return display.count > limit ? String(display.prefix(limit)) + "\n…" : display
-    }
-
-    private var messages: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if flow.messages.isEmpty {
-                Text("netcapture.detail.noMessages").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(flow.messages) { message in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: message.fromClient ? "arrow.up" : "arrow.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(message.fromClient ? Color(hex: 0x0A84FF) : Color(hex: 0x28A745))
-                        .frame(width: 14)
-                    Text(verbatim: FlowFormat.time(message.at))
-                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                    if let text = message.text {
-                        Text(verbatim: text).font(.caption.monospaced()).textSelection(.enabled)
-                    } else {
-                        Text("netcapture.detail.binary \(message.size)").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private var rawView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("netcapture.detail.rawRequest").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(verbatim: rawText(startLine: "\(flow.method) \(flow.path) \(flow.httpVersion)",
-                                   headers: flow.requestHeaders, body: flow.requestBody))
-                .font(.caption.monospaced()).textSelection(.enabled)
-            Divider()
-            Text("netcapture.detail.rawResponse").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(verbatim: rawText(startLine: "\(flow.httpVersion) \(flow.statusCode.map(String.init) ?? "")",
-                                   headers: flow.responseHeaders, body: flow.responseBody))
-                .font(.caption.monospaced()).textSelection(.enabled)
-        }
-    }
-
-    private func rawText(startLine: String, headers: [HTTPHeader], body: Data?) -> String {
-        var lines = [startLine]
-        for h in headers { lines.append("\(h.name): \(h.value)") }
-        lines.append("")
-        if let body, let text = String(data: body, encoding: .utf8) {
-            lines.append(String(text.prefix(20000)))
-        }
-        return lines.joined(separator: "\n")
     }
 }
 
