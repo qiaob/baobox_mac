@@ -34,6 +34,7 @@ private struct NetCaptureGeneralSection: View {
     @AppStorage(NetCaptureEnv.Keys.maxFlows) private var maxFlows = 1000
     @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
     @AppStorage(NetCaptureEnv.Keys.clearOnStop) private var clearOnStop = false
+    @AppStorage(NetCaptureEnv.Keys.phoneEnabled) private var phoneEnabled = false
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.general") {
@@ -52,6 +53,10 @@ private struct NetCaptureGeneralSection: View {
                 Text(verbatim: "20 MB").tag(20 * 1024 * 1024)
             }
             Toggle("netcapture.settings.clearOnStop", isOn: $clearOnStop)
+            Toggle("netcapture.settings.phoneEnabled", isOn: Binding(
+                get: { phoneEnabled },
+                set: { NetCaptureSession.shared.setPhoneAllowed($0) }))
+            Text("netcapture.settings.phoneEnabledHint").font(.caption).foregroundStyle(.secondary)
             Text("netcapture.settings.generalHint").font(.caption).foregroundStyle(.secondary)
         }
     }

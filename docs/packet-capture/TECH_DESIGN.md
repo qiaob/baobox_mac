@@ -134,6 +134,51 @@ Baobox（Swift）                              mitmdump（子进程）
 - gRPC 流式调用、超过正文上限的正文：没测（TOOLS.md §5 已写明限制）。
 - 请求正文被截断（超过上限）时点重发，发出去的是截断后的正文 —— 没有拦，界面上也没提示。
 
+### 1.x 按真机的走法在模拟器上跑（2026-11-21）
+
+起因：用户拿真 iPhone 试，相机扫码进了 Chrome（他的默认浏览器），下到一个打不开的 `.mobileconfig`；换到 Safari 手输地址后 Mac 上弹了「允许这台设备」，点了允许页面没反应，刷新几次后 502。
+
+复现（自己起的引擎，端口 19711）：在浏览器里直接打开**代理地址**（不是配置页地址）→ 放行前回 403 页面 → 放行后引擎把这个请求转发给自己，自己连自己，循环了 16103 次，直到本机端口耗尽回 `502 [Errno 49] Can't assign requested address`。手机面板上代理地址比配置页地址显眼、还带复制按钮，手输时很容易输成它。
+
+改了什么：
+
+| 问题 | 改法 |
+|---|---|
+| 发给代理自己的请求会死循环 | 桥在 `request` / `http_connect` 最前面认出「目的地就是这个引擎」（端口是监听端口，且主机是回环名 / 本机名 / 客户端连进来用的那个地址）：不转发、不出事件、不要求放行。配置页开着（`baobox_page_port`）就 302 到配置页，否则回一页说明「这是代理地址，不是网页」；CONNECT 回 403 |
+| 手机已设代理后再开配置页，会进抓包列表、还要先放行 | 目的地是「本机 + 配置页端口」的请求照常转发，但不出事件、不要求放行 |
+| 点了允许页面没反应 | 403 页面加了 `<meta http-equiv=refresh content=3>`，放行后自己变成原来要开的页面 |
+| iOS 上用 Chrome 等打开配置页 | `PhoneBrowser.isIOSSafari` 认不出是 Safari 就不给安装按钮，只显示「请用 Safari 打开」和一个可复制的配置页地址 |
+| Android Chrome 下载证书时提示「无法安全下载」 | 页面加一句「选保留」 |
+| 菜单里的「手机与平板（局域网）」勾选项 | 去掉。点「设置 iPhone / iPad…」或「设置 Android 设备…」就开始听局域网并记住（`netcapture.phoneEnabled`），以后每次开始抓包都连手机一起；关在设置页「允许手机和平板连接」 |
+
+验证（真实的 Session / Engine / FlowStore / ConfigPageServer / MobileConfigBuilder / CaptureCA 编进一个宿主程序，端口 19611 / 19612，系统代理是桩、全程没被调用）：
+
+| 项 | 结果 |
+|---|---|
+| 发给代理自己（直连局域网地址 / 经代理 / 127.0.0.1 / localhost） | 都是 302 到配置页，引擎里 0 条事件；CONNECT 到自己被拒；正常代理请求照常 200 |
+| 没开配置页时发给代理自己 | 200，一页中英文说明 |
+| **Android 15 模拟器，按真机走**：Chrome 开 `http://192.168.0.9:19612/` | 页面正常（Android 分支）。模拟器经 NAT 出来，Mac 看到的来源是 192.168.0.9（不是回环），所以走的是和真机一样的设备准入 |
+| 点「下载证书」 | Chrome 提示 File can't be downloaded securely，点 Keep 后 `baobox-ca.crt`（1172 字节）进了 Download；随后 Chrome 自己弹「Install CA certificates in Settings」 |
+| 按页面写的路径装证书 | More security & privacy › Encryption & credentials › Install a certificate › CA certificate › Install anyway › 选文件：装上了，Trusted credentials › User 里有 |
+| 代理设成 `192.168.0.9:19611`（用 `adb shell settings put global http_proxy`，等价于在 Wi-Fi 里手填） | 第一个页面是 403「请在 Mac 上允许这台设备」，宿主收到待放行设备 192.168.0.9 |
+| Mac 上放行 | **没有再点手机**，9 秒内页面自己变成了 neverssl.com |
+| HTTPS | Chrome 开 `https://example.com/` 显示 Connection is secure，列表里是解密后的 `GET https://example.com/`，来源 192.168.0.9 |
+| 手机上直接开代理地址 `http://192.168.0.9:19611/` | 跳到了配置页，列表里没有多出请求 |
+| 设了代理后再开配置页 | 能开，列表里没有多出请求 |
+| **iOS 18.3 模拟器**：Safari 开配置页 | 页面正常（iOS Safari 分支：装证书 / 一键配置代理 / 关代理） |
+| Safari 开 `/cert` | 弹出「此网站正尝试下载一个配置描述文件。你要允许吗？」—— 系统认它是描述文件 |
+| `/proxy` 描述文件的内容 | `com.apple.wifi.managed`、`ProxyType` Manual、主机和端口是 Mac 的局域网地址和代理端口、`SSID_STR` 是填的 Wi-Fi 名 |
+| 别的浏览器在 iOS 上拿到的页面（用 Chrome for iOS 的 UA 取回，在模拟器 Safari 里渲染） | 只有「请用 Safari 打开这个页面」和可复制的地址，没有安装按钮 |
+| `x-safari-http://` 能不能从别的浏览器跳到 Safari | **不能**：iOS 18.3 上没有 App 接这个地址（`simctl openurl` 报 -10814）；`x-safari-https://` 有，但配置页是 http 的，用不上。所以页面只给复制地址 |
+
+**这一轮没验证的**
+
+- iOS 模拟器里点不了屏幕：系统自动化没权限；`xcodebuild test` 的界面测试连不上 iOS 18.3 模拟器（Xcode 16.2 报 `DTServiceHubClient failed to bless service hub`）。所以「允许 → 设置里安装描述文件 → 证书信任设置里打开开关」这三下**没走**，要在真 iPhone 上看。
+- Wi-Fi 代理描述文件在模拟器上装不了（模拟器没有 Wi-Fi 设置，走的是 Mac 的系统代理），真机上是否生效没验证。
+- 真 iPhone 上的 Chrome 实际显示那一页（UA 是按 Chrome for iOS 的格式写的，没拿真机的 UA 对过）。
+- Android 的代理是用 adb 设的，没有在 Wi-Fi 设置界面里手填。
+- 菜单去掉勾选项、设置页的新开关：只编译过，没点过。
+
 ## 2. 引擎怎么带进包里
 
 沿用 llama-server 的做法（`make vendor` 下载，构建时拷进包），有三处不同。
@@ -222,7 +267,8 @@ mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
 ### 4.3 桥里的三段逻辑
 
 - **解密范围与自动放行**：在 `tls_clienthello` 里按 SNI 判断。不在范围内，或这个域名在本次抓包里握手失败过，就设 `ignore_connection`。`tls_failed_client` 把域名记进「失败过」的集合并发 `tls` 事件。域名按后缀匹配（`x.com` 匹配 `api.x.com`）。
-- **设备准入**：回环地址直接放行。别的来源 IP 第一次出现时发 `device` 事件；被允许之前，它的请求一律回一个 403 页面（「请在 Mac 上允许这台设备」），CONNECT 直接断开。允许名单只在本次抓包里有效，不存盘。
+- **设备准入**：回环地址直接放行。别的来源 IP 第一次出现时发 `device` 事件；被允许之前，它的请求一律回一个 403 页面（「请在 Mac 上允许这台设备」），CONNECT 直接断开。允许名单只在本次抓包里有效，不存盘。403 页面每 3 秒自己刷新一次，放行后不用再点。
+- **发给引擎自己的请求**（有人在浏览器里打开了代理地址）：不转发（转发就是自己连自己，死循环到端口耗尽）、不出事件、不要求放行；配置页开着就 302 过去，否则回一页说明。发给配置页的请求照常转发，同样不出事件、不要求放行。见 §1.x。
 - **读指令**：`running()` 里起一个守护线程逐行读标准输入，经 `loop.call_soon_threadsafe` 回到事件循环处理；读到结束就 `ctx.master.shutdown()`。
 
 ## 5. 证书（`CaptureCA`，取代 `MITMCertAuthority`）
@@ -260,10 +306,11 @@ mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
 
 v1 靠代理拦截 `baobox.proxy` 这个域名来给页面，手机必须先设好代理才打得开。v2 改成 Baobox 自己在局域网起一个小 HTTP 服务：
 
-- `NWListener`，端口 = 代理端口 + 1，只在有手机场景时开。
+- `NWListener`，端口 = 代理端口 + 1，只在听局域网时开（用过一次手机配置之后，每次开始抓包都开，设置页能关）。
 - 四个 GET 路由，精确匹配（v1 是子串匹配）：`/`（配置页）、`/cert`、`/proxy`、`/proxy-off`。内容生成全部沿用 `MobileConfigBuilder`，只是 CA 路径换成 §5 的。
 - 二维码编码 `http://<Mac 的局域网 IP>:<端口>/`。
 - 这个服务只发公开证书和描述文件，不涉及抓到的内容，所以不做设备准入。
+- **iOS 上只有 Safari 能装描述文件**，而相机扫码开的是默认浏览器。`PhoneBrowser.isIOSSafari(userAgent:)` 认不出是 Safari 时（Chrome、Firefox、Edge、微信等），`/` 不给安装按钮，只请他把配置页地址复制到 Safari 打开。
 - **页面是 http 的局域网地址，不是「安全上下文」**：`navigator.clipboard` 在这里不存在。2026-11-21 用户在 Android 上点「复制」没反应就是这个原因（在 Chromium 里对同一个地址实测：`isSecureContext` 为 false、`navigator.clipboard` 为 undefined）。复制改用临时文本框 + `document.execCommand('copy')`，实测可用；再不行按钮提示长按，数值设了 `user-select: all`。
 - **Android 页没法「自动配置」**：系统没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应物）。页面能做的是把手填做到最省事：主机名、端口分开各一个复制按钮（系统的代理表单就是这两个框），外加一个 `intent:` 链接直达 Wi-Fi 设置（只有 Chrome 系浏览器认，**没在真机上验证**）。真正不用手填的两条路：连 USB 用 ADB 一键（已有），或 WireGuard 模式（见下）。
 

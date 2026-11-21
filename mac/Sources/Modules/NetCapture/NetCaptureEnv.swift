@@ -92,6 +92,8 @@ enum NetCaptureEnv {
         static let mcpPort = "netcapture.mcpPort"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
+        /// 允许手机和平板连进来（引擎听局域网 + 开配置页）。第一次打开手机配置时置真，之后每次开始抓包都照这个来；设置页能关。
+        static let phoneEnabled = "netcapture.phoneEnabled"
         /// 设备别名字典（ip → 用户自定义别名），供多设备 Tab 展示（§17）。
         static let deviceAliases = "netcapture.deviceAliases"
         /// 崩溃兜底：开启系统代理前保存的原状态（JSON 编码），停止或下次启动还原。
@@ -147,6 +149,10 @@ enum NetCaptureEnv {
     static var bodyCap: Int {
         let raw = UserDefaults.standard.integer(forKey: Keys.bodyCap)
         return raw > 0 ? raw : 5 * 1024 * 1024
+    }
+
+    static var phoneEnabled: Bool {
+        UserDefaults.standard.bool(forKey: Keys.phoneEnabled)
     }
 
     static var clearOnStop: Bool {

@@ -112,6 +112,11 @@ final class NetCaptureSession: ObservableObject {
         if !engine.isActive {
             working = L("netcapture.working.starting")
             whenRunning.append { [weak self] in self?.working = nil }
+            // 用过手机配置之后，每次开始都连手机一起：听局域网、开配置页。
+            if NetCaptureEnv.phoneEnabled, !phonePageOn {
+                phonePageOn = true
+                startPhonePage()
+            }
             engine.start(port: NetCaptureEnv.port, lan: lan ?? phonePageOn)
         }
     }
@@ -210,12 +215,14 @@ final class NetCaptureSession: ObservableObject {
 
     /// 开 / 关局域网监听。引擎的监听地址只能在启动时定，所以已在跑就重启一次（约 1 秒；系统代理指的端口不变）。
     /// 同时开 / 关手机配置页（装证书、配代理用的那个网页）。
+    /// 用户不用自己开这个开关：打开手机配置（二维码 / Android 设备）时调 `setLAN(true)`，并记下来，
+    /// 以后每次开始抓包都听局域网（见 `ensureEngine`）。关只在设置页（`setPhoneAllowed(false)`）。
     func setLAN(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: NetCaptureEnv.Keys.phoneEnabled)
         guard on != phonePageOn || on != engine.lanEnabled else { return }
         phonePageOn = on
         if on {
-            ConfigPageServer.shared.start(port: NetCaptureEnv.configPagePort)
-            DispatchQueue.global(qos: .userInitiated).async { CaptureCA.shared.ensureGenerated() }
+            startPhonePage()
         } else {
             ConfigPageServer.shared.stop()
         }
@@ -225,6 +232,20 @@ final class NetCaptureSession: ObservableObject {
         } else if on {
             ensureEngine(lan: true) {}
         }
+    }
+
+    /// 设置页的「允许手机和平板连接」：记下来；引擎正在跑就立刻生效（重启一次引擎），没在跑就等下次开始。
+    func setPhoneAllowed(_ on: Bool) {
+        if engine.isActive {
+            setLAN(on)
+        } else {
+            UserDefaults.standard.set(on, forKey: NetCaptureEnv.Keys.phoneEnabled)
+        }
+    }
+
+    private func startPhonePage() {
+        ConfigPageServer.shared.start(port: NetCaptureEnv.configPagePort)
+        DispatchQueue.global(qos: .userInitiated).async { CaptureCA.shared.ensureGenerated() }
     }
 
     /// 新设备连上来了，等用户点允许。窗口里有提示条；这里再发一条通知，窗口没开着也看得到。

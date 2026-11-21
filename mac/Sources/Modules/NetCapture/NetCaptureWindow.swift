@@ -233,14 +233,10 @@ struct NetCaptureRootView: View {
                 get: { session.macCaptureOn },
                 set: { $0 ? session.startMac() : session.stopMac() }))
             Divider()
-            Toggle("netcapture.source.phone", isOn: Binding(
-                get: { session.phonePageOn },
-                set: { on in
-                    session.setLAN(on)
-                    if on { phoneSheet = .iOS }
-                }))
-            if session.phonePageOn {
-                Button("netcapture.source.showQR") { phoneSheet = .iOS }
+            // 手机这边没有开关：点开配置就开始听局域网，并且记住（关在设置页）。
+            Button("netcapture.source.showQR") {
+                session.setLAN(true)
+                phoneSheet = .iOS
             }
             // 卡片页上「Android」「模拟器」两张卡片的按钮：切到三栏以后卡片看不见了，入口在这里。
             Button("netcapture.card.android.start") {
