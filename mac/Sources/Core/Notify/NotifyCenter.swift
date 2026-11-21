@@ -7,7 +7,10 @@ import UserNotifications
 @MainActor
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
+    /// 带 `replaceKey` 的通知：同来源同 key 还挂着 / 还在排队的旧的由呈现端顶掉，只留这一条。
     func present(_ n: Notice, onAction: @escaping (String) -> Void)
+    /// 撤回占着这个位置的通知（见 `Notice.replaceKey`）：挂着的、排队的都收掉，不回调。
+    func withdraw(source: String, replaceKey: String)
     /// 配合提醒做个动作（喝水、伸懒腰、远眺），按片段名播；做不了返回 false。默认做不了。
     func performGesture(_ clips: [String]) -> Bool
     /// 还挂着、还在排队、还收着没放出的通知条数（「清除所有通知」菜单项的条数）。默认 0。
@@ -42,6 +45,8 @@ final class NotifyCenter {
     private var systemCallbacks: [String: (String) -> Void] = [:]
     private var systemCallbackOrder: [String] = []
     private var systemCategories: [String: UNNotificationCategory] = [:]
+    /// 发过的带 `replaceKey` 的系统通知的 id（撤回时据此决定要不要去动通知中心）。
+    private var systemReplaceIDs: Set<String> = []
     /// 启动期间攒着的通知，按投递顺序；nil = 没在攒（见 holdDuringLaunch）。
     private var launchHeld: [(Notice, ((String) -> Void)?)]?
 
@@ -64,6 +69,29 @@ final class NotifyCenter {
         case .drop:
             break
         }
+    }
+
+    /// 撤回一条带 `replaceKey` 的通知（事情过去了：会话已经接着跑了）：气泡上挂着 / 排队的、勿扰时攒着的、启动期间攒着的、
+    /// 已经发成系统通知的，都收掉，不回调。没有这样的通知就什么都不做。历史照留。
+    func withdraw(source: String, replaceKey: String) {
+        launchHeld?.removeAll { $0.0.occupies(source: source, replaceKey: replaceKey) }
+        ledger.withdraw(source: source, replaceKey: replaceKey)
+        PresentationHub.shared.notifications?.withdraw(source: source, replaceKey: replaceKey)
+        let id = Self.systemID(source: source, replaceKey: replaceKey)
+        // 只有发过这个 id 的系统通知才去动通知中心（宠物开着时一条都没发过，不必为撤回去碰它）。
+        guard systemReplaceIDs.remove(id) != nil else { return }
+        systemCallbacks[id] = nil
+        systemCallbackOrder.removeAll { $0 == id }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        // 通知中心里少了一条：「清除所有通知」数的条数跟着刷新。
+        Self.refreshDeliveredCount()
+    }
+
+    /// 带 `replaceKey` 的系统通知用固定 id：同一个 id 再发一条，系统自己换掉旧的；撤回时按它删。
+    private static func systemID(source: String, replaceKey: String) -> String {
+        "baobox.replace." + source + "|" + replaceKey
     }
 
     /// 现在发一条会不会由呈现端（宠物气泡）呈现；false = 走系统通知（宠物关着、宠物模块没注册）。设置页预览文案用。
@@ -112,7 +140,16 @@ final class NotifyCenter {
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
         if !silent, wantsSound(n) { content.sound = .default }
-        let id = UUID().uuidString
+        let id: String
+        if let key = n.replaceKey {
+            id = Self.systemID(source: n.source, replaceKey: key)
+            systemReplaceIDs.insert(id)
+            // 换掉旧的那条：它的回调跟着作废。
+            systemCallbacks[id] = nil
+            systemCallbackOrder.removeAll { $0 == id }
+        } else {
+            id = UUID().uuidString
+        }
         if let onAction {
             systemCallbacks[id] = onAction
             systemCallbackOrder.append(id)
@@ -207,6 +244,7 @@ final class NotifyCenter {
         deliveredSystemCount = 0
         systemCallbacks.removeAll()
         systemCallbackOrder.removeAll()
+        systemReplaceIDs.removeAll()
     }
 
     // MARK: - 启动期间先攒着

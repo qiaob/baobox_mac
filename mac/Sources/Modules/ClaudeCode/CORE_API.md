@@ -143,7 +143,7 @@
 - `enum ClaudeNotifierSettings` —— UserDefaults 键与读值：`enabled`(默认关) / `soundEnabled`(默认开) / `budgetAlertEnabled`(默认开) / `budgetRestoreEnabled`(默认关)，键名见文件。
 
 ### `@MainActor final class ClaudeNotifier`（`.shared`）
-`requestAuthorizationIfNeeded()`、`notifyStop(project:)`、`notifyWaiting(project:message:)`、`notifyBudget(percent:windowEnd:)`、`notifyBudgetRestored()`。未签名 dev 包失败静默。
+`requestAuthorizationIfNeeded()`、`notifyStop(project:)`、`notifyWaiting(sessionID:project:message:)`（按会话只留一条）、`withdrawWaiting(sessionID:)`、`notifyBudget(percent:windowEnd:)`、`notifyBudgetRestored()`。未签名 dev 包失败静默。
 
 ### `@MainActor final class ClaudeLiveStatus: ObservableObject`（`.shared`）
 | 成员 | 说明 |

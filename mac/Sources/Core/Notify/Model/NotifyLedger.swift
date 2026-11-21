@@ -97,10 +97,17 @@ struct NotifyLedger {
         // （2026-11-08 用户反馈）。环形菜单本身就会被录进去，跟着出一句回执不算多。其余攒着，勿扰解除后合并成摘要。
         let showsAnyway = notice.level == .alert || notice.isUserFeedback
         if isSuppressed(), !showsAnyway {
+            // 带 replaceKey 的只留最新一条：攒着的同一条旧的先拿掉（摘要里也就只算一条）。
+            if let key = notice.replaceKey { withdraw(source: notice.source, replaceKey: key) }
             held.append(Held(notice: notice, onAction: onAction))
             return .hold
         }
         return .deliver
+    }
+
+    /// 撤回：攒着的里面占着这个位置的（见 `Notice.replaceKey`）拿掉，不进摘要。历史照留（确实发生过）。
+    mutating func withdraw(source: String, replaceKey: String) {
+        held.removeAll { $0.notice.occupies(source: source, replaceKey: replaceKey) }
     }
 
     /// 摘要定时器到点：没攒着东西 → `.nothingHeld`；还在勿扰 → `.stillSuppressed`；

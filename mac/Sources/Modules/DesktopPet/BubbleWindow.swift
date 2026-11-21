@@ -82,6 +82,8 @@ final class BubbleController: ObservableObject {
     // MARK: - 显示 / 关闭
 
     func show(_ n: Notice, onAction: @escaping (String) -> Void) {
+        // 带 replaceKey 的只留最新一条：旧的（挂着 / 排队 / 收着的）先拿掉，新的照常进。
+        if let key = n.replaceKey { remove(source: n.source, replaceKey: key) }
         if suspended {
             held.append((n, onAction))
             return
@@ -123,6 +125,24 @@ final class BubbleController: ObservableObject {
     /// 多到排队了（挂着 + 排队到 `NotifyCenter.clearAllThreshold` 条）才在气泡顶上给「全部清除」，少的时候点 × 就行。
     var offersClearAll: Bool { entries.count + waiting.count >= NotifyCenter.clearAllThreshold }
 
+    /// 撤回占着这个位置的通知（`Notice.replaceKey`）：挂着的、排队的、收着的都拿掉，不回调；空出来的位置给排队的。
+    func withdraw(source: String, replaceKey: String) {
+        guard remove(source: source, replaceKey: replaceKey) else { return }
+        promoteWaiting()
+        refresh()
+    }
+
+    /// 返回有没有拿掉东西。不补位、不刷新，调用方接着做。
+    @discardableResult
+    private func remove(source: String, replaceKey: String) -> Bool {
+        let before = pendingCount
+        entries.removeAll { $0.notification.occupies(source: source, replaceKey: replaceKey) }
+        waiting.removeAll { $0.notification.occupies(source: source, replaceKey: replaceKey) }
+        held.removeAll { $0.0.occupies(source: source, replaceKey: replaceKey) }
+        return pendingCount != before
+    }
+
+    /// 全部收起，不回调（退出、关宠物时；也是「全部清除」做的事）。
     func dismissAll() {
         entries.removeAll()
         waiting.removeAll()

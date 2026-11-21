@@ -801,6 +801,11 @@ final class PetController: ObservableObject, NotifyPresenting {
         bubble.dismissAll()
     }
 
+    /// 撤回占着这个位置的通知（NotifyPresenting，见 `Notice.replaceKey`）。
+    func withdraw(source: String, replaceKey: String) {
+        bubble.withdraw(source: source, replaceKey: replaceKey)
+    }
+
     // MARK: - 互动（单击 / 双击 / 抚摸）
 
     /// 做个互动动作并冒一句话。3D 形象按 pet.json 的 interactions（或按片段名猜）播；2D 形象跳一下。

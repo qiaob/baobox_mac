@@ -189,6 +189,7 @@ final class ClaudeUsageStore: ObservableObject {  // @MainActor 单例
 - 状态机:`session_id → (state, cwd, lastEvent: Date)`;SessionStart/UserPromptSubmit→`.running`;Notification→`.waiting(message)`;Stop→`.idle`;SessionEnd 或 6h 无事件→移除。
 - `summaryLine() -> String?`:如"2 运行中 · 1 等待确认";无 hooks 降级:`ClaudeSessionIndex` 中 lastActivity 距今 <2min 的文件数 → "N 个会话活跃(推断)"。
 - `ClaudeNotifier`:封装 `UNUserNotificationCenter`(首次开启通知开关时 `requestAuthorization(options:[.alert,.sound])`);Stop→"会话完成 · <项目名>",Notification→"等你确认 · <项目名>"(正文带 message);受 UserDefaults 开关与提示音开关控制。**注意** UN 通知在未签名 dev 包可用,但要判空失败不 crash。
+- 「等你确认」是常驻提醒,按会话只留一条(2026-11-21):通知带 `replaceKey = waiting.<session_id>`,同一个会话再等时新的顶掉旧的;这个会话之后来了 SessionStart / UserPromptSubmit / Stop / SessionEnd(不在等了)就 `NotifyCenter.withdraw` 撤回。启动回放的旧事件不撤(那时没有气泡)。之前每空闲一轮叠一条、回去接着干了也不走。
 
 > 2026-11(#109)起,events.jsonl 的建文件、超限截断、启动回放与增量监听移到与 Codex 助手共用的 `mac/Sources/Core/EventFile/`(`EventFileFollower`:后台准备 → 主线程回放已有行 → 从读到的大小起跟随新行;纯 Foundation,`BaoboxTests` 有单元测试);`ClaudeLiveStatus.swift` 只留状态机与通知。文件名、5MB / 1000 行上限、监听队列名不变。启停收紧了一处:`start()` 立即算已启动、再调直接返回,`stop()` 之后还没处理的回调一律丢掉(`docs/codex-assistant/DEDUPE.md` §2)。
 >
