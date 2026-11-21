@@ -206,7 +206,7 @@ enum MobileConfigBuilder {
                 num: "1", title: "装证书 / Install CA",
                 body: """
                 <a class="btn" href="/cert">下载证书 / Download CA (.crt)</a>
-                <p class="hint">下载后按系统提示安装（<b>设置 › 安全 › 加密与凭据 › 安装证书 › CA 证书</b>）。<br>Install the downloaded file (<b>Settings › Security › Encryption &amp; credentials › Install a certificate › CA certificate</b>).</p>
+                <p class="hint">下载后到系统设置里安装（直接点开下载的文件装不了）：<b>设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</b>，选刚下载的文件。<br>Then install it from Settings (opening the downloaded file won't work): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, and pick the downloaded file.</p>
                 """)
 
             // Android 没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应的东西），只能手填。

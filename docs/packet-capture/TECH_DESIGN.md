@@ -52,6 +52,38 @@ Baobox（Swift）                              mitmdump（子进程）
 | 系统代理开 / 还原 | 在这台 Mac 上实际走了一遍（解密范围设为空，流量只是穿过引擎）：`scutil --proxy` 显示指向引擎，认系统代理的客户端请求经过了引擎，还原后两项都关闭 |
 | 嵌进真实构建 | Debug 构建里 `Helpers/mitmproxy.app`、桥脚本、许可文件齐全，外层 `codesign --verify --deep --strict` 通过，App 155 MB |
 
+**Android 模拟器上的端到端验证**（2026-11-21，Android 15 `google_apis_playstore` arm64 镜像，新建的 AVD `baobox_capture_test`，无 root；引擎由一个用真实源码编的小宿主程序拉起）：
+
+| 步骤 | 结果 |
+|---|---|
+| `ADBController` 找 adb、列设备 | adb 不在 PATH 里也找到了（`~/Library/Android/sdk/platform-tools`），列出 `emulator-5554` |
+| 设代理 `10.0.2.2:<端口>` | `settings get global http_proxy` 读回一致；清除后读回 `:0` |
+| 推证书 | 文件进了 `/sdcard/Download/baobox-ca.crt` |
+| v1 的「拉起安装界面」 | **失败**：VIEW + `file://` 提示「无法读取证书文件」；从系统证书安装器里选文件则提示「CA 证书必须在设置里安装」。已改成推完直接打开「更多安全和隐私」页（见 `ADBController.pushAndInstallCert` 的注释） |
+| 在设置里装证书 | 更多安全和隐私 → 加密与凭据 → 安装证书 → CA 证书 → 仍然安装 → 选文件：装上了，出现在「信任的凭据 → 用户」里，名字是 mitmproxy。不需要先设锁屏密码 |
+| Chrome 的 HTTPS | 解开了，HTTP/2，正文可见；Chrome 地址栏显示「连接是安全的」 |
+| WebSocket | Chrome 打开一个 WebSocket 回显页：101 握手进列表，收发的文本消息逐条记到那条 Flow 上 |
+| 不信任用户证书的 App | 系统自带的 Google 服务（29 个域名）握手失败 → 自动放行 → 列表里标「未解密」，模拟器照常联网 |
+| 来源 | 模拟器经 `10.0.2.2` 连过来，引擎看到的来源是 `127.0.0.1`：它的流量显示在「本机」下，不单独成一台设备，也不走设备准入 |
+
+**iOS 模拟器上的端到端验证**（2026-11-21，iOS 18.3.1 运行时，iPhone 16，无界面启动；同一个宿主程序）：
+
+| 步骤 | 结果 |
+|---|---|
+| 装证书之前，Safari 打开一个 HTTPS 页 | 握手失败 → 自动放行 → 标「未解密」 |
+| `CaptureCA.installIntoBootedSimulators()` | 成功 |
+| 系统代理指向引擎（`SystemProxyController`），Safari 打开 HTTPS 页 | 解开了，HTTP/2，UA 是 iPhone，正文可见 |
+| 还原系统代理 | `scutil --proxy` 两项都关，直连正常 |
+| 来源 | 和 Android 模拟器一样显示在「本机」下（模拟器用的就是这台 Mac 的网络和系统代理） |
+| **WebSocket** | **没抓到**，见下 |
+
+**苹果平台的 WebSocket 不走 HTTP 代理，只走 SOCKS 代理**（2026-11-21 实测）。只设系统的 HTTP / HTTPS 代理时，模拟器里 Safari 的 WebSocket 页面照常工作（页面上收发了十几条消息），但没有一条经过引擎，是直连出去的。做了对照实验：引擎加一个 `--mode socks5@<端口>` 的监听，系统只设 SOCKS 代理（HTTP 代理关着），同一个页面的 101 握手和 17 条消息全部抓到。Android 的 Chrome 没有这个问题（上表：经 HTTP 代理就抓到了）。
+
+所以现在的实现在 Mac、iOS 模拟器、（大概率）真机 iPhone 上**抓不到 WebSocket**。要补的话：
+- 引擎多开一个 SOCKS5 监听（比如代理端口 + 2），「这台 Mac」场景把系统的 SOCKS 代理也指过去、停止时一并还原（`SystemProxyController` 现在只管 HTTP / HTTPS 两项）。代价是所有认系统 SOCKS 代理的 App 的 TCP 流量都会经过引擎（引擎对认不出的协议原样转发），影响面比现在大。
+- 真机 iPhone 的 Wi-Fi 代理界面只有 HTTP 代理，没有 SOCKS；要走 SOCKS 得用「自动」代理配置（PAC 文件里写 `SOCKS5 …`），描述文件的 `ProxyType` 换成 `Auto`。没有真机，没验证。
+- **这一项还没做，等用户定。**
+
 **新发现的系统限制**：这台 macOS（27.2.1）上读不到当前 Wi-Fi 名称 —— `networksetup -getairportnetwork`、`ipconfig getsummary`、`system_profiler`、CoreWLAN 都返回空或 `<redacted>`（要定位权限）。iPhone 的代理描述文件按 Wi-Fi 名匹配网络，所以手机面板里加了一个手填 Wi-Fi 名称的输入框（`netcapture.wifiName`）；不填就在手机上手动填代理。
 
 **还没验证的**：
@@ -59,8 +91,8 @@ Baobox（Swift）                              mitmdump（子进程）
 1. **安装并信任 CA**：要用户本人验证，没法自动跑。这是「抓这台 Mac」的第一步。v1 的做法（见 §5）在用户第一次试用时就失败了，现在换成用户域，**换完之后还没有成功装上过一次**。
 2. iOS 的 Wi-Fi 代理描述文件在非监管设备上是否生效（v1 就标着未验证），要真机。
 3. 引擎监听局域网时，系统防火墙会不会弹「是否允许传入连接」。
-4. WebSocket 消息：事件解码有单元测试，界面有「消息」页，但没用真实的 WebSocket 连接跑过。
-5. 真机手机经代理上网的整条链路（探针里用本机的局域网 IP 冒充了一台设备）。
+4. 真机手机经代理上网的整条链路（局域网监听 + 设备准入只用本机的局域网 IP 冒充过一台设备；模拟器走的是回环）。
+5. 厂商定制的 Android（MIUI、ColorOS…）上「更多安全和隐私」那个 action 在不在、证书安装的路径叫什么。
 6. Intel Mac 上的置灰路径（手头没有机器，靠代码审查）。
 7. ad-hoc 签名的发布包（探针里验过外层校验，发布工作流没跑过）。
 
