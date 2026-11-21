@@ -705,7 +705,7 @@ private struct FlowRow: View {
     private var rowMenu: some View {
         if flow.decrypted {
             Button { FlowActions.copy(FlowStore.shared.curl(for: flow)) } label: {
-                Label("netcapture.flow.copyCurl", systemImage: "terminal")
+                Label("netcapture.flow.copyCurl", systemImage: "doc.on.doc")
             }
             Button { FlowActions.copy(FlowStore.shared.markdown(for: flow)) } label: {
                 Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
@@ -742,6 +742,25 @@ private enum FlowActions {
         let bin = ClaudeEnv.findClaudeBinary() ?? "claude"
         let command = "\(NetCaptureEnv.shellSingleQuote(bin)) \"$(cat \(NetCaptureEnv.shellSingleQuote(file.path)))\""
         TerminalLauncher.run(command: command, in: nil)
+    }
+}
+
+/// 复制按钮：复制图标 + 文字，点了之后短暂变成「已复制」，让人知道确实复制上了。
+private struct CopyButton: View {
+    let title: LocalizedStringKey
+    /// 点的时候才取内容（cURL 要现拼，不在每次重绘时算）。
+    let content: () -> String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            FlowActions.copy(content())
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        } label: {
+            Label(copied ? "netcapture.common.copied" : title,
+                  systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
     }
 }
 
@@ -799,14 +818,9 @@ private struct FlowDetailView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 if flow.decrypted {
-                    Button { FlowActions.copy(FlowStore.shared.curl(for: flow)) } label: {
-                        Image(systemName: "terminal")
-                    }
-                    .help(Text("netcapture.flow.copyCurl"))
-                    Button { FlowActions.sendToClaude(flow) } label: {
-                        Image(systemName: "paperplane")
-                    }
-                    .help(Text("netcapture.flow.sendToClaude"))
+                    // 带文字的复制按钮：只放一个图标时看不出是「复制」（用户 2026-11-21）。
+                    // 「发送到 Claude Code」不放这里，在列表行的右键菜单里。
+                    CopyButton(title: "netcapture.flow.copyCurl") { FlowStore.shared.curl(for: flow) }
                 }
             }
             .padding(8)
@@ -881,7 +895,14 @@ private struct FlowDetailView: View {
                 }
             }
             if let body, !body.isEmpty {
-                Text("netcapture.detail.body").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HStack {
+                    Text("netcapture.detail.body").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    if let text = String(data: body, encoding: .utf8) {
+                        CopyButton(title: "netcapture.detail.copyBody") { text }
+                            .controlSize(.small)
+                    }
+                }
                 bodyView(body: body, headers: headers)
                 if let sniffed {
                     Text("netcapture.detail.sniffed \(sniffed)").font(.caption2).foregroundStyle(.secondary)
