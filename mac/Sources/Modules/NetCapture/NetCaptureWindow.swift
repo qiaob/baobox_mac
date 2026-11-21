@@ -104,6 +104,21 @@ final class NetCaptureWindowController {
 
 // MARK: - 根视图
 
+/// 选中标签的轮廓：上面两个圆角，底边不封口（描边时底下那条线不画，标签和页面连在一起）。
+struct NetCaptureTabOutline: Shape {
+    var radius: CGFloat = 7
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        return path
+    }
+}
+
 struct NetCaptureRootView: View {
     @ObservedObject private var engine = NetCaptureEngine.shared
     @ObservedObject private var session = NetCaptureSession.shared
@@ -123,6 +138,7 @@ struct NetCaptureRootView: View {
     @State private var replayDraft: ReplayDraft?
     @State private var mockEditing: MockEditing?
     @State private var showMockRules = false
+    @Environment(\.colorScheme) private var colorScheme
 
     /// 请求列表此刻显示的行（筛选条件在 `store.filter`，全文搜索在 `query`）。
     private var filtered: [Flow] { store.filtered(query: query) }
@@ -133,7 +149,6 @@ struct NetCaptureRootView: View {
                 unavailable(reason)
             } else {
                 tabBar
-                Divider()
                 notices
                 switch windowState.tab {
                 case .config: NetCaptureConfigView()
@@ -183,61 +198,70 @@ struct NetCaptureRootView: View {
     // MARK: 标签条
 
     /// 三个标签页 + 右边的引擎状态、暂停 / 继续、停止全部。放不下时先收掉状态里的地址文字，标签名不截断。
+    /// 文件夹标签的样子：标签栏底色压暗，选中的标签和下面的页面同色、底边不封口，盖住它那一段分隔线，
+    /// 看得出下面这一页属于哪个标签（原来是一个浮着的小胶囊，像筛选控件，和页面没有关联）。
     private var tabBar: some View {
-        ViewThatFits(in: .horizontal) {
-            tabBarRow(showAddress: true)
-            tabBarRow(showAddress: false)
+        ZStack(alignment: .bottom) {
+            Divider()
+            ViewThatFits(in: .horizontal) {
+                tabBarRow(showAddress: true)
+                tabBarRow(showAddress: false)
+            }
         }
         .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(colorScheme == .dark ? 0.28 : 0.07))
     }
 
     private func tabBarRow(showAddress: Bool) -> some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .bottom, spacing: 10) {
             HStack(spacing: 2) {
-                tabButton(.config, title: "netcapture.tab.config", count: nil)
-                tabButton(.http, title: "netcapture.tab.http", count: store.flows.count)
-                tabButton(.tcp, title: "netcapture.tab.tcp", count: tcp.connections.count)
+                tabButton(.config, title: "netcapture.tab.config", symbol: "slider.horizontal.3", count: nil)
+                tabButton(.http, title: "netcapture.tab.http", symbol: "arrow.left.arrow.right", count: store.flows.count)
+                tabButton(.tcp, title: "netcapture.tab.tcp", symbol: "point.3.connected.trianglepath.dotted", count: tcp.connections.count)
             }
-            .padding(2)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12)))
             .fixedSize()
 
             Spacer(minLength: 12)
 
-            engineStatus(showAddress: showAddress)
+            HStack(spacing: 10) {
+                engineStatus(showAddress: showAddress)
 
-            Button {
-                session.setPaused(!session.paused)
-            } label: {
-                Label(session.paused ? "netcapture.window.resume" : "netcapture.window.pause",
-                      systemImage: session.paused ? "play.fill" : "pause.fill")
-            }
-            .disabled(!engine.isRunning)
-            .help(Text("netcapture.window.pauseHelp"))
-            .fixedSize()
-
-            if engine.isActive {
                 Button {
-                    session.stopAll()
+                    session.setPaused(!session.paused)
                 } label: {
-                    Label("netcapture.window.stopAll", systemImage: "stop.fill")
+                    Label(session.paused ? "netcapture.window.resume" : "netcapture.window.pause",
+                          systemImage: session.paused ? "play.fill" : "pause.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .help(Text("netcapture.window.stopAllHelp"))
+                .disabled(!engine.isRunning)
+                .help(Text("netcapture.window.pauseHelp"))
                 .fixedSize()
+
+                if engine.isActive {
+                    Button {
+                        session.stopAll()
+                    } label: {
+                        Label("netcapture.window.stopAll", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .help(Text("netcapture.window.stopAllHelp"))
+                    .fixedSize()
+                }
             }
+            .padding(.vertical, 8)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
-    private func tabButton(_ tab: NetCaptureTab, title: LocalizedStringKey, count: Int?) -> some View {
+    private func tabButton(_ tab: NetCaptureTab, title: LocalizedStringKey, symbol: String, count: Int?) -> some View {
         let selected = windowState.tab == tab
         return Button {
             windowState.tab = tab
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(selected ? NetCaptureColors.accent : Color.secondary)
                 Text(title).lineLimit(1)
                 if let count {
                     Text(verbatim: "\(count)")
@@ -246,15 +270,22 @@ struct NetCaptureRootView: View {
                 }
             }
             .font(.callout.weight(selected ? .semibold : .regular))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Color(nsColor: .controlBackgroundColor) : Color.clear)
-                .shadow(color: .black.opacity(selected ? 0.12 : 0), radius: 1, y: 0.5))
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 7)
+            .padding(.bottom, 8)
+            .background {
+                if selected {
+                    NetCaptureTabOutline().fill(Color(nsColor: .windowBackgroundColor))
+                    NetCaptureTabOutline().stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .fixedSize()
+        // 标签比标签栏矮一截，顶上露出压暗的底色。
+        .padding(.top, 7)
     }
 
     /// 「● 运行中 192.168.0.9:9090」。点地址复制。
