@@ -451,6 +451,10 @@ enum MCPTools {
                     let host = engine.listeners?.lan == true ? NetworkInterfaces.primaryIP() : "127.0.0.1"
                     switch engine.state {
                     case .running(let p):
+                        // 只开着「给其他设备装证书」：引擎在跑但没有抓包来源。
+                        guard NetCaptureSession.shared.capturing else {
+                            return ("not capturing (certificate page on)", "\(host):\(p)")
+                        }
                         return (NetCaptureSession.shared.paused ? "running (paused)" : "running", "\(host):\(p)")
                     case .starting: return ("starting", "")
                     case .failed: return ("failed", "")

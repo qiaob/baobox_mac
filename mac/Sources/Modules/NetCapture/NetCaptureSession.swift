@@ -38,7 +38,7 @@ final class NetCaptureSession: ObservableObject {
 
     private let engine = NetCaptureEngine.shared
     /// 次要卡片（终端、模拟器）、重发、MCP 起的引擎：四个总开关都关着也让它跑，直到「停止全部」。
-    private var engineOnly = false
+    @Published private(set) var engineOnly = false
     /// 等引擎就绪后要做的事；引擎起不来就丢掉。
     private var whenRunning: [() -> Void] = []
     private var stateSink: AnyCancellable?
@@ -73,8 +73,14 @@ final class NetCaptureSession: ObservableObject {
         }
     }
 
-    /// 四个总开关有没有开着的。
-    var anyCardOn: Bool { macOn || manualProxyOn || wireguardOn || certPageOn }
+    /// 四个总开关有没有开着的（引擎跑不跑看它）。
+    var anyCardOn: Bool { anySourceOn || certPageOn }
+    /// 三个抓包来源有没有开着的。
+    var anySourceOn: Bool { macOn || manualProxyOn || wireguardOn }
+    /// **是不是在抓包**：有来源开着，或者工具（终端、模拟器、重发、MCP）让引擎跑着。窗口右上角的状态、暂停、停止全部、
+    /// 菜单都看它，不看引擎进程在不在 —— 只开「给其他设备装证书」时引擎也在跑（配置页的证书检测要连它），
+    /// 但什么都不抓，不能显示成「运行中」。
+    var capturing: Bool { anySourceOn || engineOnly }
 
     // MARK: - 引擎跟着开关走
 
@@ -133,12 +139,14 @@ final class NetCaptureSession: ObservableObject {
     /// 引擎没在跑就只起引擎（**不动系统代理**），就绪后执行 `then`；已经在跑就直接执行。
     /// 次要卡片、重发、MCP 用它（docs/packet-capture/TOOLS.md §3）。
     func ensureEngine(then: @escaping () -> Void) {
+        // 没有来源开着：从现在起引擎是为这个工具跑的（算在抓包，要「停止全部」才停）。引擎可能已经因为
+        // 「给其他设备装证书」在跑了，所以先记下再看它在不在跑 —— 否则关掉证书页会把工具用着的引擎一起停掉。
+        if !anySourceOn { engineOnly = true }
         if engine.isRunning {
             then()
             return
         }
         whenRunning.append(then)
-        if !anyCardOn { engineOnly = true }
         if !engine.isActive { reconcile() }
     }
 

@@ -17,6 +17,7 @@ struct NetCaptureTCPView: View {
 
     @State private var query = ""
     @State private var device: String?
+    @ObservedObject private var session = NetCaptureSession.shared
     @State private var protocolChoice: ProtocolChoice?
     @State private var selection: TCPConnection.ID?
 
@@ -41,7 +42,7 @@ struct NetCaptureTCPView: View {
             toolbar
             Divider()
             if store.connections.isEmpty {
-                if engine.isActive {
+                if engine.isActive, session.capturing {
                     VStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("netcapture.tcp.waiting").foregroundStyle(.secondary)

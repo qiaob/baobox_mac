@@ -47,9 +47,15 @@ final class NetCaptureTool: ToolModule {
             break
         }
 
-        if engine.isActive {
+        if engine.isActive, NetCaptureSession.shared.capturing {
             items.append(disabled(L("netcapture.menu.status \(FlowStore.shared.flows.count)")))
             items.append(ClosureMenuItem(title: L("netcapture.menu.stop")) {
+                NetCaptureSession.shared.stopAll()
+            })
+        } else if engine.isActive {
+            // 没在抓包，但「给其他设备装证书」开着（证书页和引擎都在听局域网）：窗口关了也要能在这里关掉。
+            items.append(disabled(L("netcapture.menu.certPageOn")))
+            items.append(ClosureMenuItem(title: L("netcapture.menu.certPageOff")) {
                 NetCaptureSession.shared.stopAll()
             })
         }

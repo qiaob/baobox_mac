@@ -146,6 +146,8 @@ enum MCPControlTools {
                 let lan = engine.listeners?.lan == true
                 var state: [String: Any] = [
                     "engine": engineState,
+                    // 引擎在跑不等于在抓包：只开着「给其他设备装证书」时引擎也在跑，但没有来源。
+                    "capturing": engine.isActive && session.capturing,
                     "paused": session.paused,
                     "mac": session.macOn,
                     "manual_proxy": session.manualProxyOn,
@@ -181,7 +183,7 @@ enum MCPControlTools {
     }
 
     private static let readOnlyKeys: Set<String> = [
-        "engine", "ca_trusted", "proxy_address", "socks_port", "config_page_port", "config_page_url",
+        "engine", "capturing", "ca_trusted", "proxy_address", "socks_port", "config_page_port", "config_page_url",
         "wireguard_endpoint", "pending_devices", "mcp_port", "mcp_redact_auth",
     ]
     private static let bodyCaps = [1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024]

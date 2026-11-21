@@ -85,7 +85,8 @@ final class NetCaptureWindowController {
     func show() {
         // 打开窗口时（新建，或关掉后再打开）：引擎在跑就停在「HTTP / WebSocket 包」，否则停在「配置」。已经开着就不动。
         if window?.isVisible != true {
-            NetCaptureWindowState.shared.tab = NetCaptureEngine.shared.isActive ? .http : .config
+            let capturing = NetCaptureEngine.shared.isActive && NetCaptureSession.shared.capturing
+            NetCaptureWindowState.shared.tab = capturing ? .http : .config
         }
         if window == nil {
             let hosting = NSHostingController(rootView: NetCaptureRootView())
@@ -234,11 +235,11 @@ struct NetCaptureRootView: View {
                     Label(session.paused ? "netcapture.window.resume" : "netcapture.window.pause",
                           systemImage: session.paused ? "play.fill" : "pause.fill")
                 }
-                .disabled(!engine.isRunning)
+                .disabled(!(engine.isRunning && session.capturing))
                 .help(Text("netcapture.window.pauseHelp"))
                 .fixedSize()
 
-                if engine.isActive {
+                if engine.isActive, session.capturing {
                     Button {
                         session.stopAll()
                     } label: {
@@ -295,7 +296,7 @@ struct NetCaptureRootView: View {
         HStack(spacing: 6) {
             Circle().fill(statusColor).frame(width: 8, height: 8)
             Text(statusText).font(.callout).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-            if showAddress, engine.isRunning {
+            if showAddress, engine.isRunning, session.capturing {
                 Button {
                     FlowActions.copy(proxyAddress)
                 } label: {
@@ -309,8 +310,14 @@ struct NetCaptureRootView: View {
         }
     }
 
+    /// 右上角说的是「在不在抓包」。只开着「给其他设备装证书」时引擎也在跑，但没有来源，算已停止。
+    private var shownState: NetCaptureEngine.State {
+        if case .failed = engine.state { return engine.state }
+        return session.capturing ? engine.state : .stopped
+    }
+
     private var statusText: LocalizedStringKey {
-        switch engine.state {
+        switch shownState {
         case .running: return session.paused ? "netcapture.status.paused" : "netcapture.status.running"
         case .starting: return "netcapture.status.starting"
         case .failed: return "netcapture.status.failed"
@@ -319,7 +326,7 @@ struct NetCaptureRootView: View {
     }
 
     private var statusColor: Color {
-        switch engine.state {
+        switch shownState {
         case .running: return session.paused ? Color(hex: 0xF59E0B) : Color(hex: 0x28C840)
         case .starting: return Color(hex: 0xF59E0B).opacity(0.6)
         case .failed: return Color(hex: 0xFF3B30)
@@ -704,7 +711,7 @@ struct NetCaptureRootView: View {
     /// 一条请求都还没有：引擎在跑说在等；没在跑请他去「配置」里打开要抓的来源。
     @ViewBuilder
     private var emptyNotice: some View {
-        if engine.isActive {
+        if engine.isActive, session.capturing {
             VStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("netcapture.http.waiting").foregroundStyle(.secondary)
