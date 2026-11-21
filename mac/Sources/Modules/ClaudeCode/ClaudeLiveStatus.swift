@@ -124,12 +124,21 @@ final class ClaudeNotifier {
         post(title: L("claudecode.notify.stop.title \(project)"), body: "", level: .bubble, speakProject: project, onOpen: onOpen)
     }
 
-    /// 等待确认通知（受总开关控制），正文带 Claude 的 message。
-    func notifyWaiting(project: String, message: String, onOpen: (() -> Void)? = nil) {
+    /// 等待确认通知（受总开关控制），正文带 Claude 的 message。常驻；同一个会话只留最新一条，会话接着跑了由
+    /// `withdrawWaiting` 撤回 —— 起初每等一次就多叠一条，回去接着干了旧的也不走（2026-11-21 一个会话叠了 13 条）。
+    func notifyWaiting(sessionID: String, project: String, message: String, onOpen: (() -> Void)? = nil) {
         guard ClaudeNotifierSettings.enabled else { return }
         post(title: L("claudecode.notify.waiting.title \(project)"), body: message, level: .alert, speakProject: project,
-             onOpen: onOpen)
+             replaceKey: Self.waitingKey(sessionID), onOpen: onOpen)
     }
+
+    /// 这个会话不在等了（你发了新的一句、这一轮跑完了、会话开始 / 结束）：还挂着的「等你确认」收掉。
+    func withdrawWaiting(sessionID: String) {
+        NotifyCenter.shared.withdraw(source: Self.source, replaceKey: Self.waitingKey(sessionID))
+    }
+
+    private static let source = "claudecode"
+    private static func waitingKey(_ sessionID: String) -> String { "waiting." + sessionID }
 
     /// 额度 80% 提醒。
     func notifyBudget(percent: Int, windowEnd: Date) {
@@ -168,7 +177,7 @@ final class ClaudeNotifier {
     /// 视觉呈现改走通知内核（DesktopPet）：宠物在场时经宠物，关时由内核回退系统通知；
     /// 声音仍按本模块 alertStyle 处理（自定义音自播，默认音交给内核在 playSound 时发）。
     private func post(title: String, body: String, level: Notice.Level = .ambient, speakProject: String? = nil,
-                      onOpen: (() -> Void)? = nil) {
+                      replaceKey: String? = nil, onOpen: (() -> Void)? = nil) {
         var useDefaultSound = false
         switch ClaudeNotifierSettings.alertStyle {
         case .sound:
@@ -181,10 +190,11 @@ final class ClaudeNotifier {
             break
         }
         NotifyCenter.shared.post(Notice(
-            source: "claudecode",
+            source: Self.source,
             level: level,
             title: title,
             body: body,
+            replaceKey: replaceKey,
             playSound: useDefaultSound
         ), onAction: onOpen.map { open in { action in if action == "open" { open() } } })
 
@@ -317,6 +327,11 @@ final class ClaudeLiveStatus: ObservableObject {
         let terminal = TerminalLocation(json: object["baobox_terminal"])
         let now = Date()
 
+        // 等你确认以外的事件都说明这个会话不在等了：还挂着的那条「等你确认」收掉（启动回放的旧事件不用管，那时还没有气泡）。
+        if notify, ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"].contains(event) {
+            ClaudeNotifier.shared.withdrawWaiting(sessionID: sessionID)
+        }
+
         switch event {
         case "SessionStart", "UserPromptSubmit":
             update(sessionID: sessionID, state: .running, cwd: cwd, terminal: terminal, at: now)
@@ -325,7 +340,8 @@ final class ClaudeLiveStatus: ObservableObject {
             update(sessionID: sessionID, state: .waiting(message), cwd: cwd, terminal: terminal, at: now)
             if notify {
                 let project = cwd.map { ClaudeSessionIndex.projectName(fromPath: $0) } ?? sessionID
-                ClaudeNotifier.shared.notifyWaiting(project: project, message: message, onOpen: focusAction(sessionID))
+                ClaudeNotifier.shared.notifyWaiting(sessionID: sessionID, project: project, message: message,
+                                                    onOpen: focusAction(sessionID))
             }
         case "Stop":
             update(sessionID: sessionID, state: .idle, cwd: cwd, terminal: terminal, at: now)

@@ -239,6 +239,22 @@ final class NotifyLedgerTests: XCTestCase {
         XCTAssertEqual(digest.body, "b、c")
     }
 
+    /// 一键清除：攒着的全丢、回调不调，之后不再出摘要；历史不动，去重窗口照旧。
+    func testDiscardHeldDropsEverythingWithoutADigest() {
+        var ledger = NotifyLedger()
+        var calls: [String] = []
+        post(&ledger, notice("a", key: "k"), at: 0, suppressed: true, onAction: { calls.append($0) })
+        post(&ledger, notice("b"), at: 1, suppressed: true)
+        let historyBefore = ledger.history
+        XCTAssertEqual(ledger.discardHeld(), 2)
+        XCTAssertTrue(ledger.held.isEmpty)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(ledger.history, historyBefore)
+        XCTAssertEqual(ledger.flush(isSuppressed: false), .nothingHeld)
+        XCTAssertEqual(post(&ledger, notice("a", key: "k"), at: 10), .drop(.duplicate))
+        XCTAssertEqual(ledger.discardHeld(), 0)
+    }
+
     /// 没攒着东西：勿扰不勿扰都是 nothingHeld（NotifyCenter 据此停掉定时器）；直接出的不攒。
     func testFlushWithNothingHeld() {
         var ledger = NotifyLedger()
@@ -283,6 +299,55 @@ final class NotifyLedgerTests: XCTestCase {
         XCTAssertEqual(post(&ledger, notice("a", key: "k"), at: 0, historyLimit: 0), .deliver)
         XCTAssertEqual(post(&ledger, notice("a", key: "k"), at: 1, historyLimit: 0), .drop(.duplicate))
         XCTAssertTrue(ledger.history.isEmpty)
+    }
+
+    // MARK: - 只留最新一条（replaceKey）与撤回
+
+    private func slotted(_ title: String, slot: String, source: String = "claudecode",
+                         level: Notice.Level = .bubble) -> Notice {
+        Notice(source: source, level: level, title: title, replaceKey: slot)
+    }
+
+    /// replaceKey 不挡：同一个位置紧挨着再来一条照样放行（顶掉旧的是呈现端的事），两条都进历史。
+    func testReplaceKeyNeverDrops() {
+        var ledger = NotifyLedger()
+        XCTAssertEqual(post(&ledger, slotted("等你确认", slot: "waiting.s1", level: .alert), at: 0), .deliver)
+        XCTAssertEqual(post(&ledger, slotted("等你确认", slot: "waiting.s1", level: .alert), at: 1), .deliver)
+        XCTAssertEqual(titles(ledger), ["等你确认", "等你确认"])
+    }
+
+    /// 勿扰时攒着的：同来源同 replaceKey 只留最新一条，别的位置、别的来源、没带 replaceKey 的不动。
+    func testHeldKeepsOnlyTheNewestPerReplaceKey() {
+        var ledger = NotifyLedger()
+        post(&ledger, slotted("a1", slot: "a"), at: 0, suppressed: true)
+        post(&ledger, slotted("b1", slot: "b"), at: 1, suppressed: true)
+        post(&ledger, slotted("other", slot: "a", source: "codex"), at: 2, suppressed: true)
+        post(&ledger, notice("plain"), at: 3, suppressed: true)
+        XCTAssertEqual(post(&ledger, slotted("a2", slot: "a"), at: 4, suppressed: true), .hold)
+        XCTAssertEqual(heldTitles(ledger), ["b1", "other", "plain", "a2"])
+        XCTAssertEqual(ledger.flush(isSuppressed: false), .digest(.init(count: 4, titles: ["b1", "other", "plain"])))
+    }
+
+    /// 撤回：攒着的里面占着这个位置的拿掉，不进摘要；历史照留。撤回一个没有的位置什么都不动。
+    func testWithdrawRemovesHeldNoticesOfThatSlotOnly() {
+        var ledger = NotifyLedger()
+        post(&ledger, slotted("a1", slot: "a"), at: 0, suppressed: true)
+        post(&ledger, slotted("b1", slot: "b"), at: 1, suppressed: true)
+        post(&ledger, notice("plain"), at: 2, suppressed: true)
+        ledger.withdraw(source: "claudecode", replaceKey: "a")
+        ledger.withdraw(source: "codex", replaceKey: "b")
+        ledger.withdraw(source: "claudecode", replaceKey: "nope")
+        XCTAssertEqual(heldTitles(ledger), ["b1", "plain"])
+        XCTAssertEqual(titles(ledger), ["plain", "b1", "a1"])
+    }
+
+    /// 占位置按「来源 + replaceKey」认；没带 replaceKey 的不占任何位置。
+    func testOccupiesMatchesSourceAndReplaceKey() {
+        let waiting = slotted("等你确认", slot: "waiting.s1")
+        XCTAssertTrue(waiting.occupies(source: "claudecode", replaceKey: "waiting.s1"))
+        XCTAssertFalse(waiting.occupies(source: "claudecode", replaceKey: "waiting.s2"))
+        XCTAssertFalse(waiting.occupies(source: "codex", replaceKey: "waiting.s1"))
+        XCTAssertFalse(notice("plain", key: "waiting.s1").occupies(source: "claudecode", replaceKey: "waiting.s1"))
     }
 
     // MARK: - 模型

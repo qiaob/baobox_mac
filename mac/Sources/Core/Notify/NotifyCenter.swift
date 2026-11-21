@@ -7,13 +7,22 @@ import UserNotifications
 @MainActor
 protocol NotifyPresenting: AnyObject {
     var isReady: Bool { get }
+    /// 带 `replaceKey` 的通知：同来源同 key 还挂着 / 还在排队的旧的由呈现端顶掉，只留这一条。
     func present(_ n: Notice, onAction: @escaping (String) -> Void)
+    /// 撤回占着这个位置的通知（见 `Notice.replaceKey`）：挂着的、排队的都收掉，不回调。
+    func withdraw(source: String, replaceKey: String)
     /// 配合提醒做个动作（喝水、伸懒腰、远眺），按片段名播；做不了返回 false。默认做不了。
     func performGesture(_ clips: [String]) -> Bool
+    /// 还挂着、还在排队、还收着没放出的通知条数（「清除所有通知」菜单项的条数）。默认 0。
+    var pendingCount: Int { get }
+    /// 一键清除：挂着的、排队的、收着的全部收起，不回调投稿方（同点 ×）。默认什么都不做。
+    func dismissAll()
 }
 
 extension NotifyPresenting {
     func performGesture(_ clips: [String]) -> Bool { false }
+    var pendingCount: Int { 0 }
+    func dismissAll() {}
 }
 
 /// 通知内核：来源开关、去重、勿扰聚合、宠物呈现 / 系统通知回退、历史、启动期间先攒着。
@@ -36,6 +45,8 @@ final class NotifyCenter {
     private var systemCallbacks: [String: (String) -> Void] = [:]
     private var systemCallbackOrder: [String] = []
     private var systemCategories: [String: UNNotificationCategory] = [:]
+    /// 发过的带 `replaceKey` 的系统通知的 id（撤回时据此决定要不要去动通知中心）。
+    private var systemReplaceIDs: Set<String> = []
     /// 启动期间攒着的通知，按投递顺序；nil = 没在攒（见 holdDuringLaunch）。
     private var launchHeld: [(Notice, ((String) -> Void)?)]?
 
@@ -58,6 +69,29 @@ final class NotifyCenter {
         case .drop:
             break
         }
+    }
+
+    /// 撤回一条带 `replaceKey` 的通知（事情过去了：会话已经接着跑了）：气泡上挂着 / 排队的、勿扰时攒着的、启动期间攒着的、
+    /// 已经发成系统通知的，都收掉，不回调。没有这样的通知就什么都不做。历史照留。
+    func withdraw(source: String, replaceKey: String) {
+        launchHeld?.removeAll { $0.0.occupies(source: source, replaceKey: replaceKey) }
+        ledger.withdraw(source: source, replaceKey: replaceKey)
+        PresentationHub.shared.notifications?.withdraw(source: source, replaceKey: replaceKey)
+        let id = Self.systemID(source: source, replaceKey: replaceKey)
+        // 只有发过这个 id 的系统通知才去动通知中心（宠物开着时一条都没发过，不必为撤回去碰它）。
+        guard systemReplaceIDs.remove(id) != nil else { return }
+        systemCallbacks[id] = nil
+        systemCallbackOrder.removeAll { $0 == id }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        // 通知中心里少了一条：「清除所有通知」数的条数跟着刷新。
+        Self.refreshDeliveredCount()
+    }
+
+    /// 带 `replaceKey` 的系统通知用固定 id：同一个 id 再发一条，系统自己换掉旧的；撤回时按它删。
+    private static func systemID(source: String, replaceKey: String) -> String {
+        "baobox.replace." + source + "|" + replaceKey
     }
 
     /// 现在发一条会不会由呈现端（宠物气泡）呈现；false = 走系统通知（宠物关着、宠物模块没注册）。设置页预览文案用。
@@ -106,7 +140,16 @@ final class NotifyCenter {
         content.title = n.title
         if !n.body.isEmpty { content.body = n.body }
         if !silent, wantsSound(n) { content.sound = .default }
-        let id = UUID().uuidString
+        let id: String
+        if let key = n.replaceKey {
+            id = Self.systemID(source: n.source, replaceKey: key)
+            systemReplaceIDs.insert(id)
+            // 换掉旧的那条：它的回调跟着作废。
+            systemCallbacks[id] = nil
+            systemCallbackOrder.removeAll { $0 == id }
+        } else {
+            id = UUID().uuidString
+        }
         if let onAction {
             systemCallbacks[id] = onAction
             systemCallbackOrder.append(id)
@@ -116,14 +159,14 @@ final class NotifyCenter {
             }
         }
         guard !n.actions.isEmpty else {
-            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in }
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { _ in NotifyCenter.refreshDeliveredCount() }
             return
         }
         let categoryID = "baobox." + n.actions.map { $0.id + "=" + $0.label }.joined(separator: "|")
         content.categoryIdentifier = categoryID
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         if systemCategories[categoryID] != nil {
-            center.add(request) { _ in }
+            center.add(request) { _ in NotifyCenter.refreshDeliveredCount() }
             return
         }
         systemCategories[categoryID] = UNNotificationCategory(
@@ -137,7 +180,7 @@ final class NotifyCenter {
         // setNotificationCategories 是整组替换；登记完（get 回来）再投递，否则第一条可能不带按钮。
         center.setNotificationCategories(Set(systemCategories.values))
         center.getNotificationCategories { _ in
-            center.add(request) { _ in }
+            center.add(request) { _ in NotifyCenter.refreshDeliveredCount() }
         }
     }
 
@@ -161,6 +204,47 @@ final class NotifyCenter {
               let callback = systemCallbacks.removeValue(forKey: requestID) else { return }
         systemCallbackOrder.removeAll { $0 == requestID }
         callback(actionID == UNNotificationDefaultActionIdentifier ? "open" : actionID)
+    }
+
+    // MARK: - 一键清除
+
+    /// 没处理的到这么多条才给「清除所有通知」（气泡一次叠 3 条，再多就开始排队了）。少的时候一条条点 × 就行，不多占地方。
+    static let clearAllThreshold = 4
+
+    /// 系统通知中心里 Baobox 发的还剩几条：异步查的缓存（投递后、菜单打开时刷新，见 refreshDeliveredCount）。
+    private var deliveredSystemCount = 0
+
+    /// 还没处理的通知条数：呈现端挂着 / 排队的 + 勿扰时攒着的 + 系统通知中心里的（缓存值）。
+    /// 只读内存，菜单构建时可以调。
+    var pendingCount: Int {
+        (PresentationHub.shared.notifications?.pendingCount ?? 0) + ledger.held.count + deliveredSystemCount
+    }
+
+    /// 多到值得一键清除了（菜单项、环形菜单格据此显示）。
+    var offersClearAll: Bool { pendingCount >= Self.clearAllThreshold }
+
+    /// 后台查一次系统通知中心里还剩几条，回主线程写缓存。菜单构建时调：这次用旧值，下次打开就准了。
+    nonisolated static func refreshDeliveredCount() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { list in
+            let count = list.count
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { NotifyCenter.shared.deliveredSystemCount = count }
+            }
+        }
+    }
+
+    /// 一键清除所有通知（锁屏 / 离开一会儿回来攒了几十条时用）：宠物气泡全部收起、勿扰时攒着的丢掉（不再出摘要）、
+    /// 系统通知中心里 Baobox 发的也一并移走。都不回调投稿方，同点 ×。历史不动。
+    func clearAll() {
+        PresentationHub.shared.notifications?.dismissAll()
+        ledger.discardHeld()
+        flushTimer?.invalidate()
+        flushTimer = nil
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        deliveredSystemCount = 0
+        systemCallbacks.removeAll()
+        systemCallbackOrder.removeAll()
+        systemReplaceIDs.removeAll()
     }
 
     // MARK: - 启动期间先攒着

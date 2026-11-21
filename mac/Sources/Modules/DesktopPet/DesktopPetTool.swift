@@ -38,6 +38,14 @@ final class DesktopPetTool: ToolModule {
         }
         quietItem.submenu = quietMenu
         items.append(quietItem)
+        // 一键清除：没处理的多了（含系统通知中心里的，缓存值）才给，带条数。顺手在后台刷新系统通知中心的条数，下次打开就准了。
+        NotifyCenter.refreshDeliveredCount()
+        if NotifyCenter.shared.offersClearAll {
+            let pending = NotifyCenter.shared.pendingCount
+            items.append(ClosureMenuItem(title: L("pet.menu.clearNotices \(pending)")) {
+                NotifyCenter.shared.clearAll()
+            })
+        }
         let testItem = NSMenuItem(title: L("pet.menu.test"), action: nil, keyEquivalent: "")
         let testMenu = NSMenu()
         testMenu.addItem(ClosureMenuItem(title: L("pet.menu.testToast")) { PetController.shared.sendTestNotification(.toast) })

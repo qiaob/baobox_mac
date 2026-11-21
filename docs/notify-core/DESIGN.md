@@ -177,6 +177,13 @@ final class NotifyCenter {
 final class NotifyDND { /* 接口一个字不改：setSuppressed / hasToken / isSuppressed / reasons / refreshMicrophoneState / defaultInputIsRunning */ }
 ```
 
+**只留最新一条与撤回（2026-11-21 加）**。`Notice.replaceKey`：同来源同 `replaceKey` 的通知同一时刻只留最新一条 ——
+新的来了，还挂着 / 还在排队 / 勿扰时攒着的旧的被顶掉；事情过去了，投稿方调 `NotifyCenter.withdraw(source:replaceKey:)` 撤回
+（气泡、排队、攒着的、启动期间攒着的、已发成系统通知的都收掉，不回调；历史照留）。呈现端多一个
+`NotifyPresenting.withdraw(source:replaceKey:)`；系统通知那条路用固定 id `baobox.replace.<来源>|<key>`，再发一条系统自己换掉旧的。
+它和 `dedupeKey` 是两回事：`dedupeKey` 在 30 秒内**挡掉**重复的，`replaceKey` 不挡、只**换**。头一个用它的是 Claude Code 的
+「等你确认」（`waiting.<会话 id>`）：起因是常驻气泡不会自己走，同一个会话每空闲一轮就多叠一条，回去接着干了旧的也不撤，一个会话叠了 13 条。
+
 新增 `NotifySettings`，把通知内核要读的设置从 `PetSettings` 拆过来。**键名一个不改**：
 
 ```swift

@@ -35,6 +35,10 @@ struct Notice {
     var body: String = ""
     var actions: [Action] = []
     var dedupeKey: String? = nil
+    /// 同来源同 replaceKey 的通知同一时刻只留最新一条：新的来了顶掉还挂着 / 还在排队的旧的；事情过去了，投稿方用
+    /// `NotifyCenter.withdraw(source:replaceKey:)` 撤回。给「状态」类的常驻提醒用（Claude 某个会话在等你确认）——
+    /// 不然同一个会话每等一次就多叠一条。和 `dedupeKey` 无关：那个是 30 秒内挡掉重复的，这个不挡，只换。
+    var replaceKey: String? = nil
     var ttl: TimeInterval? = nil
     /// 投稿方要求发声（其自身声音设置已折算进来）；宠物路径再受 notify.sound 总开关约束。
     var playSound: Bool = false
@@ -53,6 +57,11 @@ struct Notice {
         case .bubble: return .card
         case .alert: return .sticky
         }
+    }
+
+    /// 是不是占着这个位置的那一条（见 `replaceKey`）。没带 replaceKey 的不占位置。
+    func occupies(source: String, replaceKey: String) -> Bool {
+        self.source == source && self.replaceKey == replaceKey
     }
 }
 
