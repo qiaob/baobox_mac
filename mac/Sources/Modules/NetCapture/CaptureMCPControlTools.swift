@@ -595,7 +595,7 @@ enum MCPControlTools {
     }
 }
 
-/// 「MCP 返回时脱敏鉴权头」（默认开）：Authorization / Cookie / Set-Cookie / Proxy-Authorization 打码。HTTP 包和 Mock 规则都用它。
+/// 「MCP 返回时脱敏鉴权头」（默认开）：Authorization / Cookie / Set-Cookie / Proxy-Authorization 打码。HTTP 请求和 Mock 规则都用它。
 enum MCPRedaction {
     static func value(name: String, value: String) -> String {
         guard NetCaptureEnv.mcpRedactAuth else { return value }

@@ -322,6 +322,69 @@ Baobox（Swift）                              mitmdump（子进程）
 
 没验证的：两个开关和「设备设置」面板没有真正点过（探针只渲染）；面板挂在整条工具条靠右的位置，实际弹出来箭头对不对得上按钮没看到。
 
+### 1.v 配置 / HTTP / WebSocket 包 / TCP 包三页（2026-11-21）
+
+方案见 `CONTROL.md`（和方案不一样的地方在它的 §9）。四个提交：桥 + 纯逻辑（`0fcebd8`）、窗口与开关（`c979c96`）、MCP（`01a9416`）、这次的文档。全程没有改系统代理（系统代理控制器在所有宿主里都是只记录调用的桩）、没碰钥匙串、没用用户的支持目录，端口都在 196xx。
+
+**先做的试验**（真引擎 12.3.1，`regular` + `socks5` + `wireguard:<文件>@19653` 同时开）：
+
+| 确认了什么 | 结果 |
+|---|---|
+| 三种监听同时开 | `127.0.0.1:19650`（TCP）、`127.0.0.1:19652`（TCP）、`*:19653`（UDP，v4 + v6）都在听 |
+| 引擎读已有的密钥文件 | 原样采用，跑完 SHA-1 不变（`aa01be03…`） |
+| App 拼的配置和引擎打印的 | 逐行一致（`WireGuardConfigTests.testConfigMatchesWhatTheEnginePrinted` 用的就是这次打印出来的文本） |
+| 经 SOCKS 的原始 TCP | `tcp_start` / `tcp_message` / `tcp_end` 按顺序触发，`proxy_mode.type_name` 是 `socks5` |
+| 直连代理端口的 TLS（证书检测） | `tls_clienthello` 里 `server.address` 是 `None` —— 「关了解密」时据此不放行它 |
+
+**桥脚本**：一个 Python 驱动程序自己起引擎（拿着它的标准输入，关掉就退）、起本地源站（原始 TCP 19660、HTTPS 19661）和一个假配置页（19641），31 个场景全过：
+
+| 场景 | 结果 |
+|---|---|
+| 三种监听、密钥文件 | `*:19640`、`127.0.0.1:19642`、`UDP *:19643`；密钥文件不变 |
+| `lan_proxy` 关 | 局域网来源（本机的局域网 IP）经代理：403「手动代理没有打开」，没有 `device` / `request` 事件；CONNECT 被拒；证书检测 204；`check.baobox.invalid` 回 `{"proxy": true, "allowed": false}` 且不报待放行设备 |
+| `lan_proxy` 开 | 准入页 + `device` 事件；`allow_device` 后 200 并上报 |
+| `record` | 暂停时请求照常 200、不上报；恢复后 `request` + `response`；暂停前发出、暂停后才回的请求照常补全（`request`、`response` 各一条）；启动选项 `baobox_record=false` 生效 |
+| `mac_tcp` | 关：经 SOCKS 的原始 TCP 没有事件；开：`tcp_open` … `tcp_close`；第一段是服务器的 `SSH-2.0-…`；20000 / 30000 字节的读各带 16384 字节并标截断；连接累计到正文上限（40000）后只有大小（3 段）；`tcp_open` 的来源、目标对；暂停时没有 `tcp_*`；启动选项 `baobox_mac_tcp=true` 生效 |
+| 经 SOCKS 的非 443 TLS | 照常放行，没有任何行 |
+| `mode: none` | 解密范围 `all` 时 HTTPS 被解开；切到 `none`：放行、一条 `tls` 事件 `reason: decrypt_off`（`host: localhost`），客户端看到的是源站自己的证书；证书检测仍 204 |
+| `page_port` | 0 时打开代理地址给说明页；设成 19641 后 302 到配置页；经代理按 Mac 的局域网 IP 打开配置页：转发过去、带 `X-Baobox-Client`、不进列表 |
+| 退出 | 关掉标准输入后引擎退出 |
+
+**`NetCaptureSession` / `NetCaptureEngine` / `FlowStore` / `TCPStore` / `ConfigPageServer` / `MobileConfigBuilder` / `CaptureCA` 的真实源码**编进一个宿主程序（支持目录指到临时目录；`CaptureCA.isTrusted` 改成返回真、`installTrust` 改成「取消」，所以不会弹验证框；系统代理、通知、终端是桩），按「配置」页的点法一步步拨开关，47 项全过：
+
+| 场景 | 结果 |
+|---|---|
+| 启动 | 四个开关全关，引擎停着 |
+| 打开「手动代理」 | 引擎起来，听 `*:19640`、`127.0.0.1:19642`，没有 WireGuard |
+| 再开「给其他设备装证书」 | 引擎 pid 不变（只发 `page_port`）；打开代理地址 302 到配置页；配置页（Android UA）有「配代理」 |
+| 关「手动代理」、证书页还开着 | 仍听局域网、pid 不变；局域网设备拿它当代理 → 403「手动代理没有打开」，没有待放行设备；配置页只剩装证书（`var checkProxy = false`，没有代理那两行）；证书检测 204；经引擎转发、客户端自己写的 `X-Baobox-Via` 被桥删掉，页面不会变成隧道版 |
+| 打开「WireGuard」 | 引擎重启、UDP 19643 在听；密钥文件由 Baobox 生成、权限 600；**同一个密钥文件让另一个不带 `-q` 的引擎打印配置，和二维码里的配置逐字一致**；跑完密钥文件不变 |
+| 打开「本机」，拨子开关 | 系统代理桩依次收到：`http=19640 socks=19642` → 关 HTTP：`http=nil socks=19642` → 再关 WebSocket（TCP 也关着）：`http=nil socks=nil`（整体还原）→ 开 TCP：`http=nil socks=19642` → 全开：`http=19640 socks=19642` |
+| 经 SOCKS 的原始 TCP（Swift 侧读出） | `TCPStore` 里一条连接；服务器的 banner 分两次写（`SS` + `H-2.0-…`），认出 **SSH（确定）**；上行 20007、下行 76 字节；两段 banner 合成一块（27 字节、2 段），共 6 段合成 5 块；20000 字节那一段带 16384、其余 3616 标未保存 |
+| 暂停 | 请求照常 200，HTTP、TCP 都不记；关 WireGuard 引起的重启后仍是暂停；继续后又记 |
+| 关「解密 HTTPS」 | HTTPS 原样通过，列表里一行未解密、原因 `decryptOff`，没有解开的请求；再打开又解开了 |
+| 停止全部 | 开关全关、引擎停；19640–19645 和 UDP 19643 都不听了；系统代理桩收到 `restore`；列表保留（没开「停止时清空」） |
+| 只起引擎 | 开关全关时点重发：引擎起来、重发进列表；新启动不是暂停；开一下再关「手动代理」后引擎还在（只起引擎的要等「停止全部」）；停止全部后引擎退出 |
+| 配置页三种 | 隧道版：「已通过 WireGuard 连接」、装证书 + 信任两步、没有配代理 / 关代理、不查代理 |
+
+**MCP**：同一个宿主程序把真实的 `CaptureMCPServer` 也编进去（听 19691），一个 Python 客户端把每个工具调一遍，并读宿主每 0.1 秒写出的界面状态（会话、引擎、Mock、两个列表）对照，39 项全过：`tools/list` 21 个工具；`get_config` 初始全关、键齐；`set_config` 开手动代理 + 证书页、改端口（报「下次启动生效」后改回）、开本机 + TCP（系统代理桩 `http=19640 socks=19642`）、关 HTTP（`socks` only）、暂停 / 继续（`capture_status` 写 `running (paused)`、暂停中的请求不进 `list_flows`）、开 WireGuard（引擎带 19643 重启后才回复）、关解密（范围 `none`）、只解密 `example.com`、`*.test.dev`（范围按域名清洗）、坏的 `body_cap` / 只读键 / 未知键进 `errors` 而 `max_flows`、`wifi_name` 照改；`get_wireguard_config` 带端点 `<Mac IP>:19643`；`list_tcp_connections protocol=ssh` 有、`protocol=mqtt` 无；`get_tcp_connection` 默认合并（`## #1 server->client offset=0 length=27 reads=2`，后面是 `SSH-2.0-HarnessServer_1.0`）、`segments=true format=hex limit=3`、未保存的写明偏移；`clear_tcp`；新建 Mock（`Authorization` 在 `list_mock_rules` 里是 `<redacted>`，经引擎请求得 418 + `mocked`）、停用后源站应答、删除；`replay_flow` 改 URL 后回 `-> 200`；局域网设备出现在 `pending_devices`，`allow_device` 后放行、`deny_device` 后 403；`stop_capture` 全关、引擎停、`restore`；`start_capture` 证书受信时打开本机；证书不受信时 `set_config mac=true` 不改并返回 `needs_user_in_window`，`start_capture` 只起引擎。**发现并修了一个老问题**：MCP 服务一直不应答（会话对象建出来就被释放），修之前第一个 `tools/list` 就超时。
+
+**界面**：把真实的视图源码（窗口、配置页、TCP 页、详情、三栏）加桩编进渲染探针，引擎是真的（19670，系统代理桩），中英文各 20 张：配置页全关 / 全开（900、1180，开着时有一台局域网设备在等允许）、两个列表页空着时（没在跑 / 在跑）、暂停中的标签条、HTTP / WebSocket 包（900、1180、WS 筛选）、TCP 包（SSH 合并 / 按分段、SMTP 文本、超过上限的占位）、900 / 1000 / 1180 的标签条、停止全部之后。只为探针改了几处 `@State` 初值（列表选中、TCP 详情的「按分段」），因为合成点击点不动。看图发现并改掉的：TCP 列表原是八列的表格，900 宽下时长和字节数被挤出可见区（改成两层的行）；十六进制一行折成两行、ASCII 掉到下一行（改成不折行、放不下横着滚）；进行中的连接时长显示成「1227m6s」（超过一小时改写「20h30m」）；块头的起止时间在窄的详情里折行（改成「开始 +N ms」）；SSH 的密文按文本看满屏替换符（改成 `·`）。开关在探针里是灰的：窗口不是前台窗口时系统开关就这么画，不是代码问题。
+
+用系统 WebKit 按 iPhone 身份打开三种配置页（`MobileConfigBuilder` 直接生成的 HTML）：手动代理版四步 + 三行清单 + 顶上代理地址；只装证书版两步 + 一行清单；隧道版两步 + 「证书已信任」「已通过 WireGuard 连接（已打勾）」；Android 的两种只有「装证书」一步。
+
+单元测试 633 个全过（新加 55 个：事件与指令 8、监听组合 6、WireGuard 6、十六进制 / 文本 5、协议识别 19、TCP 数据与合块 10、WS 筛选 1）；`make build` 通过，抓包模块没有新的编译警告（少了一个：MCP 会话的那个）。
+
+**这一轮没验证的**
+
+- **真的 WireGuard 隧道**：没有隧道客户端（Android 模拟器里没装 WireGuard App，这台机器也没有 wireguard-go）。隧道设备免放行、配置页的隧道版、`baobox_lan_ip`、经隧道的证书检测，都只在「本机以自己的身份经代理访问」和单元级别上验证过。
+- iPhone 上的一切（扫码导入、经隧道装描述文件、信任开关）。
+- 真机手机的原始 TCP 进不进「TCP 包」（只测了本机经 SOCKS 的）。
+- Android USB 卡片、设置 Android 模拟器：探针里 adb 是桩，按钮没有真的点过。
+- 界面上的点击都没真点（没有界面自动化权限）：开关、菜单、暂停、停止全部是用代码调同一个会话接口验证的；协议筛选菜单、设备菜单渲染不出来。
+- 设置页新加的「WireGuard 端口」「重新生成 WireGuard 密钥」：只编译过，没渲染、没点过（`regenerateWireGuardKeys` 的换文件逻辑有单元测试）。
+- 真的系统代理（`SystemProxyController.apply` 的 `networksetup` 调用顺序）：按约定没在这台机器上真改过，只有桩记录的调用；改动是把原来一次性的 `enable` 拆成两组各自可选，还原逻辑没变。
+
 ## 2. 引擎怎么带进包里
 
 沿用 llama-server 的做法（`make vendor` 下载，构建时拷进包），有三处不同。
@@ -343,6 +406,8 @@ Baobox（Swift）                              mitmdump（子进程）
 **其它要跟着改的**：`release.yml` 与 `build-macos.yml` 已经会跑 `make vendor`，不用改流程，只是多一次下载；`build-macos.yml` 里 vendor 失败时的那句 warning 只提了离线翻译，补上抓包。`Info.plist` 的 `NSLocalNetworkUsageDescription` 补回「网络抓包」。`CLAUDE.md` 技术栈那句的例外从「调用系统 openssl」改成「内置 mitmproxy」，模块表去掉「暂缓」。
 
 ## 3. `NetCaptureEngine`（取代 `ProxyServer`）
+
+> 2026-11-21 起启动参数由开关决定：`start(listeners:flags:)`（`Logic/EngineLaunch.swift` 的 `EngineListeners` 管监听组合、`BridgeFlags` 管桥的几个开关），见 `CONTROL.md` §2.1。下面是最初的形状，留档。
 
 `@MainActor final class NetCaptureEngine: ObservableObject`，单例（不叫 `CaptureEngine`：截图模块已经有一个同名类型）。对外形状和 `ProxyServer` 一样，界面和 MCP 只需改名：
 
@@ -396,12 +461,17 @@ mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
 | `ws` | 一条 WebSocket 消息 | `id`、`from_client`、`text` 或 `size`、`ts` |
 | `tls` | 一个域名改为不解密 | `host`、`client`、`reason`（`handshake_failed` / `out_of_scope`） |
 | `device` | 一个新的来源 IP 在等允许 | `client` |
+| `tcp_open` / `tcp_data` / `tcp_close` | 原始 TCP 连接开始 / 读到一段 / 结束（2026-11-21） | `id`、`client`、`host`、`port`、`sni`、`ts` / `from_client`、`size`、`data`（≤ 16 KB）、`truncated` / `error`；见 `CONTROL.md` §4.1 |
+
+`tls` 的 `reason` 多一种 `decrypt_off`（「解密 HTTPS」关着）。
 
 ### 4.2 指令（Baobox → 引擎）
 
 | `cmd` | 作用 |
 |---|---|
-| `scope` | 换解密范围：`mode`（`all` / `allow` / `deny`）+ `domains` |
+| `scope` | 换解密范围：`mode`（`all` / `allow` / `deny` / `none`）+ `domains` |
+| `record` / `lan_proxy` / `mac_tcp` | `on`：记录与暂停 / 局域网设备能否拿引擎当代理 / 记不记本机的原始 TCP（2026-11-21，初值用启动选项 `baobox_record` 等给） |
+| `page_port` | `port`：手机配置页的端口，0 = 没开（初值 `baobox_page_port`） |
 | `allow_device` / `deny_device` | 放行或拒绝一个来源 IP |
 | `shutdown` | 退出 |
 
@@ -430,6 +500,8 @@ mitmdump --mode regular@<127.0.0.1 | 0.0.0.0>:<端口>
 - **已知的表面问题**：证书在设备上显示的名字是「mitmproxy」，不是 Baobox。mitmproxy 支持换成自备的 CA，这一版不做。
 
 ## 6. 五个场景各自怎么实现
+
+> 2026-11-21 起「五个场景」由「配置」页的四个总开关和三张次要卡片取代，见 `CONTROL.md` §2；下面各场景背后的做法（系统代理、合并证书、ADB、模拟器）照旧，留档。
 
 `NetCaptureSession`（`@MainActor`，单例）：窗口、菜单、MCP 都从它进。「这台 Mac」和「手机」是两个开关（`macCaptureOn`、`phonePageOn`），终端和模拟器是一次性动作；每个都先确保引擎在跑。上次是否在抓这台 Mac 存 `netcapture.lastMacCapture`，窗口上的「开始」照它来（第一次默认是）。MCP 的 `start_capture` 不弹密码框：证书已受信才指系统代理，否则只起引擎。
 
