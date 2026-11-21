@@ -158,7 +158,7 @@ enum MobileConfigBuilder {
 
     /// 生成 `GET /` 的自包含 HTML。按 `userAgent` 区分 iOS / Android·其它。
     /// - iOS：三张卡各给一个可点的描述文件链接（`/cert`、`/proxy`、`/proxy-off`）。
-    /// - Android·其它：证书链接 + 大字 `IP:端口` + 复制按钮 + 手动步骤（含 ADB 提示）。
+    /// - Android·其它：证书链接 + 主机名 / 端口各带一个复制按钮 + 直达 Wi-Fi 设置的按钮 + 手动步骤（含 ADB 提示）。
     /// `ssid` 为空时 iOS 的「配代理」改为手动说明（因无 SSID 无法出 Wi-Fi 描述文件）。
     static func landingPageHTML(ip: String, port: UInt16, ssid: String?, userAgent: String) -> String {
         let isIOS = userAgent.contains("iPhone") || userAgent.contains("iPad") || userAgent.contains("iPod")
@@ -209,12 +209,15 @@ enum MobileConfigBuilder {
                 <p class="hint">下载后按系统提示安装（<b>设置 › 安全 › 加密与凭据 › 安装证书 › CA 证书</b>）。<br>Install the downloaded file (<b>Settings › Security › Encryption &amp; credentials › Install a certificate › CA certificate</b>).</p>
                 """)
 
+            // Android 没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应的东西），只能手填。
+            // 所以把手填做到最省事：主机名和端口分开各一个复制按钮（系统的代理表单就是这两个框），再给一个直达 Wi-Fi 设置的按钮。
             proxyCard = card(
                 num: "2", title: "配代理 / Set proxy",
                 body: """
-                <p class="addr" id="addr">\(addrEsc)</p>
-                <button class="btn" onclick="copyAddr()">复制 / Copy</button>
-                <p class="hint">在 <b>Wi-Fi › 修改网络 › 代理 › 手动</b> 填入主机与端口。<br>In <b>Wi-Fi › Modify network › Proxy › Manual</b> enter the host and port.<br>或在电脑上用 ADB 一键。 / or use ADB on the computer.</p>
+                <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
+                <div class="kv"><span>端口 Port</span><b id="port">\(port)</b><button class="mini" onclick="copyText('port',this)">复制 Copy</button></div>
+                <a class="btn ghost" href="intent:#Intent;action=android.settings.WIFI_SETTINGS;end">打开 Wi-Fi 设置 / Open Wi-Fi settings</a>
+                <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，可以在电脑的抓包窗口里一键设置。 / With USB debugging connected, the Mac can set it in one click.</p>
                 """)
 
             offCard = card(
@@ -224,10 +227,30 @@ enum MobileConfigBuilder {
                 """)
         }
 
+        // 复制：这个页面是 http 的局域网地址，不算「安全上下文」，`navigator.clipboard` 在这里不存在
+        // （2026-11-21 用户在 Android 上点复制没反应就是这个原因）。所以走老办法：临时文本框 + execCommand。
+        // 都不行时把按钮文字换成「长按复制」，数值本身设了 user-select: all，长按就是整段选中。
         let copyJS = isIOS ? "" : """
         <script>
-        function copyAddr(){var t=document.getElementById('addr').textContent;
-        if(navigator.clipboard){navigator.clipboard.writeText(t);}
+        function copyText(id, btn){
+          var t = document.getElementById(id).textContent;
+          function done(ok){ btn.textContent = ok ? '已复制 ✓' : '长按数字复制'; }
+          function legacy(){
+            var ta = document.createElement('textarea');
+            ta.value = t; ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+            document.body.appendChild(ta);
+            ta.focus(); ta.select(); ta.setSelectionRange(0, t.length);
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+            done(ok);
+          }
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(t).then(function(){ done(true); }, legacy);
+          } else {
+            legacy();
+          }
         }
         </script>
         """
@@ -251,6 +274,11 @@ enum MobileConfigBuilder {
         .btn.ghost{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
         .addr{font-size:22px;font-weight:700;text-align:center;margin:10px 0;word-break:break-all}
         .hint{font-size:13px;color:var(--sub);margin:10px 0 0}
+        .kv{display:flex;align-items:center;gap:10px;margin:10px 0}
+        .kv span{color:var(--sub);font-size:13px;flex:0 0 auto}
+        .kv b{font-size:19px;flex:1;white-space:nowrap;-webkit-user-select:all;user-select:all}
+        .mini{flex:0 0 auto;padding:8px 12px;border-radius:8px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);font-size:13px;font-weight:600}
+        .card .btn.ghost{margin-top:4px}
         .foot{font-size:12px;color:var(--sub);text-align:center;margin-top:24px}
         </style></head>
         <body><div class="wrap">

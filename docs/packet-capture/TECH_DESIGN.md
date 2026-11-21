@@ -193,6 +193,10 @@ v1 靠代理拦截 `baobox.proxy` 这个域名来给页面，手机必须先设�
 - 四个 GET 路由，精确匹配（v1 是子串匹配）：`/`（配置页）、`/cert`、`/proxy`、`/proxy-off`。内容生成全部沿用 `MobileConfigBuilder`，只是 CA 路径换成 §5 的。
 - 二维码编码 `http://<Mac 的局域网 IP>:<端口>/`。
 - 这个服务只发公开证书和描述文件，不涉及抓到的内容，所以不做设备准入。
+- **页面是 http 的局域网地址，不是「安全上下文」**：`navigator.clipboard` 在这里不存在。2026-11-21 用户在 Android 上点「复制」没反应就是这个原因（在 Chromium 里对同一个地址实测：`isSecureContext` 为 false、`navigator.clipboard` 为 undefined）。复制改用临时文本框 + `document.execCommand('copy')`，实测可用；再不行按钮提示长按，数值设了 `user-select: all`。
+- **Android 页没法「自动配置」**：系统没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应物）。页面能做的是把手填做到最省事：主机名、端口分开各一个复制按钮（系统的代理表单就是这两个框），外加一个 `intent:` 链接直达 Wi-Fi 设置（只有 Chrome 系浏览器认，**没在真机上验证**）。真正不用手填的两条路：连 USB 用 ADB 一键（已有），或 WireGuard 模式（见下）。
+
+**WireGuard 模式（没做，已确认内核支持）**：2026-11-21 用包内的引擎实测，`--mode regular@端口 --mode wireguard@端口` 可以同时开，启动时打印一份 WireGuard 客户端配置。手机装官方的 WireGuard App 扫码导入后，全部流量经引擎，不用设代理，不认系统代理的 App 也能抓。证书仍要手动装。要做的话：手机面板多一个二维码，引擎多一个监听端口（UDP），设备准入要换一种认法（来源地址都是隧道里的 10.0.0.x）。
 
 ## 8. v1 的代码：删什么、留什么
 

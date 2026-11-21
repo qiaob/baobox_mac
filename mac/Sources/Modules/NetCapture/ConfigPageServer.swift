@@ -114,6 +114,9 @@ final class ConfigPageServer: @unchecked Sendable {
             } else {
                 redirectHome(connection)
             }
+        case "/favicon.ico":
+            // 浏览器会自己来要图标；没有，安静地回个空。
+            send(connection, status: "204 No Content", contentType: "image/x-icon", body: Data())
         default:
             send(connection, status: "404 Not Found", contentType: "text/plain", body: Data("Not found".utf8))
         }
