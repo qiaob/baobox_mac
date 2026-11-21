@@ -6,7 +6,8 @@ import Foundation
 /// （Resources/NetCapture/baobox_bridge.py）：它把每条请求从标准输出一行一个 JSON 推过来，
 /// 这边从标准输入给它发指令。不开额外端口。
 ///
-/// `state` 是「抓包是否在进行」的唯一事实源，窗口、菜单、MCP 都看它。
+/// `state` 是「抓包是否在进行」的唯一事实源，窗口、菜单、MCP 都看它。变成 `failed`（起不来、意外退出、启动超时）时
+/// `NetCaptureSession` 在它的订阅里把开关全部复位、还原系统代理。
 @MainActor
 final class NetCaptureEngine: ObservableObject {
     static let shared = NetCaptureEngine()
@@ -19,8 +20,10 @@ final class NetCaptureEngine: ObservableObject {
     }
 
     @Published private(set) var state: State = .stopped
-    /// 当前这次运行是否监听局域网（有手机要抓时才开；否则只听 127.0.0.1）。
-    @Published private(set) var lanEnabled = false
+    /// 这次运行（或正在启动的这次）的监听组合；没在跑是 nil。变了就要重启（`restart`）。
+    @Published private(set) var listeners: EngineListeners?
+    /// 桥那边几个开关此刻的值（暂停、手动代理、本机 TCP、配置页端口）；变了发指令（`apply(flags:)`），不用重启。
+    private(set) var flags = BridgeFlags()
     /// 连上来了、还在等用户点允许的局域网设备（来源 IP）。
     @Published private(set) var pendingDevices: [String] = []
     /// 引擎报告的版本号（就绪后才有）。
@@ -46,7 +49,6 @@ final class NetCaptureEngine: ObservableObject {
     private var reader: EngineOutputReader?
     /// 每次启动加一。旧进程的回调晚到时靠它认出来、丢掉。
     private var generation = 0
-    private var startingPort: UInt16 = 0
 
     /// 等引擎就绪的上限。正常约 1 秒。
     private static let startTimeout: TimeInterval = 8
@@ -55,8 +57,8 @@ final class NetCaptureEngine: ObservableObject {
 
     // MARK: - 启停
 
-    /// 启动引擎。已经在启动或运行就忽略（要换端口或监听范围，用 `restart`）。
-    func start(port: UInt16, lan: Bool) {
+    /// 启动引擎。已经在启动或运行就忽略（要换监听组合，用 `restart`）。
+    func start(listeners: EngineListeners, flags: BridgeFlags) {
         guard !isActive else { return }
         guard NetCaptureEnv.engineUnavailable == nil, let script = NetCaptureEnv.bridgeScriptURL else {
             state = .failed(L("netcapture.error.engineMissing"))
@@ -64,41 +66,38 @@ final class NetCaptureEngine: ObservableObject {
         }
         generation += 1
         let current = generation
-        startingPort = port
-        lanEnabled = lan
+        self.listeners = listeners
+        self.flags = flags
         pendingDevices = []
         state = .starting
 
         // 证书要在引擎第一次启动之前就按 Baobox 的名字做好，否则引擎会自己生成一张叫 mitmproxy 的
         // （`CaptureCA.ensureGenerated`）。只有头一次会走后台这一支，多等约 1 秒。
         if CaptureCA.shared.isGenerated {
-            launch(script: script, port: port, lan: lan, generation: current)
+            launch(script: script, generation: current)
         } else {
             DispatchQueue.global(qos: .userInitiated).async {
                 CaptureCA.shared.ensureGenerated()
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         guard self.generation == current, self.state == .starting else { return }
-                        self.launch(script: script, port: port, lan: lan, generation: current)
+                        self.launch(script: script, generation: current)
                     }
                 }
             }
         }
     }
 
-    private func launch(script: URL, port: UInt16, lan: Bool, generation current: Int) {
+    private func launch(script: URL, generation current: Int) {
+        guard let listening = listeners else { return }
         let confDir = NetCaptureEnv.engineConfDir
         try? FileManager.default.createDirectory(at: confDir, withIntermediateDirectories: true)
         let bodyCap = NetCaptureEnv.bodyCap
 
         let process = Process()
         process.executableURL = NetCaptureEnv.engineURL
-        process.arguments = [
-            // 普通代理：有手机要抓时听局域网，否则只听本机。
-            "--mode", "regular@\(lan ? "0.0.0.0" : "127.0.0.1"):\(port)",
-            // SOCKS5：永远只听本机。苹果平台（Mac、iOS 模拟器）的 WebSocket 不走 HTTP 代理，只走系统的 SOCKS 代理，
-            // 「这台 Mac」场景会把系统的 SOCKS 代理指到这里。
-            "--mode", "socks5@127.0.0.1:\(EngineListeners.neighbour(of: port, offset: 2))",
+        // 监听：HTTP 代理（听本机或局域网）、只听本机的 SOCKS5、开着时 WireGuard（docs/packet-capture/CONTROL.md §2.1）。
+        process.arguments = listening.modeArguments(keyFile: NetCaptureEnv.wireguardKeyURL.path) + [
             "--set", "confdir=\(confDir.path)",
             // 超过上限的正文直接流过去，不在引擎里攒着；这样的请求标「已截断」。
             "--set", "stream_large_bodies=\(bodyCap)",
@@ -108,9 +107,9 @@ final class NetCaptureEngine: ObservableObject {
             "--set", "baobox_body_cap=\(bodyCap)",
             "--set", "baobox_scope=\(NetCaptureEnv.decryptScope.json)",
             "--set", "baobox_allowed=\(allowedDevices.sorted().joined(separator: ","))",
-            // 有人在浏览器里直接打开代理地址时，桥把它转到手机配置页（配置页只在听局域网时开着）。
-            "--set", "baobox_page_port=\(lan ? NetCaptureEnv.configPagePort : 0)",
-        ]
+            // 隧道里的设备访问 Mac 用的是它的局域网地址：桥据此认出「发给这台 Mac 自己的」（配置页、证书检测）。
+            "--set", "baobox_lan_ip=\(NetworkInterfaces.primaryIP())",
+        ] + flags.optionArguments
         let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -142,6 +141,7 @@ final class NetCaptureEngine: ObservableObject {
         do {
             try process.run()
         } catch {
+            listeners = nil
             state = .failed(error.localizedDescription)
             return
         }
@@ -153,8 +153,8 @@ final class NetCaptureEngine: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, self.generation == current, self.state == .starting else { return }
                 self.teardown()
+                self.listeners = nil
                 self.state = .failed(L("netcapture.error.engineTimeout"))
-                NetCaptureSession.shared.engineDidStopUnexpectedly()
             }
         }
     }
@@ -164,14 +164,23 @@ final class NetCaptureEngine: ObservableObject {
         guard process != nil || state != .stopped else { return }
         teardown()
         pendingDevices = []
+        listeners = nil
         state = .stopped
     }
 
-    /// 换端口或监听范围：停了再起（约 1 秒）。允许过的设备会带过去。
-    func restart(port: UInt16, lan: Bool) {
+    /// 换监听组合：停了再起（约 1 秒）。允许过的设备、暂停与否（在 `flags` 里）都带过去；列表不动。
+    func restart(listeners: EngineListeners, flags: BridgeFlags) {
         teardown()
         state = .stopped
-        start(port: port, lan: lan)
+        start(listeners: listeners, flags: flags)
+    }
+
+    /// 桥的开关变了：只发变了的那几条指令。还在启动时也不会丢：进程还没起（在等证书生成）时，起的时候用的就是新值；
+    /// 已经起了、桥还没开始读，指令在管道里等着，桥就绪后按顺序读到。
+    func apply(flags next: BridgeFlags) {
+        let commands = flags.commands(toReach: next)
+        flags = next
+        commands.forEach(send)
     }
 
     /// 结束当前进程并让它的回调作废。
@@ -199,6 +208,7 @@ final class NetCaptureEngine: ObservableObject {
         process = nil
         stdinHandle = nil
         reader = nil
+        listeners = nil
         state = .stopped
     }
 
@@ -209,9 +219,9 @@ final class NetCaptureEngine: ObservableObject {
         stdinHandle = nil
         reader = nil
         pendingDevices = []
-        let detail = Self.explain(message, port: startingPort)
+        let detail = Self.explain(message, port: listeners?.port ?? NetCaptureEnv.port)
+        listeners = nil
         state = .failed(detail.isEmpty ? L("netcapture.error.engineExited \(Int(status))") : detail)
-        NetCaptureSession.shared.engineDidStopUnexpectedly()
     }
 
     /// 把引擎的报错翻成人话。认得的只有「端口被占」，其余原样给最后一行。
@@ -262,7 +272,7 @@ final class NetCaptureEngine: ObservableObject {
                 engineVersion = version
                 // 引擎每次起来都是空的 Mock 规则表：先把规则发过去，再让等着就绪的事（重发…）去跑。
                 MockRuleStore.shared.pushToEngine()
-                if state == .starting { state = .running(startingPort) }
+                if state == .starting, let listeners { state = .running(listeners.port) }
             case .device(let client):
                 guard !allowedDevices.contains(client), !pendingDevices.contains(client) else { continue }
                 pendingDevices.append(client)
@@ -274,6 +284,7 @@ final class NetCaptureEngine: ObservableObject {
             }
         }
         FlowStore.shared.apply(events)
+        TCPStore.shared.apply(events)
     }
 }
 

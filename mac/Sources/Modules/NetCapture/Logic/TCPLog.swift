@@ -195,12 +195,14 @@ enum TCPStream {
             if segment.missing > 0 { parts.append(.missing(count: segment.missing, offset: offset + saved.count)) }
             if segment.fromClient { upOffset += segment.size } else { downOffset += segment.size }
 
-            if merge, var last = blocks.last, last.fromClient == segment.fromClient {
+            if merge, blocks.last?.fromClient == segment.fromClient {
+                // 先取下来再改再放回：这一块的数据只有一个引用，接上新的字节时就地追加，不整块复制。
+                var last = blocks.removeLast()
                 for part in parts { append(part, to: &last.parts) }
                 last.size += segment.size
                 last.endedAt = segment.at
                 last.segmentCount += 1
-                blocks[blocks.count - 1] = last
+                blocks.append(last)
             } else {
                 blocks.append(TCPBlock(id: segment.id, fromClient: segment.fromClient, offset: offset, size: segment.size,
                                        parts: parts, startedAt: segment.at, endedAt: segment.at, segmentCount: 1))
@@ -211,11 +213,20 @@ enum TCPStream {
 
     /// 接一个部分：和前一个同类就并起来（数据接上，占位的字节数相加）。
     private static func append(_ part: TCPBlock.Part, to parts: inout [TCPBlock.Part]) {
-        switch (parts.last, part) {
-        case (.data(let previous, let offset)?, .data(let bytes, _)):
-            parts[parts.count - 1] = .data(previous + bytes, offset: offset)
-        case (.missing(let previous, let offset)?, .missing(let count, _)):
-            parts[parts.count - 1] = .missing(count: previous + count, offset: offset)
+        guard let last = parts.indices.last else {
+            parts.append(part)
+            return
+        }
+        switch (parts[last], part) {
+        case (.data(_, let offset), .data(let bytes, _)):
+            // 先从数组里取出来、把那一格换掉，取出来的这份就是唯一的引用，追加是就地的
+            // （不然每接一段都把前面攒下的整份复制一遍）。
+            guard case .data(var previous, _) = parts[last] else { return }
+            parts[last] = .missing(count: 0, offset: offset)
+            previous.append(bytes)
+            parts[last] = .data(previous, offset: offset)
+        case (.missing(let previous, let offset), .missing(let count, _)):
+            parts[last] = .missing(count: previous + count, offset: offset)
         default:
             parts.append(part)
         }

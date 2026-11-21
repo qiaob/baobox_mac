@@ -7,13 +7,22 @@ import Network
 /// 所以手机还没设好代理时也打得开（v1 靠代理拦截一个假域名来给页面，必须先设代理）。
 ///
 /// 只应答几个 GET 路由（`/`、`/cert`、`/proxy`、`/proxy-manual`、`/proxy-off`、`/proxy.pac`、`/ping`），内容都由 `MobileConfigBuilder` / `ProxyPAC` 生成；只发公开证书和描述文件，不涉及抓到的内容，
-/// 所以不做设备准入。只在听局域网时开着。带着二维码里的口令来开 `/` 的设备，顺手在引擎那边放行。
+/// 所以不做设备准入。「给其他设备装证书」开着时才开。带着二维码里的口令来开 `/` 的设备，顺手在引擎那边放行。
+/// 页面按来访者的接法给不同内容（docs/packet-capture/CONTROL.md §2.5）：经 WireGuard 隧道来的、或者「手动代理」没开时，只留装证书。
 final class ConfigPageServer: @unchecked Sendable {
     static let shared = ConfigPageServer()
 
     private let queue = DispatchQueue(label: "com.baobox.netcapture.configpage")
     private var listener: NWListener?
     private var proxyPort: UInt16 = 0
+    private let lock = NSLock()
+    private var manualProxyValue = false
+
+    /// 「手动代理」开着没有（主线程写，服务队列读）：没开时页面不给配代理那几步。
+    var manualProxyOn: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return manualProxyValue }
+        set { lock.lock(); manualProxyValue = newValue; lock.unlock() }
+    }
 
     private init() {}
 
@@ -104,13 +113,17 @@ final class ConfigPageServer: @unchecked Sendable {
 
         switch path {
         case "/":
-            let forwarded = lines.dropFirst()
-                .first { $0.lowercased().hasPrefix("x-baobox-client:") }
-                .map { String($0.dropFirst("x-baobox-client:".count)).trimmingCharacters(in: .whitespaces) }
+            let forwarded = Self.header("x-baobox-client", in: lines)
             admitIfPaired(connection, requestTarget: String(requestLine[1]), forwardedClient: forwarded, localIP: ip)
+            let access: MobileConfigBuilder.PageAccess
+            if fromThisMac(connection, localIP: ip), Self.header("x-baobox-via", in: lines) == "wireguard" {
+                access = .tunnel
+            } else {
+                access = manualProxyOn ? .manualProxy : .certificateOnly
+            }
             let html = MobileConfigBuilder.landingPageHTML(ip: ip, port: proxyPort,
                                                            ssid: MobileConfigBuilder.currentSSID(),
-                                                           userAgent: userAgent)
+                                                           userAgent: userAgent, access: access)
             send(connection, status: "200 OK", contentType: "text/html; charset=utf-8", body: Data(html.utf8))
         case "/cert":
             CaptureCA.shared.ensureGenerated()
@@ -166,6 +179,21 @@ final class ConfigPageServer: @unchecked Sendable {
         default:
             send(connection, status: "404 Not Found", contentType: "text/plain", body: Data("Not found".utf8))
         }
+    }
+
+    /// 请求头里某一项的值（名字不分大小写）；没有是 nil。
+    private static func header(_ name: String, in lines: [String]) -> String? {
+        let prefix = name + ":"
+        return lines.dropFirst()
+            .first { $0.lowercased().hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// 对端是这台 Mac 自己：请求是经引擎转过来的，桥写的 `X-Baobox-*` 头才算数（别的设备自己写这些头没用）。
+    private func fromThisMac(_ connection: NWConnection, localIP: String) -> Bool {
+        guard case .hostPort(let host, _) = connection.endpoint else { return false }
+        let remote = PhonePairing.deviceAddress("\(host)")
+        return PhonePairing.isLoopback(remote) || remote == localIP
     }
 
     private func redirectHome(_ connection: NWConnection) {

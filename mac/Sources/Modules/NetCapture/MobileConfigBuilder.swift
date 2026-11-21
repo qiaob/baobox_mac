@@ -174,11 +174,23 @@ enum MobileConfigBuilder {
 
     // MARK: - 配置网页（给手机浏览器，非 App UI，双语内联，不走 xcstrings）
 
-    /// 生成 `GET /` 的自包含 HTML。按 `userAgent` 区分 iOS / Android·其它。
-    /// - iOS：三张卡各给一个可点的描述文件链接（`/cert`、`/proxy`、`/proxy-off`）。
-    /// - Android·其它：证书链接 + 主机名 / 端口各带一个复制按钮 + 直达 Wi-Fi 设置的按钮 + 手动步骤（含 ADB 提示）。
+    /// 来访者是怎么接进来的，决定页面给哪几步（docs/packet-capture/CONTROL.md §2.5）。
+    enum PageAccess {
+        /// 「手动代理」开着：装证书 + 配代理 + 关代理。
+        case manualProxy
+        /// 「手动代理」没开：只装证书（拿 Mac 当代理会被拒）。
+        case certificateOnly
+        /// 经 WireGuard 隧道来的：流量已经经过 Baobox，只装证书。
+        case tunnel
+    }
+
+    /// 生成 `GET /` 的自包含 HTML。按 `userAgent` 区分 iOS / Android·其它，按 `access` 决定给不给配代理那几步。
+    /// - iOS：装证书、信任证书，`manualProxy` 时再加配代理 / 关代理（描述文件链接 `/cert`、`/proxy-manual`、`/proxy-off`）。
+    /// - Android·其它：证书链接，`manualProxy` 时再加主机名 / 端口各带一个复制按钮 + 直达 Wi-Fi 设置的按钮 + 手动步骤。
     /// `ssid` 为空时 iOS 的「配代理」改为手动说明（因无 SSID 无法出 Wi-Fi 描述文件）。
-    static func landingPageHTML(ip: String, port: UInt16, ssid: String?, userAgent: String) -> String {
+    static func landingPageHTML(ip: String, port: UInt16, ssid: String?, userAgent: String,
+                                access: PageAccess) -> String {
+        let offerProxy = access == .manualProxy
         let isIOS = PhoneBrowser.isIOS(userAgent: userAgent)
         // iOS 上只有 Safari 能装描述文件。相机扫码开的是默认浏览器，默认浏览器是 Chrome 时只会下到一个打不开的文件
         // （2026-11-21 用户真机遇到）。这种情况不给安装按钮，只请他换到 Safari。
@@ -226,7 +238,9 @@ enum MobileConfigBuilder {
             // 自动代理（PAC，装一次、开关跟着 Mac 走）折叠在最后的「高级」里。2026-11-21 用户在真机上试自动代理，
             // 觉得绕（开、关、再开各要装一个描述文件，装完页面还让他下载），要求「把自动代理单独隐藏，以手动为主，
             // 自动也保留」。手动代理按 IP 配（最稳）；按名字配只留给自动代理。
-            if hasSSID {
+            if !offerProxy {
+                proxyCard = ""
+            } else if hasSSID {
                 proxyCard = card(
                     num: "3", title: "配代理 / Set proxy",
                     body: """
@@ -246,7 +260,7 @@ enum MobileConfigBuilder {
                     """)
             }
 
-            let autoBlock = hasSSID ? """
+            let autoBlock = (hasSSID && offerProxy) ? """
             <details class="adv"><summary>高级：自动代理 / Advanced: automatic proxy</summary>
             <p class="hint">装一次，以后在 Mac 上开始、停止抓包，手机自动跟着切换；Baobox 没在抓包时手机直连，不用关代理。Mac 睡眠、关机或不在这个 Wi-Fi 时，手机联网会变得很慢。<br>Install once; the phone then follows the capture being started and stopped on the Mac, and connects directly while Baobox is not capturing. It gets very slow when the Mac sleeps, shuts down or leaves this Wi-Fi.</p>
             <a class="btn ghost" id="proxyauto" href="/proxy">安装自动代理 / Install the automatic proxy</a>
@@ -255,7 +269,7 @@ enum MobileConfigBuilder {
             </details>
             """ : ""
 
-            offCard = card(
+            offCard = !offerProxy ? "" : card(
                 num: "4", title: "关代理 / Turn proxy off",
                 body: """
                 <a class="btn ghost" href="/proxy-off">一键关闭代理 / One-tap turn off</a>
@@ -271,7 +285,7 @@ enum MobileConfigBuilder {
                 <p class="hint">下载后把它设成<b>受信任的根证书</b>。macOS：双击加进钥匙串，在「钥匙串访问」里打开它，把「信任」改成<b>始终信任</b>。Windows：双击 → 安装证书 → 放进<b>受信任的根证书颁发机构</b>。Firefox 要在它自己的设置里导入。<br>Make it a <b>trusted root certificate</b>. macOS: double-click to add it to the keychain, open it in Keychain Access and set Trust to <b>Always Trust</b>. Windows: double-click → Install Certificate → <b>Trusted Root Certification Authorities</b>. Firefox needs it imported in its own settings.</p>
                 """)
 
-            proxyCard = card(
+            proxyCard = !offerProxy ? "" : card(
                 num: "2", title: "配代理 / Set proxy",
                 body: """
                 <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
@@ -279,7 +293,7 @@ enum MobileConfigBuilder {
                 <p class="hint">在系统（或浏览器）的代理设置里，把 <b>HTTP</b> 和 <b>HTTPS</b> 代理都设成上面的主机名和端口。<br>In the system's (or the browser's) proxy settings, set both the <b>HTTP</b> and <b>HTTPS</b> proxy to the host and port above.</p>
                 """)
 
-            offCard = card(
+            offCard = !offerProxy ? "" : card(
                 num: "3", title: "关代理 / Turn proxy off",
                 body: """
                 <p class="hint">抓完把代理设置改回原样：Baobox 没在抓包时，这台设备连不上代理会上不了网。<br>Put the proxy settings back when you are done: while Baobox is not capturing this device cannot reach the proxy and is offline.</p>
@@ -297,7 +311,7 @@ enum MobileConfigBuilder {
 
             // Android 没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应的东西），只能手填。
             // 所以把手填做到最省事：主机名和端口分开各一个复制按钮（系统的代理表单就是这两个框），再给一个直达 Wi-Fi 设置的按钮。
-            proxyCard = card(
+            proxyCard = !offerProxy ? "" : card(
                 num: "2", title: "配代理 / Set proxy",
                 body: """
                 <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
@@ -306,7 +320,7 @@ enum MobileConfigBuilder {
                 <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，可以在电脑的抓包窗口里一键设置。 / With USB debugging connected, the Mac can set it in one click.</p>
                 """)
 
-            offCard = card(
+            offCard = !offerProxy ? "" : card(
                 num: "3", title: "关代理 / Turn proxy off",
                 body: """
                 <p class="hint">到 <b>Wi-Fi › 修改网络 › 代理</b> 改回 <b>无</b>。<br>Set <b>Wi-Fi › Modify network › Proxy</b> back to <b>None</b>. / 或用 ADB 清除。 / or clear via ADB.</p>
@@ -363,11 +377,24 @@ enum MobileConfigBuilder {
         //   但没在「证书信任设置」里打开开关，握手都失败。
         // - 代理、放行：请求一个不存在的域名 `check.baobox.invalid`。设了代理它才到得了引擎，桥直接应答
         //   `{"proxy":true,"allowed":…}`；没设代理就是解析失败。
+        // 清单按接法给：经代理的查「代理已生效」「Mac 已允许」；经隧道的那一行写死已连上（这个页面就是经隧道打开的）；
+        // 「手动代理」没开时只有证书一行。
+        let accessRows: String
+        switch access {
+        case .manualProxy:
+            accessRows = """
+            <div class="st" id="st-proxy"><i></i>代理已生效 / Proxy in use</div>
+            <div class="st" id="st-allow"><i></i>Mac 已允许这台设备 / Allowed on the Mac</div>
+            """
+        case .tunnel:
+            accessRows = #"<div class="st on"><i></i>已通过 WireGuard 连接 / Connected through WireGuard</div>"#
+        case .certificateOnly:
+            accessRows = ""
+        }
         let statusCard = needsSafari ? "" : """
         <div class="card">
         <div class="st" id="st-cert"><i></i>证书已信任 / Certificate trusted</div>
-        <div class="st" id="st-proxy"><i></i>代理已生效 / Proxy in use</div>
-        <div class="st" id="st-allow"><i></i>Mac 已允许这台设备 / Allowed on the Mac</div>
+        \(accessRows)
         <p class="ok" id="ready" style="margin:10px 0 0" hidden>全部就绪，可以开始抓包了。<br>All set. Start capturing.</p>
         </div>
         """
@@ -375,7 +402,7 @@ enum MobileConfigBuilder {
         // 能不能找到要在手机上试（有的网络不放行这种名字解析），所以由页面去请求一下 `/ping`，
         // 通了才把「安装自动代理」的链接换成带 `?h=local` 的。只用在自动代理上；手动代理一律按 IP。
         let localName = NetworkInterfaces.localHostName ?? ""
-        let nameJS = (needsSafari || !isIOS || localName.isEmpty) ? "" : """
+        let nameJS = (needsSafari || !isIOS || !offerProxy || localName.isEmpty) ? "" : """
         <script>
         (function(){
           if (!window.fetch) return;
@@ -398,7 +425,9 @@ enum MobileConfigBuilder {
         <script>
         (function(){
           if (!window.fetch) return;
+          var checkProxy = \(offerProxy ? "true" : "false");
           var state = {cert: false, proxy: false, allow: false};
+          function done(){ return state.cert && (!checkProxy || (state.proxy && state.allow)); }
           function get(url, ms){
             var ctl = window.AbortController ? new AbortController() : null;
             if (ctl) setTimeout(function(){ ctl.abort(); }, ms);
@@ -416,24 +445,43 @@ enum MobileConfigBuilder {
             if (todo) todo.hidden = state.cert;
             if (btn && state.cert) { btn.className = 'btn ghost'; btn.textContent = '重新下载 / Download again'; }
             var ready = document.getElementById('ready');
-            if (ready) ready.hidden = !(state.cert && state.proxy && state.allow);
+            if (ready) ready.hidden = !done();
           }
           function check(){
             var cert = get('https://\(addr)/baobox-trust-check?' + Date.now(), 4000)
               .then(function(r){ state.cert = r.status === 204; }, function(){ state.cert = false; });
-            var proxy = get('http://check.baobox.invalid/status?' + Date.now(), 4000)
+            var proxy = !checkProxy ? Promise.resolve() : get('http://check.baobox.invalid/status?' + Date.now(), 4000)
               .then(function(r){ return r.json(); })
               .then(function(j){ state.proxy = true; state.allow = !!j.allowed; },
                     function(){ state.proxy = false; state.allow = false; });
             Promise.all([cert, proxy]).then(function(){
               render();
-              setTimeout(check, (state.cert && state.proxy && state.allow) ? 10000 : 3000);
+              setTimeout(check, done() ? 10000 : 3000);
             });
           }
           check();
         })();
         </script>
         """
+
+        // 页面顶上：经代理的给代理地址；经隧道的说已经连上；「手动代理」没开的说这里只装证书。
+        let accessHeader: String
+        switch access {
+        case .manualProxy:
+            accessHeader = """
+            <p class="hint" style="text-align:center">当前代理 / Proxy</p>
+            <div class="big">\(addrEsc)</div>
+            """
+        case .tunnel:
+            accessHeader = """
+            <p class="ok" style="text-align:center;margin:14px 0 4px">✓ 已通过 WireGuard 连接 / Connected through WireGuard</p>
+            <p class="hint" style="text-align:center">这台设备的流量已经经过 Baobox，不用设代理，装好证书就能看 HTTPS。<br>This device's traffic already goes through Baobox. No proxy needed; install the certificate to see HTTPS.</p>
+            """
+        case .certificateOnly:
+            accessHeader = """
+            <p class="hint" style="text-align:center">这里只装证书：Mac 上没有打开「手动代理」。要经代理抓这台设备，先在 Mac 的抓包窗口里打开它。<br>Certificate only: Manual Proxy is off on the Mac. To capture this device through the proxy, turn it on in the capture window first.</p>
+            """
+        }
 
         return """
         <!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -473,8 +521,7 @@ enum MobileConfigBuilder {
         </style></head>
         <body><div class="wrap">
         <h1>Baobox 抓包配置 / Capture Setup</h1>
-        <p class="hint" style="text-align:center">当前代理 / Proxy</p>
-        <div class="big">\(addrEsc)</div>
+        \(accessHeader)
         \(statusCard)
         \(cards)
         <p class="foot">仅用于本机调试，请勿抓取他人隐私。<br>For local debugging only.</p>

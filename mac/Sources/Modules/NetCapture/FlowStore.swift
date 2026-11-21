@@ -368,11 +368,12 @@ final class FlowStore: ObservableObject {
         ip == "127.0.0.1" || ip == "::1" || ip.lowercased() == "localhost"
     }
 
-    /// 设备显示名：别名优先 → 本机 → 原始 IP（反查主机名从简省略，见 §17.6 取舍）。
+    /// 设备显示名：别名优先 → 本机 → WireGuard 隧道里的手机（地址固定 10.0.0.1）→ 原始 IP（反查主机名从简省略，见 §17.6 取舍）。
     static func label(for ip: String) -> String {
         if ip == NetCaptureEnv.unknownDeviceKey { return L("netcapture.device.unknown") }
         if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
         if isLoopback(ip) { return L("netcapture.device.thisMac") }
+        if ip == WireGuardKeys.clientAddress { return L("netcapture.device.wireguard") }
         return ip
     }
 

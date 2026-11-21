@@ -85,15 +85,19 @@ enum NetCaptureEnv {
         static let decryptScope = "netcapture.decryptScope"       // "all" | "allowlist"
         /// 用户手填的 Wi-Fi 名称。新版 macOS 不给定位权限就读不到当前 Wi-Fi 名，而 iPhone 的代理描述文件要按名称匹配网络。
         static let wifiName = "netcapture.wifiName"
-        /// 「这台 Mac」上次是不是开着（下次点开始时照旧）。
-        static let lastMacCapture = "netcapture.lastMacCapture"
+        /// 「本机」卡片的三个子开关（docs/packet-capture/CONTROL.md §2.2）。总开关不存：App 启动时四张卡片都是关的。
+        static let macHTTP = "netcapture.mac.http"
+        static let macWebSocket = "netcapture.mac.websocket"
+        static let macTCP = "netcapture.mac.tcp"
+        /// 「解密 HTTPS」（证书卡片）。关 = 解密范围用 `DecryptScope.off`。
+        static let decryptHTTPS = "netcapture.decryptHTTPS"
+        /// WireGuard 的 UDP 端口（设置页可改）。
+        static let wireguardPort = "netcapture.wireguardPort"
         static let allowDomains = "netcapture.allowDomains"        // 换行分隔
         static let denyDomains = "netcapture.denyDomains"          // 换行分隔
         static let mcpPort = "netcapture.mcpPort"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
-        /// 允许手机和平板连进来（引擎听局域网 + 开配置页）。第一次打开手机配置时置真，之后每次开始抓包都照这个来；设置页能关。
-        static let phoneEnabled = "netcapture.phoneEnabled"
         /// 设备别名字典（ip → 用户自定义别名），供多设备 Tab 展示（§17）。
         static let deviceAliases = "netcapture.deviceAliases"
         /// 崩溃兜底：开启系统代理前保存的原状态（JSON 编码），停止或下次启动还原。
@@ -124,6 +128,11 @@ enum NetCaptureEnv {
             Keys.mcpPort: 9191,
             Keys.mcpRedactAuth: true,
             Keys.clearOnStop: false,
+            Keys.macHTTP: true,
+            Keys.macWebSocket: true,
+            Keys.macTCP: false,
+            Keys.decryptHTTPS: true,
+            Keys.wireguardPort: 51820,
         ])
     }
 
@@ -151,9 +160,18 @@ enum NetCaptureEnv {
         return raw > 0 ? raw : 5 * 1024 * 1024
     }
 
-    static var phoneEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Keys.phoneEnabled)
+    static var macHTTP: Bool { UserDefaults.standard.object(forKey: Keys.macHTTP) as? Bool ?? true }
+    static var macWebSocket: Bool { UserDefaults.standard.object(forKey: Keys.macWebSocket) as? Bool ?? true }
+    static var macTCP: Bool { UserDefaults.standard.object(forKey: Keys.macTCP) as? Bool ?? false }
+    static var decryptHTTPS: Bool { UserDefaults.standard.object(forKey: Keys.decryptHTTPS) as? Bool ?? true }
+
+    static var wireguardPort: UInt16 {
+        let raw = UserDefaults.standard.integer(forKey: Keys.wireguardPort)
+        return UInt16((1024...65535).contains(raw) ? raw : 51820)
     }
+
+    /// WireGuard 的密钥文件（引擎认的格式，见 `WireGuardKeys`），权限 600。
+    static var wireguardKeyURL: URL { supportDir.appendingPathComponent("wireguard.json") }
 
     static var clearOnStop: Bool {
         UserDefaults.standard.object(forKey: Keys.clearOnStop) as? Bool ?? false
@@ -184,8 +202,9 @@ enum NetCaptureEnv {
 
     // MARK: - 解密范围
 
-    /// 设置里当前的解密范围（匹配在桥脚本里做，见 `DecryptScope`）。
+    /// 当前的解密范围（匹配在桥脚本里做，见 `DecryptScope`）：「解密 HTTPS」关着是 `.off`，否则按设置页的范围。
     static var decryptScope: DecryptScope {
+        guard decryptHTTPS else { return .off }
         let defaults = UserDefaults.standard
         return DecryptScope.from(setting: defaults.string(forKey: Keys.decryptScope) ?? "all",
                                  allowText: defaults.string(forKey: Keys.allowDomains) ?? "",

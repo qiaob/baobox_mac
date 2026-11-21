@@ -41,5 +41,7 @@ final class TCPPayloadTests: XCTestCase {
 
     func testTextKeepsLineBreaksAndMarksControlBytes() {
         XCTAssertEqual(TCPPayload.text(Data("a\r\nb\tc\u{01}d\re".utf8)), "a\nb\tc·d\ne")
+        // 解不开的字节（密文）也是点，不是替换符。
+        XCTAssertEqual(TCPPayload.text(Data([0x53, 0x53, 0x48, 0xFF, 0xFE, 0x0A])), "SSH··\n")
     }
 }

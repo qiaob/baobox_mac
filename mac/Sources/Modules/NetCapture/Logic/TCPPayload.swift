@@ -47,14 +47,15 @@ enum TCPPayload {
         return control * 20 <= scalars.count
     }
 
-    /// 当文本显示：按 UTF-8 解（坏字节换成 �），换行、回车换行、制表照留，别的控制字符显示成 `·`。
+    /// 当文本显示：按 UTF-8 解，换行、回车换行、制表照留；别的控制字符和解不开的字节都显示成 `·`
+    /// （SSH 的版本行之后是密文，按文本看时就是一串点，不是满屏的替换符）。
     static func text(_ data: Data) -> String {
         let decoded = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
         var result = String.UnicodeScalarView()
         for scalar in decoded.unicodeScalars {
             if scalar == "\r" {
                 result.append("\n")
-            } else if isControl(scalar) {
+            } else if isControl(scalar) || scalar == "\u{FFFD}" {
                 result.append("·")
             } else {
                 result.append(scalar)

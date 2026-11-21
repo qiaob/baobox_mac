@@ -477,8 +477,11 @@ class Bridge:
 
     # ----- device admission ------------------------------------------------
 
-    def admitted(self, ip):
-        if is_loopback(ip) or ip in self.allowed:
+    def admitted(self, client):
+        """This Mac and devices inside the WireGuard tunnel (they needed the key to get in) are always
+        admitted; a LAN device only after the user allowed it on the Mac."""
+        ip = client_ip(client)
+        if is_loopback(ip) or via_wireguard(client) or ip in self.allowed:
             return True
         if ip not in self.denied and ip not in self.announced:
             self.announced.add(ip)
@@ -505,7 +508,7 @@ class Bridge:
         if self.proxy_refused(flow.client_conn):
             flow.response = http.Response.make(403, b"", {"Connection": "close"})
             return
-        if not self.admitted(client_ip(flow.client_conn)):
+        if not self.admitted(flow.client_conn):
             flow.response = http.Response.make(403, b"", {"Connection": "close"})
 
     # ----- requests sent to the proxy itself --------------------------------
@@ -696,7 +699,7 @@ class Bridge:
             if self.proxy_refused(flow.client_conn):
                 allowed = ip in self.allowed
             else:
-                allowed = self.admitted(ip)
+                allowed = self.admitted(flow.client_conn)
             flow.response = http.Response.make(
                 200, json.dumps({"proxy": True, "allowed": allowed}).encode("utf-8"),
                 {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
@@ -707,6 +710,12 @@ class Bridge:
             # The page server would otherwise only see this Mac as the sender; tell it who really asked
             # (it uses that for scan-to-allow). Always overwritten, so a client cannot claim to be another.
             flow.request.headers["X-Baobox-Client"] = client_ip(flow.client_conn) or ""
+            # How the device came in: the page leaves out the proxy steps for a tunnel device. Told by the
+            # listener, not by the address (a home network can be 10.0.0.x too).
+            if via_wireguard(flow.client_conn):
+                flow.request.headers["X-Baobox-Via"] = "wireguard"
+            else:
+                flow.request.headers.pop("X-Baobox-Via", None)
             return
         if self.proxy_refused(flow.client_conn):
             # No `device` event: the device is not waiting to be allowed, Manual Proxy is simply off.
@@ -715,7 +724,7 @@ class Bridge:
                 {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
             return
         ip = client_ip(flow.client_conn)
-        if not self.admitted(ip):
+        if not self.admitted(flow.client_conn):
             flow.response = http.Response.make(
                 403, FORBIDDEN_PAGE.encode("utf-8"),
                 {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
