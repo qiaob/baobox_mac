@@ -11,12 +11,14 @@ Bodies travel base64-encoded inside the events; nothing is written to disk.
 
 import asyncio
 import base64
+import fnmatch
 import json
 import sys
 import threading
+import time
 import zlib
 
-from mitmproxy import ctx, http, tls
+from mitmproxy import connection, contentviews, ctx, http, tls
 
 PREFIX = "BAOBOX "
 
@@ -94,6 +96,34 @@ def sniff_decompress(content, limit):
     return content, None, False
 
 
+# Headers that describe the wire form of a body. When a body is replaced (replay with an edited body, mock
+# response) they would describe the old bytes, so they are dropped and the engine recomputes what it needs.
+WIRE_HEADERS = ("content-length", "content-encoding", "transfer-encoding")
+
+# Content types whose bodies are structured binary. The engine can render them as text.
+STRUCTURED_VIEWS = (("grpc", "grpc"), ("protobuf", "protobuf"), ("application/proto", "protobuf"),
+                    ("msgpack", "msgpack"))
+
+
+def structured_view(message):
+    """Name of the engine view for this body's content type, or None."""
+    content_type = (message.headers.get("content-type") or "").lower()
+    for needle, view in STRUCTURED_VIEWS:
+        if needle in content_type:
+            return view
+    return None
+
+
+def header_pairs(raw):
+    """[[name, value], ...] from a command -> list of (bytes, bytes), minus the wire headers."""
+    pairs = []
+    for item in raw or []:
+        if isinstance(item, list) and len(item) == 2 and all(isinstance(x, str) for x in item):
+            if item[0].lower() not in WIRE_HEADERS and item[0]:
+                pairs.append((item[0].encode("utf-8", "surrogateescape"), item[1].encode("utf-8", "surrogateescape")))
+    return pairs
+
+
 def via_socks(client):
     """True when the client connection came in through the SOCKS5 listener."""
     mode = getattr(client, "proxy_mode", None)
@@ -128,6 +158,7 @@ class Bridge:
         self.failed = set()              # (client ip, host): handshake failed -> pass through
         self.reported = set()            # (client ip, host, reason): `tls` already sent
         self.body_cap = 5 * 1024 * 1024
+        self.rules = []                  # mock rules, in the order the user keeps them
 
     # ----- options --------------------------------------------------------
 
@@ -191,6 +222,10 @@ class Bridge:
             ctx.master.shutdown()
         elif name == "scope":
             self.apply_scope(cmd)
+        elif name == "rules":
+            self.apply_rules(cmd.get("rules"))
+        elif name == "replay":
+            self.replay(cmd)
         elif name == "allow_device":
             ip = cmd.get("client")
             if ip:
@@ -209,6 +244,83 @@ class Bridge:
             self.scope_mode = mode
             self.scope_domains = [d for d in domains if isinstance(d, str) and d.strip()]
             self.reported = {r for r in self.reported if r[2] != "out_of_scope"}
+
+    # ----- mock rules ------------------------------------------------------
+
+    def apply_rules(self, rules):
+        """Replace the whole rule list. Malformed entries are skipped."""
+        kept = []
+        for rule in rules if isinstance(rules, list) else []:
+            if not isinstance(rule, dict) or not rule.get("enabled", True):
+                continue
+            host, path = rule.get("host"), rule.get("path")
+            if not isinstance(host, str) or not isinstance(path, str) or not host:
+                continue
+            try:
+                body = base64.b64decode(rule.get("body") or "")
+                status = int(rule.get("status", 200))
+            except (ValueError, TypeError):
+                continue
+            kept.append({
+                "id": str(rule.get("id", "")),
+                "method": str(rule.get("method") or "*").upper(),
+                "host": host.lower(),
+                "path": path or "/",
+                "status": status if 100 <= status <= 599 else 200,
+                "headers": header_pairs(rule.get("headers")),
+                "body": body,
+            })
+        self.rules = kept
+
+    def match_rule(self, request):
+        """First enabled rule for this request. Host is exact, path ignores the query and may use `*`."""
+        if not self.rules:
+            return None
+        host = (request.pretty_host or "").lower()
+        path = request.path.split("?", 1)[0]
+        for rule in self.rules:
+            if rule["method"] not in ("*", request.method.upper()) or rule["host"] != host:
+                continue
+            if rule["path"] == path or fnmatch.fnmatchcase(path, rule["path"]):
+                return rule
+        return None
+
+    # ----- replay ----------------------------------------------------------
+
+    def replay(self, cmd):
+        """Send a request again. Everything comes from the command, so it also works for a request that
+        was captured before the engine was restarted. Built the same way as the engine's own
+        `view.flows.create`. The caller picks the flow id, so it knows which row is the answer."""
+        try:
+            method, url = cmd["method"], cmd["url"]
+            body = base64.b64decode(cmd.get("body") or "")
+            request = http.Request.make(str(method).upper(), str(url), body)
+        except (KeyError, ValueError, TypeError) as error:
+            emit({"event": "replay_failed", "id": cmd.get("id"), "message": str(error)})
+            return
+        headers = header_pairs(cmd.get("headers"))
+        if headers:
+            request.headers = http.Headers(headers)
+        # A request captured over HTTP/2 has no Host header (it was `:authority`), and one built from
+        # nothing has none either; without it servers answer 400.
+        if "host" not in request.headers:
+            request.headers["host"] = request.pretty_host
+        if body or request.method in ("POST", "PUT", "PATCH"):
+            request.headers["content-length"] = str(len(body))
+        else:
+            request.headers.pop("content-length", None)
+        client = connection.Client(peername=("127.0.0.1", 0), sockname=("127.0.0.1", 0),
+                                   timestamp_start=time.time())
+        server = connection.Server(address=(request.host, request.port))
+        flow = http.HTTPFlow(client, server)
+        flow.request = request
+        if isinstance(cmd.get("id"), str) and cmd["id"]:
+            flow.id = cmd["id"]
+        flow.metadata["baobox_replay"] = True
+        try:
+            ctx.master.commands.call("replay.client", [flow])
+        except Exception as error:
+            emit({"event": "replay_failed", "id": flow.id, "message": str(error)})
 
     # ----- device admission ------------------------------------------------
 
@@ -290,6 +402,30 @@ class Bridge:
             truncated = True
         return base64.b64encode(content).decode("ascii"), truncated, sniffed
 
+    def structured_text(self, message, flow):
+        """Protobuf / gRPC / msgpack bodies rendered as text by the engine, or None.
+
+        Without a .proto file a protobuf message only has field numbers, not names; that is what the
+        engine prints. Returns {"view": name, "text": ...}."""
+        view = structured_view(message)
+        if view is None:
+            return None
+        try:
+            if not message.raw_content:
+                return None
+            result = contentviews.prettify_message(message, flow, view)
+        except Exception:
+            return None
+        text = getattr(result, "text", None)
+        if not text:
+            return None
+        name = getattr(result, "view_name", view) or view
+        # The engine falls back to a hex/raw view, or returns its own error text, when the bytes do not
+        # parse; neither is a decode.
+        if "raw" in name.lower() or "hex" in name.lower() or text.startswith("Couldn't parse"):
+            return None
+        return {"view": name, "text": text[:400000]}
+
     @staticmethod
     def wire_size(message):
         """Body size on the wire. A streamed body was never buffered, so fall back to Content-Length."""
@@ -314,13 +450,20 @@ class Bridge:
             return
         req = flow.request
         body, truncated, sniffed = self.body_fields(req)
+        rule = self.match_rule(req)
         emit({
             "event": "request", "id": flow.id, "client": ip,
+            "replay": bool(flow.metadata.get("baobox_replay")),
+            "decoded": self.structured_text(req, flow),
             "method": req.method, "scheme": req.scheme, "host": req.pretty_host,
             "port": req.port, "path": req.path, "http": req.http_version,
             "headers": self.headers(req), "body": body, "truncated": truncated, "sniffed": sniffed,
             "bytes": self.wire_size(req), "ts": req.timestamp_start,
         })
+        if rule is not None:
+            # Answer from the rule; the request never reaches the server.
+            flow.metadata["baobox_mock"] = rule["id"]
+            flow.response = http.Response.make(rule["status"], rule["body"], http.Headers(rule["headers"]))
 
     def response(self, flow: http.HTTPFlow):
         if not self.admitted(client_ip(flow.client_conn)):
@@ -333,6 +476,8 @@ class Bridge:
             remote = str(peer[0])
         emit({
             "event": "response", "id": flow.id, "status": resp.status_code,
+            "mock": flow.metadata.get("baobox_mock"),
+            "decoded": self.structured_text(resp, flow),
             "http": resp.http_version, "headers": self.headers(resp),
             "body": body, "truncated": truncated, "sniffed": sniffed,
             "encoding": resp.headers.get("content-encoding"),
