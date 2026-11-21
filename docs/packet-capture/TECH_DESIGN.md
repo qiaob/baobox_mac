@@ -200,6 +200,7 @@ Baobox（Swift）                              mitmdump（子进程）
 | 地址 | 结果 |
 |---|---|
 | iOS `com.apple.Preferences://` | **真 iPhone（Safari 27.2）上唯一能用的**：Safari 弹「在"设置"中打开此页？」，到设置首页。「打开设置」按钮用的就是它。下载描述文件后首页最上面是「已下载描述文件」 |
+| iOS `com.apple.Preferences:` 后面带路径（`//General`、`:root=General`、`…&path=ManagedConfigurationList`、`//General/ManagedConfigurationList`、`…About/CERT_TRUST_SETTINGS`、`:root=WIFI` 等八种） | 真 iPhone 上都能跳出去，但**都只到设置首页**（用户每次先把设置退回首页再点）。从网页直达「已下载描述文件」或「证书信任设置」这条路不通 |
 | iOS `App-prefs:`（含 `App-Prefs:root=General`、`App-prefs://`、带 `path=` 的、用脚本跳的） | iOS 18.3 **模拟器**的 Safari 能弹「在"设置"中打开此页？」；**真 iPhone 上全部报「网址无效」**（用户逐个点过，页面自动记录了哪个让 Safari 退到后台）。模拟器的结果不能当真机的 |
 | iOS `prefs:root=General`、`settings-navigation://…`、`app-settings:` | 真 iPhone 上报「网址无效」 |
 | iOS `App-prefs:General&path=ManagedConfigurationList`、`…About/CERT_TRUST_SETTINGS`、`root=…` 的写法 | 都只到设置首页，深层路径不认（iOS 18.3） |
