@@ -116,20 +116,60 @@ final class CaptureCA: @unchecked Sendable {
     /// v1 的做法是 `osascript … with administrator privileges` 以 root 跑 `add-trusted-cert -d`（管理员域），
     /// 2026-11-21 在 macOS 27 上实测：证书进了系统钥匙串，但信任设置没写进去（root 的 shell 不在用户的图形会话里，
     /// 系统要的那次「用户交互」做不了），而且命令不报错地做了一半。用户域的信任对这个用户的所有 App 都生效，够用。
+    ///
+    /// 先在本进程里调系统接口，不行再退回 `security` 命令行（两条路写的是同一份用户域信任设置）。
+    /// 走命令行时，验证框是替 `security` 这个后台进程弹的，出来以后不在最前、拿不到焦点，要先用鼠标点一下
+    /// 才能按指纹（2026-11-21 用户遇到）。本进程里调，验证框是替 Baobox 弹的，而 Baobox 这时正是前台 App。
     func installTrust() -> TrustResult {
         guard ensureGenerated() else { return TrustResult(ok: false, message: "CA not generated") }
+        if let outcome = installTrustInProcess() { return outcome }
         let result = NetCaptureEnv.run("/usr/bin/security", [
             "add-trusted-cert", "-r", "trustRoot", "-k", loginKeychain, certURL.path,
         ])
         return Self.trustResult(result)
     }
 
+    /// 用户在验证框里点了取消。
+    private static let cancelledStatuses: Set<OSStatus> = [errSecUserCanceled, -60006]
+    /// 验证没通过（比如密码连错）。
+    private static let deniedStatus: OSStatus = -60005
+
+    /// 本进程里装：证书放进登录钥匙串，再写「这个用户始终信任」。返回 nil 表示这条路走不通，调用方退回命令行。
+    private func installTrustInProcess() -> TrustResult? {
+        guard let der = certDER(), let cert = SecCertificateCreateWithData(nil, der as CFData) else { return nil }
+        let added = SecItemAdd([kSecClass: kSecClassCertificate, kSecValueRef: cert] as CFDictionary, nil)
+        guard added == errSecSuccess || added == errSecDuplicateItem else { return nil }
+        // 第三个参数给 nil = 不分用途，始终信任这张根证书。
+        let status = SecTrustSettingsSetTrustSettings(cert, .user, nil)
+        if Self.cancelledStatuses.contains(status) { return TrustResult(ok: false, cancelled: true) }
+        if status == Self.deniedStatus { return TrustResult(ok: false, message: Self.describe(status)) }
+        // 接口说成了、评估也确实通过才算数；否则让命令行再试一次。
+        guard status == errSecSuccess, isTrusted() else { return nil }
+        return TrustResult(ok: true)
+    }
+
+    /// 本进程里撤信任。返回 nil 表示这条路走不通。
+    private func removeTrustInProcess() -> TrustResult? {
+        guard let der = certDER(), let cert = SecCertificateCreateWithData(nil, der as CFData) else { return nil }
+        let status = SecTrustSettingsRemoveTrustSettings(cert, .user)
+        if Self.cancelledStatuses.contains(status) { return TrustResult(ok: false, cancelled: true) }
+        if status == Self.deniedStatus { return TrustResult(ok: false, message: Self.describe(status)) }
+        // 本来就没有信任设置（errSecItemNotFound）也算撤掉了。
+        guard status == errSecSuccess || status == errSecItemNotFound else { return nil }
+        return TrustResult(ok: true)
+    }
+
+    private static func describe(_ status: OSStatus) -> String {
+        (SecCopyErrorMessageString(status, nil) as String?) ?? "OSStatus \(status)"
+    }
+
     /// 取消信任，并把证书从钥匙串里删掉。
     func removeTrust() -> TrustResult {
         guard isGenerated else { return TrustResult(ok: true) }
         // 先撤信任设置（系统弹验证框）；证书本身还留在钥匙串里，再按指纹删掉。
-        let removed = NetCaptureEnv.run("/usr/bin/security", ["remove-trusted-cert", certURL.path])
-        let outcome = Self.trustResult(removed)
+        // 和安装一样，先在本进程里撤（验证框才拿得到焦点），不行再用命令行。
+        let outcome = removeTrustInProcess()
+            ?? Self.trustResult(NetCaptureEnv.run("/usr/bin/security", ["remove-trusted-cert", certURL.path]))
         guard outcome.ok, let sha1 = sha1Fingerprint() else { return outcome }
         NetCaptureEnv.run("/usr/bin/security", ["delete-certificate", "-Z", sha1, loginKeychain])
         // 早先那次没装成的安装可能在系统钥匙串里也留了一份（没有信任设置，不起作用）；有就顺手删掉，这一步要管理员密码。

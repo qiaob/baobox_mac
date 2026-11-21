@@ -36,7 +36,7 @@ final class OnboardingController {
         win.title = L("onboarding.windowTitle")
         win.level = .floating
         win.isReleasedWhenClosed = false
-        win.center()
+        win.centerFittingContent()
         window = win
 
         NSApp.activate(ignoringOtherApps: true)

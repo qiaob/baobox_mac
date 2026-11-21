@@ -66,7 +66,7 @@ final class MeetingWindowController {
         window.title = L("meeting.brief.title")
         window.styleMask = [.titled, .closable, .resizable]
         window.isReleasedWhenClosed = false
-        window.center()
+        window.centerFittingContent()
         briefWindow = window
         return window
     }

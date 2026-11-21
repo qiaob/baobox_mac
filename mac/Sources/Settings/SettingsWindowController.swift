@@ -28,7 +28,7 @@ final class SettingsWindowController {
             // 关闭窗口后复用同一实例：避免默认的 close 即释放导致再次打开时崩溃，
             // 也留住「建窗口时是普通 App」的身份 —— 重建就得再走一遍 DesktopSpaceWindow。
             created.isReleasedWhenClosed = false
-            created.center()
+            created.centerFittingContent()
             window = created
         }
 
