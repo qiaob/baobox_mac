@@ -146,6 +146,8 @@ install: build stop
 	@codesign --verify --strict "$(DEST)" && echo "签名校验通过"
 	@codesign -dv --verbose=2 "$(DEST)" 2>&1 | grep -E "TeamIdentifier|Authority=Apple Development" || true
 	open "$(DEST)"
+	@# 拷贝、校验签名这几步会让系统把构建目录里嵌着的 mitmproxy.app 又登记一遍，装完再注销一次。
+	@$(call unregister,$(BUILD_DIR)/Release/$(APP))
 	@echo "已安装并启动：$(DEST)"
 
 ## 调试构建并直接运行（不覆盖 /Applications 里的版本）
