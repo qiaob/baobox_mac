@@ -3,9 +3,10 @@
 给在 `mac/` 下干活的会话。**先读仓库根目录的 `CLAUDE.md`** —— 那一页是产品全貌、
 模块清单与八条通用约定，是这个项目的主文档。这一页只补 macOS 特有的东西。
 
-macOS 是**功能最全的那一版**（九个工具都在），另外两个平台目前只有截图。
-跨平台共享逻辑在 `../shared/`（Rust），mac 侧是独立的 Swift 实现 ——
-**共享的是规格与算法，不是代码行**，见 `../docs/multiplatform/ARCHITECTURE.md`。
+macOS 是**功能最全的那一版**。Windows / Linux 版和它们共用的 Rust 库 2026-11-22 起在各自的仓库
+（[baobox_windows](https://github.com/qiaob/baobox_windows)、[baobox_linux](https://github.com/qiaob/baobox_linux)、
+[baobox_shared](https://github.com/qiaob/baobox_shared)）；mac 侧是独立的 Swift 实现 ——
+**共享的是规格与算法，不是代码行**，见 baobox_shared 的 `docs/ARCHITECTURE.md`。
 
 ## 构建
 
@@ -66,12 +67,12 @@ Sources/Modules/<名>/ 九个工具，一个目录一个
 Sources/Resources/   Localizable.xcstrings
 ```
 
-`Sources/Core/ToolModule.swift` 的协议与 `../shared/baobox-app` 的 `ToolModule` trait
+`Sources/Core/ToolModule.swift` 的协议与 baobox_shared 里 `baobox-app` 的 `ToolModule` trait
 是**同一套结构的两种语言表达**。改其中一边的形状时，看一眼另一边有没有跟着走的必要。
 
 ## 两条最容易犯的错
 
-1. **坐标系**：macOS 是**左下角原点、y 轴向上**，而 `shared/` 与另外两个平台一律用
+1. **坐标系**：macOS 是**左下角原点、y 轴向上**，而 baobox_shared 与另外两个平台一律用
    左上角原点。转换集中在 `Core/Geometry.swift`，别在业务代码里就地翻 y。
 2. **本地化**：每个 `L("ns.key")` / `Text("ns.key")` 都必须在
    `Sources/Resources/Localizable.xcstrings` 里有 **en + zh-Hans 两条**译文。

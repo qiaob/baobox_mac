@@ -1,8 +1,6 @@
 # Baobox
 
 [![macOS](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml)
-[![Windows](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml)
-[![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
 **菜单栏常驻的 macOS 效率工具集** —— 截图、剪贴板、窗口管理、菜单栏整理、键盘点击、防休眠、
 会议纪要与同传字幕、语音听写、划词助手、手机互传、桌面宠物、专注与健康提醒，
@@ -271,9 +269,8 @@ macOS 14+   ·   Swift 5.9   ·   零第三方 Swift 依赖   ·   默认数据�
 解压后把 `Baobox.app` 拖进「应用程序」。首次打开若被 Gatekeeper 拦下，
 在「系统设置 → 隐私与安全性」里点「仍要打开」。
 
-从 0.0.9 起同一个 Release 里也有 Linux 和 Windows 版：
-`Baobox-X.Y.Z-linux-x86_64.tar.gz`（解压后运行 `./baobox-linux`）、
-`Baobox-X.Y.Z-windows-x86_64.zip`（解压后运行 `baobox-windows.exe`）。
+Windows 和 Linux 版在各自的仓库发版：[baobox_windows](https://github.com/qiaob/baobox_windows/releases)、
+[baobox_linux](https://github.com/qiaob/baobox_linux/releases)。这里的 0.0.9 是最后一个同时带这两个版本的 Release。
 
 ### 系统要求
 
@@ -338,19 +335,21 @@ macOS 14+   ·   Swift 5.9   ·   零第三方 Swift 依赖   ·   默认数据�
 
 ## 仓库结构
 
-本仓库同时容纳三个平台的实现：
-
 ```
-mac/       macOS（Swift + SwiftUI/AppKit）—— 全部工具
-windows/   Windows（Rust + Win32/GDI）—— 托盘常驻：截图、剪贴板、防休眠、
-           窗口管理、两个 AI 助手、键盘点击
-linux/     Linux（Rust + X11）—— 托盘常驻：与 Windows 相同的六个工具
-shared/    三平台共用的 Rust 核心（几何 / 选区 / 标注 / 拼接 / 文件名）
+mac/       macOS App（Swift + SwiftUI/AppKit）
+docs/      产品文档与使用手册
+assets/    可下载的桌面宠物形象包
 ```
 
-Windows 与 Linux 版本均为托盘常驻 App。Windows 还提供桌面宠物，从托盘的「桌面宠物」菜单开启。
-可在同一菜单下载形象，或将自制的形象包放到 `%APPDATA%\Baobox\Pets`，再到设置里选择。
-会议、字幕与同传、划词助手、听写、专注与健康、菜单栏、手机互传和 AI 模型目前只有 macOS 版。详见[多平台架构](docs/multiplatform/ARCHITECTURE.md)。
+2026-11-22 起，其他平台在各自的仓库里：
+
+| 仓库 | 内容 |
+|---|---|
+| [baobox_windows](https://github.com/qiaob/baobox_windows) | Windows 托盘 App（Rust + Win32）：截图、剪贴板、防休眠、窗口管理、两个 AI 助手、键盘点击、桌面宠物 |
+| [baobox_linux](https://github.com/qiaob/baobox_linux) | Linux 托盘 App（Rust + X11）：与 Windows 相同的六个工具 |
+| [baobox_shared](https://github.com/qiaob/baobox_shared) | Windows 和 Linux 共用的 Rust 库（几何、选区、标注、拼接、文件名、剪贴板历史），以及[多平台架构](https://github.com/qiaob/baobox_shared/blob/main/docs/ARCHITECTURE.md)文档 |
+
+macOS 版不链接任何 Rust 代码，各平台共享的是规格与算法。会议、字幕与同传、划词助手、听写、专注与健康、菜单栏、手机互传、网络抓包和 AI 模型目前只有 macOS 版。
 
 ## 从源码构建
 

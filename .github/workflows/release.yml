@@ -1,11 +1,7 @@
 name: Release
 
-# 推 vX.Y.Z 标签触发：三个平台各自编译打包，最后一个 publish 统一发到同一个 GitHub Release（#112）：
-# - Baobox-X.Y.Z.zip                     macOS（ad-hoc 签名，见下）
-# - Baobox-X.Y.Z-linux-x86_64.tar.gz     Linux 可执行文件（tar 保留可执行位）
-# - Baobox-X.Y.Z-windows-x86_64.zip      Windows 可执行文件
-# Mac 包必须有；Linux / Windows 哪个没编过就先不挂它，不挡 Mac 发版（Actions 页面会标红，修好后可重跑）。
-# Rust 两边的版本号同样取自标签：编译前把 Cargo.toml 的 version 改成 X.Y.Z，「关于」里显示的就是它。
+# 推 vX.Y.Z 标签触发：编译打包 macOS 版，发到 GitHub Release：Baobox-X.Y.Z.zip（ad-hoc 签名，见下）。
+# Windows / Linux 版 2026-11-22 起在各自的仓库单独发版：qiaob/baobox_windows、qiaob/baobox_linux。
 #
 # 无付费开发者账号（无 Developer ID 证书、无法公证），所以产物是 **ad-hoc 签名**：
 # - 他人下载后首次打开需右键 →「打开」绕过 Gatekeeper；
@@ -21,7 +17,7 @@ on:
   push:
     tags:
       - "v*"
-  # 手动试跑：三个平台照样编译、打包，产物留在这次运行的 Artifacts 里，**不发布**（publish 只在推标签时跑）。
+  # 手动试跑：照样编译、打包，产物留在这次运行的 Artifacts 里，**不发布**（publish 只在推标签时跑）。
   workflow_dispatch:
     inputs:
       version:
@@ -105,86 +101,9 @@ jobs:
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
 
-  linux:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      # GTK 是设置窗口用的（C 库，必须装开发包）；同 build-linux.yml。
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Set version from tag
-        id: version
-        working-directory: linux/baobox-linux
-        run: |
-          tag="${{ inputs.version || github.ref_name }}"
-          version="${tag#v}"
-          sed -i -E "0,/^version = \".*\"/s//version = \"${version}\"/" Cargo.toml
-          grep -m1 '^version' Cargo.toml
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Build release (warnings are errors)
-        working-directory: linux/baobox-linux
-        run: cargo rustc --release -- -D warnings
-
-      - name: Package
-        run: |
-          mkdir -p "$RUNNER_TEMP/dist"
-          tar -C linux/baobox-linux/target/release -czf \
-            "$RUNNER_TEMP/dist/Baobox-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz" baobox-linux
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-linux
-          path: ${{ runner.temp }}/dist/*
-          if-no-files-found: error
-
-  windows:
-    runs-on: windows-2022
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Set version from tag
-        id: version
-        working-directory: windows/baobox-windows
-        run: |
-          tag="${{ inputs.version || github.ref_name }}"
-          version="${tag#v}"
-          sed -i -E "0,/^version = \".*\"/s//version = \"${version}\"/" Cargo.toml
-          grep -m1 '^version' Cargo.toml
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Build release (warnings are errors)
-        working-directory: windows/baobox-windows
-        run: cargo rustc --release -- -D warnings
-
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist" | Out-Null
-          Compress-Archive -Path windows/baobox-windows/target/release/baobox-windows.exe `
-            -DestinationPath "$env:RUNNER_TEMP/dist/Baobox-${{ steps.version.outputs.version }}-windows-x86_64.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-windows
-          path: ${{ runner.temp }}/dist/*
-          if-no-files-found: error
-
   publish:
-    # Mac 包是必须的；Linux / Windows 没编过就只发已有的（见文件头）。
-    needs: [macos, linux, windows]
-    if: ${{ !cancelled() && needs.macos.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    needs: [macos]
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

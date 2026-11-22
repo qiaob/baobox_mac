@@ -30,7 +30,7 @@ struct PetPackInfo {
 
 enum PetCatalog {
     /// 可下载素材所在的提交。素材只增不改：要换图就提交新文件、改这里和下面的校验值。
-    static let revision = "1c39c54a57497f487e296d33de96927db9f734be"
+    static let revision = "a2715dfac0f87f5d8a67a9bca5f3c1362373fd37"
 
     /// 按顺序尝试：GitHub 原始文件 → jsDelivr（国内网络更稳）。
     static var mirrors: [String] {

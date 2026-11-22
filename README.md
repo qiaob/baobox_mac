@@ -1,8 +1,6 @@
 # Baobox
 
 [![macOS](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-macos.yml)
-[![Windows](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-windows.yml)
-[![Linux](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml/badge.svg)](https://github.com/qiaob/baobox_mac/actions/workflows/build-linux.yml)
 
 **A menu-bar toolbox for macOS** — screenshots, clipboard, window management, menu-bar
 tidying, keyboard clicking, sleep prevention, meeting notes and live subtitles, voice dictation,
@@ -342,9 +340,10 @@ Grab the latest `.zip` from [Releases](https://github.com/qiaob/baobox_mac/relea
 unzip it, and drag `Baobox.app` into Applications. If Gatekeeper blocks the first launch,
 allow it under System Settings → Privacy & Security.
 
-From 0.0.9 on the same release also carries the Linux and Windows builds:
-`Baobox-X.Y.Z-linux-x86_64.tar.gz` (unpack and run `./baobox-linux`) and
-`Baobox-X.Y.Z-windows-x86_64.zip` (unzip and run `baobox-windows.exe`).
+Windows and Linux builds are released from their own repositories:
+[baobox_windows](https://github.com/qiaob/baobox_windows/releases) and
+[baobox_linux](https://github.com/qiaob/baobox_linux/releases). The 0.0.9 release here was the
+last one to carry them as well.
 
 ### Requirements
 
@@ -421,21 +420,23 @@ See [Data and privacy](docs/manual/en/privacy-and-data.md).
 
 ## Repository layout
 
-Three platform implementations live side by side:
-
 ```
-mac/       macOS (Swift + SwiftUI/AppKit) — every tool
-windows/   Windows (Rust + Win32/GDI) — tray app: screenshot, clipboard, caffeinate,
-           window manager, both AI assistants, keyboard clicking
-linux/     Linux (Rust + X11) — tray app: same six tools as Windows
-shared/    Rust core shared by all three (geometry, selection, annotation, stitching, filenames)
+mac/       macOS app (Swift + SwiftUI/AppKit)
+docs/      product docs and the user manual
+assets/    downloadable desktop-pet packs
 ```
 
-Windows and Linux run in the system tray. Windows also offers a Desktop Pet menu
-to show the pet and download characters. Put custom packs in `%APPDATA%\Baobox\Pets`
-and select them in Settings. Meeting, subtitles and interpreting, the selection assistant,
-dictation, focus & health, Menu Bar, Phone Transfer, and AI models are macOS-only for now. See
-[multi-platform architecture](docs/multiplatform/ARCHITECTURE.md) (Chinese).
+Since 2026-11-22 the other platforms live in their own repositories:
+
+| Repository | What |
+|---|---|
+| [baobox_windows](https://github.com/qiaob/baobox_windows) | Windows tray app (Rust + Win32): screenshot, clipboard, caffeinate, window manager, both AI assistants, keyboard clicking, desktop pet |
+| [baobox_linux](https://github.com/qiaob/baobox_linux) | Linux tray app (Rust + X11): the same six tools as Windows |
+| [baobox_shared](https://github.com/qiaob/baobox_shared) | Rust libraries shared by Windows and Linux (geometry, selection, annotation, stitching, filenames, clipboard history), plus the [multi-platform architecture](https://github.com/qiaob/baobox_shared/blob/main/docs/ARCHITECTURE.md) notes (Chinese) |
+
+The macOS app doesn't link any of the Rust code; what the platforms share is the spec and the
+algorithms. Meeting, subtitles and interpreting, the selection assistant, dictation, focus &
+health, Menu Bar, Phone Transfer, network capture and AI models are macOS-only for now.
 
 ## Build from source
 

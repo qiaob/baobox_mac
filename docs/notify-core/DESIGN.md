@@ -101,7 +101,7 @@
 - §1.3 末尾那几个洞和通知历史界面（§8 列为后续）。
 - 把 FocusHealth 里的片段名（`petClips` / `restClips`，`FocusHealthText.swift:105-117`）挪走。它们只是数据，不是类型耦合。
 - 拆成多个 Swift module / framework。仍是一个 target，分层靠约定加 grep 检查。
-- Windows / Linux：`windows/baobox-windows/src/pet_notify.rs` 自成一套，不受影响。Rust 的 `ToolModule` trait（`shared/baobox-app/src/lib.rs:75`）本来就没有 `aiFeatures` 这类可选声明，这次也不跟着加。
+- Windows / Linux：[baobox_windows](https://github.com/qiaob/baobox_windows) 的 `baobox-windows/src/pet_notify.rs` 自成一套，不受影响。Rust 的 `ToolModule` trait（[baobox_shared](https://github.com/qiaob/baobox_shared) 的 `baobox-app/src/lib.rs`）本来就没有 `aiFeatures` 这类可选声明，这次也不跟着加。
 
 ## 3. 新结构
 
