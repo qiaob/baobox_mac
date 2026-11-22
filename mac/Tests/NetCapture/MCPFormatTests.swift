@@ -108,4 +108,17 @@ final class MCPFormatTests: XCTestCase {
         XCTAssertEqual(gate(["host": "127.0.0.1:9191"], method: "OPTIONS")?.status, "405 Method Not Allowed")
         XCTAssertEqual(gate(ok, method: "GET")?.status, "405 Method Not Allowed")
     }
+
+    /// 没解密的那一行带上原因（真机测试：MCP 只写 `[passthrough]`，AI 看不出为什么）。
+    func testPassthroughReason() {
+        XCTAssertEqual(MCPPassthrough.mark(decrypted: true, reason: "handshake_failed"), "")
+        XCTAssertEqual(MCPPassthrough.mark(decrypted: false, reason: nil), " [passthrough]")
+        XCTAssertEqual(MCPPassthrough.mark(decrypted: false, reason: "handshake_failed"), " [passthrough: handshake_failed]")
+        XCTAssertNil(MCPPassthrough.detailLine(decrypted: true, reason: nil))
+        XCTAssertEqual(MCPPassthrough.detailLine(decrypted: false, reason: nil), "Not decrypted: passed through untouched")
+        let line = MCPPassthrough.detailLine(decrypted: false, reason: "out_of_scope")
+        XCTAssertEqual(line, "Not decrypted: out_of_scope — the host is outside the decryption scope on the Config tab")
+        XCTAssertTrue(MCPPassthrough.explanation("handshake_failed").contains("rejected Baobox's certificate"))
+        XCTAssertEqual(MCPPassthrough.explanation("something_new"), "passed through untouched")
+    }
 }

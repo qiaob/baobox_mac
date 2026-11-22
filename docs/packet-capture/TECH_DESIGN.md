@@ -182,7 +182,7 @@ Baobox（Swift）                              mitmdump（子进程）
 | **扫码即放行** | 二维码里的地址带一个口令 `?k=xxxxxx`（`PhonePairing`，6 位，每次启动换一个，只显示在 Mac 屏幕上）。带着对的口令来开 `/` 的设备，`ConfigPageServer` 直接让引擎放行，不用再到 Mac 上点「允许」。手机已经设了代理时，请求是经引擎转过来的，对端看上去是 Mac 自己，所以桥在转发配置页请求时写上 `X-Baobox-Client`（每次都覆盖），配置页只在对端是本机时认这个头。手输地址没带口令的，照旧走「允许」 |
 | **实时清单** | 页面最上面三行：证书已信任 / 代理已生效 / Mac 已允许这台设备，每 3 秒自己查一次（都好了以后 10 秒），全好了显示「全部就绪」 |
 | **已装证书就提醒** | 证书那一行查出来是已信任时，卡片上写「这台设备已经信任 Baobox 的证书，不用再装」，安装按钮变成次要的「重新下载」 |
-| **跳到设置** | iOS：`com.apple.Preferences://`（「打开设置」，到首页）；Android：`intent:#Intent;action=android.settings.SECURITY_SETTINGS;end`（「打开安全设置」）。iOS 一开始用的是 `App-prefs:`，真机上报「网址无效」，换成了真机上试出来的这个（见下表） |
+| **跳到设置** | iOS：`com.apple.Preferences://`（「打开设置」，到首页）；Android：原来有个 `intent:#Intent;action=android.settings.SECURITY_SETTINGS;end`（「打开安全设置」），2026-11-22 在 vivo 的 Chrome 上点了没反应，已去掉（见下表）。iOS 一开始用的是 `App-prefs:`，真机上报「网址无效」，换成了真机上试出来的这个（见下表） |
 
 两项检测的做法：
 
@@ -206,7 +206,7 @@ Baobox（Swift）                              mitmdump（子进程）
 | iOS `App-prefs:General&path=ManagedConfigurationList`、`…About/CERT_TRUST_SETTINGS`、`root=…` 的写法 | 都只到设置首页，深层路径不认（iOS 18.3） |
 | iOS `prefs:root=…` | 没有 App 接（-10814） |
 | Android `android.settings.WIFI_SETTINGS` | 到 Wi-Fi 设置（这个按钮之前就有，这次才验证） |
-| Android `android.settings.SECURITY_SETTINGS` | 到「安全和隐私」首页 |
+| Android `android.settings.SECURITY_SETTINGS` | 当时到「安全和隐私」首页；**2026-11-22 在用户的 vivo（Android 17，Chrome）上点了没反应**：Chrome 只放行带 `BROWSABLE` 的页面，这台手机的安全设置页没有（`cmd package query-activities -a android.settings.SECURITY_SETTINGS -c android.intent.category.BROWSABLE` 为空）。按钮已去掉，改成醒目的路径 + 「在设置里搜『证书』」 |
 | Android `…SECURITY_ADVANCED_SETTINGS`、`com.android.credentials.INSTALL`、`…TRUSTED_CREDENTIALS_USER`（带不带 `package=`） | Chrome 不放行：不带包名没反应，带包名被带去应用商店。所以到「安装证书」那一页还得手点三层 |
 
 验证（同一个宿主程序，端口 19611 / 19612）：

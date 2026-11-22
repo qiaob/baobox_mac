@@ -122,3 +122,34 @@ enum MCPRequestGate {
         return nil
     }
 }
+
+/// 没解密的那一行为什么没解密（真机测试时发现 MCP 只写 `[passthrough]`，AI 看不出原因）。
+/// 原因的键名和桥脚本 `tls` 事件里的一致；说明是英文（MCP 的输出一律英文）。
+enum MCPPassthrough {
+    /// 摘要里的标记：` [passthrough: handshake_failed]`；不知道原因时 ` [passthrough]`；解开了是空串。
+    static func mark(decrypted: Bool, reason: String?) -> String {
+        guard !decrypted else { return "" }
+        guard let reason, !reason.isEmpty else { return " [passthrough]" }
+        return " [passthrough: \(reason)]"
+    }
+
+    /// 详情里的一行：`Not decrypted: handshake_failed — …`；解开了是 nil。
+    static func detailLine(decrypted: Bool, reason: String?) -> String? {
+        guard !decrypted else { return nil }
+        guard let reason, !reason.isEmpty else { return "Not decrypted: passed through untouched" }
+        return "Not decrypted: \(reason) — \(explanation(reason))"
+    }
+
+    static func explanation(_ reason: String) -> String {
+        switch reason {
+        case "handshake_failed":
+            return "this device rejected Baobox's certificate (not installed or not trusted, or the app pins its certificate); later connections from the same kind of client pass through untouched"
+        case "out_of_scope":
+            return "the host is outside the decryption scope on the Config tab"
+        case "decrypt_off":
+            return "Decrypt HTTPS is off on the Config tab"
+        default:
+            return "passed through untouched"
+        }
+    }
+}

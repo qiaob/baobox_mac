@@ -42,6 +42,8 @@ final class NetCaptureSession: ObservableObject {
     /// 等引擎就绪后要做的事；引擎起不来就丢掉。
     private var whenRunning: [() -> Void] = []
     private var stateSink: AnyCancellable?
+    /// 引擎失败时弹的那条提示的原文。引擎后来跑起来了就收掉它（只收这一条，别的提示不动）。
+    private var engineFailureText: String?
     /// 改系统代理的串行队列：先开后关的顺序不能乱（`networksetup` 要在后台跑）。
     private let proxyQueue = DispatchQueue(label: "com.baobox.netcapture.system-proxy", qos: .userInitiated)
 
@@ -55,6 +57,8 @@ final class NetCaptureSession: ObservableObject {
     private func engineStateChanged(_ state: NetCaptureEngine.State) {
         switch state {
         case .running:
+            if let text = engineFailureText, banner?.text == text { banner = nil }
+            engineFailureText = nil
             let actions = whenRunning
             whenRunning = []
             // 让 @Published 先落值，再跑后续（它们会读 engine.port）。
@@ -68,6 +72,7 @@ final class NetCaptureSession: ObservableObject {
         case .failed(let message):
             engineFailed()
             banner = Banner(kind: .problem, text: message)
+            engineFailureText = message
         case .stopped, .starting:
             break
         }

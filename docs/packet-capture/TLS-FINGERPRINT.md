@@ -40,6 +40,7 @@ Android 上装了 Baobox 证书后，浏览器信任它、大多数 App 不信�
   - 指纹对应 TLS 库，不是 App：走 Android 默认网络库的 App 共用一个（CMB 与 vivo 自带的一些 App 都是 `44be…`）；一个 App 里也可能有两种（CMB 自己的接口 `44be…`，里面 Firebase / Facebook / Braze 等 SDK 是 `1321a7c074fb`）。
   - App 里的 WebView 和浏览器共用一个指纹（vivo 自家服务、微信相关的一些域名也是 `b427…`），而 WebView 按 App 自己的信任设置走。同一个域名浏览器访问、App 内嵌网页也访问时仍会互相影响，只是范围比按域名小得多。
   - 微信不走系统代理，这次没测到（经 WireGuard 会进来；不影响结论）。
+  - **iOS 上基本区分不开**（2026-11-22 装上新版后用户的 iPhone 实测，iOS 27.2.1，经手动代理）：Safari 和系统服务、大多数 App 都用系统自带的网络库，指纹相同，按指纹分开记在 iOS 上起不了多大作用。实测中，同一次 Safari 打开 apple.com 首页，`securemetrics.apple.com`、`pancake.apple.com` 都解开了，`www.apple.com` 本身却记成「这台设备拒绝了抓包证书」被放行（13:59:59.217）。原因没能分清：可能是 Safari 对 www.apple.com 有额外的校验，也可能是共用同一指纹的系统服务先连过它并失败了。Safari 打开 CMB 接口 `api.prod.cmbww.io` 照常解开（`GET 401`）。
   - 失败表只增不减（直到引擎重启）；握手中途断开（不一定是不信任证书，例如网络抖动）也会记成放行。这是原有的「握手失败自动放行」策略，这次不改（独立审查 #11）。
 
 本机预检：curl（LibreSSL）与 Python（OpenSSL）访问同一个域名，指纹不同，各自两次相同。

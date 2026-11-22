@@ -311,3 +311,27 @@
 | 7 | （独立审查 #1）网页能用 `fetch(..., {mode: "no-cors"})` 发不触发预检的 POST 调写工具，配合 DNS 重绑定还能读回复（WireGuard 配置里有私钥） | 带 `Origin` 头的一律 403（Claude Code / Codex 不带）；`Host` 只认 `127.0.0.1:<端口>` / `localhost:<端口>`，别的 403；只收 POST（OPTIONS 预检、GET 都 405，不回 CORS 头）；POST 的 `Content-Type` 不是 `application/json` 回 415。判断在 `Logic/MCPFormat.swift` 的 `MCPRequestGate`，有单元测试 |
 
 验证（真引擎 19640–19645，同 `WIREGUARD-DEVICES.md` §11 的宿主程序），17 项全过：没人在等时 `allow_device 203.0.113.7` → `error: 203.0.113.7 is not waiting to be allowed; pending devices: (none)`，有一台局域网设备在等时错误里列出它、放行它照常成功，`deny_device` 任意 IP 照常；`replay_flow` 之后 `latest_flows` / `list_flows` / `search_flows` 里那一行末尾 `[replay of 4C4F04A6-…]`、`get_flow` 有 `Replay of:`；Mock 规则读回来的 `Authorization` / `Set-Cookie` 是 `<redacted>`，原样写回后真实值还在，多写一个原来没有的 `Cookie: <redacted>` 没写入、回复里报了；一条没解密的 XMPP（6 块）`limit=6` auto 3728 字、hex 10567 字，ClientHello 和服务器那 1224 字节都标了 `(TLS record: handshake)`、后者带 `[… 968 more bytes …]`；`set_config port=19690` 之后 `get_config` 仍报 `port 19640 / socks_port 19642 / config_page_port 19641`、`pending_next_start: {"port": 19690}`，改回去就没有了，引擎停着时报设置里的值；`list_devices` 是 `127.0.0.1 · This Mac · 2 flows · …` 和 `192.168.0.9 · LAN · 1 flow · …`。单元测试 `MCPFormatTests` 7 个。
+
+## 11. 装上新版后的真机测试（2026-11-22）
+
+装在用户 Mac 上（Xcode 27.2 编译），vivo V2502A（Android 17，adb 驱动）+ iPhone 18 Pro（iOS 27.2.1，devicectl 驱动，经手动代理）。
+
+| 测的 | 结果 |
+|---|---|
+| 升级后旧二维码不重扫 | ✅ `wireguard.json` 迁成「设备 1」:51820，钥匙逐字节相同；vivo 直接连上（手机上真正对应这把钥匙的隧道叫「48g」，另一条「baobox」是 11-21 临时引擎留下的，钥匙对不上） |
+| 两个 WireGuard 监听 | ✅ MCP 加一台测试设备 → 引擎带 51820 / 51821 重启，vivo 自己重连、包仍记在 vivo 名下；删掉后 51821 关闭、钥匙文件删除 |
+| XMPP（CMB 正式包，不信任用户证书） | ✅ 第一条接管握手失败，之后原样放行、App 正常连着 |
+| 按指纹放行 | ✅ vivo 装了 Baobox 证书后，同一个 `api.prod.cmbww.io`：CMB App 放行，Chrome 照常解密（`GET 401`） |
+| 手动代理 + 配对口令 | ✅ iPhone 打开带口令的证书页后自动放行，iCloud / Safari 的 HTTPS 能解开 |
+| MCP | ✅ 24 个工具；网页来源 / `text/plain` / 伪造 Host 分别 403 / 415 / 403 |
+
+测出来、随第七个提交修掉的：
+
+1. **Android 证书页的「打开安全设置」点了没反应**：Chrome 只放行带 `BROWSABLE` 的页面，vivo 的安全设置页没有。按钮去掉，路径单独一块显示，加一句「找不到就在设置顶部搜『证书』」（`TECH_DESIGN.md` 的跳转表已更正）。
+2. **MCP 的放行行看不出原因**：摘要改成 `[passthrough: <原因>]`，末尾带开始时间；`get_flow` 加 `Started:` 和 `Not decrypted: <原因> — <说明>`（`Logic/MCPFormat.swift` 的 `MCPPassthrough`，有单元测试）。
+3. **iOS 上按指纹分不开**：写进 `TLS-FINGERPRINT.md` §2 的限制（Safari 打开 apple.com，`www.apple.com` 本身被记成拒绝证书，同页其他子域名都解开了）。
+4. **重装 / 重启后「端口 9090 被占用」**：旧引擎还没退完新引擎就去绑端口。`restart()` 也有同样的窗口（`teardown` 给旧进程留了 1 秒）。改成启动阶段遇到端口被占就等 1.5 秒自动重试一次，界面保持「启动中」；实测先用小程序占住 9090 再开开关，第二次起来、不报错。
+5. **引擎后来跑起来了，失败提示条还挂着**：会话记下引擎失败那条提示的原文，引擎进入运行状态时只收掉这一条。
+6. **提示文案过时**：「端口被占用，请在设置里换一个」改成先说可能是旧引擎还没退完、稍等几秒，再指到「高级 → 端口与上限」（端口已经不在设置页）。
+
+没能在真机上测的：iPhone 走 WireGuard（大陆区 App Store 没有 WireGuard，所以 iOS 上的 XMPP 解密、两台手机同时走 WireGuard 没测）；Android 上 XMPP「已解密」（vivo 上只有不信任用户证书的正式包）。

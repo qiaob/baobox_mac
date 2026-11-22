@@ -392,7 +392,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     private static let baseToolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key>, and requests sent by replay_flow (or Replay in the window) with [replay of <original id>].",
+            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key> and its start time (ISO 8601), and requests sent by replay_flow (or Replay in the window) with [replay of <original id>]. Rows that were not decrypted carry [passthrough: <reason>] (handshake_failed, out_of_scope, decrypt_off); get_flow explains the reason.",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
@@ -546,13 +546,14 @@ enum MCPTools {
 
     private static func summaries(_ flows: [Flow]) -> String {
         if flows.isEmpty { return "(no flows)" }
+        let iso = ISO8601DateFormatter()
         return flows.map { flow in
             let status = flow.statusCode.map(String.init) ?? "-"
             let dur = flow.durationMs.map { "\($0)ms" } ?? "-"
-            let dec = flow.decrypted ? "" : " [passthrough]"
+            let dec = MCPPassthrough.mark(decrypted: flow.decrypted, reason: flow.undecryptedReason?.rawValue)
             let dev = flow.deviceKey
             return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec) @\(dev)"
-                + replayMark(flow)
+                + " \(iso.string(from: flow.startedAt))" + replayMark(flow)
         }.joined(separator: "\n")
     }
 
@@ -608,6 +609,10 @@ enum MCPTools {
         if flow.isReplay { lines.append("Replay of: " + (flow.replayOf?.uuidString ?? "(unknown flow)")) }
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
         lines.append("Device: \(flow.deviceKey) (\(deviceLabel(flow.deviceKey)))")
+        lines.append("Started: \(ISO8601DateFormatter().string(from: flow.startedAt))")
+        if let why = MCPPassthrough.detailLine(decrypted: flow.decrypted, reason: flow.undecryptedReason?.rawValue) {
+            lines.append(why)
+        }
         lines.append("-- Request headers --")
         for h in flow.requestHeaders { lines.append("\(h.name): \(MCPRedaction.value(name: h.name, value: h.value))") }
         if let body = flow.requestBody, let text = String(data: body, encoding: .utf8) {
