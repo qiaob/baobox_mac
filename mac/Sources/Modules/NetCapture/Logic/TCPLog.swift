@@ -47,6 +47,8 @@ struct TCPConnection: Identifiable, Equatable, Sendable {
     var segments: [TCPSegment] = []
     /// 认出来的协议；nil = 未知。
     var detected: TCPProtocolMatch?
+    /// XMPP STARTTLS 接管过的连接：解开了没有、分隔线在哪（docs/packet-capture/STARTTLS.md §3.3）。别的连接为 nil。
+    var tls: TCPTLSMark?
 
     /// 两个方向各自累计的前若干字节，认协议用（`TCPProtocol.prefixLimit`）。
     var clientPrefix = Data()
@@ -134,6 +136,11 @@ struct TCPLog: Sendable {
                 connections[index].state = error == nil ? .closed : .failed
                 connections[index].error = error
                 changed = true
+            case .tcpTLS(let tls):
+                guard let index = index(of: tls.connectionID) else { continue }
+                // 分隔线放在此刻已经读到的段后面：桥在 `<proceed/>` 转发之后、TLS 之前发这条。
+                connections[index].tls = TCPTLSMark(tls: tls, afterSegment: connections[index].segmentCount)
+                changed = true
             default:
                 continue
             }
@@ -159,6 +166,31 @@ struct TCPLog: Sendable {
     /// 数据几乎总是落在最近的几条上，从尾部找。
     private func index(of id: UUID) -> Int? {
         connections.lastIndex { $0.id == id }
+    }
+}
+
+/// STARTTLS 接管过的连接上的 TLS 标记：结果 + 分隔线的位置（序号 ≤ `afterSegment` 的段在线上面，是 TLS 之前的明文）。
+struct TCPTLSMark: Equatable, Sendable {
+    var tls: CaptureEvent.TCPTLS
+    var afterSegment: Int
+
+    var decrypted: Bool { tls.state == .decrypted }
+
+    /// `TLSv1.3` → `TLS 1.3`；认不出的原样。
+    var versionLabel: String? {
+        guard let raw = tls.version else { return nil }
+        if raw.hasPrefix("TLSv") { return "TLS " + raw.dropFirst(4) }
+        return raw
+    }
+
+    /// 分隔线上「· 域名 · TLS 1.3」那一截（没有的项不写）。
+    var detail: String {
+        [tls.sni, versionLabel].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 分隔线插在第几块前面：第一块起始段序号大于 `afterSegment` 的那块；都在线上面就放在最后。
+    func boundaryIndex(in blocks: [TCPBlock]) -> Int {
+        blocks.firstIndex { $0.id > afterSegment } ?? blocks.count
     }
 }
 
@@ -194,7 +226,8 @@ struct TCPBlock: Identifiable, Equatable, Sendable {
 
 enum TCPStream {
     /// `merge` = 相邻同方向的段合成一块；false = 一段一块（看读取时序用）。
-    static func blocks(_ segments: [TCPSegment], merge: Bool) -> [TCPBlock] {
+    /// `breakAfter`：序号大于它的段不和前面的合并（STARTTLS 的分隔线两边分开）。
+    static func blocks(_ segments: [TCPSegment], merge: Bool, breakAfter: Int? = nil) -> [TCPBlock] {
         var blocks: [TCPBlock] = []
         var upOffset = 0
         var downOffset = 0
@@ -206,7 +239,9 @@ enum TCPStream {
             if segment.missing > 0 { parts.append(.missing(count: segment.missing, offset: offset + saved.count)) }
             if segment.fromClient { upOffset += segment.size } else { downOffset += segment.size }
 
-            if merge, blocks.last?.fromClient == segment.fromClient {
+            var crossesBoundary = false
+            if let breakAfter, let last = blocks.last { crossesBoundary = last.id <= breakAfter && segment.id > breakAfter }
+            if merge, blocks.last?.fromClient == segment.fromClient, !crossesBoundary {
                 // 先取下来再改再放回：这一块的数据只有一个引用，接上新的字节时就地追加，不整块复制。
                 var last = blocks.removeLast()
                 for part in parts { append(part, to: &last.parts) }

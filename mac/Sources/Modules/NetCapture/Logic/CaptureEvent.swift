@@ -43,6 +43,8 @@ enum CaptureEvent: Equatable, Sendable {
     case tcpData(TCPData)
     /// 原始 TCP 连接结束；`error` 为 nil 是正常关闭。
     case tcpClose(id: UUID, error: String?, at: Date?)
+    /// XMPP 的 STARTTLS（docs/packet-capture/STARTTLS.md §3.2）：`<proceed/>` 之后这条连接的 TLS 解开了没有。
+    case tcpTLS(TCPTLS)
 
     struct Request: Equatable, Sendable {
         var id: UUID
@@ -121,6 +123,34 @@ enum CaptureEvent: Equatable, Sendable {
         /// `data` 比 `size` 短（这一段超过 16 KB，只带了前面）。
         var truncated: Bool
         var at: Date
+    }
+
+    struct TCPTLS: Equatable, Sendable {
+        enum State: String, Sendable {
+            /// Baobox 接管了 TLS，手机接受了它的证书：后面的数据是解密后的明文。
+            case decrypted
+            /// 没解开：没接管（关着 / 不在范围 / 之前握手失败过），或接管时握手失败。后面的数据（如果有）是密文。
+            case failed
+        }
+
+        enum Reason: String, Sendable {
+            /// 手机不信任 Baobox 证书（这一次接管时被拒，或这台设备之前对这个域名被拒过，原样放行）。
+            case handshakeFailed = "handshake_failed"
+            /// 「解密 HTTPS」关着。
+            case decryptOff = "decrypt_off"
+            /// 域名不在解密范围里。
+            case outOfScope = "out_of_scope"
+            /// Baobox 和服务器的 TLS 握手失败（服务器证书没通过检查）。
+            case serverHandshakeFailed = "server_handshake_failed"
+        }
+
+        var connectionID: UUID
+        var state: State
+        /// XMPP 的域名（客户端 stream 头里的 `to`，或 ClientHello 的 SNI）。
+        var sni: String?
+        /// 引擎给的 TLS 版本（`TLSv1.3`）；只有解开了才有。
+        var version: String?
+        var reason: Reason?
     }
 
     /// 一个域名为什么没被解密。
@@ -232,6 +262,16 @@ enum CaptureEvent: Equatable, Sendable {
             guard let id = uuid(json["id"]) else { return nil }
             let error = (json["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             return .tcpClose(id: id, error: error, at: date(json["ts"]))
+        case "tcp_tls":
+            guard let id = uuid(json["id"]),
+                  let state = (json["state"] as? String).flatMap(TCPTLS.State.init(rawValue:)) else { return nil }
+            return .tcpTLS(TCPTLS(
+                connectionID: id,
+                state: state,
+                sni: (json["sni"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                version: (json["version"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                // 认不出的原因当作没有（界面上只写「没解密」，不说为什么）。
+                reason: (json["reason"] as? String).flatMap(TCPTLS.Reason.init(rawValue:))))
         default:
             return nil
         }

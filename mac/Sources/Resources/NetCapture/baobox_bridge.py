@@ -20,10 +20,13 @@ import socket
 import sys
 import threading
 import time
+import uuid
 import zlib
 from pathlib import Path
 
 from mitmproxy import certs, connection, contentviews, ctx, http, tls
+from mitmproxy.connection import ConnectionState
+from mitmproxy.proxy import commands, events, layer
 
 PREFIX = "BAOBOX "
 
@@ -73,6 +76,125 @@ TRUST_CHECK_PATH = "/baobox-trust-check"
 
 # Raw TCP (Baobox's "TCP" tab): at most this much of one read travels in a `tcp_data` event.
 TCP_CHUNK = 16 * 1024
+
+# XMPP STARTTLS (docs/packet-capture/STARTTLS.md): how much of the client's first bytes is kept to read the stream
+# header (`to='…'`), and the stream header itself. Same rule as TCPProtocol on the Swift side: `<stream:stream` at
+# the start, or `<?xml …` followed by `<stream` (a bare `<?xml` is also how SOAP and friends begin).
+XMPP_HEAD = 4096
+XMPP_TO = re.compile(rb"""<stream:stream\b[^>]*?\sto\s*=\s*['"]([^'"]+)['"]""")
+
+
+def xmpp_stream_header(data):
+    """True when `data` (the client's first bytes) opens an XMPP stream."""
+    head = data.lstrip()
+    if head.startswith(b"<stream:stream"):
+        return True
+    return head.startswith(b"<?xml") and b"<stream" in head
+
+
+def xmpp_domain(data):
+    """The `to='…'` of the client's stream header (the XMPP domain, same as the SNI of the TLS that follows)."""
+    match = XMPP_TO.search(data)
+    if not match:
+        return None
+    return match.group(1).decode("utf-8", "replace").strip().lower() or None
+
+
+def tcp_data_event(conn_id, from_client, content, sent, cap):
+    """One `tcp_data` event. Past the body cap only the size travels; below it at most TCP_CHUNK bytes of each read.
+    Returns (event, bytes sent so far on this connection)."""
+    event = {"event": "tcp_data", "id": conn_id, "from_client": from_client, "size": len(content),
+             "truncated": False, "ts": time.time()}
+    if sent < cap and content:
+        chunk = content[: min(TCP_CHUNK, cap - sent)]
+        sent += len(chunk)
+        event["data"] = base64.b64encode(chunk).decode("ascii")
+        event["truncated"] = len(chunk) < len(content)
+    return event, sent
+
+
+class StartTLSState:
+    """One XMPP connection the STARTTLS layer looks after. Shared between the layer, the TLS hooks and the TCP flow
+    the engine creates once Baobox has taken over the TLS, so the whole connection stays one row."""
+
+    def __init__(self, conn_id, key, rec):
+        self.id = conn_id          # the row id (tcp_open / tcp_data / tcp_tls / tcp_close)
+        self.key = key             # device key (wg:<id> or source IP): the handshake-failure table is per device
+        self.rec = rec             # tcp_open was reported (not paused, not this Mac with "TCP" off)
+        self.sent = 0              # bytes of data reported so far (body cap)
+        self.domain = None         # from the stream header
+        self.takeover = False      # Baobox does the TLS with the phone (and separately with the server)
+        self.tls_reported = False  # tcp_tls sent (only the first outcome counts)
+        self.error = None
+        self.closed = False        # tcp_close sent
+
+
+class StartTLSLayer(layer.Layer):
+    """XMPP with STARTTLS (docs/packet-capture/STARTTLS.md §3).
+
+    Until the server says `<proceed/>` this relays the plaintext both ways and reports it as a TCP connection of its
+    own. At `<proceed/>` the bridge decides whether Baobox takes over: if so, the connection goes to a fresh
+    `NextLayer` and the engine stacks its own TLS layers on top (phone <-> Baobox certificate, Baobox <-> server);
+    the plaintext that comes out of them lands in the same row. If not, this keeps relaying the bytes untouched (the
+    TLS ciphertext) and keeps reporting them.
+    """
+
+    def __init__(self, context, bridge, state):
+        super().__init__(context)
+        self.bridge = bridge
+        self.state = state
+        self.child = None
+        self.client_head = b""
+        self.server_tail = b""
+        self.decided = False
+
+    def _handle_event(self, event):
+        if self.child is not None:
+            yield from self.child.handle_event(event)
+            return
+        client, server = self.context.client, self.context.server
+        if isinstance(event, events.Start):
+            self.bridge.starttls_open(self.state, self.context)
+            if server.timestamp_start is None:
+                err = yield commands.OpenConnection(server)
+                if err:
+                    self.state.error = str(err)
+                    yield commands.CloseConnection(client)
+                    self._handle_event = self.done
+            return
+        if isinstance(event, events.DataReceived):
+            from_client = event.connection == client
+            self.bridge.starttls_data(self.state, from_client, event.data)
+            if from_client:
+                yield commands.SendData(server, event.data)
+                if len(self.client_head) < XMPP_HEAD:
+                    self.client_head += event.data[: XMPP_HEAD - len(self.client_head)]
+                return
+            yield commands.SendData(client, event.data)
+            if self.decided:
+                return
+            window = self.server_tail + event.data
+            self.server_tail = window[-16:]
+            if b"<proceed" in window and xmpp_stream_header(self.client_head):
+                self.decided = True
+                if self.bridge.starttls_decide(self.state, self.context, self.client_head):
+                    self.child = layer.NextLayer(self.context)
+                    yield from self.child.handle_event(events.Start())
+            return
+        if isinstance(event, events.ConnectionClosed):
+            # Like the engine's TCP layer: pass a half-close on, finish when both sides are done.
+            done = not ((client.state & ConnectionState.CAN_READ) or (server.state & ConnectionState.CAN_READ))
+            if done:
+                self._handle_event = self.done
+                if server.state is not ConnectionState.CLOSED:
+                    yield commands.CloseConnection(server)
+                if client.state is not ConnectionState.CLOSED:
+                    yield commands.CloseConnection(client)
+            else:
+                yield commands.CloseTcpConnection(server if event.connection == client else client, half_close=True)
+
+    def done(self, _):
+        yield from ()
 
 def bare_host(value):
     """Lower-case host without brackets, IPv4-mapped prefix or zone id."""
@@ -300,6 +422,7 @@ class Bridge:
         self.recording = True            # False = paused: nothing new is reported
         self.lan_proxy = True            # False = LAN devices may not use the engine as a proxy
         self.mac_tcp = False             # report raw TCP from this Mac (it arrives through SOCKS)
+        self.starttls = {}               # client connection id -> StartTLSState (XMPP connections)
 
     # ----- options --------------------------------------------------------
 
@@ -616,6 +739,11 @@ class Bridge:
             return
         host = data.client_hello.sni
         client = data.context.client
+        state = self.starttls.get(client.id)
+        if state is not None and state.takeover:
+            # XMPP after <proceed/>: the decision (Decrypt HTTPS, scope, failure table) was made right then, on the
+            # domain from the stream header. Let the engine do the TLS.
+            return
         # The SOCKS listener exists for WebSocket: Apple's WebSocket stack ignores the HTTP proxy and only
         # uses the system SOCKS proxy. But every SOCKS-aware app sends all of its TCP through it (mail,
         # chat, ...). Only web traffic (443) is of interest here; leave everything else untouched.
@@ -641,12 +769,35 @@ class Bridge:
             self.report_tls(client, host, "out_of_scope")
 
     def tls_failed_client(self, data: tls.TlsData):
+        client = data.context.client
+        state = self.starttls.get(client.id)
+        if state is not None and state.takeover:
+            # The phone refused Baobox's certificate after <proceed/>: this connection breaks, the app reconnects and
+            # then gets passed through (same table as HTTPS). Shown on the TCP row, not as an HTTP row.
+            self.failed.add((state.key, state.domain))
+            state.error = getattr(data.conn, "error", None) or "TLS handshake failed"
+            self.report_tcp_tls(state, "failed", reason="handshake_failed")
+            return
         host = data.conn.sni
         if not host:
             return
-        client = data.context.client
         self.failed.add((device_key(client), host))
         self.report_tls(client, host, "handshake_failed")
+
+    def tls_failed_server(self, data: tls.TlsData):
+        state = self.starttls.get(data.context.client.id)
+        if state is not None and state.takeover:
+            # Baobox could not do TLS with the server (its certificate did not check out). Not the phone's fault, but
+            # the connection breaks just the same: pass the reconnect through so the app keeps working.
+            self.failed.add((state.key, state.domain))
+            state.error = getattr(data.conn, "error", None) or "TLS handshake with the server failed"
+            self.report_tcp_tls(state, "failed", reason="server_handshake_failed")
+
+    def tls_established_client(self, data: tls.TlsData):
+        state = self.starttls.get(data.context.client.id)
+        if state is not None and state.takeover:
+            self.report_tcp_tls(state, "decrypted", sni=getattr(data.conn, "sni", None) or state.domain,
+                                version=getattr(data.conn, "tls_version", None))
 
     # ----- flows ----------------------------------------------------------
 
@@ -832,6 +983,11 @@ class Bridge:
 
     def tcp_start(self, flow):
         client = flow.client_conn
+        state = self.starttls.get(client.id)
+        if state is not None:
+            # The plaintext that comes out of the TLS Baobox took over after <proceed/>: same row as the XMPP before it.
+            flow.metadata["baobox_starttls"] = state
+            return
         ip = client_ip(client)
         if not self.recording:
             return
@@ -852,28 +1008,118 @@ class Bridge:
         # process reads the older ones (the layer forwards its own reference to the newest), so drop them
         # and keep memory flat on long-lived connections.
         del flow.messages[:-1]
+        state = flow.metadata.get("baobox_starttls")
+        if state is not None:
+            if state.rec:
+                event, state.sent = tcp_data_event(state.id, message.from_client, message.content, state.sent,
+                                                   self.body_cap)
+                event["ts"] = message.timestamp
+                emit(event)
+            return
         if not flow.metadata.get("baobox_rec"):
             return
-        content = message.content
-        event = {"event": "tcp_data", "id": flow.id, "from_client": message.from_client, "size": len(content),
-                 "truncated": False, "ts": message.timestamp}
-        sent = flow.metadata.get("baobox_tcp_bytes", 0)
-        # Past the body cap only the size travels; below it at most TCP_CHUNK bytes of each read.
-        if sent < self.body_cap and content:
-            chunk = content[: min(TCP_CHUNK, self.body_cap - sent)]
-            flow.metadata["baobox_tcp_bytes"] = sent + len(chunk)
-            event["data"] = base64.b64encode(chunk).decode("ascii")
-            event["truncated"] = len(chunk) < len(content)
+        event, sent = tcp_data_event(flow.id, message.from_client, message.content,
+                                     flow.metadata.get("baobox_tcp_bytes", 0), self.body_cap)
+        flow.metadata["baobox_tcp_bytes"] = sent
+        event["ts"] = message.timestamp
         emit(event)
 
     def tcp_end(self, flow):
-        if flow.metadata.get("baobox_rec"):
+        state = flow.metadata.get("baobox_starttls")
+        if state is not None:
+            self.close_starttls(state)
+        elif flow.metadata.get("baobox_rec"):
             emit({"event": "tcp_close", "id": flow.id, "error": None, "ts": time.time()})
 
     def tcp_error(self, flow):
-        if flow.metadata.get("baobox_rec"):
-            message = getattr(flow.error, "msg", None) or str(flow.error or "")
+        message = getattr(flow.error, "msg", None) or str(flow.error or "")
+        state = flow.metadata.get("baobox_starttls")
+        if state is not None:
+            state.error = state.error or message or "error"
+            self.close_starttls(state)
+        elif flow.metadata.get("baobox_rec"):
             emit({"event": "tcp_close", "id": flow.id, "error": message or "error", "ts": time.time()})
+
+    # ----- XMPP STARTTLS (docs/packet-capture/STARTTLS.md) ---------------------
+    #
+    # A connection whose client opens with an XMPP stream header gets StartTLSLayer instead of the engine's TCP layer.
+    # It relays and reports the plaintext itself; at <proceed/> it either hands the connection to the engine's TLS
+    # layers (Baobox's certificate to the phone) or keeps passing the bytes through.
+
+    def next_layer(self, nextlayer):
+        if nextlayer.layer is not None:
+            return
+        context = nextlayer.context
+        client = context.client
+        if client.transport_protocol != "tcp" or via_socks(client):
+            # SOCKS: leave mail, chat and other apps on this Mac alone (same rule as non-443 TLS there).
+            return
+        if any(isinstance(item, StartTLSLayer) for item in context.layers):
+            return  # inside a connection already taken over: the decrypted stream is plain TCP
+        head = nextlayer.data_client().lstrip()
+        if not (head.startswith(b"<stream:stream") or head.startswith(b"<?xml")):
+            return
+        # A bare `<?xml` may still turn into an XMPP stream header in the next read (some clients write the XML
+        # declaration on its own); the layer only takes over once it has seen one.
+        ip = client_ip(client)
+        rec = self.recording and not (is_loopback(ip) and not via_wireguard(client) and not self.mac_tcp)
+        state = StartTLSState(str(uuid.uuid4()), device_key(client), rec)
+        self.starttls[client.id] = state
+        nextlayer.layer = StartTLSLayer(context, self, state)
+
+    def starttls_open(self, state, context):
+        if not state.rec:
+            return
+        client = context.client
+        host, port = address_fields(getattr(context.server, "address", None))
+        emit(with_device({"event": "tcp_open", "id": state.id, "client": client_ip(client), "host": host or "",
+                          "port": port or 0, "sni": None, "ts": time.time()}, client))
+
+    def starttls_data(self, state, from_client, data):
+        if state.rec and not state.closed:
+            event, state.sent = tcp_data_event(state.id, from_client, data, state.sent, self.body_cap)
+            emit(event)
+
+    def starttls_decide(self, state, context, head):
+        """At <proceed/>: take the TLS over when Decrypt HTTPS is on, the XMPP domain is in scope, and this device
+        has not failed a handshake with it before. Otherwise say why on the row and keep passing bytes through."""
+        state.domain = xmpp_domain(head) or address_fields(getattr(context.server, "address", None))[0] or ""
+        if self.scope_mode == "none":
+            reason = "decrypt_off"
+        elif (state.key, state.domain) in self.failed:
+            reason = "handshake_failed"
+        elif not self.in_scope(state.domain):
+            reason = "out_of_scope"
+        else:
+            state.takeover = True
+            return True
+        self.report_tcp_tls(state, "failed", reason=reason)
+        return False
+
+    def report_tcp_tls(self, state, outcome, reason=None, sni=None, version=None):
+        if state.tls_reported:
+            return
+        state.tls_reported = True
+        if not state.rec:
+            return
+        event = {"event": "tcp_tls", "id": state.id, "state": outcome, "sni": sni or state.domain}
+        if reason:
+            event["reason"] = reason
+        if version:
+            event["version"] = version
+        emit(event)
+
+    def close_starttls(self, state):
+        if state.rec and not state.closed:
+            emit({"event": "tcp_close", "id": state.id, "error": state.error, "ts": time.time()})
+        state.closed = True
+
+    def client_disconnected(self, client):
+        # The row ends with the client: covers connections that never got (or lost) a TCP flow after <proceed/> --
+        # passed through, refused certificate, server unreachable.
+        state = self.starttls.pop(client.id, None)
+        if state is not None:
+            self.close_starttls(state)
 
 
 addons = [Bridge()]

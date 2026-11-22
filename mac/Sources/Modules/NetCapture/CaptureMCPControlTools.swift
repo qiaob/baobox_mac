@@ -50,7 +50,7 @@ enum MCPControlTools {
         ],
         [
             "name": "list_tcp_connections",
-            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), bytes up/down, reads, source device. Filters: limit, device (device key from list_devices: wg:<id> for a WireGuard device, otherwise the client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
+            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), tls (only on XMPP connections that reached STARTTLS: tls=decrypted, or tls=failed(<reason>) when Baobox did not take over or the phone refused its certificate), bytes up/down, reads, source device. Filters: limit, device (device key from list_devices: wg:<id> for a WireGuard device, otherwise the client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"], "device": ["type": "string"], "protocol": ["type": "string"],
                 "host": ["type": "string"],
@@ -58,7 +58,7 @@ enum MCPControlTools {
         ],
         [
             "name": "get_tcp_connection",
-            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default: text where the block looks like text). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. Raw data is not redacted.",
+            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default: text where the block looks like text). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. On an XMPP connection that reached STARTTLS, a TLS line says whether Baobox decrypted it, and a marker line in the data separates the plaintext before <proceed/> from what follows (decrypted XMPP, or TLS ciphertext). Raw data is not redacted.",
             "inputSchema": ["type": "object", "properties": [
                 "id": ["type": "string"], "limit": ["type": "integer"],
                 "format": ["type": "string", "enum": ["auto", "hex", "text"]], "segments": ["type": "boolean"],
@@ -531,8 +531,14 @@ enum MCPControlTools {
         let iso = ISO8601DateFormatter()
         return connections.suffix(max(1, limit)).map { c in
             "\(c.id.uuidString) \(c.state.rawValue) \(c.target):\(c.port) \(protocolText(c)) "
+                + (c.tls.map { tlsText($0) + " " } ?? "")
                 + "up=\(c.bytesUp)B down=\(c.bytesDown)B reads=\(c.segmentCount) @\(c.deviceKey) \(iso.string(from: c.startedAt))"
         }.joined(separator: "\n")
+    }
+
+    /// `tls=decrypted` / `tls=failed(handshake_failed)`：STARTTLS 接管过的连接才有（STARTTLS.md §3.3）。
+    private static func tlsText(_ mark: TCPTLSMark) -> String {
+        mark.decrypted ? "tls=decrypted" : "tls=failed" + (mark.tls.reason.map { "(\($0.rawValue))" } ?? "")
     }
 
     private static func protocolText(_ connection: TCPConnection) -> String {
@@ -558,6 +564,12 @@ enum MCPControlTools {
             "TCP \(connection.target):\(connection.port)" + (connection.sni != nil ? " (\(connection.host))" : ""),
             "Device: \(connection.deviceKey) (\(MCPTools.deviceLabel(connection.deviceKey)))",
             "Protocol: \(protocolText(connection))",
+        ]
+        if let tls = connection.tls {
+            lines.append("TLS: " + (tls.decrypted ? "decrypted" : "failed") + (tls.tls.reason.map { " (\($0.rawValue))" } ?? "")
+                         + (tls.detail.isEmpty ? "" : " · \(tls.detail)"))
+        }
+        lines += [
             "State: \(connection.state.rawValue)" + (connection.error.map { " (\($0))" } ?? ""),
             "Started: \(iso.string(from: connection.startedAt))" + (connection.endedAt.map { " · ended \(iso.string(from: $0))" } ?? ""),
             "Bytes: up \(connection.bytesUp), down \(connection.bytesDown) · reads \(connection.segmentCount)"
@@ -565,9 +577,14 @@ enum MCPControlTools {
             merged ? "-- Data: adjacent reads in the same direction merged; offsets run per direction --"
                    : "-- Data: reads as they arrived (boundaries are where reads ended, not messages) --",
         ]
-        let blocks = TCPStream.blocks(connection.segments, merge: merged)
+        let blocks = TCPStream.blocks(connection.segments, merge: merged, breakAfter: connection.tls?.afterSegment)
+        let boundary = connection.tls?.boundaryIndex(in: blocks)
+        let marker = connection.tls.map { $0.decrypted
+            ? "-- TLS taken over at <proceed/>: decrypted data below" + ($0.detail.isEmpty ? "" : " (\($0.detail))") + " --"
+            : "-- TLS not decrypted: ciphertext below --" }
         var size = lines.reduce(0) { $0 + $1.count }
         for (index, block) in blocks.prefix(limit).enumerated() {
+            if index == boundary, let marker { lines.append(marker) }
             let direction = block.fromClient ? "client->server" : "server->client"
             var text = "## #\(index + 1) \(direction) offset=\(block.offset) length=\(block.size)"
                 + (block.segmentCount > 1 ? " reads=\(block.segmentCount)" : "") + " at \(iso.string(from: block.startedAt))"
@@ -592,6 +609,7 @@ enum MCPControlTools {
             }
             lines.append(text)
         }
+        if let marker, boundary == blocks.count, blocks.count <= limit { lines.append(marker) }
         if blocks.count > limit { lines.append("[\(blocks.count - limit) more blocks; raise limit to see them]") }
         if blocks.isEmpty { lines.append("(no data yet)") }
         return lines.joined(separator: "\n")

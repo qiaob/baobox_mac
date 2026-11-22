@@ -72,3 +72,45 @@
 3. 界面渲染探针：解密成功 / 失败 / 没接管三种连接的列表行和详情，中英文。
 4. xcstrings 校验、`make build`、测试全过；只做本地提交。
 5. 要用户在真机上试的：CMB staging 包经 WireGuard 连 `chat.coffeemeetsbagel.com:5222`，TCP 页能看到解密后的 XMPP；iPhone 同样一遍。
+
+## 6. 实现时和方案不一样的地方（2026-11-22）
+
+用户看得见的行为照 §3 做了；下面是方案没写到、或者写法和实际做法不一样的地方。
+
+| # | 方案原写法 | 实际做法 | 为什么 |
+|---|---|---|---|
+| 1 | `tcp_tls` 的 `state` 只有 `decrypted` / `failed`，接管握手成功 / 失败时发 | 没接管的连接也在 `<proceed/>` 那一刻发一条 `failed`；另带 `reason`（`handshake_failed` / `decrypt_off` / `out_of_scope` / `server_handshake_failed`）和解开时的 `version`（`TLSv1.3`） | 详情顶上的说明要知道是哪种原因，分隔线上要写 TLS 版本；列表的「未解密」标签也靠它 |
+| 2 | 客户端头几个字节是 XMPP 流开头才换上 STARTTLS 层 | 只有 `<?xml` 也先换上，层里看到 `<stream` 才算 XMPP、才会在 `<proceed/>` 时接管；不是 XMPP 的就一直原样转发、照样记成一条 TCP 连接（没有 TLS 标签） | iOS 的 XMPPFramework 把 `<?xml version='1.0'?>` 和 `<stream:stream …>` 分两次写，Nagle 下常常分两次到；等引擎自己决定就成了普通 TCP 层，再也接不了。实测：客户端分两次写（21 字节 + 122 字节）照样接管 |
+| 3 | 域名取 stream 头里的 `to` | 没有 `to` 时用服务器的 IP | 极少见，但范围判断总得有个东西比 |
+| 4 | 失败只写了「手机拒绝证书」 | Baobox 和服务器握手失败（服务器证书没通过检查）也记进失败表、`reason: server_handshake_failed`，详情顶上一句「没解密：Baobox 和服务器的 TLS 握手失败。服务器的证书没通过检查，App 下次连接时原样放行。」 | 不记的话每次重连都被接管、每次都断，App 一直连不上 |
+| 5 | 没写 | 连接结束：解开了的由引擎的 TCP 流结束时发 `tcp_close`；没接管、接管时被拒、连不上服务器的，在引擎的 `client_disconnected` 钩子里发（只发一次） | 后几种没有引擎的 TCP 流，不这样就一直是「进行中」 |
+| 6 | 「解密 HTTPS」关着、不在解密范围「各一句」 | 「没解密：「解密 HTTPS」关着。在配置页打开它，App 下次连接时就会解密。」「没解密：这个域名不在解密范围里。把它加进解密范围（配置页「解密 HTTPS」旁的「范围…」），App 下次连接时就会解密。」 | 方案没给原文 |
+| 7 | 没写 | 详情概览的「协议」写成「XMPP · 已解密 / 未解密」；「复制全部」里分隔线也是一行；合块不跨过分隔线（线两边同方向的段不合在一起，偏移照样按方向累计） | 复制出去也看得出从哪里开始是 TLS；跨线合块会把明文和密文糊成一块 |
+| 8 | MCP 多一个字段 `tls` | `list_tcp_connections` 每行 `tls=decrypted` 或 `tls=failed(<reason>)`；`get_tcp_connection` 多一行 `TLS: decrypted · chat.example.test · TLS 1.3`，数据里分隔处一行 `-- TLS taken over at <proceed/>: decrypted data below (…) --` / `-- TLS not decrypted: ciphertext below --` | MCP 的输出是文本，不是 JSON |
+| 9 | 没写 | 接管时被拒的那一条，分隔线放在数据最后（线后没有数据），连接以出错结束，错误原文写在概览里 | 那条连接在 TLS 握手时就断了 |
+
+> 2026-11-22 追加的 `TLS-FINGERPRINT.md` 把 §3.1「在 `<proceed/>` 那一刻决定」改成等第一个 ClientHello 到齐再决定（失败表多一个客户端 TLS 指纹），那一版在下一个提交里做。
+
+## 7. 验证记录（2026-11-22）
+
+**真引擎 + 真桥脚本**（同 `WIREGUARD-DEVICES.md` §11 的宿主程序；本机一个假 XMPP 服务器 19680：明文 stream → `<starttls/>` → `<proceed/>` → TLS，自签证书 `chat.example.test`；客户端把 XML 声明和 stream 头分两次写；宿主里引擎多开了 `ssl_insecure`，因为假服务器的证书是自签的，真服务器不用），22 项全过：
+
+| 场景 | 结果 |
+|---|---|
+| A. 本机经 HTTP 代理 `CONNECT`，客户端信任 Baobox 的 CA | 客户端拿到 `Baobox Capture CA` 签的证书、对话完整；TCP 页**一条**连接、XMPP、「已解密 · chat.example.test · TLS 1.2」；8 段：线前 5 段明文（`<?xml…>` 21B、stream 头 122B、features、`<starttls/>`、`<proceed/>`），线后 3 段解密后的 XMPP（`secret-from-client` / `secret-from-server` 都在）；HTTP 页没有这个域名的行 |
+| E1. 模拟器经 WireGuard（`app_process` 跑一个 Java 客户端，连 `192.168.0.9:19680`），信任 Baobox 的 CA | 客户端 TLSv1.3、证书是 Baobox 的；这一行「已解密」，设备是模拟器那台 WireGuard 设备、来源 `10.0.0.1` |
+| C. 关「解密 HTTPS」 | 不接管，客户端和真服务器握手成功；「未解密」`decrypt_off`，线后是密文（首字节 `0x16`） |
+| D. 解密范围只有 `other.test` | 不接管，`out_of_scope` |
+| B. 本机客户端只信任服务器自己的证书（模拟不信任 Baobox 的手机） | 第一次：被接管、客户端拒绝证书，这一行「未解密」`handshake_failed`、以出错结束、线在最后；第二次：原样放行，客户端和真服务器握手成功，这一行 `handshake_failed`、线后的密文照样记了字节 |
+| E2. 本机刚对这个域名失败过，模拟器再连（信任 Baobox） | 照样解密（失败表按设备记） |
+| E3. 模拟器只信任服务器证书 | 第一次失败、第二次放行，和 B 一样 |
+| F. 本机经 SOCKS 连 | 不接管（普通 TCP 行，没有 TLS 标签），客户端直接和服务器握手 |
+| MCP | `list_tcp_connections protocol=xmpp` 每行带 `tls=decrypted` / `tls=failed(decrypt_off)` / `tls=failed(out_of_scope)` / `tls=failed(handshake_failed)`，经 SOCKS 那条没有；`get_tcp_connection` 有 `TLS: decrypted · chat.example.test · TLS 1.2` 和 `-- TLS taken over at <proceed/>: decrypted data below (chat.example.test · TLS 1.2) --`，线前 4 块、线后 3 块 |
+
+（本机的 Python 只会 TLS 1.2，所以本机那几条写的是 TLS 1.2；模拟器的客户端是 1.3。）
+
+**单元测试**（`StartTLSTests` 9 个）：`tcp_tls` 解析（解开、四种原因、缺字段跳过、认不出的原因当没有）；`TCPLog`：明文 4 段 + 解密 3 段是一行、线在第 4 段后、XMPP 照样认得出；放行的连接线后照样记密文字节；被拒的那条线在最后；别的连接没有标记；合块不跨线、偏移照样累计；TLS 版本显示。
+
+**界面**（渲染探针，中英文各 6 张）：列表里「已解密」「未解密」标签（只在 XMPP STARTTLS 连接上）；解开的详情（线前明文、分隔线「以下是 TLS 解密后的内容 · chat.coffeemeetsbagel.com · TLS 1.3」、线后解密内容）；手机不信任证书后放行的那条（顶上提示 + 「以下是 TLS 密文（没解密）」+ 密文）；被拒的那次（出错、线在最后、错误原文）；「解密 HTTPS」关着；不在范围；900 宽。
+
+**没验证的**：真的 Smack（CMB Android staging 包）和 XMPPFramework（iPhone）；真服务器 `chat.coffeemeetsbagel.com:5222`（这台 Mac 不能替用户连生产聊天服务）。
