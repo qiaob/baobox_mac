@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// 网络抓包设置（docs/packet-capture/REQUIREMENTS.md §5.3）：一项一行。
-/// 抓什么、怎么接设备这些开关都在抓包窗口的「配置」页里，这里只放不常改的东西（端口、上限、解密范围、证书、WireGuard 密钥、MCP）。
+/// 抓什么、怎么接设备这些开关都在抓包窗口的「配置」页里，这里只放不常改的东西（端口、上限、解密范围、证书、MCP）。
 /// 重操作（证书安装、MCP 注册）在后台队列执行，完成回主线程更新状态。
 struct NetCaptureSettingsView: View {
     var body: some View {
@@ -35,7 +35,6 @@ private struct NetCaptureGeneralSection: View {
     @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
     @AppStorage(NetCaptureEnv.Keys.clearOnStop) private var clearOnStop = false
     @AppStorage(NetCaptureEnv.Keys.wireguardPort) private var wireguardPort = 51820
-    @State private var confirmRegenerate = false
 
     var body: some View {
         SwiftUI.Section("netcapture.settings.general") {
@@ -54,24 +53,15 @@ private struct NetCaptureGeneralSection: View {
                 Text(verbatim: "20 MB").tag(20 * 1024 * 1024)
             }
             Toggle("netcapture.settings.clearOnStop", isOn: $clearOnStop)
+            // 一台设备想换钥匙：删掉再添加（docs/packet-capture/WIREGUARD-DEVICES.md §6）。
             HStack {
-                Text("netcapture.settings.wireguardPort")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("netcapture.settings.wireguardPort")
+                    Text("netcapture.settings.wireguardPortNote").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 TextField("", value: $wireguardPort, format: .number.grouping(.never))
                     .frame(width: 80).multilineTextAlignment(.trailing)
-            }
-            HStack {
-                Text("netcapture.settings.wireguardKeys")
-                Spacer()
-                Button("netcapture.settings.wireguardRegenerate") { confirmRegenerate = true }
-                    .alert(Text("netcapture.settings.wireguardRegenerateTitle"), isPresented: $confirmRegenerate) {
-                        Button("netcapture.settings.wireguardRegenerateConfirm", role: .destructive) {
-                            NetCaptureSession.shared.regenerateWireGuardKeys()
-                        }
-                        Button("common.cancel", role: .cancel) {}
-                    } message: {
-                        Text("netcapture.settings.wireguardRegenerateMessage")
-                    }
             }
             Text("netcapture.settings.generalHint").font(.caption).foregroundStyle(.secondary)
         }

@@ -317,7 +317,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     private static let baseToolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = client LAN IP (source device), get it from list_devices. Each summary ends with @<clientIP>.",
+            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key>.",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
@@ -335,7 +335,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "search_flows",
-            "description": "Search flows whose URL or body contains the query. Optional device = client LAN IP (from list_devices) to restrict to one device.",
+            "description": "Search flows whose URL or body contains the query. Optional device = device key (from list_devices) to restrict to one device.",
             "inputSchema": ["type": "object",
                             "properties": ["query": ["type": "string"], "limit": ["type": "integer"],
                                            "device": ["type": "string"]],
@@ -343,7 +343,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "list_devices",
-            "description": "List capturing source devices (each phone / this Mac) keyed by client LAN IP, with flow count and last activity. Use a device's ip as the `device` argument to list_flows / search_flows.",
+            "description": "List capturing source devices with flow count and last activity. Each line starts with the device key: wg:<id> for a WireGuard device (one per phone, named on the Config tab), otherwise the client IP (this Mac, LAN devices). Use the key as the `device` argument to list_flows / search_flows / list_tcp_connections.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
@@ -394,7 +394,7 @@ enum MCPTools {
                 filtered = filtered.filter { $0.statusCode == status || $0.statusClass == status }
             }
             if let device = arguments["device"] as? String, !device.isEmpty {
-                filtered = filtered.filter { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == device }
+                filtered = filtered.filter { $0.deviceKey == device }
             }
             let limit = arguments["limit"] as? Int ?? 50
             return summaries(Array(filtered.suffix(limit)))
@@ -406,8 +406,7 @@ enum MCPTools {
             let limit = arguments["limit"] as? Int ?? 50
             let device = arguments["device"] as? String
             let matched = flows.filter { flow in
-                if let device, !device.isEmpty,
-                   (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
+                if let device, !device.isEmpty, flow.deviceKey != device { return false }
                 if flow.url.lowercased().contains(query) { return true }
                 if let b = flow.responseBody, let t = String(data: b, encoding: .utf8),
                    t.lowercased().contains(query) { return true }
@@ -476,16 +475,16 @@ enum MCPTools {
             let status = flow.statusCode.map(String.init) ?? "-"
             let dur = flow.durationMs.map { "\($0)ms" } ?? "-"
             let dec = flow.decrypted ? "" : " [passthrough]"
-            let dev = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            let dev = flow.deviceKey
             return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec) @\(dev)"
         }.joined(separator: "\n")
     }
 
-    /// 按 clientIP 聚合设备列表（读快照 + UserDefaults 别名），供 `list_devices`。
+    /// 按设备键聚合设备列表（读快照 + 设备表的名字 / 别名），供 `list_devices`。
     private static func devices(_ flows: [Flow]) -> String {
         var buckets: [String: (count: Int, last: Date)] = [:]
         for flow in flows {
-            let ip = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            let ip = flow.deviceKey
             var bucket = buckets[ip] ?? (0, Date.distantPast)
             bucket.count += 1
             if flow.startedAt > bucket.last { bucket.last = flow.startedAt }
@@ -499,19 +498,22 @@ enum MCPTools {
         }.joined(separator: "\n")
     }
 
-    /// MCP 侧设备名（英文，AI 面向）：别名 → This Mac（回环）→ WireGuard 隧道里的手机 → IP。
-    private static func deviceLabel(_ ip: String) -> String {
-        if ip == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
-        if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
-        if ip == "127.0.0.1" || ip == "::1" { return "This Mac" }
-        if ip == WireGuardKeys.clientAddress { return "WireGuard device" }
-        return ip
+    /// MCP 侧设备名（英文，AI 面向）：WireGuard 设备 → 设备表里的名字（删了是 (deleted WireGuard device)）；
+    /// 其余：别名 → This Mac（回环）→ IP。
+    static func deviceLabel(_ key: String) -> String {
+        if key == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            return WireGuardNameSnapshot.shared.name(id: id).map { "WireGuard: \($0)" } ?? "(deleted WireGuard device)"
+        }
+        if let alias = NetCaptureEnv.deviceAlias(for: key) { return alias }
+        if key == "127.0.0.1" || key == "::1" { return "This Mac" }
+        return key
     }
 
     private static func detail(_ flow: Flow) -> String {
         var lines: [String] = ["\(flow.method) \(flow.url)"]
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
-        lines.append("Device: \(flow.clientIP ?? NetCaptureEnv.unknownDeviceKey)")
+        lines.append("Device: \(flow.deviceKey) (\(deviceLabel(flow.deviceKey)))")
         lines.append("-- Request headers --")
         for h in flow.requestHeaders { lines.append("\(h.name): \(MCPRedaction.value(name: h.name, value: h.value))") }
         if let body = flow.requestBody, let text = String(data: body, encoding: .utf8) {

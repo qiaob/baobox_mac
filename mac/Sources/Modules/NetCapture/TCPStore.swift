@@ -25,11 +25,18 @@ final class TCPStore: ObservableObject {
         connections = []
         TCPSnapshotStore.shared.set([])
     }
+
+    /// 清掉某台设备的连接（设备栏右键「清空这台设备的包」）。
+    func clearDevice(key: String) {
+        guard log.removeAll(where: { $0.deviceKey == key }) else { return }
+        connections = log.connections
+        TCPSnapshotStore.shared.set(connections)
+    }
 }
 
 extension TCPConnection {
-    /// 来源设备（工具条的设备筛选、MCP 的 `device` 参数）。
-    var deviceKey: String { client ?? NetCaptureEnv.unknownDeviceKey }
+    /// 来源设备（工具条的设备筛选、MCP 的 `device` 参数）：隧道设备 `wg:<id>`，其余是来源 IP。
+    var deviceKey: String { NetCaptureDevice.key(clientIP: client, wireguard: wireguardID) }
 
     /// 列表和筛选菜单里的协议名；认不出是 nil（显示「未知」）。
     var protocolLabel: String? { detected?.label }

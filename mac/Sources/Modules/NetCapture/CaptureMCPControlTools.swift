@@ -10,12 +10,12 @@ enum MCPControlTools {
     static let schemas: [[String: Any]] = [
         [
             "name": "get_config",
-            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_endpoint, config_page_url, pending_devices, mcp_redact_auth.",
+            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_devices (one per phone: id, name, UDP port, endpoint), config_page_url, pending_devices, mcp_redact_auth.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
             "name": "set_config",
-            "description": "Change any of the settable keys from get_config (keys not given are left alone); same effect as using the window. Booleans: mac, mac_http, mac_websocket, mac_tcp, manual_proxy, wireguard, cert_page, paused, decrypt_https, clear_on_stop. decrypt_scope: \"all\" or \"allowlist\"; allow_domains / deny_domains: arrays of domains. port, wireguard_port, body_cap (1048576, 5242880 or 20971520) apply the next time the engine starts; max_flows (200-5000). Turning on mac needs this Mac to trust the certificate; when it does not, nothing is changed and the reply says to do it in the window (the trust prompt is the user's). Returns what changed and the config afterwards.",
+            "description": "Change any of the settable keys from get_config (keys not given are left alone); same effect as using the window. Booleans: mac, mac_http, mac_websocket, mac_tcp, manual_proxy, wireguard, cert_page, paused, decrypt_https, clear_on_stop. decrypt_scope: \"all\" or \"allowlist\"; allow_domains / deny_domains: arrays of domains. port and body_cap (1048576, 5242880 or 20971520) apply the next time the engine starts; wireguard_port is the start port for WireGuard devices added from now on (existing ones keep theirs); max_flows (200-5000). Turning on mac needs this Mac to trust the certificate; when it does not, nothing is changed and the reply says to do it in the window (the trust prompt is the user's). Returns what changed and the config afterwards.",
             "inputSchema": ["type": "object", "properties": [
                 "mac": ["type": "boolean"], "mac_http": ["type": "boolean"], "mac_websocket": ["type": "boolean"],
                 "mac_tcp": ["type": "boolean"], "manual_proxy": ["type": "boolean"], "wireguard": ["type": "boolean"],
@@ -29,12 +29,28 @@ enum MCPControlTools {
         ],
         [
             "name": "get_wireguard_config",
-            "description": "The WireGuard client config a phone imports (the same text as the QR code on the Config tab). It contains the tunnel's private key; this server only listens on 127.0.0.1. Creates the key file if there is none yet.",
-            "inputSchema": ["type": "object", "properties": [:]],
+            "description": "The WireGuard client config one phone imports (the same text as its QR code on the Config tab). Each phone has its own key and UDP port; device = name or id from get_config's wireguard_devices, default the first one. It contains the tunnel's private key; this server only listens on 127.0.0.1.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"]]],
+        ],
+        [
+            "name": "add_wireguard_device",
+            "description": "Add a WireGuard device (one per phone: its own key, UDP port and QR code). name is what the device list and the TCP tab show (default \"Device N\"). Restarts the engine when WireGuard is on (other tunnel phones reconnect by themselves). Returns the device and its client config text.",
+            "inputSchema": ["type": "object", "properties": ["name": ["type": "string"]]],
+        ],
+        [
+            "name": "remove_wireguard_device",
+            "description": "Delete a WireGuard device (name or id): phones set up from its QR code can no longer connect. Its captured packets stay in the lists. Restarts the engine when WireGuard is on.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"]], "required": ["device"]],
+        ],
+        [
+            "name": "rename_wireguard_device",
+            "description": "Rename a WireGuard device (name or id). The engine is not restarted.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"], "name": ["type": "string"]],
+                            "required": ["device", "name"]],
         ],
         [
             "name": "list_tcp_connections",
-            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), bytes up/down, reads, source device. Filters: limit, device (client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
+            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), bytes up/down, reads, source device. Filters: limit, device (device key from list_devices: wg:<id> for a WireGuard device, otherwise the client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"], "device": ["type": "string"], "protocol": ["type": "string"],
                 "host": ["type": "string"],
@@ -99,7 +115,10 @@ enum MCPControlTools {
         switch name {
         case "get_config": return json(config())
         case "set_config": return setConfig(arguments)
-        case "get_wireguard_config": return wireguardConfig()
+        case "get_wireguard_config": return wireguardConfig(arguments)
+        case "add_wireguard_device": return addWireGuardDevice(arguments)
+        case "remove_wireguard_device": return removeWireGuardDevice(arguments)
+        case "rename_wireguard_device": return renameWireGuardDevice(arguments)
         case "list_tcp_connections": return listTCP(arguments)
         case "get_tcp_connection": return getTCP(arguments)
         case "clear_tcp":
@@ -155,7 +174,7 @@ enum MCPControlTools {
                     "cert_page": session.certPageOn,
                     "pending_devices": engine.pendingDevices,
                     "proxy_address": engine.port.map { "\(lan ? NetworkInterfaces.primaryIP() : "127.0.0.1"):\($0)" } ?? NSNull(),
-                    "wireguard_endpoint": session.wireguardEndpoint,
+                    "wireguard_devices": MCPControlTools.wireguardDeviceObjects(),
                 ]
                 state["config_page_url"] = session.certPageOn ? NetworkInterfaces.landingPageURL : NSNull()
                 return state
@@ -184,7 +203,7 @@ enum MCPControlTools {
 
     private static let readOnlyKeys: Set<String> = [
         "engine", "capturing", "ca_trusted", "proxy_address", "socks_port", "config_page_port", "config_page_url",
-        "wireguard_endpoint", "pending_devices", "mcp_port", "mcp_redact_auth",
+        "wireguard_devices", "pending_devices", "mcp_port", "mcp_redact_auth",
     ]
     private static let bodyCaps = [1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024]
 
@@ -371,15 +390,123 @@ enum MCPControlTools {
 
     // MARK: - WireGuard
 
-    private static func wireguardConfig() -> String {
-        do {
-            let keys = try WireGuardKeyFile.loadOrCreate(at: NetCaptureEnv.wireguardKeyURL)
-            let endpoint = "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.wireguardPort)"
-            guard let text = keys.clientConfig(endpoint: endpoint) else { return "error: the key file has an invalid key" }
-            let on = DispatchQueue.main.sync { MainActor.assumeIsolated { NetCaptureSession.shared.wireguardOn } }
-            return on ? text : text + "\n\n# WireGuard is off in Baobox: turn it on (set_config wireguard=true) before the phone connects."
-        } catch {
-            return "error: \(error.localizedDescription)"
+    /// get_config 里的 `wireguard_devices`。主线程上调。
+    @MainActor
+    static func wireguardDeviceObjects() -> [[String: Any]] {
+        let store = WireGuardDeviceStore.shared
+        return store.devices.map { device in
+            var object: [String: Any] = ["id": device.id, "key": WireGuardDeviceTable.deviceKey(id: device.id),
+                                         "name": device.name, "port": Int(device.port), "endpoint": store.endpoint(for: device)]
+            if store.missingKeys.contains(device.id) { object["key_missing"] = true }
+            return object
+        }
+    }
+
+    /// 按名字或 id（也认 `wg:<id>`）找一台；不给就是第一台。找不到、名字重了给一句错误。
+    private static func findDevice(_ wanted: String?) -> Result<WireGuardDevice, MCPError> {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> Result<WireGuardDevice, MCPError> in
+                let store = WireGuardDeviceStore.shared
+                guard store.loaded else { return .failure(MCPError("the WireGuard device list is still loading; try again")) }
+                guard let wanted = wanted?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty else {
+                    guard let first = store.devices.first else {
+                        return .failure(MCPError("no WireGuard devices yet; add one with add_wireguard_device"))
+                    }
+                    return .success(first)
+                }
+                let id = (WireGuardDeviceTable.deviceID(fromKey: wanted) ?? wanted).lowercased()
+                if let device = store.device(id: id) { return .success(device) }
+                let named = store.devices.filter { $0.name.caseInsensitiveCompare(wanted) == .orderedSame }
+                if named.count == 1 { return .success(named[0]) }
+                if named.count > 1 { return .failure(MCPError("\(named.count) devices are called \"\(wanted)\"; use the id")) }
+                return .failure(MCPError("no WireGuard device \"\(wanted)\" (see get_config wireguard_devices)"))
+            }
+        }
+    }
+
+    struct MCPError: Error {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    /// 一台的客户端配置文本；钥匙丢了的给错误。WireGuard 关着时文本后面加一句提醒。
+    private static func configText(for device: WireGuardDevice) -> String {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> String in
+                let store = WireGuardDeviceStore.shared
+                guard let text = store.clientConfig(for: device) else {
+                    return "error: the key file of \"\(device.name)\" is missing; remove the device and add it again"
+                }
+                return NetCaptureSession.shared.wireguardOn ? text
+                    : text + "\n\n# WireGuard is off in Baobox: turn it on (set_config wireguard=true) before the phone connects."
+            }
+        }
+    }
+
+    private static func wireguardConfig(_ arguments: [String: Any]) -> String {
+        switch findDevice(string(arguments["device"])) {
+        case .success(let device): return configText(for: device)
+        case .failure(let error): return "error: " + error.message
+        }
+    }
+
+    /// 等主线程上的一个异步操作做完（最多 10 秒）。主线程从不同步等 MCP 的队列，不会死锁。
+    private static func waitOnMain<T>(_ start: @escaping @MainActor (@escaping (T) -> Void) -> Void) -> T? {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                start { value in
+                    box.value = value
+                    semaphore.signal()
+                }
+            }
+        }
+        return semaphore.wait(timeout: .now() + 10) == .timedOut ? nil : box.value
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable { var value: T? }
+
+    private static func addWireGuardDevice(_ arguments: [String: Any]) -> String {
+        let requested = string(arguments["name"])
+        let loaded: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.ensureLoaded { done(true) } }
+        guard loaded == true else { return "error: the WireGuard device list did not load" }
+        let result: Result<WireGuardDevice, Error>? = waitOnMain { done in
+            let store = WireGuardDeviceStore.shared
+            store.add(name: requested.flatMap(WireGuardDeviceTable.cleanName) ?? store.defaultName(), completion: done)
+        }
+        guard let result else { return "error: timed out adding the device" }
+        switch result {
+        case .failure(let error): return "error: " + error.localizedDescription
+        case .success(let device):
+            // WireGuard 开着：等引擎带着新监听重启完再回复。
+            settle([:])
+            let object = DispatchQueue.main.sync { MainActor.assumeIsolated { wireguardDeviceObjects().first { $0["id"] as? String == device.id } } }
+            return json(["device": object ?? ["id": device.id, "name": device.name, "port": Int(device.port)],
+                         "config": configText(for: device)])
+        }
+    }
+
+    private static func removeWireGuardDevice(_ arguments: [String: Any]) -> String {
+        guard let wanted = string(arguments["device"]), !wanted.isEmpty else { return "error: device is required" }
+        switch findDevice(wanted) {
+        case .failure(let error): return "error: " + error.message
+        case .success(let device):
+            let ok: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.remove(id: device.id, completion: done) }
+            guard ok == true else { return "error: could not remove \"\(device.name)\"" }
+            settle([:])
+            return "removed \(device.name) (\(device.id)); its captured packets stay in the lists"
+        }
+    }
+
+    private static func renameWireGuardDevice(_ arguments: [String: Any]) -> String {
+        guard let wanted = string(arguments["device"]), !wanted.isEmpty else { return "error: device is required" }
+        guard let name = string(arguments["name"]).flatMap(WireGuardDeviceTable.cleanName) else { return "error: name is required" }
+        switch findDevice(wanted) {
+        case .failure(let error): return "error: " + error.message
+        case .success(let device):
+            let ok: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.rename(id: device.id, to: name, completion: done) }
+            return ok == true ? "renamed \(device.id) to \(name)" : "error: could not rename \"\(device.name)\""
         }
     }
 
@@ -429,7 +556,7 @@ enum MCPControlTools {
 
         var lines = [
             "TCP \(connection.target):\(connection.port)" + (connection.sni != nil ? " (\(connection.host))" : ""),
-            "Device: \(connection.deviceKey)",
+            "Device: \(connection.deviceKey) (\(MCPTools.deviceLabel(connection.deviceKey)))",
             "Protocol: \(protocolText(connection))",
             "State: \(connection.state.rawValue)" + (connection.error.map { " (\($0))" } ?? ""),
             "Started: \(iso.string(from: connection.startedAt))" + (connection.endedAt.map { " · ended \(iso.string(from: $0))" } ?? ""),

@@ -228,6 +228,34 @@ def via_wireguard(client):
     return mode_name(client) == "wireguard"
 
 
+def wireguard_device(client):
+    """Which WireGuard device a connection belongs to: Baobox runs one listener per device, each with its
+    own key file named `<device id>.json` (docs/packet-capture/WIREGUARD-DEVICES.md §4). Every device has
+    the same tunnel address (10.0.0.1), so the listener is the only way to tell them apart. None for
+    anything that did not come in through WireGuard."""
+    if not via_wireguard(client):
+        return None
+    path = str(getattr(getattr(client, "proxy_mode", None), "data", "") or "")
+    name = os.path.basename(path)
+    if name.endswith(".json"):
+        name = name[:-5]
+    return name or None
+
+
+def device_key(client):
+    """`wg:<id>` for a WireGuard device, the source IP for everything else (this Mac, LAN devices)."""
+    wg = wireguard_device(client)
+    return "wg:" + wg if wg else client_ip(client)
+
+
+def with_device(event, client):
+    """Add `wg` to an event when the connection came in through WireGuard."""
+    wg = wireguard_device(client)
+    if wg:
+        event["wg"] = wg
+    return event
+
+
 def address_fields(address):
     """(host, port) of a server address, or (None, None)."""
     try:
@@ -261,8 +289,8 @@ class Bridge:
         self.allowed = set()             # LAN source IPs the user allowed
         self.denied = set()
         self.announced = set()           # source IPs already reported as pending
-        self.failed = set()              # (client ip, host): handshake failed -> pass through
-        self.reported = set()            # (client ip, host, reason): `tls` already sent
+        self.failed = set()              # (device key, host): handshake failed -> pass through
+        self.reported = set()            # (device key, host, reason): `tls` already sent
         self.body_cap = 5 * 1024 * 1024
         self.rules = []                  # mock rules, in the order the user keeps them
         self.listen_ports = set()        # ports this engine listens on
@@ -485,7 +513,7 @@ class Bridge:
             return True
         if ip not in self.denied and ip not in self.announced:
             self.announced.add(ip)
-            emit({"event": "device", "client": ip})
+            emit(with_device({"event": "device", "client": ip}, client))
         return False
 
     def proxy_refused(self, client):
@@ -567,14 +595,14 @@ class Bridge:
             return not host_in(host, self.scope_domains)
         return True
 
-    def report_tls(self, ip, host, reason):
-        key = (ip, host, reason)
+    def report_tls(self, client, host, reason):
+        key = (device_key(client), host, reason)
         # Paused: nothing is reported, and nothing is remembered as reported, so the row shows up once
         # capture resumes and the host is seen again.
         if key in self.reported or not self.recording:
             return
         self.reported.add(key)
-        emit({"event": "tls", "client": ip, "host": host, "reason": reason})
+        emit(with_device({"event": "tls", "client": client_ip(client), "host": host, "reason": reason}, client))
 
     def tls_clienthello(self, data: tls.ClientHelloData):
         server = getattr(data.context.server, "address", None)
@@ -587,7 +615,7 @@ class Bridge:
             data.establish_server_tls_first = False
             return
         host = data.client_hello.sni
-        ip = client_ip(data.context.client)
+        client = data.context.client
         # The SOCKS listener exists for WebSocket: Apple's WebSocket stack ignores the HTTP proxy and only
         # uses the system SOCKS proxy. But every SOCKS-aware app sends all of its TCP through it (mail,
         # chat, ...). Only web traffic (443) is of interest here; leave everything else untouched.
@@ -599,24 +627,26 @@ class Bridge:
             # still needs its handshake with the engine, so connections to the engine itself are kept.
             data.ignore_connection = True
             if host:
-                self.report_tls(ip, host, "decrypt_off")
+                self.report_tls(client, host, "decrypt_off")
             return
         if not host:
             return
-        if (ip, host) in self.failed:
+        # Keyed by device, not by address: every WireGuard device is 10.0.0.1 inside its tunnel, and one
+        # phone not trusting the certificate says nothing about another.
+        if (device_key(client), host) in self.failed:
             data.ignore_connection = True
-            self.report_tls(ip, host, "handshake_failed")
+            self.report_tls(client, host, "handshake_failed")
         elif not self.in_scope(host):
             data.ignore_connection = True
-            self.report_tls(ip, host, "out_of_scope")
+            self.report_tls(client, host, "out_of_scope")
 
     def tls_failed_client(self, data: tls.TlsData):
         host = data.conn.sni
         if not host:
             return
-        ip = client_ip(data.context.client)
-        self.failed.add((ip, host))
-        self.report_tls(ip, host, "handshake_failed")
+        client = data.context.client
+        self.failed.add((device_key(client), host))
+        self.report_tls(client, host, "handshake_failed")
 
     # ----- flows ----------------------------------------------------------
 
@@ -747,7 +777,7 @@ class Bridge:
         flow.metadata["baobox_rec"] = True
         req = flow.request
         body, truncated, sniffed = self.body_fields(req)
-        emit({
+        emit(with_device({
             "event": "request", "id": flow.id, "client": ip,
             "replay": replay,
             "decoded": self.structured_text(req, flow),
@@ -755,7 +785,7 @@ class Bridge:
             "port": req.port, "path": req.path, "http": req.http_version,
             "headers": self.headers(req), "body": body, "truncated": truncated, "sniffed": sniffed,
             "bytes": self.wire_size(req), "ts": req.timestamp_start,
-        })
+        }, flow.client_conn))
 
     def response(self, flow: http.HTTPFlow):
         if not flow.metadata.get("baobox_rec"):
@@ -812,8 +842,9 @@ class Bridge:
         flow.metadata["baobox_rec"] = True
         flow.metadata["baobox_tcp_bytes"] = 0
         host, port = address_fields(getattr(flow.server_conn, "address", None))
-        emit({"event": "tcp_open", "id": flow.id, "client": ip, "host": host or "", "port": port or 0,
-              "sni": getattr(client, "sni", None), "ts": getattr(flow, "timestamp_created", None) or time.time()})
+        emit(with_device({"event": "tcp_open", "id": flow.id, "client": ip, "host": host or "", "port": port or 0,
+                          "sni": getattr(client, "sni", None),
+                          "ts": getattr(flow, "timestamp_created", None) or time.time()}, client))
 
     def tcp_message(self, flow):
         message = flow.messages[-1]

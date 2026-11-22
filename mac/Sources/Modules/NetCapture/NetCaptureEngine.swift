@@ -96,8 +96,8 @@ final class NetCaptureEngine: ObservableObject {
 
         let process = Process()
         process.executableURL = NetCaptureEnv.engineURL
-        // 监听：HTTP 代理（听本机或局域网）、只听本机的 SOCKS5、开着时 WireGuard（docs/packet-capture/CONTROL.md §2.1）。
-        process.arguments = listening.modeArguments(keyFile: NetCaptureEnv.wireguardKeyURL.path) + [
+        // 监听：HTTP 代理（听本机或局域网）、只听本机的 SOCKS5、开着时每台 WireGuard 设备一个（docs/packet-capture/CONTROL.md §2.1）。
+        process.arguments = listening.modeArguments + [
             "--set", "confdir=\(confDir.path)",
             // 超过上限的正文直接流过去，不在引擎里攒着；这样的请求标「已截断」。
             "--set", "stream_large_bodies=\(bodyCap)",
@@ -285,6 +285,8 @@ final class NetCaptureEngine: ObservableObject {
         }
         FlowStore.shared.apply(events)
         TCPStore.shared.apply(events)
+        // 配置页 WireGuard 设备的「最近活动」：要在两个列表落完之后看（响应、TCP 数据靠它们找回是哪台）。
+        WireGuardDeviceStore.shared.noteActivity(events)
     }
 }
 

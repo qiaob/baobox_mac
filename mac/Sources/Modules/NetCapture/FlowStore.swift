@@ -40,8 +40,9 @@ struct Flow: Identifiable, Sendable {
 
     var remoteIP: String?
     /// 源设备局域网 IP（客户端连到代理的 remote 端）。`127.0.0.1`/`::1` → 本机；nil 未知。
-    /// 用于多设备区分（§17）：一处在 `ProxyConnection.appendFlow` 统一打标。
     var clientIP: String?
+    /// 经 WireGuard 来的：是哪台设备（设备 id）。隧道里每台的地址都是 10.0.0.1，认设备靠它（WIREGUARD-DEVICES.md §5）。
+    var wireguardID: String?
     /// false = 透传未解密（只知道域名，没有明文）。
     var decrypted: Bool
     /// 附注：目前只放请求失败时引擎给的错误信息。
@@ -150,18 +151,36 @@ struct Flow: Identifiable, Sendable {
 
 /// 列表筛选看的那几样（Logic/FlowFilter.swift）。
 extension Flow: FilterableFlow {
-    var deviceKey: String { clientIP ?? NetCaptureEnv.unknownDeviceKey }
+    /// 来源设备：隧道设备是 `wg:<id>`，其余是来源 IP（不知道来源的归一个占位桶）。
+    var deviceKey: String { NetCaptureDevice.key(clientIP: clientIP, wireguard: wireguardID) }
 }
 
-// MARK: - 设备（多设备区分，§17）
+// MARK: - 设备（多设备区分）
 
-/// 一个抓包来源设备。身份 = 客户端源 LAN IP（手机 / 本机）。
+/// 一个抓包来源设备。身份 = 设备键：隧道设备 `wg:<id>`，其余是来源 IP（手机 / 本机）。
 struct DeviceInfo: Identifiable, Sendable {
-    let id: String            // = ip（未知源用 NetCaptureEnv.unknownDeviceKey）
-    let ip: String
-    let label: String         // 别名 ?? 本机 ?? IP
+    let id: String            // = key
+    let key: String
+    let label: String         // 设备表里的名字 / 别名 / 本机 / IP
     let flowCount: Int
     let lastActivity: Date
+}
+
+/// 设备键与显示名（HTTP / WebSocket 包的设备栏、TCP 包的设备筛选与详情都用它）。
+enum NetCaptureDevice {
+    static func key(clientIP: String?, wireguard: String?) -> String {
+        if let wireguard { return WireGuardDeviceTable.deviceKey(id: wireguard) }
+        return clientIP ?? NetCaptureEnv.unknownDeviceKey
+    }
+
+    /// 是经 WireGuard 来的设备（不论还在不在设备表里）。
+    static func isTunnel(_ key: String) -> Bool { WireGuardDeviceTable.deviceID(fromKey: key) != nil }
+
+    /// 设备栏里的图标：隧道设备和配置页 WireGuard 那一行一样，本机是笔记本，局域网设备是网络。
+    static func symbol(_ key: String) -> String {
+        if isTunnel(key) { return "lock.shield" }
+        return FlowStore.isLoopback(key) ? "laptopcomputer" : "network"
+    }
 }
 
 // MARK: - 跨线程快照
@@ -229,6 +248,7 @@ final class FlowStore: ObservableObject {
                                 startedAt: request.startedAt,
                                 requestBytes: request.bytes,
                                 clientIP: request.client)
+                flow.wireguardID = request.wireguard
                 flow.httpVersion = request.httpVersion
                 flow.requestSniffed = request.sniffed
                 flow.isReplay = request.isReplay
@@ -263,11 +283,12 @@ final class FlowStore: ObservableObject {
                 let overflow = flows[index].messages.count - Self.maxMessagesPerFlow
                 if overflow > 0 { flows[index].messages.removeFirst(overflow) }
                 changed = true
-            case .tls(let client, let host, let reason):
+            case .tls(let client, let wireguard, let host, let reason):
                 // 没解密的连接引擎不会给请求事件，这里补一行，让用户知道这个域名有流量、为什么看不到内容。
                 let now = Date()
                 var flow = Flow(method: "CONNECT", scheme: "https", host: host, port: 443, path: "",
                                 startedAt: now, endedAt: now, clientIP: client, decrypted: false)
+                flow.wireguardID = wireguard
                 flow.undecryptedReason = reason
                 flows.append(flow)
                 changed = true
@@ -297,9 +318,9 @@ final class FlowStore: ObservableObject {
         FlowSnapshotStore.shared.set(flows)
     }
 
-    /// 移除某设备（clientIP）的全部 flow；用于设备 Tab 右键「清空此设备的包」。
-    func clearDevice(ip: String) {
-        flows.removeAll { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == ip }
+    /// 移除某设备（设备键）的全部 flow；用于设备栏右键「清空这台设备的包」。
+    func clearDevice(key: String) {
+        flows.removeAll { $0.deviceKey == key }
         recomputeDevices()
         recomputeCounts()
         FlowSnapshotStore.shared.set(flows)
@@ -361,23 +382,26 @@ final class FlowStore: ObservableObject {
         sidebarCounts = SidebarCounts.compute(flows, filter: filter)
     }
 
-    // MARK: - 设备聚合与别名（§17）
+    // MARK: - 设备聚合与名字
 
     /// 判定回环（本机）源 IP。
-    static func isLoopback(_ ip: String) -> Bool {
+    nonisolated static func isLoopback(_ ip: String) -> Bool {
         ip == "127.0.0.1" || ip == "::1" || ip.lowercased() == "localhost"
     }
 
-    /// 设备显示名：别名优先 → 本机 → WireGuard 隧道里的手机（地址固定 10.0.0.1）→ 原始 IP（反查主机名从简省略，见 §17.6 取舍）。
-    static func label(for ip: String) -> String {
-        if ip == NetCaptureEnv.unknownDeviceKey { return L("netcapture.device.unknown") }
-        if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
-        if isLoopback(ip) { return L("netcapture.device.thisMac") }
-        if ip == WireGuardKeys.clientAddress { return L("netcapture.device.wireguard") }
-        return ip
+    /// 设备显示名。隧道设备（`wg:<id>`）是设备表里的名字，设备已经删了是「已删除的设备」；
+    /// 其余：别名 → 本机 → 原始 IP（反查主机名从简省略）。
+    static func label(for key: String) -> String {
+        if key == NetCaptureEnv.unknownDeviceKey { return L("netcapture.device.unknown") }
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            return WireGuardDeviceStore.shared.device(id: id)?.name ?? L("netcapture.device.deleted")
+        }
+        if let alias = NetCaptureEnv.deviceAlias(for: key) { return alias }
+        if isLoopback(key) { return L("netcapture.device.thisMac") }
+        return key
     }
 
-    /// 读取某设备别名（无则 nil）。
+    /// 读取某设备别名（无则 nil）。只用于局域网设备和本机；隧道设备的名字在设备表里。
     func alias(ip: String) -> String? { NetCaptureEnv.deviceAlias(for: ip) }
 
     /// 设置/清除某设备别名，并刷新设备标签。空串清除。
@@ -386,22 +410,27 @@ final class FlowStore: ObservableObject {
         recomputeDevices()
     }
 
-    /// 从 `flows` 重算设备列表：按 clientIP 分桶计数 + 末次时间；本机排最前，其余按末次活动降序。
+    /// WireGuard 设备改了名或删了：设备栏的名字跟着变。
+    func refreshDeviceLabels() {
+        recomputeDevices()
+    }
+
+    /// 从 `flows` 重算设备列表：按设备键分桶计数 + 末次时间；本机排最前，其余按末次活动降序。
     private func recomputeDevices() {
         var buckets: [String: (count: Int, last: Date)] = [:]
         for flow in flows {
-            let key = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            let key = flow.deviceKey
             var bucket = buckets[key] ?? (0, Date.distantPast)
             bucket.count += 1
             if flow.startedAt > bucket.last { bucket.last = flow.startedAt }
             buckets[key] = bucket
         }
         var result = buckets.map { key, bucket in
-            DeviceInfo(id: key, ip: key, label: Self.label(for: key),
+            DeviceInfo(id: key, key: key, label: Self.label(for: key),
                        flowCount: bucket.count, lastActivity: bucket.last)
         }
         result.sort { lhs, rhs in
-            let lLoop = Self.isLoopback(lhs.ip), rLoop = Self.isLoopback(rhs.ip)
+            let lLoop = Self.isLoopback(lhs.key), rLoop = Self.isLoopback(rhs.key)
             if lLoop != rLoop { return lLoop }         // 本机固定最前
             return lhs.lastActivity > rhs.lastActivity  // 其余按末次活动降序
         }

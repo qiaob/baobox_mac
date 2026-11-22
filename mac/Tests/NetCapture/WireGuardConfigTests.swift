@@ -55,29 +55,23 @@ final class WireGuardConfigTests: XCTestCase {
         XCTAssertEqual(WireGuardKeys.decode(keys.encoded()), keys)
     }
 
-    /// 没有就生成（权限 600），有就照用；坏了重新生成；`replace` 换一份新的。
+    /// 生成一份写下去（权限 600），读回来一样；坏了读不出来；`replace` 换一份新的；不留临时文件。
     func testKeyFile() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("wg-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let url = folder.appendingPathComponent("wireguard.json")
-        let first = try WireGuardKeyFile.loadOrCreate(at: url)
+        XCTAssertNil(WireGuardKeyFile.read(at: url))
+        let first = try WireGuardKeyFile.replace(at: url)
         let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         XCTAssertEqual(mode, 0o600)
-        XCTAssertEqual(try WireGuardKeyFile.loadOrCreate(at: url), first)
+        XCTAssertEqual(WireGuardKeyFile.read(at: url), first)
 
         try Data("garbage".utf8).write(to: url)
-        let rebuilt = try WireGuardKeyFile.loadOrCreate(at: url)
-        XCTAssertNotEqual(rebuilt, first)
+        XCTAssertNil(WireGuardKeyFile.read(at: url))
         let replaced = try WireGuardKeyFile.replace(at: url)
-        XCTAssertNotEqual(replaced, rebuilt)
-        XCTAssertEqual(try WireGuardKeyFile.loadOrCreate(at: url), replaced)
+        XCTAssertNotEqual(replaced, first)
+        XCTAssertEqual(WireGuardKeyFile.read(at: url), replaced)
         // 没有留下临时文件。
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["wireguard.json"])
-    }
-
-    func testTunnelAddress() {
-        XCTAssertTrue(WireGuardKeys.isTunnelAddress(WireGuardKeys.clientAddress))
-        XCTAssertFalse(WireGuardKeys.isTunnelAddress("10.0.1.1"))
-        XCTAssertFalse(WireGuardKeys.isTunnelAddress("192.168.0.9"))
     }
 }

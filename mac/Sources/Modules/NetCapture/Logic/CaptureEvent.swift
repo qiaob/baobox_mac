@@ -32,7 +32,8 @@ enum CaptureEvent: Equatable, Sendable {
     case response(Response)
     case failure(id: UUID, message: String, at: Date?)
     case webSocket(WebSocketMessage)
-    case tls(client: String?, host: String, reason: UndecryptedReason)
+    /// 一个没解密的域名。`wireguard`：经 WireGuard 来的是哪台设备（设备 id），别的来源为 nil。
+    case tls(client: String?, wireguard: String?, host: String, reason: UndecryptedReason)
     case device(client: String)
     /// 重发没发出去（URL 不合法、指令缺字段…）。`id` 是指令里给的那个；引擎没收到 id 时为 nil。
     case replayFailed(id: UUID?, message: String)
@@ -46,6 +47,8 @@ enum CaptureEvent: Equatable, Sendable {
     struct Request: Equatable, Sendable {
         var id: UUID
         var client: String?
+        /// 经 WireGuard 来的：是哪台设备（设备 id，docs/packet-capture/WIREGUARD-DEVICES.md §4）；别的来源为 nil。
+        var wireguard: String? = nil
         var method: String
         var scheme: String
         var host: String
@@ -98,6 +101,8 @@ enum CaptureEvent: Equatable, Sendable {
     struct TCPOpen: Equatable, Sendable {
         var id: UUID
         var client: String?
+        /// 同 `Request.wireguard`。
+        var wireguard: String? = nil
         /// 目标地址（多半是 IP）。
         var host: String
         var port: Int
@@ -151,6 +156,7 @@ enum CaptureEvent: Equatable, Sendable {
             return .request(Request(
                 id: id,
                 client: json["client"] as? String,
+                wireguard: wireguardID(json["wg"]),
                 method: method,
                 scheme: scheme,
                 host: host,
@@ -196,7 +202,7 @@ enum CaptureEvent: Equatable, Sendable {
             guard let host = json["host"] as? String,
                   let raw = json["reason"] as? String,
                   let reason = UndecryptedReason(rawValue: raw) else { return nil }
-            return .tls(client: json["client"] as? String, host: host, reason: reason)
+            return .tls(client: json["client"] as? String, wireguard: wireguardID(json["wg"]), host: host, reason: reason)
         case "device":
             guard let client = json["client"] as? String, !client.isEmpty else { return nil }
             return .device(client: client)
@@ -207,6 +213,7 @@ enum CaptureEvent: Equatable, Sendable {
             return .tcpOpen(TCPOpen(
                 id: id,
                 client: json["client"] as? String,
+                wireguard: wireguardID(json["wg"]),
                 host: json["host"] as? String ?? "",
                 port: int(json["port"]) ?? 0,
                 sni: (json["sni"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -234,6 +241,12 @@ enum CaptureEvent: Equatable, Sendable {
 
     private static func uuid(_ value: Any?) -> UUID? {
         (value as? String).flatMap(UUID.init(uuidString:))
+    }
+
+    /// `wg`：设备 id（小写 UUID，密钥文件名）。不是这个形状的当作没有，免得一个怪字符串变成一台「设备」。
+    private static func wireguardID(_ value: Any?) -> String? {
+        guard let id = value as? String, WireGuardDeviceTable.isValidID(id) else { return nil }
+        return id
     }
 
     /// JSON 数字可能解成 Int 或 Double，两种都认；Bool 不算数字。

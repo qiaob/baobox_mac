@@ -49,6 +49,7 @@ private struct ConfigSidebar: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var engine = NetCaptureEngine.shared
     @ObservedObject private var state = NetCaptureWindowState.shared
+    @ObservedObject private var wireguardDevices = WireGuardDeviceStore.shared
     @AppStorage(NetCaptureEnv.Keys.decryptHTTPS) private var decrypt = true
     @AppStorage(NetCaptureEnv.Keys.macHTTP) private var macHTTP = true
     @AppStorage(NetCaptureEnv.Keys.macWebSocket) private var macWebSocket = true
@@ -103,9 +104,10 @@ private struct ConfigSidebar: View {
                         rowSwitch(selecting(.manualProxy, get: { session.manualProxyOn }, set: session.setManualProxy))
                     }
                     rowDivider
+                    // 开着时小字是「N 台设备」（每台一个端点，不再显示单个端点）。
                     ConfigRow(item: .wireguard, icon: "lock.shield", title: "netcapture.config.wg.title",
-                              subtitle: session.wireguardOn ? session.wireguardEndpoint : nil) {
-                        rowSwitch(selecting(.wireguard, get: { session.wireguardOn }, set: session.setWireGuard))
+                              subtitle: session.wireguardOn ? L("netcapture.wg.deviceCount \(wireguardDevices.devices.count)") : nil) {
+                        rowSwitch(selecting(.wireguard, get: { session.wireguardOn }, set: WireGuardUI.setOn))
                     }
                 }
 
@@ -248,7 +250,7 @@ private struct ConfigDetail<Content: View>: View {
 }
 
 /// 「1 手机装 WireGuard App」这样的一步。
-private struct StepRow: View {
+struct StepRow: View {
     let number: Int
     let text: LocalizedStringKey
 
@@ -302,7 +304,7 @@ private struct CopyValueRow: View {
 }
 
 /// 二维码；内容为空时是一个虚线占位框，里面一句说明。点一下放大（卡片上的太小，手机隔着屏幕不好扫），再点或点别处收起。
-private struct QRBox: View {
+struct QRBox: View {
     let text: String?
     let side: CGFloat
     let placeholder: LocalizedStringKey
@@ -434,34 +436,18 @@ private struct ManualProxyDetail: View {
 
 // MARK: - WireGuard
 
+/// 卡片上只列设备（名字、端口、最近活动、二维码 / 改名 / 删除）；二维码在「添加设备」起好名字之后、或点那台的二维码图标时出现
+/// （docs/packet-capture/WIREGUARD-DEVICES.md §6）。开关关着时列表照常显示、能改名删除，添加和二维码是灰的。
 private struct WireGuardDetail: View {
     @ObservedObject private var session = NetCaptureSession.shared
 
     var body: some View {
         ConfigDetail(icon: "lock.shield", title: "netcapture.config.wg.title", detail: "netcapture.config.wg.detail",
-                     isOn: Binding(get: { session.wireguardOn }, set: { session.setWireGuard($0) })) {
-            HStack(alignment: .top, spacing: 22) {
-                // 关着时不显示任何和密钥有关的东西。
-                QRBox(text: session.wireguardOn ? session.wireguardClientConfig() : nil, side: ConfigDetailMetrics.qrSide,
-                      placeholder: "netcapture.config.qrPlaceholder", caption: session.wireguardEndpoint)
-                VStack(alignment: .leading, spacing: 10) {
-                    if session.wireguardOn {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("netcapture.config.wg.endpoint").font(.caption).foregroundStyle(.secondary)
-                            Text(verbatim: session.wireguardEndpoint).font(.title3.monospaced()).textSelection(.enabled)
-                                .lineLimit(1).minimumScaleFactor(0.7)
-                            CopyButton(title: "netcapture.config.wg.copy") { session.wireguardClientConfig() ?? "" }
-                                .controlSize(.small)
-                        }
-                        .padding(.bottom, 4)
-                    }
-                    StepRow(number: 1, text: "netcapture.config.wg.step1")
-                    StepRow(number: 2, text: "netcapture.config.wg.step2")
-                    StepRow(number: 3, text: "netcapture.config.wg.step3")
-                }
-            }
+                     isOn: Binding(get: { session.wireguardOn }, set: { WireGuardUI.setOn($0) })) {
+            WireGuardDeviceList()
             Text("netcapture.config.wg.note").font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: WireGuardDeviceList.width, alignment: .leading)
         }
     }
 }

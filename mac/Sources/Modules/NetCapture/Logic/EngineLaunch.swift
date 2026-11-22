@@ -3,26 +3,33 @@ import Foundation
 // 网络抓包的纯逻辑（只依赖 Foundation，进 BaoboxTests）：引擎这一次听哪些端口、桥的几个开关取什么值。
 // 见 docs/packet-capture/CONTROL.md §2.1。
 
+/// 一台 WireGuard 设备的监听：它的密钥文件（格式是引擎自己的，见 `WireGuardKeys`）+ UDP 端口。
+/// 桥按密钥文件名认设备（docs/packet-capture/WIREGUARD-DEVICES.md §4）。
+struct WireGuardListener: Equatable, Sendable {
+    var keyFile: String
+    var port: UInt16
+}
+
 /// 引擎的监听组合。由「配置」页的开关决定，变了就要重启引擎（监听地址只能在启动时定）。
 struct EngineListeners: Equatable, Sendable {
     /// HTTP 代理端口；SOCKS 在它 + 2。
     var port: UInt16
     /// HTTP 代理听 `0.0.0.0`（「手动代理」或「给其他设备装证书」开着），否则只听 `127.0.0.1`。
     var lan: Bool
-    /// WireGuard 的 UDP 端口；nil = 不开。
-    var wireguardPort: UInt16?
+    /// 每台 WireGuard 设备一个监听（按设备表的顺序）；WireGuard 开关关着 = 空。
+    var wireguard: [WireGuardListener] = []
 
     var socksPort: UInt16 { Self.neighbour(of: port, offset: 2) }
 
-    /// 传给引擎的 `--mode …` 参数。`keyFile` 是 WireGuard 的密钥文件（格式是引擎自己的，见 `WireGuardKeys`）。
-    func modeArguments(keyFile: String) -> [String] {
+    /// 传给引擎的 `--mode …` 参数。
+    var modeArguments: [String] {
         var arguments = [
             "--mode", "regular@\(lan ? "0.0.0.0" : "127.0.0.1"):\(port)",
             // SOCKS5 永远只听本机：苹果平台的 WebSocket 只走系统的 SOCKS 代理，「本机」把系统的 SOCKS 指到这里。
             "--mode", "socks5@127.0.0.1:\(socksPort)",
         ]
-        if let wireguardPort {
-            arguments += ["--mode", "wireguard:\(keyFile)@\(wireguardPort)"]
+        for listener in wireguard {
+            arguments += ["--mode", "wireguard:\(listener.keyFile)@\(listener.port)"]
         }
         return arguments
     }

@@ -29,6 +29,8 @@ struct TCPConnection: Identifiable, Equatable, Sendable {
 
     let id: UUID
     var client: String?
+    /// 经 WireGuard 来的：是哪台设备（设备 id）。
+    var wireguardID: String?
     var host: String
     var port: Int
     var sni: String?
@@ -51,9 +53,10 @@ struct TCPConnection: Identifiable, Equatable, Sendable {
     var serverPrefix = Data()
     var firstSpeaker: TCPProtocol.Input.Side?
 
-    init(id: UUID, client: String?, host: String, port: Int, sni: String?, startedAt: Date) {
+    init(id: UUID, client: String?, wireguardID: String? = nil, host: String, port: Int, sni: String?, startedAt: Date) {
         self.id = id
         self.client = client
+        self.wireguardID = wireguardID
         self.host = host
         self.port = port
         self.sni = sni
@@ -116,8 +119,8 @@ struct TCPLog: Sendable {
         for event in events {
             switch event {
             case .tcpOpen(let open):
-                let connection = TCPConnection(id: open.id, client: open.client, host: open.host, port: open.port,
-                                               sni: open.sni, startedAt: open.startedAt)
+                let connection = TCPConnection(id: open.id, client: open.client, wireguardID: open.wireguard,
+                                               host: open.host, port: open.port, sni: open.sni, startedAt: open.startedAt)
                 if let index = index(of: open.id) { connections[index] = connection } else { connections.append(connection) }
                 changed = true
             case .tcpData(let data):
@@ -143,6 +146,14 @@ struct TCPLog: Sendable {
 
     mutating func removeAll() {
         connections.removeAll()
+    }
+
+    /// 删掉符合条件的连接，返回有没有删掉。
+    @discardableResult
+    mutating func removeAll(where shouldRemove: (TCPConnection) -> Bool) -> Bool {
+        let before = connections.count
+        connections.removeAll(where: shouldRemove)
+        return connections.count != before
     }
 
     /// 数据几乎总是落在最近的几条上，从尾部找。

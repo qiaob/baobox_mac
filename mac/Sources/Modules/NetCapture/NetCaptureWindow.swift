@@ -73,6 +73,12 @@ final class NetCaptureWindowState: ObservableObject {
     @Published var tab: NetCaptureTab = .config
     /// 「配置」页左边选中的那一项。放在这里：切到别的标签页再回来还是它。
     @Published var configItem: NetCaptureConfigItem = .mac
+    /// WireGuard 设备的小窗（添加 / 看二维码 / 改名）。挂在根视图上：设备栏右键改名时也用它。
+    @Published var wireguardDialog: WireGuardDialog?
+    /// 等用户确认删除的那台 WireGuard 设备。
+    @Published var wireguardDeleteID: String?
+    /// 配置页设备列表里高亮的那一台（设备栏右键「在配置页里管理…」跳过去时选中它）。
+    @Published var focusedWireGuardDevice: String?
     private init() {}
 }
 
@@ -183,6 +189,11 @@ struct NetCaptureRootView: View {
         .sheet(isPresented: $showMockRules) {
             MockRulesSheet { showMockRules = false }
         }
+        // WireGuard 设备的小窗与删除确认（配置页、设备栏右键都从这里弹）。
+        .sheet(item: $windowState.wireguardDialog) { dialog in
+            WireGuardDeviceSheet(dialog: dialog) { windowState.wireguardDialog = nil }
+        }
+        .wireguardDeleteConfirmation()
         .onAppear {
             session.refreshTrust()
             mockRules.load()
@@ -541,16 +552,16 @@ struct NetCaptureRootView: View {
                         clearSelection()
                     }
                     ForEach(store.devices) { device in
-                        sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
-                                   selected: filter.device == device.ip && filter.host == nil,
-                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "network") {
+                        sidebarRow(title: device.label, count: counts.byDevice[device.key] ?? 0,
+                                   selected: filter.device == device.key && filter.host == nil,
+                                   icon: NetCaptureDevice.symbol(device.key)) {
                             store.updateFilter {
-                                $0.device = device.ip
+                                $0.device = device.key
                                 $0.host = nil
                             }
                             clearSelection()
                         }
-                        .contextMenu { deviceMenu(ip: device.ip) }
+                        .contextMenu { deviceMenu(key: device.key) }
                     }
 
                     Text("netcapture.sidebar.hosts")
@@ -623,22 +634,45 @@ struct NetCaptureRootView: View {
         .buttonStyle(.plain)
     }
 
+    /// 设备栏右键。隧道设备：重命名（改设备表里的名字，配置页一起变）、清空、在配置页里管理；没有「屏蔽」（隧道设备不走「允许」）。
+    /// 局域网设备和本机：重命名（别名）、清空、屏蔽（本机不能屏蔽）。
     @ViewBuilder
-    private func deviceMenu(ip: String) -> some View {
-        Button {
-            renameText = store.alias(ip: ip) ?? ""
-            renameIP = ip
-        } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+    private func deviceMenu(key: String) -> some View {
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            if WireGuardDeviceStore.shared.device(id: id) != nil {
+                Button {
+                    windowState.wireguardDialog = .rename(deviceID: id)
+                } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+            }
+            clearDeviceButton(key: key)
+            Divider()
+            Button {
+                windowState.focusedWireGuardDevice = id
+                windowState.configItem = .wireguard
+                windowState.tab = .config
+            } label: { Label("netcapture.device.manage", systemImage: "lock.shield") }
+        } else {
+            Button {
+                renameText = store.alias(ip: key) ?? ""
+                renameIP = key
+            } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+            clearDeviceButton(key: key)
+            if !FlowStore.isLoopback(key), key != NetCaptureEnv.unknownDeviceKey {
+                Button(role: .destructive) {
+                    engine.deny(device: key)
+                } label: { Label("netcapture.device.block", systemImage: "hand.raised") }
+            }
+        }
+    }
+
+    /// 「清空这台设备的包」：HTTP 和 TCP 两页里这台的都清掉。
+    private func clearDeviceButton(key: String) -> some View {
         Button(role: .destructive) {
-            store.clearDevice(ip: ip)
-            if store.filter.device == ip { store.updateFilter { $0.device = nil } }
+            store.clearDevice(key: key)
+            tcp.clearDevice(key: key)
+            if store.filter.device == key { store.updateFilter { $0.device = nil } }
             clearSelection()
         } label: { Label("netcapture.device.clear", systemImage: "trash") }
-        if !FlowStore.isLoopback(ip), ip != NetCaptureEnv.unknownDeviceKey {
-            Button(role: .destructive) {
-                engine.deny(device: ip)
-            } label: { Label("netcapture.device.block", systemImage: "hand.raised") }
-        }
     }
 
     private var renameSheet: some View {

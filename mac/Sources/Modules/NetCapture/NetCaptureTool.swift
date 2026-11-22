@@ -22,6 +22,8 @@ final class NetCaptureTool: ToolModule {
         NetCaptureEnv.registerDefaults()
         // Mock 规则在后台读进来，引擎起来时要发给它（docs/packet-capture/TOOLS.md §4）。
         MockRuleStore.shared.load()
+        // WireGuard 设备表在后台读进来；首次启动新版本时把原来那一份密钥迁成第一台设备（docs/packet-capture/WIREGUARD-DEVICES.md §3）。
+        WireGuardDeviceStore.shared.load()
         // 上次崩溃时系统代理可能还指着已经不存在的引擎，那样整机断网；启动时补一次还原。
         DispatchQueue.global(qos: .utility).async {
             SystemProxyController.restoreIfLeftover()
