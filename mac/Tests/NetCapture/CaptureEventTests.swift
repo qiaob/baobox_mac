@@ -79,10 +79,10 @@ final class CaptureEventTests: XCTestCase {
     func testTLSDeviceErrorAndWebSocket() {
         XCTAssertEqual(
             CaptureEvent.parse(line: line(#"{"event":"tls","client":"192.168.0.9","host":"www.wikipedia.org","reason":"handshake_failed"}"#)),
-            .tls(client: "192.168.0.9", host: "www.wikipedia.org", reason: .handshakeFailed))
+            .tls(client: "192.168.0.9", wireguard: nil, host: "www.wikipedia.org", reason: .handshakeFailed))
         XCTAssertEqual(
             CaptureEvent.parse(line: line(#"{"event":"tls","client":"127.0.0.1","host":"example.com","reason":"out_of_scope"}"#)),
-            .tls(client: "127.0.0.1", host: "example.com", reason: .outOfScope))
+            .tls(client: "127.0.0.1", wireguard: nil, host: "example.com", reason: .outOfScope))
         XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"device","client":"192.168.0.9"}"#)),
                        .device(client: "192.168.0.9"))
 
@@ -437,7 +437,7 @@ final class CaptureControlEventTests: XCTestCase {
 
     func testDecryptOffReason() {
         XCTAssertEqual(CaptureEvent.parse(line: line(#"{"event":"tls","client":"10.0.0.1","host":"x.com","reason":"decrypt_off"}"#)),
-                       .tls(client: "10.0.0.1", host: "x.com", reason: .decryptOff))
+                       .tls(client: "10.0.0.1", wireguard: nil, host: "x.com", reason: .decryptOff))
     }
 
     func testNewCommands() {
@@ -448,5 +448,44 @@ final class CaptureControlEventTests: XCTestCase {
         XCTAssertEqual(text(.pagePort(9091)), "{\"cmd\":\"page_port\",\"port\":9091}\n")
         XCTAssertEqual(text(.scope(.off)), "{\"cmd\":\"scope\",\"domains\":[],\"mode\":\"none\"}\n")
         XCTAssertEqual(DecryptScope.off.json, #"{"domains":[],"mode":"none"}"#)
+    }
+}
+
+/// WireGuard 多台设备：桥在经隧道来的事件上多带一个 `"wg": "<设备 id>"`（docs/packet-capture/WIREGUARD-DEVICES.md §4）。
+final class WireGuardDeviceEventTests: XCTestCase {
+
+    private func line(_ json: String) -> Data { Data(("BAOBOX " + json).utf8) }
+    private let wg = "6f1c2a9e-0b7d-4c55-9a3e-2f8d1e4b7c60"
+    private let id = "be704a7c-d720-4793-9f07-39bd4f54a61f"
+
+    func testRequestTLSAndTCPOpenCarryTheDevice() throws {
+        guard case .request(let request)? = CaptureEvent.parse(line: line(
+            #"{"event":"request","id":"\#(id)","client":"10.0.0.1","wg":"\#(wg)","method":"GET","host":"example.com"}"#))
+        else { return XCTFail("not a request") }
+        XCTAssertEqual(request.client, "10.0.0.1")
+        XCTAssertEqual(request.wireguard, wg)
+
+        XCTAssertEqual(CaptureEvent.parse(line: line(
+            #"{"event":"tls","client":"10.0.0.1","wg":"\#(wg)","host":"x.com","reason":"handshake_failed"}"#)),
+                       .tls(client: "10.0.0.1", wireguard: wg, host: "x.com", reason: .handshakeFailed))
+
+        guard case .tcpOpen(let open)? = CaptureEvent.parse(line: line(
+            #"{"event":"tcp_open","id":"\#(id)","client":"10.0.0.1","wg":"\#(wg)","host":"139.95.11.88","port":5222}"#))
+        else { return XCTFail("not a tcp_open") }
+        XCTAssertEqual(open.wireguard, wg)
+    }
+
+    /// 不是隧道来的不带 `wg`；带了个不像设备 id 的（不是小写 UUID）当作没有。
+    func testMissingOrOddDeviceIsNil() throws {
+        guard case .request(let plain)? = CaptureEvent.parse(line: line(
+            #"{"event":"request","id":"\#(id)","client":"192.168.0.23","method":"GET","host":"example.com"}"#))
+        else { return XCTFail() }
+        XCTAssertNil(plain.wireguard)
+        for odd in [#""../../etc""#, #""6F1C2A9E-0B7D-4C55-9A3E-2F8D1E4B7C60""#, "42", "null", #""""#] {
+            guard case .tcpOpen(let open)? = CaptureEvent.parse(line: line(
+                #"{"event":"tcp_open","id":"\#(id)","wg":\#(odd),"host":"1.2.3.4","port":1}"#))
+            else { return XCTFail(odd) }
+            XCTAssertNil(open.wireguard, odd)
+        }
     }
 }

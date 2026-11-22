@@ -47,6 +47,9 @@ protocol ToolModule: AnyObject {
     /// 用到模型的功能，默认没有。设置的「AI」页按工具分组列出、每个功能选一个模型（同 `hotkeys()` 之于快捷键页），
     /// 见 docs/ai-service/DESIGN.md §3.3。每次现建（文案跟着当前语言）。
     func aiFeatures() -> [AIFeatureDefinition]
+    /// 二级菜单最后那项「<工具>设置…」点了做什么。nil（默认）= 打开设置窗口里这个工具的那一页；
+    /// 有自己窗口、设置都在窗口里的工具（网络抓包）给一个动作，打开自己的窗口（docs/packet-capture/CONFIG-LAYOUT.md §3）。
+    var settingsAction: (@MainActor () -> Void)? { get }
     /// 这个模块替框架承担的呈现角色，默认没有（目前只有桌面宠物交出通知呈现端、浮窗挂靠点与休息画面主角）。框架在调任何模块的 `activate()` 之前
     /// 收集一次、装进 `PresentationHub`，与注册顺序无关，之后不再收集。见 docs/notify-core/DESIGN.md §3.3。
     func presentationRoles() -> PresentationRoles
@@ -57,4 +60,5 @@ extension ToolModule {
     func statusMenuHeaderItems() -> [NSMenuItem] { [] }
     func aiFeatures() -> [AIFeatureDefinition] { [] }
     func presentationRoles() -> PresentationRoles { PresentationRoles() }
+    var settingsAction: (@MainActor () -> Void)? { nil }
 }

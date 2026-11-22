@@ -28,6 +28,8 @@ final class NetCaptureEngine: ObservableObject {
     @Published private(set) var pendingDevices: [String] = []
     /// 引擎报告的版本号（就绪后才有）。
     @Published private(set) var engineVersion = ""
+    /// 这次运行用的正文上限（设置改了要下次启动才生效；MCP 的 get_config 报此刻在用的值）。
+    private(set) var runningBodyCap: Int?
 
     /// 用户允许过的设备。只在这次 App 运行期间有效，不存盘；引擎重启（切换监听范围）时带过去。
     private var allowedDevices: Set<String> = []
@@ -52,6 +54,10 @@ final class NetCaptureEngine: ObservableObject {
 
     /// 等引擎就绪的上限。正常约 1 秒。
     private static let startTimeout: TimeInterval = 8
+    /// 端口被占时等多久再试一次（上一个引擎正常 1 秒内退完）。
+    private static let portRetryDelay: TimeInterval = 1.5
+    /// 这一轮启动是否已经因为端口被占重试过（只重试一次）。
+    private var retriedAfterPortInUse = false
 
     private init() {}
 
@@ -59,7 +65,12 @@ final class NetCaptureEngine: ObservableObject {
 
     /// 启动引擎。已经在启动或运行就忽略（要换监听组合，用 `restart`）。
     func start(listeners: EngineListeners, flags: BridgeFlags) {
+        start(listeners: listeners, flags: flags, isRetry: false)
+    }
+
+    private func start(listeners: EngineListeners, flags: BridgeFlags, isRetry: Bool) {
         guard !isActive else { return }
+        if !isRetry { retriedAfterPortInUse = false }
         guard NetCaptureEnv.engineUnavailable == nil, let script = NetCaptureEnv.bridgeScriptURL else {
             state = .failed(L("netcapture.error.engineMissing"))
             return
@@ -93,11 +104,12 @@ final class NetCaptureEngine: ObservableObject {
         let confDir = NetCaptureEnv.engineConfDir
         try? FileManager.default.createDirectory(at: confDir, withIntermediateDirectories: true)
         let bodyCap = NetCaptureEnv.bodyCap
+        runningBodyCap = bodyCap
 
         let process = Process()
         process.executableURL = NetCaptureEnv.engineURL
-        // 监听：HTTP 代理（听本机或局域网）、只听本机的 SOCKS5、开着时 WireGuard（docs/packet-capture/CONTROL.md §2.1）。
-        process.arguments = listening.modeArguments(keyFile: NetCaptureEnv.wireguardKeyURL.path) + [
+        // 监听：HTTP 代理（听本机或局域网）、只听本机的 SOCKS5、开着时每台 WireGuard 设备一个（docs/packet-capture/CONTROL.md §2.1）。
+        process.arguments = listening.modeArguments + [
             "--set", "confdir=\(confDir.path)",
             // 超过上限的正文直接流过去，不在引擎里攒着；这样的请求标「已截断」。
             "--set", "stream_large_bodies=\(bodyCap)",
@@ -219,15 +231,35 @@ final class NetCaptureEngine: ObservableObject {
         stdinHandle = nil
         reader = nil
         pendingDevices = []
+        // 端口被占多半是上一个引擎还没退完：重装或重启 App 之后、刚换过监听组合（`teardown` 给旧进程留了 1 秒）。
+        // 还在启动阶段就等一会儿再试一次，界面一直是「启动中」；第二次还不行才算失败。
+        if state == .starting, !retriedAfterPortInUse, Self.isPortInUse(message), let retryListeners = listeners {
+            retriedAfterPortInUse = true
+            let retryFlags = flags
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.portRetryDelay) {
+                MainActor.assumeIsolated {
+                    // 等的这段时间里有人停了或换了监听（generation 变了），就不再试。
+                    guard self.generation == finished, self.state == .starting else { return }
+                    self.state = .stopped
+                    self.start(listeners: retryListeners, flags: retryFlags, isRetry: true)
+                }
+            }
+            return
+        }
         let detail = Self.explain(message, port: listeners?.port ?? NetCaptureEnv.port)
         listeners = nil
         state = .failed(detail.isEmpty ? L("netcapture.error.engineExited \(Int(status))") : detail)
     }
 
     /// 把引擎的报错翻成人话。认得的只有「端口被占」，其余原样给最后一行。
-    private static func explain(_ stderr: String, port: UInt16) -> String {
+    /// 引擎的报错是不是「端口被占」。
+    private static func isPortInUse(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
-        if lower.contains("address already in use") || lower.contains("errno 48") {
+        return lower.contains("address already in use") || lower.contains("errno 48")
+    }
+
+    private static func explain(_ stderr: String, port: UInt16) -> String {
+        if isPortInUse(stderr) {
             // 引擎开了两个端口（代理、SOCKS），报错里写着是哪一个；认不出来就说代理端口。
             // 端口号当字符串传：按数字格式化会带千分位（「9,090」）。
             let busy = CaptureEngineLog.busyPort(in: stderr) ?? port
@@ -285,6 +317,8 @@ final class NetCaptureEngine: ObservableObject {
         }
         FlowStore.shared.apply(events)
         TCPStore.shared.apply(events)
+        // 配置页 WireGuard 设备的「最近活动」：要在两个列表落完之后看（响应、TCP 数据靠它们找回是哪台）。
+        WireGuardDeviceStore.shared.noteActivity(events)
     }
 }
 

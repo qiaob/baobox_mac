@@ -70,6 +70,8 @@ struct ReplayRequest: Equatable, Sendable {
     var headers: [HTTPHeader]
     /// 解压后的正文。长度、压缩、分块这几个头桥脚本会丢掉重算。
     var body: Data?
+    /// 重发的是哪一条（列表里那条的 id）。只留在 Baobox 这边（MCP 摘要里的 `[replay of <id>]`），不发给引擎。
+    var origin: UUID? = nil
 }
 
 /// 写进引擎标准输入的一条指令（一行 JSON）。

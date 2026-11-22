@@ -11,12 +11,18 @@ final class CaptureMCPServer: ObservableObject {
     static let shared = CaptureMCPServer()
 
     @Published private(set) var isRunning = false
+    /// 此刻在听的端口（设置里的端口改了要关掉再打开才生效）。
+    private(set) var listeningPort: UInt16?
 
     private var listener: NWListener?
+    /// 取消了、还没关完的那一个（端口还占着）。
+    private var stopping: NWListener?
+    /// 关完它就起新的（刚关又开）。
+    private var startWhenStopped = false
     private let queue = DispatchQueue(label: "com.baobox.netcapture.mcp")
 
     /// 注册进 AI 配置时用的服务器名。
-    static let serverName = "baobox-netcapture"
+    nonisolated static let serverName = "baobox-netcapture"
 
     private init() {}
 
@@ -25,36 +31,95 @@ final class CaptureMCPServer: ObservableObject {
     // MARK: - 启停
 
     func start() {
-        guard !isRunning else { return }
+        // 已经有监听器（在跑或正在起来）就不再起一个。
+        guard listener == nil else { return }
+        // 上一个还在关（取消是异步的，端口还占着）：等它关完再起，免得刚关又开时新的绑不上端口。
+        if stopping != nil {
+            startWhenStopped = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                // 兜底：迟迟收不到 cancelled 也照起。
+                guard let self, self.startWhenStopped else { return }
+                self.startWhenStopped = false
+                self.stopping = nil
+                self.start()
+            }
+            return
+        }
+        let port = NetCaptureEnv.mcpPort
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         // 仅绑 loopback（127.0.0.1），不对外暴露。
-        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1",
-                                                           port: NWEndpoint.Port(rawValue: NetCaptureEnv.mcpPort)!)
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return }
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: endpointPort)
         guard let listener = try? NWListener(using: params) else { return }
         self.listener = listener
+        listeningPort = port
 
-        listener.stateUpdateHandler = { [weak self] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    switch state {
-                    case .ready: self?.isRunning = true
-                    case .failed, .cancelled: self?.isRunning = false
-                    default: break
-                    }
+                    guard let self, let listener else { return }
+                    self.handleListener(listener, state: state)
                 }
             }
         }
         listener.newConnectionHandler = { connection in
-            MCPHTTPSession(connection: connection, queue: DispatchQueue(label: "com.baobox.netcapture.mcpconn")).start()
+            MCPHTTPSession(connection: connection, queue: DispatchQueue(label: "com.baobox.netcapture.mcpconn"), port: port).start()
         }
         listener.start(queue: queue)
     }
 
+    /// 监听器的状态变化。只认现在这一个：停掉又打开时，旧监听器晚到的 cancelled / failed 不能把新的状态改掉。
+    private func handleListener(_ changed: NWListener, state: NWListener.State) {
+        if changed === stopping {
+            if case .cancelled = state {
+                stopping = nil
+                if startWhenStopped {
+                    startWhenStopped = false
+                    start()
+                }
+            }
+            return
+        }
+        guard changed === listener else { return }
+        switch state {
+        case .ready:
+            isRunning = true
+        case .failed:
+            // 起不来（端口被占）：这次开关显示关；记住的 `netcapture.mcpEnabled` 不改，下次启动再试。
+            // 只有用户自己关掉才记成关（`setEnabled(false)`）。
+            listener = nil
+            listeningPort = nil
+            isRunning = false
+            stopping = changed
+            changed.cancel()
+        case .cancelled:
+            isRunning = false
+        default:
+            break
+        }
+    }
+
     func stop() {
-        listener?.cancel()
+        startWhenStopped = false
+        if let listener {
+            stopping = listener
+            listener.cancel()
+        }
         listener = nil
+        listeningPort = nil
         isRunning = false
+    }
+
+    /// 配置页「本地 MCP」的开关：开 / 关并记住（下次启动照这个来）。
+    func setEnabled(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: NetCaptureEnv.Keys.mcpEnabled)
+        on ? start() : stop()
+    }
+
+    /// App 启动时：上次开着就接着开。
+    func startIfEnabled() {
+        if UserDefaults.standard.bool(forKey: NetCaptureEnv.Keys.mcpEnabled) { start() }
     }
 
     // MARK: - 注册进 Claude Code / Codex（显式动作，后台线程调用）
@@ -202,11 +267,14 @@ final class CaptureMCPServer: ObservableObject {
 private final class MCPHTTPSession: @unchecked Sendable {
     private let connection: NWConnection
     private let queue: DispatchQueue
+    /// 服务听的端口：`Host` 头只认 `127.0.0.1:<它>` / `localhost:<它>`。
+    private let port: UInt16
     private var buffer = Data()
 
-    init(connection: NWConnection, queue: DispatchQueue) {
+    init(connection: NWConnection, queue: DispatchQueue, port: UInt16) {
         self.connection = connection
         self.queue = queue
+        self.port = port
     }
 
     func start() {
@@ -218,8 +286,8 @@ private final class MCPHTTPSession: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             if let data { self.buffer.append(data) }
             if error != nil { self.connection.cancel(); return }
-            if let (headers, body) = self.tryParseRequest() {
-                self.handle(headers: headers, body: body)
+            if let (method, headers, body) = self.tryParseRequest() {
+                self.handle(method: method, headers: headers, body: body)
             } else if isComplete {
                 self.connection.cancel()
             } else {
@@ -228,13 +296,15 @@ private final class MCPHTTPSession: @unchecked Sendable {
         }
     }
 
-    /// 尝试解析完整 HTTP 请求（headers 到 \r\n\r\n，body 满足 Content-Length）。不完整返回 nil。
-    private func tryParseRequest() -> (headers: [String: String], body: Data)? {
+    /// 尝试解析完整 HTTP 请求（请求行、headers 到 \r\n\r\n，body 满足 Content-Length）。不完整返回 nil。
+    private func tryParseRequest() -> (method: String, headers: [String: String], body: Data)? {
         guard let range = buffer.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) else { return nil }
         let headerText = String(data: buffer.subdata(in: buffer.startIndex..<range.lowerBound),
                                 encoding: .isoLatin1) ?? ""
+        let lines = headerText.components(separatedBy: "\r\n")
+        let method = lines.first?.split(separator: " ").first.map(String.init) ?? ""
         var headers: [String: String] = [:]
-        for line in headerText.components(separatedBy: "\r\n").dropFirst() {
+        for line in lines.dropFirst() {
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = String(line[line.startIndex..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
@@ -245,10 +315,15 @@ private final class MCPHTTPSession: @unchecked Sendable {
         let available = buffer.distance(from: bodyStart, to: buffer.endIndex)
         guard available >= length else { return nil }
         let end = buffer.index(bodyStart, offsetBy: length)
-        return (headers, buffer.subdata(in: bodyStart..<end))
+        return (method, headers, buffer.subdata(in: bodyStart..<end))
     }
 
-    private func handle(headers: [String: String], body: Data) {
+    private func handle(method httpMethod: String, headers: [String: String], body: Data) {
+        // 网页发来的（带 Origin、Host 不对、不是 JSON 的 POST、预检）一律拒绝。
+        if let rejection = MCPRequestGate.check(method: httpMethod, headers: headers, port: port) {
+            respond(status: rejection.status, json: ["error": rejection.reason])
+            return
+        }
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
             respond(status: "400 Bad Request", json: ["error": "invalid JSON"])
             return
@@ -317,7 +392,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     private static let baseToolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = client LAN IP (source device), get it from list_devices. Each summary ends with @<clientIP>.",
+            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key> and its start time (ISO 8601), and requests sent by replay_flow (or Replay in the window) with [replay of <original id>]. Rows that were not decrypted carry [passthrough: <reason>] (handshake_failed, out_of_scope, decrypt_off); get_flow explains the reason.",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
@@ -335,7 +410,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "search_flows",
-            "description": "Search flows whose URL or body contains the query. Optional device = client LAN IP (from list_devices) to restrict to one device.",
+            "description": "Search flows whose URL or body contains the query. Optional device = device key (from list_devices) to restrict to one device.",
             "inputSchema": ["type": "object",
                             "properties": ["query": ["type": "string"], "limit": ["type": "integer"],
                                            "device": ["type": "string"]],
@@ -343,7 +418,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "list_devices",
-            "description": "List capturing source devices (each phone / this Mac) keyed by client LAN IP, with flow count and last activity. Use a device's ip as the `device` argument to list_flows / search_flows.",
+            "description": "List capturing source devices with flow count and last activity. Each line: device key · type (This Mac / LAN / WireGuard) · name if it has one · flows · last activity. The key is wg:<id> for a WireGuard device (one per phone, named on the Config tab), otherwise the client IP. Use the key as the `device` argument to list_flows / search_flows / list_tcp_connections.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
@@ -394,7 +469,7 @@ enum MCPTools {
                 filtered = filtered.filter { $0.statusCode == status || $0.statusClass == status }
             }
             if let device = arguments["device"] as? String, !device.isEmpty {
-                filtered = filtered.filter { ($0.clientIP ?? NetCaptureEnv.unknownDeviceKey) == device }
+                filtered = filtered.filter { $0.deviceKey == device }
             }
             let limit = arguments["limit"] as? Int ?? 50
             return summaries(Array(filtered.suffix(limit)))
@@ -406,8 +481,7 @@ enum MCPTools {
             let limit = arguments["limit"] as? Int ?? 50
             let device = arguments["device"] as? String
             let matched = flows.filter { flow in
-                if let device, !device.isEmpty,
-                   (flow.clientIP ?? NetCaptureEnv.unknownDeviceKey) != device { return false }
+                if let device, !device.isEmpty, flow.deviceKey != device { return false }
                 if flow.url.lowercased().contains(query) { return true }
                 if let b = flow.responseBody, let t = String(data: b, encoding: .utf8),
                    t.lowercased().contains(query) { return true }
@@ -472,20 +546,22 @@ enum MCPTools {
 
     private static func summaries(_ flows: [Flow]) -> String {
         if flows.isEmpty { return "(no flows)" }
+        let iso = ISO8601DateFormatter()
         return flows.map { flow in
             let status = flow.statusCode.map(String.init) ?? "-"
             let dur = flow.durationMs.map { "\($0)ms" } ?? "-"
-            let dec = flow.decrypted ? "" : " [passthrough]"
-            let dev = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            let dec = MCPPassthrough.mark(decrypted: flow.decrypted, reason: flow.undecryptedReason?.rawValue)
+            let dev = flow.deviceKey
             return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec) @\(dev)"
+                + " \(iso.string(from: flow.startedAt))" + replayMark(flow)
         }.joined(separator: "\n")
     }
 
-    /// 按 clientIP 聚合设备列表（读快照 + UserDefaults 别名），供 `list_devices`。
+    /// 按设备键聚合设备列表（读快照 + 设备表的名字 / 别名），供 `list_devices`。
     private static func devices(_ flows: [Flow]) -> String {
         var buckets: [String: (count: Int, last: Date)] = [:]
         for flow in flows {
-            let ip = flow.clientIP ?? NetCaptureEnv.unknownDeviceKey
+            let ip = flow.deviceKey
             var bucket = buckets[ip] ?? (0, Date.distantPast)
             bucket.count += 1
             if flow.startedAt > bucket.last { bucket.last = flow.startedAt }
@@ -494,24 +570,49 @@ enum MCPTools {
         if buckets.isEmpty { return "(no devices)" }
         let iso = ISO8601DateFormatter()
         let sorted = buckets.sorted { $0.value.last > $1.value.last }
-        return sorted.map { ip, bucket in
-            "\(ip) \(deviceLabel(ip)) · \(bucket.count) flows · \(iso.string(from: bucket.last))"
+        return sorted.map { key, bucket in
+            let (kind, name) = deviceKind(key)
+            return MCPDeviceLine.format(key: key, kind: kind, name: name, count: bucket.count, last: iso.string(from: bucket.last))
         }.joined(separator: "\n")
     }
 
-    /// MCP 侧设备名（英文，AI 面向）：别名 → This Mac（回环）→ WireGuard 隧道里的手机 → IP。
-    private static func deviceLabel(_ ip: String) -> String {
-        if ip == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
-        if let alias = NetCaptureEnv.deviceAlias(for: ip) { return alias }
-        if ip == "127.0.0.1" || ip == "::1" { return "This Mac" }
-        if ip == WireGuardKeys.clientAddress { return "WireGuard device" }
-        return ip
+    /// 设备的类型和名字（没起名字是 nil，不重复 IP）。
+    private static func deviceKind(_ key: String) -> (MCPDeviceLine.Kind, String?) {
+        if key == NetCaptureEnv.unknownDeviceKey { return (.unknown, nil) }
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            return (.wireguard, WireGuardNameSnapshot.shared.name(id: id) ?? "(deleted)")
+        }
+        let alias = NetCaptureEnv.deviceAlias(for: key)
+        return (key == "127.0.0.1" || key == "::1" ? .thisMac : .lan, alias)
+    }
+
+    /// MCP 侧设备名（英文，AI 面向）：WireGuard 设备 → 设备表里的名字（删了是 (deleted WireGuard device)）；
+    /// 其余：别名 → This Mac（回环）→ IP。
+    static func deviceLabel(_ key: String) -> String {
+        if key == NetCaptureEnv.unknownDeviceKey { return "(unknown)" }
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            return WireGuardNameSnapshot.shared.name(id: id).map { "WireGuard: \($0)" } ?? "(deleted WireGuard device)"
+        }
+        if let alias = NetCaptureEnv.deviceAlias(for: key) { return alias }
+        if key == "127.0.0.1" || key == "::1" { return "This Mac" }
+        return key
+    }
+
+    /// 重发出来的那一行：` [replay of <原 id>]`，不知道原 id 就 ` [replay]`（界面上标「重发」用的同一个字段）。
+    private static func replayMark(_ flow: Flow) -> String {
+        guard flow.isReplay else { return "" }
+        return flow.replayOf.map { " [replay of \($0.uuidString)]" } ?? " [replay]"
     }
 
     private static func detail(_ flow: Flow) -> String {
         var lines: [String] = ["\(flow.method) \(flow.url)"]
+        if flow.isReplay { lines.append("Replay of: " + (flow.replayOf?.uuidString ?? "(unknown flow)")) }
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
-        lines.append("Device: \(flow.clientIP ?? NetCaptureEnv.unknownDeviceKey)")
+        lines.append("Device: \(flow.deviceKey) (\(deviceLabel(flow.deviceKey)))")
+        lines.append("Started: \(ISO8601DateFormatter().string(from: flow.startedAt))")
+        if let why = MCPPassthrough.detailLine(decrypted: flow.decrypted, reason: flow.undecryptedReason?.rawValue) {
+            lines.append(why)
+        }
         lines.append("-- Request headers --")
         for h in flow.requestHeaders { lines.append("\(h.name): \(MCPRedaction.value(name: h.name, value: h.value))") }
         if let body = flow.requestBody, let text = String(data: body, encoding: .utf8) {

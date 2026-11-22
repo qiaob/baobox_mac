@@ -99,6 +99,8 @@
 
 ### 2.4 WireGuard
 
+> 2026-11-22 起是**多台设备**：一台一份密钥、一个 UDP 端口、一张二维码，卡片上只列设备，二维码在「添加设备」的小窗里出现，设备栏按名字显示。下面写的单份密钥、单个端口、`10.0.0.1` 叫「WireGuard 设备」、设置页「重新生成 WireGuard 密钥」都是这之前的做法，现在以 `WIREGUARD-DEVICES.md` 为准（数据 §3，引擎与桥 §4，设备栏 §5，卡片 §6，和方案不一样的地方 §10）。
+
 总开关开着时卡片上直接显示二维码；关着时显示占位（「打开后显示二维码」），不显示密钥相关的任何东西。
 
 **已经在用户的 vivo 手机（Android）上验证过**（2026-11-21，临时引擎 `--mode wireguard:<密钥文件>@51820` + 桥 + 探针脚本，约 9 分钟）：920 条连接、631 次 DNS 查询进来，无报错；微信的 `mmtls` 请求、输入法的 WebSocket 握手、5 条原始 TCP 这些不认代理的流量都到了；HTTPS 大多没解密（手机没装当前证书 + App 不信任用户证书），握手失败后自动放行。隧道里客户端地址是 `10.0.0.1`，DNS 是 `10.0.0.53`。**iPhone 没试过。**
@@ -121,7 +123,7 @@
 - 端点用 IP（用户的决定）。卡片上一句话：Mac 的 IP 变了要重新扫码，或在 WireGuard App 里改端点；Baobox 没开着这个开关时隧道不通，手机会上不了网，记得在 App 里关隧道。
 - 端口 `netcapture.wireguardPort`，默认 51820（UDP），设置页可改。设置页另有「重新生成 WireGuard 密钥」（确认框写明扫过的隧道会失效）。
 - 隧道进来的设备**不走「允许」**：有密钥才连得上。桥按接入的监听认（`proxy_mode` 是 `wireguard`），不按地址段认 —— 家里的 Wi-Fi 也可能是 `10.0.0.x`，按地址认会把这样的局域网设备误放行。设备栏里 `10.0.0.1` 默认叫「WireGuard 设备」。
-- 一份配置 = 一个对端，同一时间一台设备。多设备不在这一版。
+- 一份配置 = 一个对端，同一时间一台设备。多台设备见 `WIREGUARD-DEVICES.md`（一台一份配置、一个监听）。
 - 纯逻辑在 `Logic/WireGuardConfig.swift`（密钥文件读写与生成、公钥推导、配置文本），有单元测试（固定私钥对照已知公钥、文本逐行对照）。
 - 桥：隧道里的 UDP、DNS 原样通过，不要拦；手机经隧道访问 `http://<Mac 的 IP>:<配置页端口>/` 要到得了配置页且不进列表 —— 桥收 `baobox_lan_ip`，`is_this_machine` 把 Mac 的局域网 IP 也算作「这台机器」（经代理以本机身份打开、按 Mac 的 IP 访问配置页，已实测不进列表；经真隧道没测，见 `TECH_DESIGN.md` §1.v）。
 
@@ -130,6 +132,8 @@
 三样东西：
 
 1. **这台 Mac 的信任状态**：已信任 / 「安装并信任」按钮（现有的 `session.installCert()`）。
+> 握手失败自动放行（2026-11-22 起）：失败表按「设备 + 域名 + 客户端 TLS 指纹」记，不再只按（设备，域名）—— 同一台 Android 上浏览器信任 Baobox 证书、App 多半不信任，谁先来不该决定另一个解不解得开。指纹对应的是 TLS 库不是 App：同一个网络库的 App 共用一个，App 里的 WebView 和浏览器共用一个，所以仍可能互相影响，只是范围小得多。见 `TLS-FINGERPRINT.md`。
+
 2. **解密 HTTPS** 开关（`netcapture.decryptHTTPS`，默认开）+「范围…」（打开设置页的抓包那一栏）。关 = 桥的解密范围用新的 `mode: "none"`：`tls_clienthello` 里一律 `ignore_connection`，`tls` 事件的 reason 用 `decrypt_off`，列表里这种行的说明和「握手失败」区分开。连到引擎自己的 TLS（配置页的证书检测：直连代理端口时还没有目的地址；经隧道时目的地是 Mac 的 IP + 引擎的端口）不放行，否则证书检测会跟着失效。
 3. **给其他设备装证书** 总开关：开 = 配置页服务（`ConfigPageServer`）开着，卡片上显示二维码和地址（带扫码即放行的口令，现有的 `landingPageURL`）；关 = 配置页服务关。
 
@@ -141,7 +145,7 @@
 
 - **模拟器**：给 iOS 模拟器装证书（说明里写「需要打开『本机』」，没开时点了提示一句，不替用户开）；设置 Android 模拟器（adb 找到所有已启动的模拟器，代理设成 `10.0.2.2:<端口>` + 推证书；只要引擎在跑）。
 - **终端 / 脚本**：打开抓包终端；复制环境变量。
-- **Android USB**：列出 adb 设备（模拟器不在这里，在「模拟器」卡片里），一键设代理 + 推证书、清代理（现有手机面板里 Android 那部分搬过来）。代理指向 Mac 的局域网 IP，要「手动代理」开着；没开时点了提示一句，不替用户开（和模拟器卡片对「本机」的做法一样）。
+- **Android USB**：列出 adb 设备（模拟器不在这里，在「模拟器」卡片里），推证书、在手机上打开 Wi-Fi 设置；代理由人填进当前 Wi-Fi（2026-11-22 改，见 §12：原来是用 adb 设隐藏的全局代理）。
 
 现有的 `NetCapturePhoneSheet`、`NetCaptureDeviceSetup`、五张场景卡片、工具条上的两个来源开关都删掉，别留死代码和没人用的文案 key。
 
@@ -154,7 +158,7 @@
 ```
 
 - 新增筛选按钮 **WS**：只看 WebSocket（`Flow.isWebSocket`）。
-- 「⋯」里保留：MCP 开关、导出 HAR、设置。
+- 「⋯」里保留：MCP 开关、导出 HAR、设置。（2026-11-22 起只剩「导出 .har…」和「抓包设置…」（切到配置页），MCP 开关和设置页的内容都搬进了「配置」页，见 `CONFIG-LAYOUT.md`。）
 - 没有任何请求时：引擎在跑显示「正在抓包，等待请求…」；没在跑显示一句「到『配置』里打开要抓的来源」和一个跳过去的按钮。
 - WebSocket 消息的记录总开关：就是「本机」里的 WebSocket 开关吗？不是 —— 那个只管本机的 SOCKS。别的设备的 WebSocket 只要连接被解密就照常记录，不另设开关。
 
@@ -252,7 +256,7 @@
 
 ## 7. 这一批不做
 
-多台设备各用一份 WireGuard 配置；端点用 `.local` 名字；UDP / DNS 的显示；iPhone 的 WebSocket 走 SOCKS（用 WireGuard 就不需要了）；本机用系统网络扩展抓全部 TCP。自动代理（PAC）不动，仍在配置页的「高级」里。
+~~多台设备各用一份 WireGuard 配置~~（2026-11-22 做了，见 `WIREGUARD-DEVICES.md`）；端点用 `.local` 名字；UDP / DNS 的显示；iPhone 的 WebSocket 走 SOCKS（用 WireGuard 就不需要了）；本机用系统网络扩展抓全部 TCP。自动代理（PAC）不动，仍在配置页的「高级」里。
 
 **TCP 应用层消息的拆分不做**：按协议把字节流拆成一条条消息（长度头、分隔符……）要逐个协议写解析器，不在这一批。这一批只认协议（§4.3）、按连续的流显示（§4.2）。以后要做可以从格式简单的开始：MQTT（固定头 + 变长剩余长度）、Redis（RESP，按 `\r\n` 和长度前缀）。
 
@@ -291,3 +295,59 @@
 | 17 | 没写 | 桥收到一条 TCP 消息就删掉引擎里攒的旧消息 | 引擎会把整条连接的消息留到结束，长连接越攒越多 |
 | 18 | 没写 | 暂停时标签条下多一条提示和「继续」；本机卡片在证书没信任时多一行说明 | 一眼看清暂停是什么意思；第一次打开会弹验证框，先说一声 |
 | 19 | 没写 | 修了 MCP 服务从不应答的老问题 | 见 §6 |
+
+## 10. 本地 MCP 的六处修正（2026-11-22）
+
+对着用户正在用的 Baobox 把 21 个工具实测一遍后改的：
+
+| # | 问题 | 现在 |
+|---|---|---|
+| 1 | `allow_device` 任何 IP 都直接放行（`203.0.113.7` 没在等也回 `allowed`） | 只放行 `pending_devices` 里的；别的 IP 返回错误并列出此刻在等的（没有就写 `(none)`）。`deny_device` 照旧任何 IP 都能拒 |
+| 2 | `get_tcp_connection` 默认 `format: auto` 把二进制块整块转十六进制（4.6 KB 的 TLS 块 ≈ 18 KB 文字） | auto 下不像文本的块只给前 256 字节的十六进制，下一行 `[… N more bytes (binary; use format: hex to get all of it)]`；块开头是 TLS 记录的先标一行 `(TLS record: handshake)` / `(TLS record: application data, encrypted)`。`format: hex` 不变（每块仍最多 8 KB）。纯逻辑在 `Logic/MCPFormat.swift`（`MCPBlockText`） |
+| 3 | Mock 规则的头读出来是 `<redacted>`，AI 原样写回就把真实值盖成字面 `<redacted>` | `set_mock_rule` 收到值恰好是 `<redacted>` 的头，沿用这条规则里同名头（不分大小写、按出现顺序对应）原来的值；原来没有就不写入这个头，放进回复的 `errors`（`MCPHeaderRestore`） |
+| 4 | 重发出来的请求在摘要和详情里看不出是重发 | 摘要末尾 `[replay of <原 id>]`（不知道原 id 时 `[replay]`），`get_flow` 多一行 `Replay of: <原 id>`。原 id 在发重发时记下（界面的「重发」「编辑后重发」和 MCP 的 `replay_flow` 都记），不发给引擎 |
+| 5 | `set_config` 改了端口、引擎还没重启时，`get_config` 已经报新端口 | 引擎在跑时报它此刻在用的：`port`、`socks_port`、`config_page_port`（配置页服务开着时是它真正在听的端口）、`body_cap`、`mcp_port`（MCP 服务开着时是它在听的端口）、`config_page_url`；设置里改了、下次启动才生效的列在 `pending_next_start`（例 `{"port": 19690}`）。引擎没在跑时照旧报设置里的值。`wireguard_devices[].endpoint` 本来就按每台固定的端口报 |
+| 6 | `list_devices` 没起名的局域网设备写成 `192.168.0.9 192.168.0.9 · 1 flows` | 一行 = 设备键 · 类型（This Mac / LAN / WireGuard）· 名字（有才写）· 条数（1 flow / N flows）· 最近一次 |
+| 7 | （独立审查 #1）网页能用 `fetch(..., {mode: "no-cors"})` 发不触发预检的 POST 调写工具，配合 DNS 重绑定还能读回复（WireGuard 配置里有私钥） | 带 `Origin` 头的一律 403（Claude Code / Codex 不带）；`Host` 只认 `127.0.0.1:<端口>` / `localhost:<端口>`，别的 403；只收 POST（OPTIONS 预检、GET 都 405，不回 CORS 头）；POST 的 `Content-Type` 不是 `application/json` 回 415。判断在 `Logic/MCPFormat.swift` 的 `MCPRequestGate`，有单元测试 |
+
+验证（真引擎 19640–19645，同 `WIREGUARD-DEVICES.md` §11 的宿主程序），17 项全过：没人在等时 `allow_device 203.0.113.7` → `error: 203.0.113.7 is not waiting to be allowed; pending devices: (none)`，有一台局域网设备在等时错误里列出它、放行它照常成功，`deny_device` 任意 IP 照常；`replay_flow` 之后 `latest_flows` / `list_flows` / `search_flows` 里那一行末尾 `[replay of 4C4F04A6-…]`、`get_flow` 有 `Replay of:`；Mock 规则读回来的 `Authorization` / `Set-Cookie` 是 `<redacted>`，原样写回后真实值还在，多写一个原来没有的 `Cookie: <redacted>` 没写入、回复里报了；一条没解密的 XMPP（6 块）`limit=6` auto 3728 字、hex 10567 字，ClientHello 和服务器那 1224 字节都标了 `(TLS record: handshake)`、后者带 `[… 968 more bytes …]`；`set_config port=19690` 之后 `get_config` 仍报 `port 19640 / socks_port 19642 / config_page_port 19641`、`pending_next_start: {"port": 19690}`，改回去就没有了，引擎停着时报设置里的值；`list_devices` 是 `127.0.0.1 · This Mac · 2 flows · …` 和 `192.168.0.9 · LAN · 1 flow · …`。单元测试 `MCPFormatTests` 7 个。
+
+## 11. 装上新版后的真机测试（2026-11-22）
+
+装在用户 Mac 上（Xcode 27.2 编译），vivo V2502A（Android 17，adb 驱动）+ iPhone 18 Pro（iOS 27.2.1，devicectl 驱动，经手动代理）。
+
+| 测的 | 结果 |
+|---|---|
+| 升级后旧二维码不重扫 | ✅ `wireguard.json` 迁成「设备 1」:51820，钥匙逐字节相同；vivo 直接连上（手机上真正对应这把钥匙的隧道叫「48g」，另一条「baobox」是 11-21 临时引擎留下的，钥匙对不上） |
+| 两个 WireGuard 监听 | ✅ MCP 加一台测试设备 → 引擎带 51820 / 51821 重启，vivo 自己重连、包仍记在 vivo 名下；删掉后 51821 关闭、钥匙文件删除 |
+| XMPP（CMB 正式包，不信任用户证书） | ✅ 第一条接管握手失败，之后原样放行、App 正常连着 |
+| 按指纹放行 | ✅ vivo 装了 Baobox 证书后，同一个 `api.prod.cmbww.io`：CMB App 放行，Chrome 照常解密（`GET 401`） |
+| 手动代理 + 配对口令 | ✅ iPhone 打开带口令的证书页后自动放行，iCloud / Safari 的 HTTPS 能解开 |
+| MCP | ✅ 24 个工具；网页来源 / `text/plain` / 伪造 Host 分别 403 / 415 / 403 |
+
+测出来、随第七个提交修掉的：
+
+1. **Android 证书页的「打开安全设置」点了没反应**：Chrome 只放行带 `BROWSABLE` 的页面，vivo 的安全设置页没有。按钮去掉，路径单独一块显示，加一句「找不到就在设置顶部搜『证书』」（`TECH_DESIGN.md` 的跳转表已更正）。
+2. **MCP 的放行行看不出原因**：摘要改成 `[passthrough: <原因>]`，末尾带开始时间；`get_flow` 加 `Started:` 和 `Not decrypted: <原因> — <说明>`（`Logic/MCPFormat.swift` 的 `MCPPassthrough`，有单元测试）。
+3. **iOS 上按指纹分不开**：写进 `TLS-FINGERPRINT.md` §2 的限制（Safari 打开 apple.com，`www.apple.com` 本身被记成拒绝证书，同页其他子域名都解开了）。
+4. **重装 / 重启后「端口 9090 被占用」**：旧引擎还没退完新引擎就去绑端口。`restart()` 也有同样的窗口（`teardown` 给旧进程留了 1 秒）。改成启动阶段遇到端口被占就等 1.5 秒自动重试一次，界面保持「启动中」；实测先用小程序占住 9090 再开开关，第二次起来、不报错。
+5. **引擎后来跑起来了，失败提示条还挂着**：会话记下引擎失败那条提示的原文，引擎进入运行状态时只收掉这一条。
+6. **提示文案过时**：「端口被占用，请在设置里换一个」改成先说可能是旧引擎还没退完、稍等几秒，再指到「高级 → 端口与上限」（端口已经不在设置页）。
+
+没能在真机上测的：iPhone 走 WireGuard（大陆区 App Store 没有 WireGuard，所以 iOS 上的 XMPP 解密、两台手机同时走 WireGuard 没测）；Android 上 XMPP「已解密」（vivo 上只有不信任用户证书的正式包）。
+
+## 12. Android USB 不再设隐藏的全局代理（2026-11-22）
+
+用户看到 Android USB 卡片的「设代理并推证书」，问设的是什么。答：`adb shell settings put global http_proxy <Mac IP>:<端口>`，Android 的全局 HTTP 代理。用户：「不应该设置无法再 app 中看到的选项，这个代理可以走 wifi 代理吗」。
+
+- 这个全局代理在 Wi-Fi 设置里看不到，换 Wi-Fi、用流量、重启都还在；Baobox 没在跑或手机离开这台 Mac，走系统代理的 App 就上不了网。
+- 改成 Wi-Fi 代理：adb 做不到。Wi-Fi 代理存在已保存的网络配置里，Android 10 起只有系统设置（或创建这个配置的 App）能改；adb 能设的只有上面那个全局代理。用 adb 模拟点击去填 Wi-Fi 表单，各家设置界面不一样，不做。
+
+改成：
+
+- 设备行两个按钮：**推证书**（推到「下载」再打开安全设置页，和以前一样）、**打开 Wi-Fi 设置**（adb `am start -a android.settings.WIFI_SETTINGS`；网页里的 `intent:` 打不开的页面 adb 能打开）。不再要求「手动代理」开着才能点。
+- 下面一块「代理：填进手机的 Wi-Fi」：主机、端口各带复制按钮，一句路径（WLAN › 当前网络 › 修改 › 高级选项 › 代理 › 手动）；「手动代理」没开时多一行橙色提示。
+- 刷新时读 `settings get global http_proxy`（`Logic/ADBGlobalProxy.swift`，`null` / 空 / `:0` / `host:0` 算没设，有单元测试）；设了就在那台设备下面一行警告 +「清除代理」，清完重读。没设不显示。
+- 末尾一句：要抓全部流量（包括微信这类不走系统代理的 App），用 WireGuard。
+- 手机端配置页（Android、手动代理那张卡）里「连着 USB 调试时可以在电脑上一键设置」改成「电脑的抓包窗口能帮你在手机上打开 Wi-Fi 设置」。
+- 「模拟器」卡片对 Android 模拟器仍用全局代理（`10.0.2.2`）：模拟器是测试用的一次性设备，这次没动，待用户定。

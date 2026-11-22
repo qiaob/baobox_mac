@@ -73,6 +73,12 @@ final class NetCaptureWindowState: ObservableObject {
     @Published var tab: NetCaptureTab = .config
     /// 「配置」页左边选中的那一项。放在这里：切到别的标签页再回来还是它。
     @Published var configItem: NetCaptureConfigItem = .mac
+    /// WireGuard 设备的小窗（添加 / 看二维码 / 改名）。挂在根视图上：设备栏右键改名时也用它。
+    @Published var wireguardDialog: WireGuardDialog?
+    /// 等用户确认删除的那台 WireGuard 设备。
+    @Published var wireguardDeleteID: String?
+    /// 配置页设备列表里高亮的那一台（设备栏右键「在配置页里管理…」跳过去时选中它）。
+    @Published var focusedWireGuardDevice: String?
     private init() {}
 }
 
@@ -81,6 +87,13 @@ final class NetCaptureWindowController {
     static let shared = NetCaptureWindowController()
     private var window: NSWindow?
     private init() {}
+
+    /// 打开窗口并切到「配置」页（菜单栏「网络抓包设置…」、HTTP 页「抓包设置…」、设置窗口里的按钮）。
+    func showConfig(item: NetCaptureConfigItem? = nil) {
+        show()
+        NetCaptureWindowState.shared.tab = .config
+        if let item { NetCaptureWindowState.shared.configItem = item }
+    }
 
     func show() {
         // 打开窗口时（新建，或关掉后再打开）：引擎在跑就停在「HTTP / WebSocket 包」，否则停在「配置」。已经开着就不动。
@@ -183,6 +196,11 @@ struct NetCaptureRootView: View {
         .sheet(isPresented: $showMockRules) {
             MockRulesSheet { showMockRules = false }
         }
+        // WireGuard 设备的小窗与删除确认（配置页、设备栏右键都从这里弹）。
+        .sheet(item: $windowState.wireguardDialog) { dialog in
+            WireGuardDeviceSheet(dialog: dialog) { windowState.wireguardDialog = nil }
+        }
+        .wireguardDeleteConfirmation()
         .onAppear {
             session.refreshTrust()
             mockRules.load()
@@ -500,17 +518,11 @@ struct NetCaptureRootView: View {
     }
 
     private var moreMenu: some View {
+        // 本地 MCP 的开关在配置页「工具 → 本地 MCP」（一个设置只放一个地方，CONFIG-LAYOUT.md §1）。
         Menu {
-            Toggle("netcapture.mcp.toggle", isOn: Binding(
-                get: { mcp.isRunning },
-                set: { $0 ? mcp.start() : mcp.stop() }))
-            Divider()
             Button("netcapture.settings.exportHar") { exportHAR() }
                 .disabled(store.flows.isEmpty)
-            Button("netcapture.window.settings") {
-                guard let registry = AppDelegate.shared?.registry else { return }
-                SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
-            }
+            Button("netcapture.window.captureSettings") { windowState.tab = .config }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -541,16 +553,16 @@ struct NetCaptureRootView: View {
                         clearSelection()
                     }
                     ForEach(store.devices) { device in
-                        sidebarRow(title: device.label, count: counts.byDevice[device.ip] ?? 0,
-                                   selected: filter.device == device.ip && filter.host == nil,
-                                   icon: FlowStore.isLoopback(device.ip) ? "laptopcomputer" : "network") {
+                        sidebarRow(title: device.label, count: counts.byDevice[device.key] ?? 0,
+                                   selected: filter.device == device.key && filter.host == nil,
+                                   icon: NetCaptureDevice.symbol(device.key)) {
                             store.updateFilter {
-                                $0.device = device.ip
+                                $0.device = device.key
                                 $0.host = nil
                             }
                             clearSelection()
                         }
-                        .contextMenu { deviceMenu(ip: device.ip) }
+                        .contextMenu { deviceMenu(key: device.key) }
                     }
 
                     Text("netcapture.sidebar.hosts")
@@ -623,22 +635,45 @@ struct NetCaptureRootView: View {
         .buttonStyle(.plain)
     }
 
+    /// 设备栏右键。隧道设备：重命名（改设备表里的名字，配置页一起变）、清空、在配置页里管理；没有「屏蔽」（隧道设备不走「允许」）。
+    /// 局域网设备和本机：重命名（别名）、清空、屏蔽（本机不能屏蔽）。
     @ViewBuilder
-    private func deviceMenu(ip: String) -> some View {
-        Button {
-            renameText = store.alias(ip: ip) ?? ""
-            renameIP = ip
-        } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+    private func deviceMenu(key: String) -> some View {
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            if WireGuardDeviceStore.shared.device(id: id) != nil {
+                Button {
+                    windowState.wireguardDialog = .rename(deviceID: id)
+                } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+            }
+            clearDeviceButton(key: key)
+            Divider()
+            Button {
+                windowState.focusedWireGuardDevice = id
+                windowState.configItem = .wireguard
+                windowState.tab = .config
+            } label: { Label("netcapture.device.manage", systemImage: "lock.shield") }
+        } else {
+            Button {
+                renameText = store.alias(ip: key) ?? ""
+                renameIP = key
+            } label: { Label("netcapture.device.rename", systemImage: "pencil") }
+            clearDeviceButton(key: key)
+            if !FlowStore.isLoopback(key), key != NetCaptureEnv.unknownDeviceKey {
+                Button(role: .destructive) {
+                    engine.deny(device: key)
+                } label: { Label("netcapture.device.block", systemImage: "hand.raised") }
+            }
+        }
+    }
+
+    /// 「清空这台设备的包」：HTTP 和 TCP 两页里这台的都清掉。
+    private func clearDeviceButton(key: String) -> some View {
         Button(role: .destructive) {
-            store.clearDevice(ip: ip)
-            if store.filter.device == ip { store.updateFilter { $0.device = nil } }
+            store.clearDevice(key: key)
+            tcp.clearDevice(key: key)
+            if store.filter.device == key { store.updateFilter { $0.device = nil } }
             clearSelection()
         } label: { Label("netcapture.device.clear", systemImage: "trash") }
-        if !FlowStore.isLoopback(ip), ip != NetCaptureEnv.unknownDeviceKey {
-            Button(role: .destructive) {
-                engine.deny(device: ip)
-            } label: { Label("netcapture.device.block", systemImage: "hand.raised") }
-        }
     }
 
     private var renameSheet: some View {
@@ -817,7 +852,7 @@ struct NetCaptureRootView: View {
     /// 原样重发。
     private func replay(_ flow: Flow) {
         send(ReplayRequest(id: UUID(), method: flow.method, url: flow.url,
-                           headers: flow.requestHeaders, body: flow.requestBody))
+                           headers: flow.requestHeaders, body: flow.requestBody, origin: flow.id))
     }
 
     /// 发出去的请求是列表里新的一行：先选中它（id 是这边定的），并让它看得见 ——

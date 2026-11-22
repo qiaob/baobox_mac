@@ -10,12 +10,12 @@ enum MCPControlTools {
     static let schemas: [[String: Any]] = [
         [
             "name": "get_config",
-            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_endpoint, config_page_url, pending_devices, mcp_redact_auth.",
+            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_devices (one per phone: id, name, UDP port, endpoint), config_page_url, pending_devices, mcp_redact_auth. Ports, addresses and body_cap are what the running engine uses; values saved but only applied at the next start are listed in pending_next_start (e.g. {\"port\": 19690}).",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
             "name": "set_config",
-            "description": "Change any of the settable keys from get_config (keys not given are left alone); same effect as using the window. Booleans: mac, mac_http, mac_websocket, mac_tcp, manual_proxy, wireguard, cert_page, paused, decrypt_https, clear_on_stop. decrypt_scope: \"all\" or \"allowlist\"; allow_domains / deny_domains: arrays of domains. port, wireguard_port, body_cap (1048576, 5242880 or 20971520) apply the next time the engine starts; max_flows (200-5000). Turning on mac needs this Mac to trust the certificate; when it does not, nothing is changed and the reply says to do it in the window (the trust prompt is the user's). Returns what changed and the config afterwards.",
+            "description": "Change any of the settable keys from get_config (keys not given are left alone); same effect as using the window. Booleans: mac, mac_http, mac_websocket, mac_tcp, manual_proxy, wireguard, cert_page, paused, decrypt_https, clear_on_stop. decrypt_scope: \"all\" or \"allowlist\"; allow_domains / deny_domains: arrays of domains. port and body_cap (1048576, 5242880 or 20971520) apply the next time the engine starts; wireguard_port is the start port for WireGuard devices added from now on (existing ones keep theirs); max_flows (200-5000). Turning on mac needs this Mac to trust the certificate; when it does not, nothing is changed and the reply says to do it in the window (the trust prompt is the user's). Returns what changed and the config afterwards.",
             "inputSchema": ["type": "object", "properties": [
                 "mac": ["type": "boolean"], "mac_http": ["type": "boolean"], "mac_websocket": ["type": "boolean"],
                 "mac_tcp": ["type": "boolean"], "manual_proxy": ["type": "boolean"], "wireguard": ["type": "boolean"],
@@ -29,12 +29,28 @@ enum MCPControlTools {
         ],
         [
             "name": "get_wireguard_config",
-            "description": "The WireGuard client config a phone imports (the same text as the QR code on the Config tab). It contains the tunnel's private key; this server only listens on 127.0.0.1. Creates the key file if there is none yet.",
-            "inputSchema": ["type": "object", "properties": [:]],
+            "description": "The WireGuard client config one phone imports (the same text as its QR code on the Config tab). Each phone has its own key and UDP port; device = name or id from get_config's wireguard_devices, default the first one. It contains the tunnel's private key; this server only listens on 127.0.0.1.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"]]],
+        ],
+        [
+            "name": "add_wireguard_device",
+            "description": "Add a WireGuard device (one per phone: its own key, UDP port and QR code). name is what the device list and the TCP tab show (default \"Device N\"). Restarts the engine when WireGuard is on (other tunnel phones reconnect by themselves). Returns the device and its client config text.",
+            "inputSchema": ["type": "object", "properties": ["name": ["type": "string"]]],
+        ],
+        [
+            "name": "remove_wireguard_device",
+            "description": "Delete a WireGuard device (name or id): phones set up from its QR code can no longer connect. Its captured packets stay in the lists. Restarts the engine when WireGuard is on.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"]], "required": ["device"]],
+        ],
+        [
+            "name": "rename_wireguard_device",
+            "description": "Rename a WireGuard device (name or id). The engine is not restarted.",
+            "inputSchema": ["type": "object", "properties": ["device": ["type": "string"], "name": ["type": "string"]],
+                            "required": ["device", "name"]],
         ],
         [
             "name": "list_tcp_connections",
-            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), bytes up/down, reads, source device. Filters: limit, device (client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
+            "description": "Raw TCP connections from the TCP tab (not HTTP, not TLS decrypted into HTTP), newest last. Each line: id, state, target:port, protocol (\"?\" = guessed from the port only, \"unknown\" = not recognised), tls (only on XMPP connections that reached STARTTLS: tls=decrypted, or tls=failed(<reason>) when Baobox did not take over or the phone refused its certificate), bytes up/down, reads, source device. Filters: limit, device (device key from list_devices: wg:<id> for a WireGuard device, otherwise the client IP), protocol (name, e.g. SSH, MQTT, or \"unknown\"), host (substring of the target).",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"], "device": ["type": "string"], "protocol": ["type": "string"],
                 "host": ["type": "string"],
@@ -42,7 +58,7 @@ enum MCPControlTools {
         ],
         [
             "name": "get_tcp_connection",
-            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default: text where the block looks like text). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. Raw data is not redacted.",
+            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default): auto gives text where a block looks like text, and for a binary block only the first 256 bytes as hex plus how many bytes are left (blocks that start with a TLS record say so); format=hex gives every block in hex (up to 8 KB each). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. On an XMPP connection that reached STARTTLS, a TLS line says whether Baobox decrypted it, and a marker line in the data separates the plaintext before <proceed/> from what follows (decrypted XMPP, or TLS ciphertext). Raw data is not redacted.",
             "inputSchema": ["type": "object", "properties": [
                 "id": ["type": "string"], "limit": ["type": "integer"],
                 "format": ["type": "string", "enum": ["auto", "hex", "text"]], "segments": ["type": "boolean"],
@@ -60,7 +76,7 @@ enum MCPControlTools {
         ],
         [
             "name": "set_mock_rule",
-            "description": "Create a mock rule (no id, or an unknown id) or change one (fields not given keep their value). Fields: enabled, method, host (required for a new rule), path, status (100-599), headers ([[name, value], ...]), body (text) or body_base64. Only decrypted requests are answered. Returns the saved rule.",
+            "description": "Create a mock rule (no id, or an unknown id) or change one (fields not given keep their value). Fields: enabled, method, host (required for a new rule), path, status (100-599), headers ([[name, value], ...]; a value of exactly <redacted>, as list_mock_rules shows auth headers, keeps the rule's current value of that header), body (text) or body_base64. Only decrypted requests are answered. Returns the saved rule.",
             "inputSchema": ["type": "object", "properties": [
                 "id": ["type": "string"], "enabled": ["type": "boolean"], "method": ["type": "string"],
                 "host": ["type": "string"], "path": ["type": "string"], "status": ["type": "integer"],
@@ -84,7 +100,7 @@ enum MCPControlTools {
         ],
         [
             "name": "allow_device",
-            "description": "Allow a LAN device waiting to use this Mac as its proxy (its IP from get_config's pending_devices).",
+            "description": "Allow a LAN device that is waiting to use this Mac as its proxy. Only IPs in get_config's pending_devices can be allowed; any other IP is refused with the current pending list.",
             "inputSchema": ["type": "object", "properties": ["ip": ["type": "string"]], "required": ["ip"]],
         ],
         [
@@ -99,7 +115,10 @@ enum MCPControlTools {
         switch name {
         case "get_config": return json(config())
         case "set_config": return setConfig(arguments)
-        case "get_wireguard_config": return wireguardConfig()
+        case "get_wireguard_config": return wireguardConfig(arguments)
+        case "add_wireguard_device": return addWireGuardDevice(arguments)
+        case "remove_wireguard_device": return removeWireGuardDevice(arguments)
+        case "rename_wireguard_device": return renameWireGuardDevice(arguments)
         case "list_tcp_connections": return listTCP(arguments)
         case "get_tcp_connection": return getTCP(arguments)
         case "clear_tcp":
@@ -113,10 +132,20 @@ enum MCPControlTools {
         case "delete_mock_rule": return deleteMockRule(arguments)
         case "replay_flow": return replay(arguments)
         case "allow_device", "deny_device":
-            guard let ip = string(arguments["ip"]), !ip.isEmpty else { return "error: ip is required" }
+            guard let ip = string(arguments["ip"])?.trimmingCharacters(in: .whitespaces), !ip.isEmpty else { return "error: ip is required" }
             let allow = name == "allow_device"
-            DispatchQueue.main.sync {
-                MainActor.assumeIsolated { allow ? NetCaptureEngine.shared.allow(device: ip) : NetCaptureEngine.shared.deny(device: ip) }
+            // 只放行正在等待的设备：放行一个没来敲过门的 IP 等于替用户开了口子（拒绝任何 IP 都可以）。
+            let pending = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { () -> [String]? in
+                    let engine = NetCaptureEngine.shared
+                    if allow, !engine.pendingDevices.contains(ip) { return engine.pendingDevices }
+                    allow ? engine.allow(device: ip) : engine.deny(device: ip)
+                    return nil
+                }
+            }
+            if let pending {
+                return "error: \(ip) is not waiting to be allowed; pending devices: "
+                    + (pending.isEmpty ? "(none)" : pending.joined(separator: ", "))
             }
             return allow ? "allowed \(ip)" : "denied \(ip)"
         default:
@@ -132,10 +161,18 @@ enum MCPControlTools {
         let trusted = CaptureCA.shared.isGenerated && CaptureCA.shared.isTrusted()
         let defaults = UserDefaults.standard
         let scope = defaults.string(forKey: NetCaptureEnv.Keys.decryptScope) ?? "all"
+        // 端口、地址报引擎此刻实际在用的；设置里改了、下次启动才生效的放进 pending_next_start。引擎没在跑就报设置里的值。
+        var running: (port: UInt16?, bodyCap: Int?, pagePort: UInt16?, mcpPort: UInt16?) = (nil, nil, nil, nil)
         var object: [String: Any] = DispatchQueue.main.sync {
             MainActor.assumeIsolated { () -> [String: Any] in
                 let session = NetCaptureSession.shared
                 let engine = NetCaptureEngine.shared
+                if engine.isActive, let listeners = engine.listeners {
+                    running.port = listeners.port
+                    running.bodyCap = engine.runningBodyCap
+                }
+                running.pagePort = ConfigPageServer.shared.listeningPort
+                running.mcpPort = CaptureMCPServer.shared.isRunning ? CaptureMCPServer.shared.listeningPort : nil
                 let engineState: String
                 switch engine.state {
                 case .running: engineState = "running"
@@ -155,9 +192,11 @@ enum MCPControlTools {
                     "cert_page": session.certPageOn,
                     "pending_devices": engine.pendingDevices,
                     "proxy_address": engine.port.map { "\(lan ? NetworkInterfaces.primaryIP() : "127.0.0.1"):\($0)" } ?? NSNull(),
-                    "wireguard_endpoint": session.wireguardEndpoint,
+                    "wireguard_devices": MCPControlTools.wireguardDeviceObjects(),
                 ]
-                state["config_page_url"] = session.certPageOn ? NetworkInterfaces.landingPageURL : NSNull()
+                state["config_page_url"] = session.certPageOn
+                    ? "http://\(NetworkInterfaces.primaryIP()):\(running.pagePort ?? NetCaptureEnv.configPagePort)/?k=\(NetCaptureEnv.pairingToken)"
+                    : NSNull()
                 return state
             }
         }
@@ -168,12 +207,18 @@ enum MCPControlTools {
         object["decrypt_scope"] = scope == "allowlist" ? "allowlist" : "all"
         object["allow_domains"] = DecryptScope.parseDomains(defaults.string(forKey: NetCaptureEnv.Keys.allowDomains) ?? "")
         object["deny_domains"] = DecryptScope.parseDomains(defaults.string(forKey: NetCaptureEnv.Keys.denyDomains) ?? "")
-        object["port"] = Int(NetCaptureEnv.port)
-        object["socks_port"] = Int(NetCaptureEnv.socksPort)
-        object["config_page_port"] = Int(NetCaptureEnv.configPagePort)
+        let port = running.port ?? NetCaptureEnv.port
+        object["port"] = Int(port)
+        object["socks_port"] = Int(EngineListeners.neighbour(of: port, offset: 2))
+        object["config_page_port"] = Int(running.pagePort ?? EngineListeners.neighbour(of: port, offset: 1))
         object["wireguard_port"] = Int(NetCaptureEnv.wireguardPort)
-        object["mcp_port"] = Int(NetCaptureEnv.mcpPort)
-        object["body_cap"] = NetCaptureEnv.bodyCap
+        object["mcp_port"] = Int(running.mcpPort ?? NetCaptureEnv.mcpPort)
+        object["body_cap"] = running.bodyCap ?? NetCaptureEnv.bodyCap
+        var pending: [String: Any] = [:]
+        if let current = running.port, current != NetCaptureEnv.port { pending["port"] = Int(NetCaptureEnv.port) }
+        if let current = running.bodyCap, current != NetCaptureEnv.bodyCap { pending["body_cap"] = NetCaptureEnv.bodyCap }
+        if let current = running.mcpPort, current != NetCaptureEnv.mcpPort { pending["mcp_port"] = Int(NetCaptureEnv.mcpPort) }
+        if !pending.isEmpty { object["pending_next_start"] = pending }
         object["max_flows"] = NetCaptureEnv.maxFlows
         object["clear_on_stop"] = NetCaptureEnv.clearOnStop
         object["wifi_name"] = defaults.string(forKey: NetCaptureEnv.Keys.wifiName) ?? ""
@@ -184,7 +229,7 @@ enum MCPControlTools {
 
     private static let readOnlyKeys: Set<String> = [
         "engine", "capturing", "ca_trusted", "proxy_address", "socks_port", "config_page_port", "config_page_url",
-        "wireguard_endpoint", "pending_devices", "mcp_port", "mcp_redact_auth",
+        "wireguard_devices", "pending_devices", "mcp_port", "mcp_redact_auth", "pending_next_start",
     ]
     private static let bodyCaps = [1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024]
 
@@ -371,15 +416,123 @@ enum MCPControlTools {
 
     // MARK: - WireGuard
 
-    private static func wireguardConfig() -> String {
-        do {
-            let keys = try WireGuardKeyFile.loadOrCreate(at: NetCaptureEnv.wireguardKeyURL)
-            let endpoint = "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.wireguardPort)"
-            guard let text = keys.clientConfig(endpoint: endpoint) else { return "error: the key file has an invalid key" }
-            let on = DispatchQueue.main.sync { MainActor.assumeIsolated { NetCaptureSession.shared.wireguardOn } }
-            return on ? text : text + "\n\n# WireGuard is off in Baobox: turn it on (set_config wireguard=true) before the phone connects."
-        } catch {
-            return "error: \(error.localizedDescription)"
+    /// get_config 里的 `wireguard_devices`。主线程上调。
+    @MainActor
+    static func wireguardDeviceObjects() -> [[String: Any]] {
+        let store = WireGuardDeviceStore.shared
+        return store.devices.map { device in
+            var object: [String: Any] = ["id": device.id, "key": WireGuardDeviceTable.deviceKey(id: device.id),
+                                         "name": device.name, "port": Int(device.port), "endpoint": store.endpoint(for: device)]
+            if store.missingKeys.contains(device.id) { object["key_missing"] = true }
+            return object
+        }
+    }
+
+    /// 按名字或 id（也认 `wg:<id>`）找一台；不给就是第一台。找不到、名字重了给一句错误。
+    private static func findDevice(_ wanted: String?) -> Result<WireGuardDevice, MCPError> {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> Result<WireGuardDevice, MCPError> in
+                let store = WireGuardDeviceStore.shared
+                guard store.loaded else { return .failure(MCPError("the WireGuard device list is still loading; try again")) }
+                guard let wanted = wanted?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty else {
+                    guard let first = store.devices.first else {
+                        return .failure(MCPError("no WireGuard devices yet; add one with add_wireguard_device"))
+                    }
+                    return .success(first)
+                }
+                let id = (WireGuardDeviceTable.deviceID(fromKey: wanted) ?? wanted).lowercased()
+                if let device = store.device(id: id) { return .success(device) }
+                let named = store.devices.filter { $0.name.caseInsensitiveCompare(wanted) == .orderedSame }
+                if named.count == 1 { return .success(named[0]) }
+                if named.count > 1 { return .failure(MCPError("\(named.count) devices are called \"\(wanted)\"; use the id")) }
+                return .failure(MCPError("no WireGuard device \"\(wanted)\" (see get_config wireguard_devices)"))
+            }
+        }
+    }
+
+    struct MCPError: Error {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    /// 一台的客户端配置文本；钥匙丢了的给错误。WireGuard 关着时文本后面加一句提醒。
+    private static func configText(for device: WireGuardDevice) -> String {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated { () -> String in
+                let store = WireGuardDeviceStore.shared
+                guard let text = store.clientConfig(for: device) else {
+                    return "error: the key file of \"\(device.name)\" is missing; remove the device and add it again"
+                }
+                return NetCaptureSession.shared.wireguardOn ? text
+                    : text + "\n\n# WireGuard is off in Baobox: turn it on (set_config wireguard=true) before the phone connects."
+            }
+        }
+    }
+
+    private static func wireguardConfig(_ arguments: [String: Any]) -> String {
+        switch findDevice(string(arguments["device"])) {
+        case .success(let device): return configText(for: device)
+        case .failure(let error): return "error: " + error.message
+        }
+    }
+
+    /// 等主线程上的一个异步操作做完（最多 10 秒）。主线程从不同步等 MCP 的队列，不会死锁。
+    private static func waitOnMain<T>(_ start: @escaping @MainActor (@escaping (T) -> Void) -> Void) -> T? {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                start { value in
+                    box.value = value
+                    semaphore.signal()
+                }
+            }
+        }
+        return semaphore.wait(timeout: .now() + 10) == .timedOut ? nil : box.value
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable { var value: T? }
+
+    private static func addWireGuardDevice(_ arguments: [String: Any]) -> String {
+        let requested = string(arguments["name"])
+        let loaded: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.ensureLoaded { done(true) } }
+        guard loaded == true else { return "error: the WireGuard device list did not load" }
+        let result: Result<WireGuardDevice, Error>? = waitOnMain { done in
+            let store = WireGuardDeviceStore.shared
+            store.add(name: requested.flatMap(WireGuardDeviceTable.cleanName) ?? store.defaultName(), completion: done)
+        }
+        guard let result else { return "error: timed out adding the device" }
+        switch result {
+        case .failure(let error): return "error: " + error.localizedDescription
+        case .success(let device):
+            // WireGuard 开着：等引擎带着新监听重启完再回复。
+            settle([:])
+            let object = DispatchQueue.main.sync { MainActor.assumeIsolated { wireguardDeviceObjects().first { $0["id"] as? String == device.id } } }
+            return json(["device": object ?? ["id": device.id, "name": device.name, "port": Int(device.port)],
+                         "config": configText(for: device)])
+        }
+    }
+
+    private static func removeWireGuardDevice(_ arguments: [String: Any]) -> String {
+        guard let wanted = string(arguments["device"]), !wanted.isEmpty else { return "error: device is required" }
+        switch findDevice(wanted) {
+        case .failure(let error): return "error: " + error.message
+        case .success(let device):
+            let ok: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.remove(id: device.id, completion: done) }
+            guard ok == true else { return "error: could not remove \"\(device.name)\"" }
+            settle([:])
+            return "removed \(device.name) (\(device.id)); its captured packets stay in the lists"
+        }
+    }
+
+    private static func renameWireGuardDevice(_ arguments: [String: Any]) -> String {
+        guard let wanted = string(arguments["device"]), !wanted.isEmpty else { return "error: device is required" }
+        guard let name = string(arguments["name"]).flatMap(WireGuardDeviceTable.cleanName) else { return "error: name is required" }
+        switch findDevice(wanted) {
+        case .failure(let error): return "error: " + error.message
+        case .success(let device):
+            let ok: Bool? = waitOnMain { done in WireGuardDeviceStore.shared.rename(id: device.id, to: name, completion: done) }
+            return ok == true ? "renamed \(device.id) to \(name)" : "error: could not rename \"\(device.name)\""
         }
     }
 
@@ -404,8 +557,14 @@ enum MCPControlTools {
         let iso = ISO8601DateFormatter()
         return connections.suffix(max(1, limit)).map { c in
             "\(c.id.uuidString) \(c.state.rawValue) \(c.target):\(c.port) \(protocolText(c)) "
+                + (c.tls.map { tlsText($0) + " " } ?? "")
                 + "up=\(c.bytesUp)B down=\(c.bytesDown)B reads=\(c.segmentCount) @\(c.deviceKey) \(iso.string(from: c.startedAt))"
         }.joined(separator: "\n")
+    }
+
+    /// `tls=decrypted` / `tls=failed(handshake_failed)`：STARTTLS 接管过的连接才有（STARTTLS.md §3.3）。
+    private static func tlsText(_ mark: TCPTLSMark) -> String {
+        mark.decrypted ? "tls=decrypted" : "tls=failed" + (mark.tls.reason.map { "(\($0.rawValue))" } ?? "")
     }
 
     private static func protocolText(_ connection: TCPConnection) -> String {
@@ -429,8 +588,14 @@ enum MCPControlTools {
 
         var lines = [
             "TCP \(connection.target):\(connection.port)" + (connection.sni != nil ? " (\(connection.host))" : ""),
-            "Device: \(connection.deviceKey)",
+            "Device: \(connection.deviceKey) (\(MCPTools.deviceLabel(connection.deviceKey)))",
             "Protocol: \(protocolText(connection))",
+        ]
+        if let tls = connection.tls {
+            lines.append("TLS: " + (tls.decrypted ? "decrypted" : "failed") + (tls.tls.reason.map { " (\($0.rawValue))" } ?? "")
+                         + (tls.detail.isEmpty ? "" : " · \(tls.detail)"))
+        }
+        lines += [
             "State: \(connection.state.rawValue)" + (connection.error.map { " (\($0))" } ?? ""),
             "Started: \(iso.string(from: connection.startedAt))" + (connection.endedAt.map { " · ended \(iso.string(from: $0))" } ?? ""),
             "Bytes: up \(connection.bytesUp), down \(connection.bytesDown) · reads \(connection.segmentCount)"
@@ -438,9 +603,14 @@ enum MCPControlTools {
             merged ? "-- Data: adjacent reads in the same direction merged; offsets run per direction --"
                    : "-- Data: reads as they arrived (boundaries are where reads ended, not messages) --",
         ]
-        let blocks = TCPStream.blocks(connection.segments, merge: merged)
+        let blocks = TCPStream.blocks(connection.segments, merge: merged, breakAfter: connection.tls?.afterSegment)
+        let boundary = connection.tls?.boundaryIndex(in: blocks)
+        let marker = connection.tls.map { $0.decrypted
+            ? "-- TLS taken over at <proceed/>: decrypted data below" + ($0.detail.isEmpty ? "" : " (\($0.detail))") + " --"
+            : "-- TLS not decrypted: ciphertext below --" }
         var size = lines.reduce(0) { $0 + $1.count }
         for (index, block) in blocks.prefix(limit).enumerated() {
+            if index == boundary, let marker { lines.append(marker) }
             let direction = block.fromClient ? "client->server" : "server->client"
             var text = "## #\(index + 1) \(direction) offset=\(block.offset) length=\(block.size)"
                 + (block.segmentCount > 1 ? " reads=\(block.segmentCount)" : "") + " at \(iso.string(from: block.startedAt))"
@@ -450,9 +620,14 @@ enum MCPControlTools {
                 case .data(let data, let offset):
                     let room = max(0, blockLimit - shown)
                     let visible = data.prefix(room)
+                    if format != "text", format != "hex", !TCPPayload.looksLikeText(visible) {
+                        // auto 下的二进制：只给开头一小段十六进制（一块 4.6 KB 的 TLS 整块转 hex 是 18 KB 文字）。
+                        text += "\n" + MCPBlockText.binary(data, offset: offset)
+                        shown += min(data.count, MCPBlockText.binaryPreview)
+                        continue
+                    }
                     shown += visible.count
-                    let asText = format == "text" || (format == "auto" && TCPPayload.looksLikeText(visible))
-                    text += "\n" + (asText ? TCPPayload.text(visible) : TCPPayload.hexDump(visible, startOffset: offset))
+                    text += "\n" + MCPBlockText.render(visible, offset: offset, format: format == "hex" ? "hex" : "text")
                     if visible.count < data.count { text += "\n[\(data.count - visible.count) more bytes not shown]" }
                 case .missing(let count, let offset):
                     text += "\n[\(count) bytes not saved at offset \(offset)]"
@@ -465,6 +640,7 @@ enum MCPControlTools {
             }
             lines.append(text)
         }
+        if let marker, boundary == blocks.count, blocks.count <= limit { lines.append(marker) }
         if blocks.count > limit { lines.append("[\(blocks.count - limit) more blocks; raise limit to see them]") }
         if blocks.isEmpty { lines.append("(no data yet)") }
         return lines.joined(separator: "\n")
@@ -501,9 +677,16 @@ enum MCPControlTools {
             guard let status = int(arguments["status"]) else { return "error: status must be an integer" }
             rule.status = status
         }
+        var errors: [String] = []
         if arguments["headers"] != nil {
             guard let headers = headerPairs(arguments["headers"]) else { return "error: headers must be [[name, value], ...]" }
-            rule.headers = headers
+            // 读到的是脱敏后的（`<redacted>`），原样写回不能把真实值盖掉：换回这条规则原来的同名头；原来没有的不写入。
+            let previous = id.flatMap { wanted in existing.first { $0.id == wanted } }?.headers ?? []
+            let restored = MCPHeaderRestore.restore(headers, from: previous)
+            rule.headers = restored.headers
+            errors += restored.unresolved.map {
+                "header \($0) is \(MCPHeaderRestore.placeholder) but the rule had no such header to keep; it was not written"
+            }
         }
         if let body = string(arguments["body"]) { rule.body = Data(body.utf8) }
         if let encoded = string(arguments["body_base64"]) {
@@ -514,7 +697,9 @@ enum MCPControlTools {
         guard rule.isValid else { return "error: a rule needs a host and a status of 100-599" }
         let saved = rule
         DispatchQueue.main.sync { MainActor.assumeIsolated { MockRuleStore.shared.save(saved) } }
-        return json(ruleObject(saved))
+        var reply = ruleObject(saved)
+        if !errors.isEmpty { reply["errors"] = errors }
+        return json(reply)
     }
 
     private static func deleteMockRule(_ arguments: [String: Any]) -> String {
@@ -536,7 +721,8 @@ enum MCPControlTools {
               let flow = FlowSnapshotStore.shared.get().first(where: { $0.id.uuidString.caseInsensitiveCompare(idText) == .orderedSame })
         else { return "flow not found" }
         guard flow.decrypted else { return "error: this flow was not decrypted; there is no request to send again" }
-        var request = ReplayRequest(id: UUID(), method: flow.method, url: flow.url, headers: flow.requestHeaders, body: flow.requestBody)
+        var request = ReplayRequest(id: UUID(), method: flow.method, url: flow.url, headers: flow.requestHeaders, body: flow.requestBody,
+                                    origin: flow.id)
         if let method = string(arguments["method"]), !method.isEmpty { request.method = method.uppercased() }
         if let url = string(arguments["url"]), !url.isEmpty { request.url = url }
         if arguments["headers"] != nil {

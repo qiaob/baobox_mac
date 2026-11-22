@@ -2,10 +2,10 @@ import CryptoKit
 import Foundation
 
 // 网络抓包的纯逻辑（Foundation + CryptoKit，进 BaoboxTests）：手机经 WireGuard 接进来要的密钥与客户端配置。
-// 见 docs/packet-capture/CONTROL.md §2.4。
+// 见 docs/packet-capture/CONTROL.md §2.4、WIREGUARD-DEVICES.md。
 //
 // 引擎（mitmproxy 的 `--mode wireguard:<密钥文件>@<端口>`）只做服务器，一份配置一个对端：
-// 隧道里客户端地址固定 10.0.0.1，DNS 10.0.0.53（引擎自己应答）。
+// 隧道里客户端地址固定 10.0.0.1，DNS 10.0.0.53（引擎自己应答）。多台设备 = 多份密钥、多个监听（WireGuardDevices.swift）。
 
 /// 引擎认的密钥文件：`{"server_key": <base64>, "client_key": <base64>}`，两把都是 Curve25519 私钥（32 字节）。
 /// 没有就由 Baobox 生成：这样引擎没起过也能出二维码；引擎读到已有的就照用，不改写（2026-11-21 实测）。
@@ -13,7 +13,7 @@ struct WireGuardKeys: Equatable, Sendable {
     var serverKey: Data
     var clientKey: Data
 
-    /// 隧道里客户端（手机）的地址、DNS。引擎写死的，配置文本和设备名都用它。
+    /// 隧道里客户端（手机）的地址、DNS。引擎写死的，每台设备都一样（认设备靠监听，见 WireGuardDevices.swift）。
     static let clientAddress = "10.0.0.1"
     static let dnsAddress = "10.0.0.53"
 
@@ -57,22 +57,17 @@ struct WireGuardKeys: Equatable, Sendable {
         Endpoint = \(endpoint)
         """
     }
-
-    /// 隧道里的地址（10.0.0.x）：经 WireGuard 进来的设备。
-    static func isTunnelAddress(_ ip: String) -> Bool {
-        ip.hasPrefix("10.0.0.")
-    }
 }
 
-/// 密钥文件的读写。权限 600（里面是隧道的私钥）。
+/// 密钥文件的读写。权限 600（里面是隧道的私钥）。一台设备一份（`WireGuardDeviceFiles`）。
 enum WireGuardKeyFile {
-    /// 读已有的；没有或读不出来就生成一份写下去。写不下去抛错（调用方报 `StorageWriteFailure`）。
-    static func loadOrCreate(at url: URL) throws -> WireGuardKeys {
-        if let data = try? Data(contentsOf: url), let keys = WireGuardKeys.decode(data) { return keys }
-        return try replace(at: url)
+    /// 读已有的；没有或读不出来返回 nil。
+    static func read(at url: URL) -> WireGuardKeys? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return WireGuardKeys.decode(data)
     }
 
-    /// 换一份新的（设置页「重新生成 WireGuard 密钥」）。扫过旧二维码的隧道从此连不上。
+    /// 生成一份新的写下去（已有的被换掉）。写不下去抛错（调用方报 `StorageWriteFailure`）。
     @discardableResult
     static func replace(at url: URL) throws -> WireGuardKeys {
         let keys = WireGuardKeys.generate()

@@ -213,7 +213,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
             submenu.addItem(.separator())
             submenu.addItem(ClosureMenuItem(title: L("app.menu.toolSettings \(tool.name)")) { [weak self] in
-                self?.openSettings(tab: tool.id)
+                // 设置在自己窗口里的工具自己打开；其余照旧开设置窗口的那一页。
+                if let action = tool.settingsAction { action() } else { self?.openSettings(tab: tool.id) }
             })
             item.submenu = submenu
             menu.addItem(item)

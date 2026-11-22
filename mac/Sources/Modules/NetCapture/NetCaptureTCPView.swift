@@ -182,6 +182,7 @@ private struct TCPRow: View {
                     Text(verbatim: "\(connection.target):\(connection.port)")
                         .font(.callout).lineLimit(1).truncationMode(.middle)
                     protocolBadge
+                    if let tls = connection.tls { TCPTLSBadge(mark: tls) }
                 }
                 Text(verbatim: "\(TCPFormat.clock(connection.startedAt)) · \(FlowStore.label(for: connection.deviceKey))")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -219,9 +220,97 @@ private struct TCPRow: View {
     }
 }
 
+/// 协议标签旁的「已解密」/「未解密」：只有 XMPP STARTTLS 接管过（走到 `<proceed/>`）的连接才有（STARTTLS.md §3.3）。
+struct TCPTLSBadge: View {
+    let mark: TCPTLSMark
+
+    var body: some View {
+        let tint = mark.decrypted ? NetCaptureColors.accent : TCPFormat.amber
+        HStack(spacing: 3) {
+            Image(systemName: mark.decrypted ? "lock.open" : "lock").font(.system(size: 9, weight: .semibold))
+            Text(mark.decrypted ? "netcapture.tcp.tls.decryptedTag" : "netcapture.tcp.tls.notDecryptedTag")
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .padding(.leading, 4).padding(.trailing, 5).padding(.vertical, 1)
+        .foregroundStyle(tint)
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(tint.opacity(0.6)))
+        .fixedSize()
+    }
+}
+
+/// 数据里那条分隔线：上面是 `<proceed/>` 之前的明文，下面是解密后的内容（或没解开的密文）。
+struct TCPTLSSeparator: View {
+    let mark: TCPTLSMark
+
+    var body: some View {
+        let tint = mark.decrypted ? NetCaptureColors.accent : TCPFormat.amber
+        HStack(spacing: 10) {
+            Rectangle().fill(tint.opacity(0.45)).frame(height: 1)
+            HStack(spacing: 6) {
+                Image(systemName: mark.decrypted ? "lock.open" : "lock")
+                if mark.decrypted {
+                    Text(verbatim: ([L("netcapture.tcp.tls.decryptedLine")] + (mark.detail.isEmpty ? [] : [mark.detail]))
+                        .joined(separator: " · "))
+                } else {
+                    Text("netcapture.tcp.tls.cipherLine")
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 11).padding(.vertical, 2)
+            .background(tint.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(tint.opacity(0.45)))
+            .fixedSize()
+            Rectangle().fill(tint.opacity(0.45)).frame(height: 1)
+        }
+        .foregroundStyle(tint)
+        .padding(.vertical, 4)
+    }
+}
+
+/// 没解开的 STARTTLS 连接，详情顶上说明原因（握手失败 / 「解密 HTTPS」关着 / 不在解密范围）。
+struct TCPTLSWarning: View {
+    let mark: TCPTLSMark
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(TCPFormat.amber)
+            (Text(title).bold() + Text(verbatim: " ") + Text(explanation))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 11).padding(.vertical, 8)
+        .background(TCPFormat.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(TCPFormat.amber.opacity(0.4)))
+    }
+
+    private var title: LocalizedStringKey {
+        switch mark.tls.reason {
+        case .handshakeFailed?: return "netcapture.tcp.tls.failed.title"
+        case .decryptOff?: return "netcapture.tcp.tls.off.title"
+        case .outOfScope?: return "netcapture.tcp.tls.scope.title"
+        case .serverHandshakeFailed?: return "netcapture.tcp.tls.server.title"
+        case nil: return "netcapture.tcp.tls.unknown.title"
+        }
+    }
+
+    private var explanation: LocalizedStringKey {
+        switch mark.tls.reason {
+        case .handshakeFailed?: return "netcapture.tcp.tls.failed.body"
+        case .decryptOff?: return "netcapture.tcp.tls.off.body"
+        case .outOfScope?: return "netcapture.tcp.tls.scope.body"
+        case .serverHandshakeFailed?: return "netcapture.tcp.tls.server.body"
+        case nil: return "netcapture.tcp.tls.unknown.body"
+        }
+    }
+}
+
 // MARK: - 格式化
 
 enum TCPFormat {
+    static let amber = Color(hex: 0xF59E0B)
+
     private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -276,21 +365,26 @@ struct TCPDetailView: View {
     }
 
     var body: some View {
-        let blocks = TCPStream.blocks(connection.segments, merge: !bySegment)
+        let blocks = TCPStream.blocks(connection.segments, merge: !bySegment, breakAfter: connection.tls?.afterSegment)
+        let boundary = connection.tls?.boundaryIndex(in: blocks)
         VStack(spacing: 0) {
             header.padding(10)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if let tls = connection.tls, !tls.decrypted { TCPTLSWarning(mark: tls) }
                     overview
                     Divider()
                     dataControls(blocks)
-                    if blocks.isEmpty {
+                    if blocks.isEmpty, connection.tls == nil {
                         Text("netcapture.tcp.noData").font(.callout).foregroundStyle(.secondary)
                     }
-                    ForEach(blocks) { block in
+                    ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                        if index == boundary, let tls = connection.tls { TCPTLSSeparator(mark: tls) }
                         TCPBlockView(block: block, format: shownFormat, limit: Self.displayLimit)
                     }
+                    // 分隔线后面还没有数据（刚接管、或接管时握手失败）：线放在最后。
+                    if let tls = connection.tls, boundary == blocks.count { TCPTLSSeparator(mark: tls) }
                     if connection.droppedSegments > 0 {
                         Text("netcapture.tcp.dropped \(TCPLog.maxSegments) \(connection.droppedSegments)")
                             .font(.caption).foregroundStyle(.secondary)
@@ -334,7 +428,9 @@ struct TCPDetailView: View {
 
     private var protocolText: String {
         guard let match = connection.detected else { return L("netcapture.tcp.unknown") }
-        return match.guessed ? L("netcapture.tcp.guessedByPort \(match.name)") : match.name
+        let name = match.guessed ? L("netcapture.tcp.guessedByPort \(match.name)") : match.name
+        guard let tls = connection.tls else { return name }
+        return name + " · " + L(tls.decrypted ? "netcapture.tcp.tls.decryptedTag" : "netcapture.tcp.tls.notDecryptedTag")
     }
 
     private func field(_ label: LocalizedStringKey, _ value: String) -> some View {
@@ -355,7 +451,7 @@ struct TCPDetailView: View {
                     Text("netcapture.tcp.text").tag(Format.text)
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
-                CopyButton(title: "netcapture.tcp.copyAll") { TCPBlockView.copyText(blocks, format: shownFormat) }
+                CopyButton(title: "netcapture.tcp.copyAll") { TCPBlockView.copyText(blocks, format: shownFormat, tls: connection.tls) }
                     .controlSize(.small)
             }
             Toggle("netcapture.tcp.bySegment", isOn: $bySegment).toggleStyle(.checkbox).font(.callout)
@@ -465,20 +561,33 @@ struct TCPBlockView: View {
         }
     }
 
-    /// 复制：整块（不受显示上限限制），十六进制带累计偏移；没保存的部分写一行说明。
-    static func copyText(_ blocks: [TCPBlock], format: TCPDetailView.Format) -> String {
-        blocks.map { block in
-            let direction = L(block.fromClient ? "netcapture.tcp.fromClient" : "netcapture.tcp.fromServer")
-            var lines = ["# \(direction) · \(block.size) B · \(FlowFormat.time(block.startedAt))"]
-            for part in block.parts {
-                switch part {
-                case .data(let data, let offset):
-                    lines.append(format == .hex ? TCPPayload.hexDump(data, startOffset: offset) : TCPPayload.text(data))
-                case .missing(let count, let offset):
-                    lines.append(L("netcapture.tcp.missing \(count) \(TCPPayload.offsetText(offset))"))
-                }
+    /// 复制：整块（不受显示上限限制），十六进制带累计偏移；没保存的部分写一行说明。STARTTLS 的分隔线也写一行。
+    static func copyText(_ blocks: [TCPBlock], format: TCPDetailView.Format, tls: TCPTLSMark? = nil) -> String {
+        let boundary = tls?.boundaryIndex(in: blocks)
+        let separator = tls.map { mark in
+            "# —— " + (mark.decrypted
+                ? ([L("netcapture.tcp.tls.decryptedLine")] + (mark.detail.isEmpty ? [] : [mark.detail])).joined(separator: " · ")
+                : L("netcapture.tcp.tls.cipherLine")) + " ——"
+        }
+        var texts = blocks.enumerated().map { index, block -> String in
+            let prefix = index == boundary ? (separator.map { $0 + "\n\n" } ?? "") : ""
+            return prefix + text(of: block, format: format)
+        }
+        if let separator, boundary == blocks.count { texts.append(separator) }
+        return texts.joined(separator: "\n\n")
+    }
+
+    private static func text(of block: TCPBlock, format: TCPDetailView.Format) -> String {
+        let direction = L(block.fromClient ? "netcapture.tcp.fromClient" : "netcapture.tcp.fromServer")
+        var lines = ["# \(direction) · \(block.size) B · \(FlowFormat.time(block.startedAt))"]
+        for part in block.parts {
+            switch part {
+            case .data(let data, let offset):
+                lines.append(format == .hex ? TCPPayload.hexDump(data, startOffset: offset) : TCPPayload.text(data))
+            case .missing(let count, let offset):
+                lines.append(L("netcapture.tcp.missing \(count) \(TCPPayload.offsetText(offset))"))
             }
-            return lines.joined(separator: "\n")
-        }.joined(separator: "\n\n")
+        }
+        return lines.joined(separator: "\n")
     }
 }

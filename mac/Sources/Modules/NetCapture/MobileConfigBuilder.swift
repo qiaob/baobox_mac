@@ -304,9 +304,10 @@ enum MobileConfigBuilder {
                 body: """
                 <p class="ok" id="trusted" hidden>✓ 这台设备已经信任 Baobox 的证书，不用再装。<br>This device already trusts the Baobox certificate. No need to install it again.</p>
                 <a class="btn" id="certbtn" href="/cert">下载证书 / Download CA (.crt)</a>
-                <a class="btn ghost" href="intent:#Intent;action=android.settings.SECURITY_SETTINGS;end">打开安全设置 / Open security settings</a>
                 <p class="hint">Chrome 提示「无法安全下载」时选<b>保留</b>。<br>If Chrome says the file can't be downloaded securely, choose <b>Keep</b>.</p>
-                <p class="hint">下载后到系统设置里安装（直接点开下载的文件装不了）。点<b>打开安全设置</b>能直接到「安全和隐私」，剩下几层浏览器不让直接跳：<b>设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</b>，选刚下载的文件。<br>Then install it from Settings (opening the downloaded file won't work): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, and pick the downloaded file.</p>
+                <p class="hint">下载后打开手机的<b>设置</b>来安装（直接点开下载的文件装不了，网页也打不开设置里的这一页）：</p>
+                <p class="path">设置 › 安全和隐私 › 更多安全和隐私 › 加密与凭据 › 安装证书 › CA 证书</p>
+                <p class="hint">点「仍然安装」，选刚下载的文件。各家手机的菜单名字不完全一样，找不到就在设置顶部搜<b>证书</b>。<br>Then open <b>Settings</b> to install it (opening the downloaded file won't work, and a web page can't open that screen): <b>Settings › Security &amp; privacy › More security &amp; privacy › Encryption &amp; credentials › Install a certificate › CA certificate</b>, tap <b>Install anyway</b> and pick the downloaded file. Menu names differ between phone makers; if you can't find it, search Settings for <b>certificate</b>.</p>
                 """)
 
             // Android 没有让网页设置 Wi-Fi 代理的机制（iOS 靠描述文件，Android 没有对应的东西），只能手填。
@@ -317,7 +318,7 @@ enum MobileConfigBuilder {
                 <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
                 <div class="kv"><span>端口 Port</span><b id="port">\(port)</b><button class="mini" onclick="copyText('port',this)">复制 Copy</button></div>
                 <a class="btn ghost" href="intent:#Intent;action=android.settings.WIFI_SETTINGS;end">打开 Wi-Fi 设置 / Open Wi-Fi settings</a>
-                <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，可以在电脑的抓包窗口里一键设置。 / With USB debugging connected, the Mac can set it in one click.</p>
+                <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，电脑的抓包窗口能帮你在手机上打开 Wi-Fi 设置。 / With USB debugging connected, the Mac's capture window can open Wi-Fi settings on the phone.</p>
                 """)
 
             offCard = !offerProxy ? "" : card(
@@ -502,6 +503,7 @@ enum MobileConfigBuilder {
         .btn.ghost{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
         .addr{font-size:22px;font-weight:700;text-align:center;margin:10px 0;word-break:break-all}
         .hint{font-size:13px;color:var(--sub);margin:10px 0 0}
+        .path{font-size:15px;font-weight:600;line-height:1.5;margin:8px 0 0;padding:10px 12px;border-radius:10px;background:var(--bg)}
         .kv{display:flex;align-items:center;gap:10px;margin:10px 0}
         .kv span{color:var(--sub);font-size:13px;flex:0 0 auto}
         .kv b{font-size:19px;flex:1;white-space:nowrap;-webkit-user-select:all;user-select:all}

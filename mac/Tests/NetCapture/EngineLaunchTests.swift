@@ -1,34 +1,45 @@
 import Foundation
 import XCTest
 
-/// 引擎的监听组合与桥的开关（docs/packet-capture/CONTROL.md §2.1）。
+/// 引擎的监听组合与桥的开关（docs/packet-capture/CONTROL.md §2.1、WIREGUARD-DEVICES.md §4）。
 final class EngineLaunchTests: XCTestCase {
 
     func testLocalOnly() {
-        let listeners = EngineListeners(port: 9090, lan: false, wireguardPort: nil)
-        XCTAssertEqual(listeners.modeArguments(keyFile: "/k.json"),
+        let listeners = EngineListeners(port: 9090, lan: false)
+        XCTAssertEqual(listeners.modeArguments,
                        ["--mode", "regular@127.0.0.1:9090", "--mode", "socks5@127.0.0.1:9092"])
     }
 
-    /// 手动代理或给其他设备装证书：HTTP 代理听局域网；SOCKS 永远只听本机；WireGuard 开着才加。
-    func testLANAndWireGuard() {
-        let listeners = EngineListeners(port: 19640, lan: true, wireguardPort: 19643)
-        XCTAssertEqual(listeners.modeArguments(keyFile: "/a b/wireguard.json"),
+    /// 手动代理或给其他设备装证书：HTTP 代理听局域网；SOCKS 永远只听本机；WireGuard 每台设备一个监听，按设备表的顺序。
+    func testLANAndSeveralWireGuardDevices() {
+        let listeners = EngineListeners(port: 19640, lan: true, wireguard: [
+            WireGuardListener(keyFile: "/a b/wireguard/1111.json", port: 19643),
+            WireGuardListener(keyFile: "/a b/wireguard/2222.json", port: 19644),
+        ])
+        XCTAssertEqual(listeners.modeArguments,
                        ["--mode", "regular@0.0.0.0:19640", "--mode", "socks5@127.0.0.1:19642",
-                        "--mode", "wireguard:/a b/wireguard.json@19643"])
+                        "--mode", "wireguard:/a b/wireguard/1111.json@19643",
+                        "--mode", "wireguard:/a b/wireguard/2222.json@19644"])
     }
 
+    /// 加一台、删一台、换了顺序都算监听组合变了（要重启引擎）。
     func testListenersEquality() {
-        let base = EngineListeners(port: 9090, lan: false, wireguardPort: nil)
-        XCTAssertNotEqual(base, EngineListeners(port: 9090, lan: true, wireguardPort: nil))
-        XCTAssertNotEqual(base, EngineListeners(port: 9090, lan: false, wireguardPort: 51820))
-        XCTAssertEqual(base, EngineListeners(port: 9090, lan: false, wireguardPort: nil))
+        let one = WireGuardListener(keyFile: "/k/1.json", port: 51820)
+        let two = WireGuardListener(keyFile: "/k/2.json", port: 51821)
+        let base = EngineListeners(port: 9090, lan: false)
+        XCTAssertNotEqual(base, EngineListeners(port: 9090, lan: true))
+        XCTAssertNotEqual(base, EngineListeners(port: 9090, lan: false, wireguard: [one]))
+        XCTAssertNotEqual(EngineListeners(port: 9090, lan: false, wireguard: [one]),
+                          EngineListeners(port: 9090, lan: false, wireguard: [one, two]))
+        XCTAssertNotEqual(EngineListeners(port: 9090, lan: false, wireguard: [one, two]),
+                          EngineListeners(port: 9090, lan: false, wireguard: [two, one]))
+        XCTAssertEqual(base, EngineListeners(port: 9090, lan: false, wireguard: []))
     }
 
     func testNeighbourNeverOverflows() {
         XCTAssertEqual(EngineListeners.neighbour(of: 9090, offset: 2), 9092)
         XCTAssertEqual(EngineListeners.neighbour(of: 65535, offset: 2), 65533)
-        XCTAssertEqual(EngineListeners(port: 65534, lan: false, wireguardPort: nil).socksPort, 65532)
+        XCTAssertEqual(EngineListeners(port: 65534, lan: false).socksPort, 65532)
     }
 
     func testFlagOptions() {

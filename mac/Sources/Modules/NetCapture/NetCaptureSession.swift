@@ -22,14 +22,14 @@ final class NetCaptureSession: ObservableObject {
     @Published private(set) var macOn = false
     /// 「手动代理」：引擎听局域网，局域网设备（放行后）能拿它当代理。
     @Published private(set) var manualProxyOn = false
-    /// 「WireGuard」：引擎开 WireGuard 监听，卡片上显示二维码。
+    /// 「WireGuard」：引擎给每台设备开一个 WireGuard 监听（设备表在 `WireGuardDeviceStore`）。
     @Published private(set) var wireguardOn = false
+    /// 用户最后一次对 WireGuard 开关的意图。设备表还在读时先开后关，读完的回调照这个来，不再把它打开。
+    private var wireguardWanted = false
     /// 「给其他设备装证书」：配置页服务开着，卡片上显示二维码。
     @Published private(set) var certPageOn = false
     /// 暂停：HTTP 和 TCP 都不记录新的（CONTROL.md §5）。不记住，引擎每次新启动都从「记录中」开始。
     @Published private(set) var paused = false
-    /// WireGuard 的密钥（打开 WireGuard 时读或生成）：拼二维码里的配置用。
-    @Published private(set) var wireguardKeys: WireGuardKeys?
     /// 正在做一件要等的事（装证书、起引擎…）时的说明，窗口据此显示进度、禁用按钮。
     @Published private(set) var working: String?
     @Published var banner: Banner?
@@ -42,6 +42,8 @@ final class NetCaptureSession: ObservableObject {
     /// 等引擎就绪后要做的事；引擎起不来就丢掉。
     private var whenRunning: [() -> Void] = []
     private var stateSink: AnyCancellable?
+    /// 引擎失败时弹的那条提示的原文。引擎后来跑起来了就收掉它（只收这一条，别的提示不动）。
+    private var engineFailureText: String?
     /// 改系统代理的串行队列：先开后关的顺序不能乱（`networksetup` 要在后台跑）。
     private let proxyQueue = DispatchQueue(label: "com.baobox.netcapture.system-proxy", qos: .userInitiated)
 
@@ -55,6 +57,8 @@ final class NetCaptureSession: ObservableObject {
     private func engineStateChanged(_ state: NetCaptureEngine.State) {
         switch state {
         case .running:
+            if let text = engineFailureText, banner?.text == text { banner = nil }
+            engineFailureText = nil
             let actions = whenRunning
             whenRunning = []
             // 让 @Published 先落值，再跑后续（它们会读 engine.port）。
@@ -68,6 +72,7 @@ final class NetCaptureSession: ObservableObject {
         case .failed(let message):
             engineFailed()
             banner = Banner(kind: .problem, text: message)
+            engineFailureText = message
         case .stopped, .starting:
             break
         }
@@ -88,7 +93,7 @@ final class NetCaptureSession: ObservableObject {
         EngineListeners(port: NetCaptureEnv.port,
                         // 「给其他设备装证书」开着也要听局域网：配置页的证书检测要连代理端口。拿它当代理用会被桥拒绝（`lanProxy`）。
                         lan: manualProxyOn || certPageOn,
-                        wireguardPort: wireguardOn ? NetCaptureEnv.wireguardPort : nil)
+                        wireguard: wireguardOn ? WireGuardDeviceStore.shared.listeners : [])
     }
 
     private var desiredFlags: BridgeFlags {
@@ -165,6 +170,7 @@ final class NetCaptureSession: ObservableObject {
         macOn = false
         manualProxyOn = false
         wireguardOn = false
+        wireguardWanted = false
         certPageOn = false
         engineOnly = false
         ConfigPageServer.shared.stop()
@@ -188,6 +194,7 @@ final class NetCaptureSession: ObservableObject {
         macOn = false
         manualProxyOn = false
         wireguardOn = false
+        wireguardWanted = false
         certPageOn = false
         engineOnly = false
         ConfigPageServer.shared.stop()
@@ -200,6 +207,7 @@ final class NetCaptureSession: ObservableObject {
     /// 让引擎把这条请求再发一次。引擎没在跑就先只起引擎，就绪后再发。
     /// 发出去的请求是列表里新的一行，id 就是 `request.id`（调用方据此先选中它）。
     func replay(_ request: ReplayRequest) {
+        FlowStore.shared.noteReplay(request)
         ensureEngine { [weak self] in self?.engine.send(.replay(request)) }
     }
 
@@ -333,8 +341,10 @@ final class NetCaptureSession: ObservableObject {
 
     // MARK: - WireGuard
 
-    /// 「WireGuard」总开关。打开时先读（没有就生成）密钥文件，再让引擎开 WireGuard 监听。
+    /// 「WireGuard」总开关。打开时等设备表读完（首次启动新版本时要先迁移），再让引擎给每台设备开一个监听。
+    /// 一台设备都没有也照样打开（窗口会接着弹出「添加设备」）。
     func setWireGuard(_ on: Bool) {
+        wireguardWanted = on
         guard on else {
             guard wireguardOn else { return }
             wireguardOn = false
@@ -342,63 +352,17 @@ final class NetCaptureSession: ObservableObject {
             return
         }
         guard !wireguardOn else { return }
-        loadWireGuardKeys { [weak self] keys in
-            guard let self, keys != nil else { return }
+        WireGuardDeviceStore.shared.ensureLoaded { [weak self] in
+            guard let self, self.wireguardWanted, !self.wireguardOn else { return }
             self.wireguardOn = true
             self.reconcile()
         }
     }
 
-    /// 设置页「重新生成 WireGuard 密钥」：换一份新的；WireGuard 开着就重启引擎让它用新的。扫过旧二维码的隧道从此连不上。
-    func regenerateWireGuardKeys() {
-        let url = NetCaptureEnv.wireguardKeyURL
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try WireGuardKeyFile.replace(at: url) }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    switch result {
-                    case .success(let keys):
-                        self.wireguardKeys = keys
-                        if self.wireguardOn, self.engine.isActive {
-                            self.engine.restart(listeners: self.desiredListeners, flags: self.desiredFlags)
-                        }
-                    case .failure(let error):
-                        StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: error.localizedDescription)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 读密钥文件（没有就生成，权限 600），在后台做。写不下去报 `StorageWriteFailure`，交回 nil。
-    func loadWireGuardKeys(then: @escaping (WireGuardKeys?) -> Void) {
-        if let wireguardKeys {
-            then(wireguardKeys)
-            return
-        }
-        let url = NetCaptureEnv.wireguardKeyURL
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try WireGuardKeyFile.loadOrCreate(at: url) }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    switch result {
-                    case .success(let keys):
-                        self.wireguardKeys = keys
-                        then(keys)
-                    case .failure(let error):
-                        StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: error.localizedDescription)
-                        then(nil)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 二维码里的客户端配置：端点是 Mac 现在的局域网 IP + WireGuard 端口。
-    var wireguardEndpoint: String { "\(NetworkInterfaces.primaryIP()):\(NetCaptureEnv.wireguardPort)" }
-
-    func wireguardClientConfig() -> String? {
-        wireguardKeys?.clientConfig(endpoint: wireguardEndpoint)
+    /// 设备加了或删了：WireGuard 开着就让引擎换监听（监听只能启动时定，重启一次；别的设备断一下再自己连上）。改名不走这里。
+    func wireguardDevicesChanged() {
+        guard wireguardOn else { return }
+        reconcile()
     }
 
     // MARK: - 证书

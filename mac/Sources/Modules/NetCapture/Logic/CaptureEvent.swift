@@ -32,7 +32,8 @@ enum CaptureEvent: Equatable, Sendable {
     case response(Response)
     case failure(id: UUID, message: String, at: Date?)
     case webSocket(WebSocketMessage)
-    case tls(client: String?, host: String, reason: UndecryptedReason)
+    /// 一个没解密的域名。`wireguard`：经 WireGuard 来的是哪台设备（设备 id），别的来源为 nil。
+    case tls(client: String?, wireguard: String?, host: String, reason: UndecryptedReason)
     case device(client: String)
     /// 重发没发出去（URL 不合法、指令缺字段…）。`id` 是指令里给的那个；引擎没收到 id 时为 nil。
     case replayFailed(id: UUID?, message: String)
@@ -42,10 +43,14 @@ enum CaptureEvent: Equatable, Sendable {
     case tcpData(TCPData)
     /// 原始 TCP 连接结束；`error` 为 nil 是正常关闭。
     case tcpClose(id: UUID, error: String?, at: Date?)
+    /// XMPP 的 STARTTLS（docs/packet-capture/STARTTLS.md §3.2）：`<proceed/>` 之后这条连接的 TLS 解开了没有。
+    case tcpTLS(TCPTLS)
 
     struct Request: Equatable, Sendable {
         var id: UUID
         var client: String?
+        /// 经 WireGuard 来的：是哪台设备（设备 id，docs/packet-capture/WIREGUARD-DEVICES.md §4）；别的来源为 nil。
+        var wireguard: String? = nil
         var method: String
         var scheme: String
         var host: String
@@ -98,6 +103,8 @@ enum CaptureEvent: Equatable, Sendable {
     struct TCPOpen: Equatable, Sendable {
         var id: UUID
         var client: String?
+        /// 同 `Request.wireguard`。
+        var wireguard: String? = nil
         /// 目标地址（多半是 IP）。
         var host: String
         var port: Int
@@ -116,6 +123,34 @@ enum CaptureEvent: Equatable, Sendable {
         /// `data` 比 `size` 短（这一段超过 16 KB，只带了前面）。
         var truncated: Bool
         var at: Date
+    }
+
+    struct TCPTLS: Equatable, Sendable {
+        enum State: String, Sendable {
+            /// Baobox 接管了 TLS，手机接受了它的证书：后面的数据是解密后的明文。
+            case decrypted
+            /// 没解开：没接管（关着 / 不在范围 / 之前握手失败过），或接管时握手失败。后面的数据（如果有）是密文。
+            case failed
+        }
+
+        enum Reason: String, Sendable {
+            /// 手机不信任 Baobox 证书（这一次接管时被拒，或这台设备之前对这个域名被拒过，原样放行）。
+            case handshakeFailed = "handshake_failed"
+            /// 「解密 HTTPS」关着。
+            case decryptOff = "decrypt_off"
+            /// 域名不在解密范围里。
+            case outOfScope = "out_of_scope"
+            /// Baobox 和服务器的 TLS 握手失败（服务器证书没通过检查）。
+            case serverHandshakeFailed = "server_handshake_failed"
+        }
+
+        var connectionID: UUID
+        var state: State
+        /// XMPP 的域名（客户端 stream 头里的 `to`，或 ClientHello 的 SNI）。
+        var sni: String?
+        /// 引擎给的 TLS 版本（`TLSv1.3`）；只有解开了才有。
+        var version: String?
+        var reason: Reason?
     }
 
     /// 一个域名为什么没被解密。
@@ -151,6 +186,7 @@ enum CaptureEvent: Equatable, Sendable {
             return .request(Request(
                 id: id,
                 client: json["client"] as? String,
+                wireguard: wireguardID(json["wg"]),
                 method: method,
                 scheme: scheme,
                 host: host,
@@ -196,7 +232,7 @@ enum CaptureEvent: Equatable, Sendable {
             guard let host = json["host"] as? String,
                   let raw = json["reason"] as? String,
                   let reason = UndecryptedReason(rawValue: raw) else { return nil }
-            return .tls(client: json["client"] as? String, host: host, reason: reason)
+            return .tls(client: json["client"] as? String, wireguard: wireguardID(json["wg"]), host: host, reason: reason)
         case "device":
             guard let client = json["client"] as? String, !client.isEmpty else { return nil }
             return .device(client: client)
@@ -207,6 +243,7 @@ enum CaptureEvent: Equatable, Sendable {
             return .tcpOpen(TCPOpen(
                 id: id,
                 client: json["client"] as? String,
+                wireguard: wireguardID(json["wg"]),
                 host: json["host"] as? String ?? "",
                 port: int(json["port"]) ?? 0,
                 sni: (json["sni"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -225,6 +262,16 @@ enum CaptureEvent: Equatable, Sendable {
             guard let id = uuid(json["id"]) else { return nil }
             let error = (json["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             return .tcpClose(id: id, error: error, at: date(json["ts"]))
+        case "tcp_tls":
+            guard let id = uuid(json["id"]),
+                  let state = (json["state"] as? String).flatMap(TCPTLS.State.init(rawValue:)) else { return nil }
+            return .tcpTLS(TCPTLS(
+                connectionID: id,
+                state: state,
+                sni: (json["sni"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                version: (json["version"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                // 认不出的原因当作没有（界面上只写「没解密」，不说为什么）。
+                reason: (json["reason"] as? String).flatMap(TCPTLS.Reason.init(rawValue:))))
         default:
             return nil
         }
@@ -234,6 +281,12 @@ enum CaptureEvent: Equatable, Sendable {
 
     private static func uuid(_ value: Any?) -> UUID? {
         (value as? String).flatMap(UUID.init(uuidString:))
+    }
+
+    /// `wg`：设备 id（小写 UUID，密钥文件名）。不是这个形状的当作没有，免得一个怪字符串变成一台「设备」。
+    private static func wireguardID(_ value: Any?) -> String? {
+        guard let id = value as? String, WireGuardDeviceTable.isValidID(id) else { return nil }
+        return id
     }
 
     /// JSON 数字可能解成 Int 或 Double，两种都认；Bool 不算数字。

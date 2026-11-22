@@ -1,16 +1,17 @@
 import AppKit
 import SwiftUI
 
-// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2）：左边一列开关，右边是选中那一项的内容。
+// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2、CONFIG-LAYOUT.md）：左边一列开关，右边是选中那一项的内容。
+// 这一页 = 抓包的全部设置（设置窗口那页只剩一个入口）。
 //
-// 左边三组：证书（这台 Mac 信任没有、解密 HTTPS、给其他设备装证书）、抓包来源（本机、手动代理、WireGuard，各一个总开关）、
-// 工具（模拟器、终端 / 脚本、Android USB）。每项一行，关着开着都只占一行，页面不会越开越长。
+// 左边四组：证书（这台 Mac、解密 HTTPS 与范围、给其他设备装证书）、抓包来源（本机、手动代理、WireGuard，各一个总开关）、
+// 工具（模拟器、终端 / 脚本、Android USB、本地 MCP）、高级（端口与上限）。每项一行，关着开着都只占一行，页面不会越开越长。
 // 右边显示选中项的内容：子开关、地址、二维码（默认就够大，手机隔着屏幕能扫）。打开某个总开关时顺便选中它 ——
 // 开 WireGuard 接下来就是扫码。打开开关不切标签页：在这一页上通常要连着开几个。
 
-/// 左边列表里能选中的项（「这台 Mac」「解密 HTTPS」两行自己就是全部内容，不能选）。
+/// 左边列表里能选中的项。
 enum NetCaptureConfigItem: Hashable {
-    case certPage, mac, manualProxy, wireguard, simulator, terminal, androidUSB
+    case thisMac, decrypt, certPage, mac, manualProxy, wireguard, simulator, terminal, androidUSB, mcp, advanced
 }
 
 struct NetCaptureConfigView: View {
@@ -32,6 +33,10 @@ struct NetCaptureConfigView: View {
     @ViewBuilder
     private var detail: some View {
         switch state.configItem {
+        case .thisMac: ThisMacDetail()
+        case .decrypt: DecryptDetail()
+        case .mcp: MCPDetail()
+        case .advanced: AdvancedDetail()
         case .certPage: CertPageDetail()
         case .mac: MacDetail()
         case .manualProxy: ManualProxyDetail()
@@ -49,7 +54,16 @@ private struct ConfigSidebar: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var engine = NetCaptureEngine.shared
     @ObservedObject private var state = NetCaptureWindowState.shared
+    @ObservedObject private var wireguardDevices = WireGuardDeviceStore.shared
+    @ObservedObject private var mcp = CaptureMCPServer.shared
     @AppStorage(NetCaptureEnv.Keys.decryptHTTPS) private var decrypt = true
+    @AppStorage(NetCaptureEnv.Keys.decryptScope) private var scope = "all"
+    @AppStorage(NetCaptureEnv.Keys.allowDomains) private var allowDomains = ""
+    @AppStorage(NetCaptureEnv.Keys.denyDomains) private var denyDomains = ""
+    @AppStorage(NetCaptureEnv.Keys.port) private var port = 9090
+    @AppStorage(NetCaptureEnv.Keys.maxFlows) private var maxFlows = 1000
+    @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
+    @AppStorage(NetCaptureEnv.Keys.mcpPort) private var mcpPort = 9191
     @AppStorage(NetCaptureEnv.Keys.macHTTP) private var macHTTP = true
     @AppStorage(NetCaptureEnv.Keys.macWebSocket) private var macWebSocket = true
     @AppStorage(NetCaptureEnv.Keys.macTCP) private var macTCP = false
@@ -59,7 +73,8 @@ private struct ConfigSidebar: View {
             VStack(alignment: .leading, spacing: 6) {
                 groupTitle("netcapture.config.cert.title")
                 group {
-                    ConfigRow(icon: "checkmark.seal", title: "netcapture.config.cert.thisMac") {
+                    // 点开是信任状态、移除信任、证书名称、重新生成、清理旧证书（原来在设置页）。
+                    ConfigRow(item: .thisMac, icon: "checkmark.seal", title: "netcapture.config.cert.thisMac") {
                         if session.caTrusted {
                             Label("netcapture.config.cert.trusted", systemImage: "checkmark.seal.fill")
                                 .font(.callout).foregroundStyle(NetCaptureColors.accent)
@@ -68,14 +83,12 @@ private struct ConfigSidebar: View {
                                 .controlSize(.small)
                                 .disabled(session.working != nil)
                         }
+                        chevron
                     }
                     rowDivider
-                    ConfigRow(icon: "lock.open", title: "netcapture.config.cert.decrypt") {
-                        Button("netcapture.config.cert.scope") {
-                            guard let registry = AppDelegate.shared?.registry else { return }
-                            SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
-                        }
-                        .buttonStyle(.link).controlSize(.small)
+                    // 点开是范围和名单；小字说当前范围。
+                    ConfigRow(item: .decrypt, icon: "lock.open", title: "netcapture.config.cert.decrypt",
+                              subtitle: decrypt ? scopeSummary : nil) {
                         rowSwitch(Binding(get: { decrypt }, set: { session.setDecryptHTTPS($0) }))
                     }
                     rowDivider
@@ -103,9 +116,10 @@ private struct ConfigSidebar: View {
                         rowSwitch(selecting(.manualProxy, get: { session.manualProxyOn }, set: session.setManualProxy))
                     }
                     rowDivider
+                    // 开着时小字是「N 台设备」（每台一个端点，不再显示单个端点）。
                     ConfigRow(item: .wireguard, icon: "lock.shield", title: "netcapture.config.wg.title",
-                              subtitle: session.wireguardOn ? session.wireguardEndpoint : nil) {
-                        rowSwitch(selecting(.wireguard, get: { session.wireguardOn }, set: session.setWireGuard))
+                              subtitle: session.wireguardOn ? L("netcapture.wg.deviceCount \(wireguardDevices.devices.count)") : nil) {
+                        rowSwitch(selecting(.wireguard, get: { session.wireguardOn }, set: WireGuardUI.setOn))
                     }
                 }
 
@@ -116,6 +130,19 @@ private struct ConfigSidebar: View {
                     toolRow(.terminal, icon: "terminal", title: "netcapture.config.terminal.title")
                     rowDivider
                     toolRow(.androidUSB, icon: "cable.connector", title: "netcapture.config.usb.title")
+                    rowDivider
+                    ConfigRow(item: .mcp, icon: "sparkles", title: "netcapture.config.mcp.title",
+                              subtitle: mcp.isRunning ? "127.0.0.1:\(String(mcpPort))" : nil) {
+                        rowSwitch(selecting(.mcp, get: { mcp.isRunning }, set: { mcp.setEnabled($0) }))
+                    }
+                }
+
+                groupTitle("netcapture.config.group.advanced")
+                group {
+                    ConfigRow(item: .advanced, icon: "gauge.with.dots.needle.33percent", title: "netcapture.config.advanced.title",
+                              subtitle: L("netcapture.config.advanced.summary \(String(port)) \(String(maxFlows)) \(bodyCap / (1024 * 1024))")) {
+                        chevron
+                    }
                 }
 
                 Text("netcapture.settings.privacyStatement")
@@ -151,8 +178,20 @@ private struct ConfigSidebar: View {
     }
 
     private func toolRow(_ item: NetCaptureConfigItem, icon: String, title: LocalizedStringKey) -> some View {
-        ConfigRow(item: item, icon: icon, title: title) {
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        ConfigRow(item: item, icon: icon, title: title) { chevron }
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+    }
+
+    /// 「解密 HTTPS」那一行的小字：全部域名 / 不解密 N 个域名 / 只解密 N 个域名。
+    private var scopeSummary: String {
+        let current = DecryptScope.from(setting: scope, allowText: allowDomains, denyText: denyDomains)
+        switch current.mode {
+        case .all, .none: return L("netcapture.config.decrypt.summaryAll")
+        case .deny: return L("netcapture.config.decrypt.summaryDeny \(current.domains.count)")
+        case .allow: return L("netcapture.config.decrypt.summaryAllow \(current.domains.count)")
         }
     }
 
@@ -218,7 +257,7 @@ enum ConfigDetailMetrics {
 }
 
 /// 右边那一块：图标 + 标题（+ 这一项的总开关）、一句说明、内容。
-private struct ConfigDetail<Content: View>: View {
+struct ConfigDetail<Content: View>: View {
     let icon: String
     let title: LocalizedStringKey
     let detail: LocalizedStringKey
@@ -248,7 +287,7 @@ private struct ConfigDetail<Content: View>: View {
 }
 
 /// 「1 手机装 WireGuard App」这样的一步。
-private struct StepRow: View {
+struct StepRow: View {
     let number: Int
     let text: LocalizedStringKey
 
@@ -302,7 +341,7 @@ private struct CopyValueRow: View {
 }
 
 /// 二维码；内容为空时是一个虚线占位框，里面一句说明。点一下放大（卡片上的太小，手机隔着屏幕不好扫），再点或点别处收起。
-private struct QRBox: View {
+struct QRBox: View {
     let text: String?
     let side: CGFloat
     let placeholder: LocalizedStringKey
@@ -434,34 +473,25 @@ private struct ManualProxyDetail: View {
 
 // MARK: - WireGuard
 
+/// 卡片上只列设备（名字、端口、最近活动、二维码 / 改名 / 删除）；二维码在「添加设备」起好名字之后、或点那台的二维码图标时出现
+/// （docs/packet-capture/WIREGUARD-DEVICES.md §6）。开关关着时列表照常显示、能改名删除，添加和二维码是灰的。
 private struct WireGuardDetail: View {
     @ObservedObject private var session = NetCaptureSession.shared
 
     var body: some View {
         ConfigDetail(icon: "lock.shield", title: "netcapture.config.wg.title", detail: "netcapture.config.wg.detail",
-                     isOn: Binding(get: { session.wireguardOn }, set: { session.setWireGuard($0) })) {
-            HStack(alignment: .top, spacing: 22) {
-                // 关着时不显示任何和密钥有关的东西。
-                QRBox(text: session.wireguardOn ? session.wireguardClientConfig() : nil, side: ConfigDetailMetrics.qrSide,
-                      placeholder: "netcapture.config.qrPlaceholder", caption: session.wireguardEndpoint)
-                VStack(alignment: .leading, spacing: 10) {
-                    if session.wireguardOn {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("netcapture.config.wg.endpoint").font(.caption).foregroundStyle(.secondary)
-                            Text(verbatim: session.wireguardEndpoint).font(.title3.monospaced()).textSelection(.enabled)
-                                .lineLimit(1).minimumScaleFactor(0.7)
-                            CopyButton(title: "netcapture.config.wg.copy") { session.wireguardClientConfig() ?? "" }
-                                .controlSize(.small)
-                        }
-                        .padding(.bottom, 4)
-                    }
-                    StepRow(number: 1, text: "netcapture.config.wg.step1")
-                    StepRow(number: 2, text: "netcapture.config.wg.step2")
-                    StepRow(number: 3, text: "netcapture.config.wg.step3")
-                }
-            }
+                     isOn: Binding(get: { session.wireguardOn }, set: { WireGuardUI.setOn($0) })) {
+            WireGuardDeviceList()
             Text("netcapture.config.wg.note").font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: WireGuardDeviceList.width, alignment: .leading)
+            // 新设备的起始端口跟着 WireGuard 走（原来在设置页，CONFIG-LAYOUT.md §3）。
+            ConfigForm {
+                ConfigFormRow(title: "netcapture.settings.wireguardPort", note: "netcapture.settings.wireguardPortNote") {
+                    PortField(key: NetCaptureEnv.Keys.wireguardPort, fallback: 51820)
+                }
+            }
+            .frame(maxWidth: WireGuardDeviceList.width)
         }
     }
 }
@@ -530,14 +560,21 @@ private struct TerminalDetail: View {
     }
 }
 
-/// USB 调试连着的 Android 手机：一键设代理（指向 Mac 的局域网 IP）+ 推证书、清代理。模拟器在「模拟器」那一项里。
+/// USB 调试连着的 Android 手机：推证书、在手机上打开 Wi-Fi 设置（代理由人填进当前 Wi-Fi，手机上看得见）。
+/// 不再替真手机设隐藏的全局代理：它在 Wi-Fi 设置里看不到、换网络也带着走（CONTROL.md §12）。发现它还开着就提示，给一个清除按钮。
+/// 模拟器在「模拟器」那一项里。
 private struct AndroidUSBDetail: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var engine = NetCaptureEngine.shared
     @State private var adbPath: String?
     @State private var devices: [ADBController.Device] = []
+    /// 设了隐藏全局代理的手机：序列号 → `host:port`。
+    @State private var hiddenProxies: [String: String] = [:]
     @State private var checked = false
     @State private var busy = false
+
+    private var proxyHost: String { NetworkInterfaces.primaryIP() }
+    private var proxyPort: String { String(engine.port ?? NetCaptureEnv.port) }
 
     var body: some View {
         ConfigDetail(icon: "cable.connector", title: "netcapture.config.usb.title", detail: "netcapture.config.usb.detail") {
@@ -553,32 +590,73 @@ private struct AndroidUSBDetail: View {
                     Button("netcapture.common.refresh") { refresh() }.disabled(busy)
                 }
             } else {
-                ForEach(devices) { device in
-                    HStack(spacing: 8) {
-                        Text(verbatim: device.model.isEmpty ? device.serial : "\(device.model) (\(device.serial))")
-                            .font(.callout).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Button("netcapture.config.usb.setUp") { setUp(device) }
-                        Button("netcapture.settings.adbClearProxy") { clearProxy(device) }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(devices) { device in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(verbatim: device.model.isEmpty ? device.serial : "\(device.model) (\(device.serial))")
+                                    .font(.callout).lineLimit(1)
+                                Spacer(minLength: 8)
+                                Button("netcapture.config.usb.pushCert") { pushCert(device) }
+                                Button("netcapture.config.usb.openWifi") { openWifi(device) }
+                            }
+                            if let hidden = hiddenProxies[device.serial] {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                    Text("netcapture.config.usb.hiddenProxy \(hidden)").font(.caption)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 8)
+                                    Button("netcapture.settings.adbClearProxy") { clearProxy(device) }.controlSize(.small)
+                                }
+                            }
+                        }
+                        .disabled(busy)
                     }
-                    .disabled(busy)
                 }
                 .frame(maxWidth: ConfigDetailMetrics.formWidth)
+
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("netcapture.config.usb.proxyTitle").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("netcapture.config.proxy.host").font(.callout).foregroundStyle(.secondary)
+                        Text(verbatim: proxyHost).font(.callout.monospaced()).textSelection(.enabled)
+                        CopyButton(title: "netcapture.common.copy") { proxyHost }.controlSize(.small)
+                        Text("netcapture.config.proxy.port").font(.callout).foregroundStyle(.secondary).padding(.leading, 8)
+                        Text(verbatim: proxyPort).font(.callout.monospaced()).textSelection(.enabled)
+                        CopyButton(title: "netcapture.common.copy") { proxyPort }.controlSize(.small)
+                    }
+                    Text("netcapture.config.usb.proxySteps").font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !session.manualProxyOn {
+                        Text("netcapture.config.usb.needsProxy").font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: ConfigDetailMetrics.formWidth, alignment: .leading)
+                Text("netcapture.config.usb.wireguardHint").font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button("netcapture.common.refresh") { refresh() }.buttonStyle(.link).disabled(busy)
             }
         }
         .onAppear { if !checked { refresh() } }
     }
 
+    /// 列出手机（模拟器不算），顺便读每台有没有设隐藏的全局代理。
     private func refresh() {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
             let path = ADBController.adbPath()
             let list = path != nil ? ADBController.devices().filter { !$0.serial.hasPrefix("emulator-") } : []
+            var hidden: [String: String] = [:]
+            for device in list {
+                if let value = ADBController.globalProxy(serial: device.serial) { hidden[device.serial] = value }
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     adbPath = path
                     devices = list
+                    hiddenProxies = hidden
                     busy = false
                     checked = true
                 }
@@ -586,39 +664,35 @@ private struct AndroidUSBDetail: View {
         }
     }
 
-    /// 手机经 Wi-Fi 连 Mac 的代理：要「手动代理」开着，没开只提示，不替用户开（同模拟器对「本机」的做法）。
-    private func setUp(_ device: ADBController.Device) {
-        guard session.manualProxyOn else {
-            session.banner = NetCaptureSession.Banner(kind: .info, text: L("netcapture.config.usb.needsProxy"))
-            return
-        }
-        busy = true
-        let port = engine.port ?? NetCaptureEnv.port
-        let ip = NetworkInterfaces.primaryIP()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let proxied = ADBController.setProxy(serial: device.serial, ip: ip, port: port)
-            let pushed = ADBController.pushAndInstallCert(serial: device.serial)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    busy = false
-                    session.banner = (proxied && pushed)
-                        ? NetCaptureSession.Banner(kind: .info, text: L("netcapture.phone.android.done"))
-                        : NetCaptureSession.Banner(kind: .problem, text: L("netcapture.phone.android.failed"))
-                }
-            }
+    /// 推证书：放进手机的「下载」，再打开离「安装证书」最近的设置页；剩下几步在手机上点。和「手动代理」无关。
+    private func pushCert(_ device: ADBController.Device) {
+        perform(success: L("netcapture.config.usb.certPushed")) { ADBController.pushAndInstallCert(serial: device.serial) }
+    }
+
+    /// 在手机上打开 Wi-Fi 设置，人把上面的主机和端口填进当前网络的代理。
+    private func openWifi(_ device: ADBController.Device) {
+        perform(success: L("netcapture.config.usb.wifiOpened")) { ADBController.openWifiSettings(serial: device.serial) }
+    }
+
+    /// 清掉以前设过的隐藏全局代理，清完重读一遍。
+    private func clearProxy(_ device: ADBController.Device) {
+        perform(success: L("netcapture.phone.android.cleared"), thenRefresh: true) {
+            ADBController.clearProxy(serial: device.serial)
         }
     }
 
-    private func clearProxy(_ device: ADBController.Device) {
+    /// 在后台跑一条 adb 操作，成功 / 失败各给一句提示。
+    private func perform(success: String, thenRefresh: Bool = false, _ work: @escaping () -> Bool) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
-            let ok = ADBController.clearProxy(serial: device.serial)
+            let ok = work()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     busy = false
                     session.banner = ok
-                        ? NetCaptureSession.Banner(kind: .info, text: L("netcapture.phone.android.cleared"))
+                        ? NetCaptureSession.Banner(kind: .info, text: success)
                         : NetCaptureSession.Banner(kind: .problem, text: L("netcapture.phone.android.failed"))
+                    if thenRefresh { refresh() }
                 }
             }
         }

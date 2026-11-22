@@ -1,0 +1,592 @@
+<title>抓包配置页重排</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a review sheet. Each numbered screen is a faithful dark macOS window (the user's app in dark mode),
+   with short notes underneath. The page itself follows the viewer's theme; the windows stay dark on purpose. */
+:root {
+  --page-bg: #f2f5f5;
+  --page-fg: #1a2121;
+  --page-muted: #5b6968;
+  --page-line: #d3dbda;
+  --page-card: #ffffff;
+  --accent: #17a398;
+
+  /* macOS dark window, fixed in both themes */
+  --w-bg: #1e1f1f;
+  --w-bar: #2a2a2c;
+  --w-panel: #252627;
+  --w-group: #2c2c2e;
+  --w-field: #1b1b1c;
+  --w-line: #3a3a3c;
+  --w-fg: #ececec;
+  --w-muted: #98989d;
+  --w-teal: #2bc4b8;
+  --w-teal-soft: rgba(43, 196, 184, .16);
+  --w-sel: #0a5fd1;
+  --w-blue: #0a84ff;
+  --w-green: #28a745;
+  --w-red: #e5484d;
+  --w-amber: #f59e0b;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page-bg: #111515; --page-fg: #e2e9e8; --page-muted: #8d9e9c; --page-line: #283130; --page-card: #181e1e;
+    --accent: #2bc4b8; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page-bg: #111515; --page-fg: #e2e9e8; --page-muted: #8d9e9c; --page-line: #283130; --page-card: #181e1e;
+  --accent: #2bc4b8; color-scheme: dark;
+}
+
+body { background: var(--page-bg); color: var(--page-fg); font-family: var(--font-ui); font-size: 15px; line-height: 1.6; }
+.page { max-width: 1120px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 56px; }
+header.top { display: grid; gap: 10px; max-width: 70ch; }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: .08em; color: var(--accent); font-weight: 600; }
+h1 { margin: 0; font-size: 28px; line-height: 1.25; text-wrap: balance; font-weight: 650; }
+.lede { margin: 0; color: var(--page-muted); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+nav.toc a { font-size: 13px; color: var(--page-fg); text-decoration: none; border: 1px solid var(--page-line); border-radius: 999px; padding: 3px 12px; background: var(--page-card); }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); outline: none; }
+
+section.shot { display: grid; gap: 14px; min-width: 0; }
+section.shot h2 { margin: 0; font-size: 19px; font-weight: 650; display: flex; gap: 10px; align-items: baseline; text-wrap: balance; }
+section.shot h2 .n { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+.sub { margin: 0; color: var(--page-muted); max-width: 72ch; }
+.scroller { overflow-x: auto; padding-bottom: 6px; }
+.notes { margin: 0; padding-left: 20px; display: grid; gap: 4px; max-width: 80ch; }
+.notes li { color: var(--page-fg); }
+.notes b { font-weight: 600; }
+.tag-new { display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 5px; margin-right: 4px; line-height: 17px; vertical-align: 1px; }
+.row-wrap { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+
+/* ---------- macOS window ---------- */
+.win { width: 1040px; background: var(--w-bg); color: var(--w-fg); font-family: var(--font-ui); font-size: 13px; line-height: 1.35;
+  border-radius: 11px; border: 1px solid #4a4a4c; box-shadow: 0 18px 50px rgba(0,0,0,.28); overflow: hidden; position: relative; }
+.win.narrow { width: 760px; }
+.titlebar { height: 30px; display: flex; align-items: center; padding: 0 12px; background: var(--w-bar); }
+.lights { display: flex; gap: 8px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+.lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.tabbar { display: flex; align-items: flex-end; justify-content: space-between; background: var(--w-bar); padding: 0 14px; border-bottom: 1px solid var(--w-line); }
+.tabs { display: flex; gap: 2px; }
+.tab { display: flex; align-items: center; gap: 7px; padding: 8px 16px; color: var(--w-muted); border-radius: 8px 8px 0 0; font-size: 13.5px; }
+.tab b { color: var(--w-teal); font-weight: 500; }
+.tab.on { background: var(--w-bg); color: var(--w-fg); font-weight: 600; }
+.tab svg { width: 15px; height: 15px; }
+.status { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; color: var(--w-muted); font-size: 12.5px; }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: #30d158; }
+.wbtn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px; background: #3a3a3c; color: var(--w-fg); font-size: 12.5px; line-height: 18px; white-space: nowrap; }
+.wbtn svg { width: 13px; height: 13px; }
+.wbtn.red { background: #c9302c; }
+.wbtn.teal { background: var(--w-teal); color: #062a27; font-weight: 600; }
+.wbtn.small { padding: 2px 9px; font-size: 12px; }
+.ico { width: 16px; height: 16px; flex: none; }
+.muted { color: var(--w-muted); }
+.mono { font-family: var(--font-mono); }
+.switch { width: 32px; height: 19px; border-radius: 10px; background: #48484a; position: relative; flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #e8e8e8; }
+.switch.on { background: var(--w-teal); }
+.switch.on::after { left: 15px; }
+
+/* ---------- config page ---------- */
+.config { display: grid; grid-template-columns: 330px 1fr; min-height: 640px; }
+.cfg-left { padding: 16px 0 16px 16px; display: grid; gap: 6px; align-content: start; }
+.gtitle { font-size: 11.5px; font-weight: 600; color: var(--w-muted); padding: 10px 4px 2px; }
+.group { background: var(--w-group); border-radius: 10px; overflow: hidden; }
+.crow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; min-height: 26px; }
+.crow + .crow { border-top: 1px solid var(--w-line); }
+.crow .ico { color: var(--w-teal); width: 17px; height: 17px; }
+.crow .t { flex: 1; min-width: 0; display: grid; }
+.crow .t small { color: var(--w-muted); font-size: 11.5px; }
+.crow.sel { background: var(--w-teal-soft); }
+.crow .chev { color: var(--w-muted); width: 13px; height: 13px; }
+.linkish { color: var(--w-teal); font-size: 12px; }
+.privacy { font-size: 11.5px; color: var(--w-muted); padding: 10px 4px 0; line-height: 1.45; }
+.cfg-right { border-left: 1px solid var(--w-line); padding: 22px; display: grid; gap: 14px; align-content: start; }
+.dhead { display: flex; align-items: center; gap: 10px; }
+.dhead .ico { color: var(--w-teal); width: 22px; height: 22px; }
+.dhead h3 { margin: 0; font-size: 17px; font-weight: 600; flex: 1; }
+.ddesc { color: var(--w-muted); font-size: 13px; margin: 0; }
+.hr { height: 1px; background: var(--w-line); }
+
+.devhead { display: flex; align-items: center; justify-content: space-between; max-width: 520px; }
+.devhead .cap { font-size: 11.5px; color: var(--w-muted); font-weight: 600; }
+.addbtn { display: inline-flex; align-items: center; gap: 5px; color: var(--w-teal); font-size: 12.5px; }
+.addbtn svg { width: 13px; height: 13px; }
+.devlist { max-width: 520px; background: var(--w-group); border-radius: 9px; overflow: hidden; }
+.dev { display: grid; grid-template-columns: 18px 1fr 58px 96px 76px; align-items: center; gap: 10px; padding: 7px 12px; }
+.dev + .dev { border-top: 1px solid var(--w-line); }
+.dev .ico { color: var(--w-muted); width: 15px; height: 15px; }
+.dev .port { font-family: var(--font-mono); color: var(--w-muted); font-size: 12px; }
+.dev .seen { color: var(--w-muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.dev .seen i { width: 6px; height: 6px; border-radius: 50%; background: #30d158; flex: none; }
+.dev .seen i.idle { background: #636366; }
+.dev .acts { display: flex; gap: 8px; justify-content: flex-end; color: var(--w-muted); }
+.dev .acts svg { width: 14px; height: 14px; }
+.dev.sel { background: var(--w-teal-soft); }
+.dev.sel .ico { color: var(--w-teal); }
+.qrrow { display: flex; gap: 22px; align-items: flex-start; }
+.qrbox { display: grid; gap: 6px; justify-items: center; flex: none; }
+.qrbox canvas { width: 220px; height: 220px; border-radius: 10px; background: #fff; display: block; }
+.qrbox .cap { font-size: 11.5px; color: var(--w-muted); font-family: var(--font-mono); }
+.qrph { width: 220px; height: 220px; border-radius: 10px; border: 1.5px dashed #555; display: grid; place-items: center; color: var(--w-muted); font-size: 12.5px; text-align: center; }
+.qinfo { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.qinfo .devname { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.qinfo .devname svg { width: 16px; height: 16px; color: var(--w-teal); }
+.qinfo .label { font-size: 11.5px; color: var(--w-muted); }
+.qinfo .endpoint { font-family: var(--font-mono); font-size: 17px; }
+.step { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.step b { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--w-teal); color: #fff; font-size: 11px; display: grid; place-items: center; font-weight: 700; transform: translateY(3px); }
+.wnote { font-size: 11.5px; color: var(--w-muted); margin: 0; line-height: 1.5; }
+.wnote strong { color: var(--w-fg); font-weight: 600; }
+.devhint { font-size: 12.5px; color: var(--w-fg); margin: 0; }
+.wbtn.outline { background: transparent; border: 1px solid rgba(43,196,184,.6); color: var(--w-teal); }
+.wbtn.off { opacity: .4; }
+.dev .acts svg.off { opacity: .35; }
+.dialog.wide { width: 560px; }
+.dialog .qrrow { gap: 18px; }
+.waitline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--w-muted); background: #232325; border-radius: 7px; padding: 7px 10px; }
+.waitline .spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid #555; border-top-color: var(--w-teal); animation: spin 1s linear infinite; flex: none; }
+.waitline.ok { color: #7fe3a0; background: rgba(48,209,88,.1); }
+.waitline.ok svg { width: 14px; height: 14px; flex: none; }
+.dialog .then { font-size: 11.5px; color: var(--w-muted); margin: 0 0 -6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- dialogs ---------- */
+.dialog { width: 380px; max-width: 100%; background: #2b2b2d; color: var(--w-fg); font-family: var(--font-ui); font-size: 13px; line-height: 1.4;
+  border-radius: 12px; border: 1px solid #4a4a4c; box-shadow: 0 18px 50px rgba(0,0,0,.3); padding: 20px; display: grid; gap: 12px; }
+.dialog h4 { margin: 0; font-size: 14px; font-weight: 650; }
+.dialog p { margin: 0; color: var(--w-muted); font-size: 12.5px; }
+.field { display: grid; gap: 5px; }
+.field label { font-size: 12px; color: var(--w-muted); }
+.input { background: var(--w-field); border: 1px solid #4b4b4e; border-radius: 6px; padding: 5px 8px; box-shadow: 0 0 0 3px rgba(43,196,184,.35); }
+.input span { background: rgba(10, 95, 209, .75); padding: 0 1px; }
+.dlg-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.dlg-btns .wbtn { padding: 4px 14px; }
+.alert { justify-items: center; text-align: center; width: 280px; }
+.alert .appicon { width: 54px; height: 54px; border-radius: 12px; background: linear-gradient(160deg, #3fd6c9, #138f86); display: grid; place-items: center; color: #fff; }
+.alert .appicon svg { width: 30px; height: 30px; }
+.alert .dlg-btns { flex-direction: column; width: 100%; }
+.alert .dlg-btns .wbtn { justify-content: center; }
+
+/* ---------- HTTP page ---------- */
+.http { display: grid; grid-template-columns: 250px 1fr; min-height: 470px; }
+.side { border-right: 1px solid var(--w-line); display: grid; align-content: start; position: relative; }
+.filt { margin: 10px; display: flex; align-items: center; gap: 7px; background: var(--w-field); border-radius: 7px; padding: 5px 9px; color: var(--w-muted); }
+.filt svg { width: 13px; height: 13px; }
+.srow { display: flex; align-items: center; gap: 9px; margin: 1px 8px; padding: 6px 9px; border-radius: 7px; font-size: 13.5px; }
+.srow .ico { width: 16px; height: 16px; color: var(--w-muted); }
+.srow .c { margin-left: auto; color: var(--w-muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.srow.sel { background: var(--w-teal); color: #fff; font-weight: 600; }
+.srow.sel .ico, .srow.sel .c { color: #fff; }
+.shead { font-size: 11.5px; color: var(--w-muted); font-weight: 600; padding: 12px 17px 3px; }
+.srow.host { font-size: 12.5px; padding: 4px 9px; }
+.menu { position: absolute; left: 150px; top: 172px; width: 196px; background: #2d2d30; border: 1px solid #505053; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 5px; z-index: 2; font-size: 13px; }
+.menu div { display: flex; gap: 8px; align-items: center; padding: 4px 8px; border-radius: 5px; }
+.menu div svg { width: 14px; height: 14px; }
+.menu div.hl { background: var(--w-sel); }
+.menu div.dim { color: var(--w-muted); }
+.menu hr { border: 0; border-top: 1px solid #48484b; margin: 4px 6px; }
+.main { display: grid; align-content: start; min-width: 0; }
+.toolbar { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--w-line); }
+.toolbar .search { flex: 1; display: flex; gap: 7px; align-items: center; background: var(--w-field); border-radius: 7px; padding: 5px 10px; color: var(--w-muted); }
+.toolbar .search svg { width: 14px; height: 14px; }
+.toolbar .iconbtn { background: #3a3a3c; border-radius: 6px; padding: 4px 9px; display: grid; place-items: center; }
+.toolbar .iconbtn svg { width: 15px; height: 15px; }
+.toolbar .pop { display: inline-flex; gap: 7px; align-items: center; background: #3a3a3c; border-radius: 6px; padding: 3px 4px 3px 10px; font-size: 13px; }
+.toolbar .pop i { background: var(--w-blue); border-radius: 4px; width: 16px; height: 16px; display: grid; place-items: center; }
+.toolbar .pop svg { width: 10px; height: 10px; color: #fff; }
+.toolbar .cnt { margin-left: auto; color: var(--w-muted); font-size: 12px; white-space: nowrap; }
+.req { display: grid; grid-template-columns: 56px 40px 1fr; gap: 10px; align-items: center; padding: 6px 12px; font-size: 12.5px; }
+.req:nth-child(even) { background: #232324; }
+.badge { font-size: 11px; font-weight: 700; color: #fff; text-align: center; border-radius: 5px; padding: 2px 0; }
+.b-tls { background: #5a5a5e; } .b-post { background: var(--w-blue); } .b-get { background: var(--w-green); }
+.req .st { color: #4cd964; font-variant-numeric: tabular-nums; }
+.req .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.req .dv { color: var(--w-muted); text-align: right; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- TCP page ---------- */
+.tcp { display: grid; grid-template-columns: 450px 1fr; min-height: 560px; }
+.clist { border-right: 1px solid var(--w-line); display: grid; align-content: start; padding: 6px; gap: 3px; }
+.conn { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 7px 9px; border-radius: 7px; }
+.conn:nth-child(even) { background: #232324; }
+.conn .a { font-size: 14px; display: flex; gap: 7px; align-items: center; font-variant-numeric: tabular-nums; }
+.conn .b { font-size: 12px; color: var(--w-muted); font-variant-numeric: tabular-nums; }
+.conn .r1 { text-align: right; font-size: 12px; color: var(--w-muted); }
+.conn .r1.live { color: var(--w-teal); }
+.conn .r2 { text-align: right; font-size: 12px; color: var(--w-muted); font-variant-numeric: tabular-nums; }
+.proto { font-size: 11px; font-weight: 600; color: var(--w-teal); background: rgba(43,196,184,.14); border-radius: 5px; padding: 1px 6px; }
+.proto.unk { color: var(--w-muted); background: rgba(255,255,255,.07); }
+.tlstag { font-size: 11px; font-weight: 600; border-radius: 5px; padding: 0 6px 0 4px; display: inline-flex; align-items: center; gap: 3px; border: 1px solid; line-height: 16px; }
+.tlstag svg { width: 11px; height: 11px; }
+.tlstag.ok { color: #7ee2d9; border-color: rgba(43,196,184,.6); }
+.tlstag.bad { color: #f8c062; border-color: rgba(245,158,11,.55); }
+.conn.sel { background: var(--w-sel) !important; }
+.conn.sel .b, .conn.sel .r1, .conn.sel .r2 { color: #dce8ff; }
+.conn.sel .proto { color: #fff; background: rgba(255,255,255,.18); }
+.conn.sel .tlstag.ok { color: #fff; border-color: rgba(255,255,255,.7); }
+.cdetail { display: grid; align-content: start; gap: 10px; padding: 12px 14px; min-width: 0; }
+.chead { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chead .live { font-size: 12px; font-weight: 600; color: var(--w-teal); background: rgba(43,196,184,.14); padding: 1px 7px; border-radius: 5px; }
+.chead .closed { font-size: 12px; font-weight: 600; color: var(--w-muted); background: rgba(255,255,255,.07); padding: 1px 7px; border-radius: 5px; }
+.chead .meta { font-size: 12px; font-weight: 400; color: var(--w-muted); margin-left: auto; }
+.seg { background: #262628; border-radius: 8px; padding: 9px 11px; display: grid; gap: 6px; min-width: 0; }
+.seg .h { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.seg .h .dir { width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center; color: #fff; flex: none; }
+.seg .h .dir svg { width: 11px; height: 11px; }
+.seg .h .up { background: #1fa58f; } .seg .h .down { background: var(--w-blue); }
+.seg .h .sz { color: var(--w-muted); font-variant-numeric: tabular-nums; }
+.seg .h .cp { margin-left: auto; display: inline-flex; gap: 5px; align-items: center; background: #3a3a3c; border-radius: 5px; padding: 1px 8px; font-size: 11.5px; }
+.seg .h .cp svg { width: 12px; height: 12px; }
+.seg pre { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #e4e4e4; }
+.seg pre .dim { color: #8a8a8f; }
+.tlsline { display: flex; align-items: center; gap: 10px; color: #7ee2d9; font-size: 12px; font-weight: 600; margin: 4px 0; }
+.tlsline::before, .tlsline::after { content: ""; flex: 1; height: 1px; background: rgba(43,196,184,.45); }
+.tlsline span { display: inline-flex; gap: 6px; align-items: center; background: rgba(43,196,184,.12); border: 1px solid rgba(43,196,184,.45); border-radius: 999px; padding: 2px 11px; white-space: nowrap; }
+.tlsline svg { width: 13px; height: 13px; }
+.warnbar { display: flex; gap: 9px; align-items: flex-start; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: #f6d39a; }
+.warnbar svg { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--w-amber); }
+.warnbar b { color: #fbe3b8; }
+
+/* ---------- settings ---------- */
+.settings { width: 560px; max-width: 100%; background: var(--w-bg); color: var(--w-fg); font-family: var(--font-ui); font-size: 13px; border-radius: 11px; border: 1px solid #4a4a4c; padding: 16px; display: grid; gap: 8px; }
+.setrow { display: flex; align-items: center; gap: 12px; background: var(--w-group); border-radius: 8px; padding: 8px 12px; }
+.setrow .k { flex: 1; display: grid; }
+.setrow .k small { color: var(--w-muted); font-size: 11.5px; }
+.setrow .num { width: 70px; background: var(--w-field); border: 1px solid #4b4b4e; border-radius: 5px; padding: 2px 6px; font-family: var(--font-mono); text-align: right; }
+.setrow.gone { opacity: .45; text-decoration: line-through; }
+
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } .waitline .spin { animation: none; } }
+</style>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/><rect x="9" y="11" width="6" height="5" rx="1"/><path d="M10.3 11V9.6a1.7 1.7 0 013.4 0V11"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.2 3.6 3.2 14.4 0 18M12 3c-3.2 3.6-3.2 14.4 0 18"/></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.3l2.4 2.4 4.6-5"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="1.6"/><path d="M8 11V7.6a4 4 0 017.7-1.6"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 19h2M19 14h1"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="1.6"/><path d="M3 9h18"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1.6"/><path d="M7 10l3 2-3 2M12.5 15H17"/></symbol>
+    <symbol id="i-cable" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0zM12 16v5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="i-arrows" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h15l-3-3M20 16H5l3 3"/></symbol>
+    <symbol id="i-nodes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M7.4 7.8l3.4 8.2M16.6 7.8l-3.4 8.2"/></symbol>
+    <symbol id="i-tray" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 2h6l1-2h5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 20l4-1L19 8l-3-3L5 16z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor"/></symbol>
+    <symbol id="i-up-a" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-down-a" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4.5M12 17.5v.1"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="1.6"/><path d="M8 11V8a4 4 0 018 0v3"/></symbol>
+  </defs>
+</svg>
+<style>
+/* Additions for the config-page relayout mockup (same tokens as the first mockup). */
+.config.tall { min-height: 760px; }
+.fgroup { background: var(--w-group); border-radius: 9px; padding: 0 12px; max-width: 480px; }
+.frow { display: flex; align-items: center; gap: 12px; padding: 9px 0; min-height: 24px; }
+.frow + .frow { border-top: 1px solid var(--w-line); }
+.frow .k { flex: 1; display: grid; gap: 1px; min-width: 0; }
+.frow .k small { color: var(--w-muted); font-size: 11.5px; line-height: 1.4; }
+.numf { width: 72px; background: var(--w-field); border: 1px solid #4b4b4e; border-radius: 5px; padding: 2px 7px; font-family: var(--font-mono); font-size: 12.5px; text-align: right; }
+.popup { display: inline-flex; align-items: center; gap: 8px; background: #3a3a3c; border-radius: 6px; padding: 2px 4px 2px 10px; font-size: 12.5px; }
+.popup i { background: var(--w-blue); border-radius: 4px; width: 16px; height: 16px; display: grid; place-items: center; }
+.popup svg { width: 10px; height: 10px; color: #fff; }
+.stepper { display: inline-grid; grid-template-rows: 1fr 1fr; background: #3a3a3c; border-radius: 5px; width: 16px; height: 22px; font-size: 9px; line-height: 11px; text-align: center; color: var(--w-fg); }
+.segctl { display: inline-flex; background: #3a3a3c; border-radius: 7px; padding: 2px; gap: 2px; }
+.segctl span { padding: 3px 14px; border-radius: 5px; font-size: 12.5px; color: var(--w-fg); }
+.segctl span.on { background: #636366; }
+.tarea { background: var(--w-field); border: 1px solid #4b4b4e; border-radius: 6px; padding: 7px 9px; font-family: var(--font-mono); font-size: 12px; line-height: 1.65; min-height: 92px; max-width: 480px; box-sizing: border-box; white-space: pre; color: #e4e4e4; }
+.flabel { font-size: 11.5px; color: var(--w-muted); font-weight: 600; }
+.okchip { display: inline-flex; align-items: center; gap: 5px; color: var(--w-teal); font-size: 12.5px; }
+.okchip svg { width: 14px; height: 14px; }
+.greychip { color: var(--w-muted); font-size: 12.5px; }
+.panelgrid { display: grid; gap: 24px; }
+.detailwin { width: 720px; }
+.detailwin .cfg-right { border-left: 0; }
+.legacy { color: #f6d39a; }
+/* settings window */
+.setwin { width: 760px; display: grid; grid-template-columns: 200px 1fr; min-height: 300px; }
+.setwin .slist { background: var(--w-panel); border-right: 1px solid var(--w-line); padding: 10px 8px; display: grid; gap: 1px; align-content: start; }
+.setwin .slist div { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; font-size: 13px; }
+.setwin .slist div svg { width: 15px; height: 15px; color: var(--w-muted); }
+.setwin .slist div.on { background: var(--w-sel); }
+.setwin .slist div.on svg { color: #fff; }
+.setwin .scontent { padding: 26px; display: grid; gap: 12px; align-content: start; }
+.setwin .scontent h3 { margin: 0; font-size: 17px; font-weight: 600; }
+.setwin .scontent p { margin: 0; color: var(--w-muted); font-size: 13px; }
+/* menus */
+.nsmenu { width: 260px; background: #2d2d30; color: var(--w-fg); font-family: var(--font-ui); font-size: 13.5px; border: 1px solid #505053; border-radius: 9px; box-shadow: 0 12px 34px rgba(0,0,0,.35); padding: 5px; display: grid; }
+.nsmenu div { padding: 4px 10px; border-radius: 5px; display: flex; justify-content: space-between; gap: 12px; }
+.nsmenu div.dim { color: var(--w-muted); }
+.nsmenu div.hl { background: var(--w-sel); }
+.nsmenu div small { color: var(--w-muted); font-size: 12px; }
+.nsmenu div.hl small { color: #dce8ff; }
+.nsmenu hr { border: 0; border-top: 1px solid #48484b; margin: 4px 8px; }
+.cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, max-content)); gap: 28px; align-items: start; }
+.cmp h3 { margin: 0 0 8px; font-size: 13px; color: var(--page-muted); font-weight: 600; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 17a8 8 0 1116 0"/><path d="M12 17l4-5"/><path d="M4 17h16"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></symbol>
+    <symbol id="i-scissor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L20 18M8 15.5L20 6"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/></symbol>
+  </defs>
+</svg>
+
+<main class="page">
+  <header class="top">
+    <p class="eyebrow">BAOBOX · 网络抓包</p>
+    <h1>抓包的设置都放进「配置」页</h1>
+    <p class="lede">规则：一个设置只放一个地方；抓包相关的全在抓包窗口的「配置」页；设置窗口那页只留入口；菜单栏只放窗口关着也必须能做的事。数据是示例，哪里要改说图的编号。</p>
+    <nav class="toc" aria-label="图目录">
+      <a href="#c1">1 配置页 · 解密 HTTPS</a>
+      <a href="#c2">2 这台 Mac 的证书</a>
+      <a href="#c3">3 本地 MCP</a>
+      <a href="#c4">4 高级 · 端口与上限</a>
+      <a href="#c5">5 WireGuard 起始端口</a>
+      <a href="#c6">6 设置窗口</a>
+      <a href="#c7">7 菜单</a>
+    </nav>
+  </header>
+
+  <!-- 1 -->
+  <section class="shot" id="c1">
+    <h2><span class="n">1</span>配置页全貌 · 选中「解密 HTTPS」</h2>
+    <p class="sub">左栏多了两样：「工具」组最后一行「本地 MCP」，最下面新的一组「高级」。「解密 HTTPS」那一行不再有「范围…」链接，点这一行，范围和名单就在右边。</p>
+    <div class="scroller">
+      <div class="win">
+        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div></div>
+        <div class="tabbar">
+          <div class="tabs">
+            <span class="tab on"><svg><use href="#i-sliders"/></svg>配置</span>
+            <span class="tab"><svg><use href="#i-arrows"/></svg>HTTP / WebSocket 包 <b>634</b></span>
+            <span class="tab"><svg><use href="#i-nodes"/></svg>TCP 包 <b>13</b></span>
+          </div>
+          <div class="status"><i class="dot"></i>运行中 127.0.0.1:9090
+            <span class="wbtn"><svg><use href="#i-pause"/></svg>暂停</span>
+            <span class="wbtn red"><svg><use href="#i-stop"/></svg>停止全部</span>
+          </div>
+        </div>
+        <div class="config tall">
+          <div class="cfg-left">
+            <div class="gtitle">证书</div>
+            <div class="group">
+              <div class="crow"><svg class="ico"><use href="#i-seal"/></svg><div class="t">这台 Mac</div><span class="linkish">✓ 已信任</span><svg class="chev"><use href="#i-chev"/></svg></div>
+              <div class="crow sel"><svg class="ico"><use href="#i-unlock"/></svg><div class="t">解密 HTTPS<small>不解密 3 个域名</small></div><span class="switch on"></span></div>
+              <div class="crow"><svg class="ico"><use href="#i-qr"/></svg><div class="t">给其他设备装证书</div><span class="switch"></span></div>
+            </div>
+            <div class="gtitle">抓包来源</div>
+            <div class="group">
+              <div class="crow"><svg class="ico"><use href="#i-laptop"/></svg><div class="t">本机<small>HTTP · WebSocket · TCP</small></div><span class="switch on"></span></div>
+              <div class="crow"><svg class="ico"><use href="#i-globe"/></svg><div class="t">手动代理<small>192.168.0.9:9090</small></div><span class="switch"></span></div>
+              <div class="crow"><svg class="ico"><use href="#i-shield"/></svg><div class="t">WireGuard<small>3 台设备</small></div><span class="switch on"></span></div>
+            </div>
+            <div class="gtitle">工具</div>
+            <div class="group">
+              <div class="crow"><svg class="ico"><use href="#i-window"/></svg><div class="t">模拟器</div><svg class="chev"><use href="#i-chev"/></svg></div>
+              <div class="crow"><svg class="ico"><use href="#i-term"/></svg><div class="t">终端 / 脚本</div><svg class="chev"><use href="#i-chev"/></svg></div>
+              <div class="crow"><svg class="ico"><use href="#i-cable"/></svg><div class="t">Android USB</div><svg class="chev"><use href="#i-chev"/></svg></div>
+              <div class="crow"><svg class="ico"><use href="#i-spark"/></svg><div class="t">本地 MCP<small>127.0.0.1:9191</small></div><span class="switch on"></span></div>
+            </div>
+            <div class="gtitle">高级</div>
+            <div class="group">
+              <div class="crow"><svg class="ico"><use href="#i-gauge"/></svg><div class="t">端口与上限<small>代理 9090 · 最多 1000 条 · 正文 5 MB</small></div><svg class="chev"><use href="#i-chev"/></svg></div>
+            </div>
+            <div class="privacy">抓到的内容只在内存里，不上传。本工具会解密 HTTPS，仅用于调试自己的设备和应用。</div>
+          </div>
+          <div class="cfg-right">
+            <div class="dhead"><svg class="ico"><use href="#i-unlock"/></svg><h3>解密 HTTPS</h3><span class="switch on"></span></div>
+            <p class="ddesc">设备信任了 Baobox 的证书，它的 HTTPS 才解得开。关掉这个开关，所有 HTTPS 都原样放行。</p>
+            <div class="hr"></div>
+            <div class="flabel">范围</div>
+            <div class="segctl"><span class="on">全部域名，除了下面这些</span><span>只解密下面这些</span></div>
+            <div class="flabel">这些域名不解密（每行一个）</div>
+            <div class="tarea">apple.com
+icloud.com
+mzstatic.com</div>
+            <p class="wnote">范围之外的域名原样放行、不解密。域名按后缀匹配：填 x.com 也包括 api.x.com。手机不信任证书的域名会自动放行，不用填进来。改了立即生效。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>「解密 HTTPS」那一行的小字说明当前范围：「全部域名」「不解密 3 个域名」「只解密 2 个域名」。</li>
+      <li>两个名单各自保留：切到「只解密下面这些」显示另一份名单，切回来原来那份还在（和现在一样）。</li>
+    </ul>
+  </section>
+
+  <!-- 2 -->
+  <section class="shot" id="c2">
+    <h2><span class="n">2</span>证书 · 这台 Mac</h2>
+    <p class="sub">「这台 Mac」那一行现在点得开。设置页「HTTPS 证书」那一节整个搬过来：信任状态、移除信任、证书名称、重新生成、清理旧证书。</p>
+    <div class="scroller">
+      <div class="win detailwin">
+        <div class="cfg-right">
+          <div class="dhead"><svg class="ico"><use href="#i-seal"/></svg><h3>这台 Mac</h3></div>
+          <p class="ddesc">这台 Mac 信任了 Baobox 的证书，本机的 HTTPS 才解得开。证书由这台 Mac 自己生成，私钥不出本机。</p>
+          <div class="hr"></div>
+          <div class="fgroup">
+            <div class="frow"><div class="k">这台 Mac 上的证书</div><span class="okchip"><svg><use href="#i-seal"/></svg>已信任</span><span class="wbtn small">移除信任</span></div>
+            <div class="frow"><div class="k">证书名称</div><span class="greychip mono">Baobox Capture CA · 2026-11-21</span></div>
+            <div class="frow"><div class="k">重新生成证书<small>换一张新的；装过旧证书的手机、模拟器都要重新安装</small></div><span class="wbtn small">重新生成…</span></div>
+            <div class="frow legacy"><div class="k">旧版证书「Baobox Proxy CA」还在钥匙串里<small>以前的版本留下的，用不到了</small></div><span class="wbtn small">移除</span></div>
+          </div>
+          <p class="wnote">其他设备的证书在「给其他设备装证书」里装。</p>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>没信任时，第一行是「未信任」+「安装并信任」（系统会弹验证框）。</li>
+      <li>旧版证书那一行只在钥匙串里还有旧证书时出现。</li>
+      <li>「重新生成…」的确认框沿用现在的文案。</li>
+    </ul>
+  </section>
+
+  <!-- 3 -->
+  <section class="shot" id="c3">
+    <h2><span class="n">3</span>工具 · 本地 MCP</h2>
+    <p class="sub">设置页的 MCP 一节和 HTTP 页「…」菜单里的开关合到这里。开关记住状态：打开过，Baobox 重启后自动打开。</p>
+    <div class="scroller">
+      <div class="win detailwin">
+        <div class="cfg-right">
+          <div class="dhead"><svg class="ico"><use href="#i-spark"/></svg><h3>本地 MCP</h3><span class="switch on"></span></div>
+          <p class="ddesc">给 Claude Code / Codex 用：AI 能看抓到的包（HTTP 和 TCP）、改这一页的配置。只听本机，不对外。</p>
+          <div class="hr"></div>
+          <div class="fgroup">
+            <div class="frow"><div class="k">地址</div><span class="mono">http://127.0.0.1:9191/mcp</span><span class="wbtn small"><svg><use href="#i-copy"/></svg>复制</span></div>
+            <div class="frow"><div class="k">Claude Code</div><span class="okchip"><svg><use href="#i-seal"/></svg>已注册</span><span class="wbtn small">移除</span></div>
+            <div class="frow"><div class="k">Codex</div><span class="greychip">未注册</span><span class="wbtn small">注册</span></div>
+            <div class="frow"><div class="k">给 AI 的请求头里隐藏鉴权信息<small>Authorization、Cookie、Set-Cookie 的值给 AI 时换成 &lt;redacted&gt;</small></div><span class="switch on"></span></div>
+            <div class="frow"><div class="k">端口<small>改了要关掉再打开；已注册的要重新注册</small></div><span class="numf">9191</span></div>
+          </div>
+          <p class="wnote">注册 = 把这个地址写进 Claude Code / Codex 的配置文件，写前备份。AI 只在这个开关开着时连得上。</p>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>左栏这一行的小字：开着显示地址，关着不显示。</li>
+      <li>HTTP 页底部状态条的「MCP 运行中」留着。</li>
+    </ul>
+  </section>
+
+  <!-- 4 -->
+  <section class="shot" id="c4">
+    <h2><span class="n">4</span>高级 · 端口与上限</h2>
+    <p class="sub">设置页「通用」一节搬到这里，放在左栏最下面。都是不常改的数值。</p>
+    <div class="scroller">
+      <div class="win detailwin">
+        <div class="cfg-right">
+          <div class="dhead"><svg class="ico"><use href="#i-gauge"/></svg><h3>端口与上限</h3></div>
+          <p class="ddesc">不常改的数值。端口在下次开始抓包时生效（四个总开关全关再打开）。</p>
+          <div class="hr"></div>
+          <div class="fgroup">
+            <div class="frow"><div class="k">代理端口<small>后面两个端口也会用到：+1 证书安装页，+2 SOCKS</small></div><span class="numf">9090</span></div>
+            <div class="frow"><div class="k">列表最多保留 1000 条<small>HTTP 和 TCP 各自算；超出后丢最早的</small></div><span class="stepper"><span>▲</span><span>▼</span></span></div>
+            <div class="frow"><div class="k">单条正文上限<small>超出的部分不保存，只记大小</small></div><span class="popup">5 MB<i><svg><use href="#i-down"/></svg></i></span></div>
+            <div class="frow"><div class="k">停止时清空已抓到的请求</div><span class="switch"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>WireGuard 的端口不在这里，在 WireGuard 详情里（图 5）；MCP 的端口在 MCP 详情里（图 3）。各自的端口跟着各自的功能走。</li>
+    </ul>
+  </section>
+
+  <!-- 5 -->
+  <section class="shot" id="c5">
+    <h2><span class="n">5</span>WireGuard 详情底部 · 新设备起始端口</h2>
+    <p class="sub">设备列表和说明照上一版示意图，只在最下面多一行端口。</p>
+    <div class="scroller">
+      <div class="win detailwin">
+        <div class="cfg-right">
+          <div class="fgroup">
+            <div class="frow"><div class="k">新设备起始端口（UDP）<small>以后添加的设备从这个端口往后排；已经有的不变</small></div><span class="numf">51820</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="shot" id="c6">
+    <h2><span class="n">6</span>设置窗口 · 网络抓包</h2>
+    <p class="sub">只剩一句话和一个按钮。在设置里找抓包设置的人，点一下就到配置页。</p>
+    <div class="scroller">
+      <div class="win setwin">
+        <div class="slist">
+          <div><svg><use href="#i-gear"/></svg>通用</div>
+          <div><svg><use href="#i-scissor"/></svg>截图</div>
+          <div><svg><use href="#i-clip"/></svg>剪贴板</div>
+          <div><svg><use href="#i-spark"/></svg>AI</div>
+          <div><svg><use href="#i-term"/></svg>Codex 助手</div>
+          <div class="on"><svg><use href="#i-globe"/></svg>网络抓包</div>
+          <div><svg><use href="#i-window"/></svg>键盘点击</div>
+        </div>
+        <div class="scontent">
+          <h3>网络抓包</h3>
+          <p>网络抓包的设置都在抓包窗口的「配置」页：抓什么、证书、解密范围、设备接入、本地 MCP、端口与上限。</p>
+          <div><span class="wbtn teal">打开抓包配置</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="shot" id="c7">
+    <h2><span class="n">7</span>菜单</h2>
+    <p class="sub">菜单栏只放窗口关着也必须能做的事。抓包开着时系统代理指着 Baobox，关窗口不会停，所以「停止抓包」留在这里；其余的都要看结果，在窗口里做。</p>
+    <div class="cmp">
+      <div>
+        <h3>菜单栏 · 网络抓包（抓包中）</h3>
+        <div class="nsmenu" role="img" aria-label="菜单栏子菜单">
+          <div class="dim">抓包中 · 662 条</div>
+          <div>停止抓包</div>
+          <div>打开抓包窗口…</div>
+          <hr>
+          <div class="hl">网络抓包设置…<small>打开配置页</small></div>
+        </div>
+      </div>
+      <div>
+        <h3>菜单栏 · 网络抓包（没在抓）</h3>
+        <div class="nsmenu" role="img" aria-label="菜单栏子菜单，没在抓">
+          <div>打开抓包窗口…</div>
+          <hr>
+          <div>网络抓包设置…<small>打开配置页</small></div>
+        </div>
+      </div>
+      <div>
+        <h3>HTTP 页工具条「…」</h3>
+        <div class="nsmenu" role="img" aria-label="HTTP 页更多菜单">
+          <div>导出 .har…</div>
+          <div class="hl">抓包设置…<small>切到配置页</small></div>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>「网络抓包设置…」不再开设置窗口，直接打开抓包窗口并切到「配置」页。框架要加一个可选项：模块自己决定「设置」在哪打开，没声明的模块照旧开设置窗口。</li>
+      <li>HTTP 页「…」菜单去掉「本地 MCP」开关，「设置…」改叫「抓包设置…」并切到配置页。</li>
+      <li>只开着「给其他设备装证书」时，菜单栏照旧是「证书安装页开着」+「关闭证书安装页」。</li>
+      <li>快捷键只有「打开抓包窗口」，出厂不绑，不加别的。</li>
+    </ul>
+  </section>
+</main>

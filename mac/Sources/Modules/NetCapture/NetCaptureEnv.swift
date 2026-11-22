@@ -91,11 +91,13 @@ enum NetCaptureEnv {
         static let macTCP = "netcapture.mac.tcp"
         /// 「解密 HTTPS」（证书卡片）。关 = 解密范围用 `DecryptScope.off`。
         static let decryptHTTPS = "netcapture.decryptHTTPS"
-        /// WireGuard 的 UDP 端口（设置页可改）。
+        /// 新 WireGuard 设备的起始 UDP 端口（设置页「新设备起始端口」）。多设备之前它是唯一那台的端口，迁移时沿用。
         static let wireguardPort = "netcapture.wireguardPort"
         static let allowDomains = "netcapture.allowDomains"        // 换行分隔
         static let denyDomains = "netcapture.denyDomains"          // 换行分隔
         static let mcpPort = "netcapture.mcpPort"
+        /// 本地 MCP 的开关（记住；App 启动时为 true 就启动服务）。
+        static let mcpEnabled = "netcapture.mcpEnabled"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
         /// 设备别名字典（ip → 用户自定义别名），供多设备 Tab 展示（§17）。
@@ -126,6 +128,7 @@ enum NetCaptureEnv {
             Keys.allowDomains: "",
             Keys.denyDomains: "",
             Keys.mcpPort: 9191,
+            Keys.mcpEnabled: false,
             Keys.mcpRedactAuth: true,
             Keys.clearOnStop: false,
             Keys.macHTTP: true,
@@ -170,8 +173,15 @@ enum NetCaptureEnv {
         return UInt16((1024...65535).contains(raw) ? raw : 51820)
     }
 
-    /// WireGuard 的密钥文件（引擎认的格式，见 `WireGuardKeys`），权限 600。
-    static var wireguardKeyURL: URL { supportDir.appendingPathComponent("wireguard.json") }
+    /// WireGuard 设备表与各台的密钥（docs/packet-capture/WIREGUARD-DEVICES.md §3）：`supportDir/wireguard/`。
+    static var wireguardFiles: WireGuardDeviceFiles {
+        WireGuardDeviceFiles(folder: supportDir.appendingPathComponent("wireguard", isDirectory: true),
+                             // 多设备之前的那一份，首次启动新版本时迁成第一台设备。
+                             legacyKeyURL: supportDir.appendingPathComponent("wireguard.json"))
+    }
+
+    /// 新 WireGuard 设备的端口要躲开的：代理、配置页、SOCKS、MCP 正在用的端口。
+    static var reservedPorts: Set<UInt16> { [port, configPagePort, socksPort, mcpPort] }
 
     static var clearOnStop: Bool {
         UserDefaults.standard.object(forKey: Keys.clearOnStop) as? Bool ?? false
