@@ -63,7 +63,8 @@ enum ADBController {
         return devices
     }
 
-    /// 一键设代理：`settings put global http_proxy <ip>:<port>`。后台线程调用。
+    /// 设隐藏的全局代理：`settings put global http_proxy <ip>:<port>`。后台线程调用。
+    /// 只给模拟器用（「模拟器」卡片）；真手机不再设它：Wi-Fi 设置里看不到、换网络也带着走（CONTROL.md §12）。
     @discardableResult
     static func setProxy(serial: String, ip: String, port: UInt16) -> Bool {
         guard let adb = adbPath() else { return false }
@@ -101,6 +102,21 @@ enum ADBController {
             startActivity(adb: adb, serial: serial, action: "android.settings.SECURITY_SETTINGS")
         }
         return true
+    }
+
+    /// 手机上有没有设隐藏的全局代理（Wi-Fi 设置里看不到）。设了返回 `host:port`。后台线程调用。
+    static func globalProxy(serial: String) -> String? {
+        guard let adb = adbPath() else { return nil }
+        let result = NetCaptureEnv.run(adb, ["-s", serial, "shell", "settings", "get", "global", "http_proxy"])
+        guard result.ok else { return nil }
+        return ADBGlobalProxy.parse(result.stdoutString)
+    }
+
+    /// 在手机上打开 Wi-Fi 设置，让人自己把代理填进当前网络（网页里的 `intent:` 打不开的页面，adb 能打开）。后台线程调用。
+    @discardableResult
+    static func openWifiSettings(serial: String) -> Bool {
+        guard let adb = adbPath() else { return false }
+        return startActivity(adb: adb, serial: serial, action: "android.settings.WIFI_SETTINGS")
     }
 
     /// 证书在设备上的位置（「下载」目录）。

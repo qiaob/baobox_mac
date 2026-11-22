@@ -560,14 +560,21 @@ private struct TerminalDetail: View {
     }
 }
 
-/// USB 调试连着的 Android 手机：一键设代理（指向 Mac 的局域网 IP）+ 推证书、清代理。模拟器在「模拟器」那一项里。
+/// USB 调试连着的 Android 手机：推证书、在手机上打开 Wi-Fi 设置（代理由人填进当前 Wi-Fi，手机上看得见）。
+/// 不再替真手机设隐藏的全局代理：它在 Wi-Fi 设置里看不到、换网络也带着走（CONTROL.md §12）。发现它还开着就提示，给一个清除按钮。
+/// 模拟器在「模拟器」那一项里。
 private struct AndroidUSBDetail: View {
     @ObservedObject private var session = NetCaptureSession.shared
     @ObservedObject private var engine = NetCaptureEngine.shared
     @State private var adbPath: String?
     @State private var devices: [ADBController.Device] = []
+    /// 设了隐藏全局代理的手机：序列号 → `host:port`。
+    @State private var hiddenProxies: [String: String] = [:]
     @State private var checked = false
     @State private var busy = false
+
+    private var proxyHost: String { NetworkInterfaces.primaryIP() }
+    private var proxyPort: String { String(engine.port ?? NetCaptureEnv.port) }
 
     var body: some View {
         ConfigDetail(icon: "cable.connector", title: "netcapture.config.usb.title", detail: "netcapture.config.usb.detail") {
@@ -583,32 +590,73 @@ private struct AndroidUSBDetail: View {
                     Button("netcapture.common.refresh") { refresh() }.disabled(busy)
                 }
             } else {
-                ForEach(devices) { device in
-                    HStack(spacing: 8) {
-                        Text(verbatim: device.model.isEmpty ? device.serial : "\(device.model) (\(device.serial))")
-                            .font(.callout).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Button("netcapture.config.usb.setUp") { setUp(device) }
-                        Button("netcapture.settings.adbClearProxy") { clearProxy(device) }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(devices) { device in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(verbatim: device.model.isEmpty ? device.serial : "\(device.model) (\(device.serial))")
+                                    .font(.callout).lineLimit(1)
+                                Spacer(minLength: 8)
+                                Button("netcapture.config.usb.pushCert") { pushCert(device) }
+                                Button("netcapture.config.usb.openWifi") { openWifi(device) }
+                            }
+                            if let hidden = hiddenProxies[device.serial] {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                    Text("netcapture.config.usb.hiddenProxy \(hidden)").font(.caption)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 8)
+                                    Button("netcapture.settings.adbClearProxy") { clearProxy(device) }.controlSize(.small)
+                                }
+                            }
+                        }
+                        .disabled(busy)
                     }
-                    .disabled(busy)
                 }
                 .frame(maxWidth: ConfigDetailMetrics.formWidth)
+
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("netcapture.config.usb.proxyTitle").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("netcapture.config.proxy.host").font(.callout).foregroundStyle(.secondary)
+                        Text(verbatim: proxyHost).font(.callout.monospaced()).textSelection(.enabled)
+                        CopyButton(title: "netcapture.common.copy") { proxyHost }.controlSize(.small)
+                        Text("netcapture.config.proxy.port").font(.callout).foregroundStyle(.secondary).padding(.leading, 8)
+                        Text(verbatim: proxyPort).font(.callout.monospaced()).textSelection(.enabled)
+                        CopyButton(title: "netcapture.common.copy") { proxyPort }.controlSize(.small)
+                    }
+                    Text("netcapture.config.usb.proxySteps").font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !session.manualProxyOn {
+                        Text("netcapture.config.usb.needsProxy").font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: ConfigDetailMetrics.formWidth, alignment: .leading)
+                Text("netcapture.config.usb.wireguardHint").font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button("netcapture.common.refresh") { refresh() }.buttonStyle(.link).disabled(busy)
             }
         }
         .onAppear { if !checked { refresh() } }
     }
 
+    /// 列出手机（模拟器不算），顺便读每台有没有设隐藏的全局代理。
     private func refresh() {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
             let path = ADBController.adbPath()
             let list = path != nil ? ADBController.devices().filter { !$0.serial.hasPrefix("emulator-") } : []
+            var hidden: [String: String] = [:]
+            for device in list {
+                if let value = ADBController.globalProxy(serial: device.serial) { hidden[device.serial] = value }
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     adbPath = path
                     devices = list
+                    hiddenProxies = hidden
                     busy = false
                     checked = true
                 }
@@ -616,39 +664,35 @@ private struct AndroidUSBDetail: View {
         }
     }
 
-    /// 手机经 Wi-Fi 连 Mac 的代理：要「手动代理」开着，没开只提示，不替用户开（同模拟器对「本机」的做法）。
-    private func setUp(_ device: ADBController.Device) {
-        guard session.manualProxyOn else {
-            session.banner = NetCaptureSession.Banner(kind: .info, text: L("netcapture.config.usb.needsProxy"))
-            return
-        }
-        busy = true
-        let port = engine.port ?? NetCaptureEnv.port
-        let ip = NetworkInterfaces.primaryIP()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let proxied = ADBController.setProxy(serial: device.serial, ip: ip, port: port)
-            let pushed = ADBController.pushAndInstallCert(serial: device.serial)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    busy = false
-                    session.banner = (proxied && pushed)
-                        ? NetCaptureSession.Banner(kind: .info, text: L("netcapture.phone.android.done"))
-                        : NetCaptureSession.Banner(kind: .problem, text: L("netcapture.phone.android.failed"))
-                }
-            }
+    /// 推证书：放进手机的「下载」，再打开离「安装证书」最近的设置页；剩下几步在手机上点。和「手动代理」无关。
+    private func pushCert(_ device: ADBController.Device) {
+        perform(success: L("netcapture.config.usb.certPushed")) { ADBController.pushAndInstallCert(serial: device.serial) }
+    }
+
+    /// 在手机上打开 Wi-Fi 设置，人把上面的主机和端口填进当前网络的代理。
+    private func openWifi(_ device: ADBController.Device) {
+        perform(success: L("netcapture.config.usb.wifiOpened")) { ADBController.openWifiSettings(serial: device.serial) }
+    }
+
+    /// 清掉以前设过的隐藏全局代理，清完重读一遍。
+    private func clearProxy(_ device: ADBController.Device) {
+        perform(success: L("netcapture.phone.android.cleared"), thenRefresh: true) {
+            ADBController.clearProxy(serial: device.serial)
         }
     }
 
-    private func clearProxy(_ device: ADBController.Device) {
+    /// 在后台跑一条 adb 操作，成功 / 失败各给一句提示。
+    private func perform(success: String, thenRefresh: Bool = false, _ work: @escaping () -> Bool) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
-            let ok = ADBController.clearProxy(serial: device.serial)
+            let ok = work()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     busy = false
                     session.banner = ok
-                        ? NetCaptureSession.Banner(kind: .info, text: L("netcapture.phone.android.cleared"))
+                        ? NetCaptureSession.Banner(kind: .info, text: success)
                         : NetCaptureSession.Banner(kind: .problem, text: L("netcapture.phone.android.failed"))
+                    if thenRefresh { refresh() }
                 }
             }
         }

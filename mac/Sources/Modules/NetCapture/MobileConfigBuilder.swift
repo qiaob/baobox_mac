@@ -318,7 +318,7 @@ enum MobileConfigBuilder {
                 <div class="kv"><span>主机名 Host</span><b id="host">\(htmlEscape(ip))</b><button class="mini" onclick="copyText('host',this)">复制 Copy</button></div>
                 <div class="kv"><span>端口 Port</span><b id="port">\(port)</b><button class="mini" onclick="copyText('port',this)">复制 Copy</button></div>
                 <a class="btn ghost" href="intent:#Intent;action=android.settings.WIFI_SETTINGS;end">打开 Wi-Fi 设置 / Open Wi-Fi settings</a>
-                <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，可以在电脑的抓包窗口里一键设置。 / With USB debugging connected, the Mac can set it in one click.</p>
+                <p class="hint">Android 不允许网页修改代理，需要手动填一次：<b>Wi-Fi › 当前网络 › 修改 › 高级选项 › 代理 › 手动</b>，填入上面的主机名和端口。<br>Android doesn't let a web page change the proxy. Enter it once by hand: <b>Wi-Fi › current network › Modify › Advanced › Proxy › Manual</b>.<br>连着 USB 调试时，电脑的抓包窗口能帮你在手机上打开 Wi-Fi 设置。 / With USB debugging connected, the Mac's capture window can open Wi-Fi settings on the phone.</p>
                 """)
 
             offCard = !offerProxy ? "" : card(
