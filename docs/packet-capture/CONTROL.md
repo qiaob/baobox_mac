@@ -132,6 +132,8 @@
 三样东西：
 
 1. **这台 Mac 的信任状态**：已信任 / 「安装并信任」按钮（现有的 `session.installCert()`）。
+> 握手失败自动放行（2026-11-22 起）：失败表按「设备 + 域名 + 客户端 TLS 指纹」记，不再只按（设备，域名）—— 同一台 Android 上浏览器信任 Baobox 证书、App 多半不信任，谁先来不该决定另一个解不解得开。指纹对应的是 TLS 库不是 App：同一个网络库的 App 共用一个，App 里的 WebView 和浏览器共用一个，所以仍可能互相影响，只是范围小得多。见 `TLS-FINGERPRINT.md`。
+
 2. **解密 HTTPS** 开关（`netcapture.decryptHTTPS`，默认开）+「范围…」（打开设置页的抓包那一栏）。关 = 桥的解密范围用新的 `mode: "none"`：`tls_clienthello` 里一律 `ignore_connection`，`tls` 事件的 reason 用 `decrypt_off`，列表里这种行的说明和「握手失败」区分开。连到引擎自己的 TLS（配置页的证书检测：直连代理端口时还没有目的地址；经隧道时目的地是 Mac 的 IP + 引擎的端口）不放行，否则证书检测会跟着失效。
 3. **给其他设备装证书** 总开关：开 = 配置页服务（`ConfigPageServer`）开着，卡片上显示二维码和地址（带扫码即放行的口令，现有的 `landingPageURL`）；关 = 配置页服务关。
 

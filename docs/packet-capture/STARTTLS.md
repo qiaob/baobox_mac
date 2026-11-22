@@ -33,12 +33,12 @@
 
 - `next_layer`：一条连接的客户端头几个字节是 XMPP 流开头（`<?xml` 后跟 `<stream`，或直接 `<stream:stream`，和 `TCPProtocol` 认 XMPP 的规则一致），就换上 STARTTLS 层。不看端口。
 - 经 SOCKS 进来的不接管（现有规则：SOCKS 上非 443 的一律不动，避免碰 Mac 上的邮件、聊天 App）。
-- STARTTLS 层在**看到 `<proceed/>` 那一刻**决定接不接管，接管的条件：
-  1. 「解密 HTTPS」开着；
-  2. 域名在解密范围内 —— 域名取客户端 stream 头里的 `to='…'`（截图里就是 `chat.coffeemeetsbagel.com`，和随后 ClientHello 的 SNI 一致）；
-  3. 这台设备 + 这个域名之前没有握手失败过。
+- STARTTLS 层在看到 `<proceed/>` 之后决定接不接管（2026-11-22 按 `TLS-FINGERPRINT.md` §3.3 改过）：
+  1. 「解密 HTTPS」关着 → 不接管（原因 `decrypt_off`），`<proceed/>` 那一刻就定；
+  2. 域名不在解密范围内 → 不接管（`out_of_scope`），也是那一刻就定 —— 域名取客户端 stream 头里的 `to='…'`（截图里就是 `chat.coffeemeetsbagel.com`，和随后 ClientHello 的 SNI 一致）；
+  3. 前两条都满足 → 先把客户端接下来的数据攒着，直到凑齐一个完整的 ClientHello（用引擎自带的解析；不完整就接着等，不是 TLS 就不接管），算客户端指纹，查失败表：这台设备 + 这个域名 + 这个指纹之前握手失败过 → 不接管（`handshake_failed`），攒着的数据原样发给服务器、照样记字节；没失败过 → 攒着的数据连同连接交给 `NextLayer`，接管。
 - 不接管：STARTTLS 层继续原样转发、照样记字节（就是现在看到的密文），并像 HTTP 页那样报一次「没解密」的原因（关着 / 不在范围 / 握手失败）。
-- 接管后手机拒绝证书：现有的 `tls_failed_client` 把（设备，域名）记进失败表，这条连接断掉；客户端重连时第 3 条不满足，原样放行。和 HTTPS 的「握手失败自动放行」是同一张表。
+- 接管后手机拒绝证书：`tls_failed_client` 把（设备，域名，指纹）记进失败表，这条连接断掉；客户端重连时第 3 条命中，原样放行。和 HTTPS 的「握手失败自动放行」是同一张表、同一个键。
 
 ### 3.2 桥：一条连接一行
 
@@ -89,7 +89,7 @@
 | 8 | MCP 多一个字段 `tls` | `list_tcp_connections` 每行 `tls=decrypted` 或 `tls=failed(<reason>)`；`get_tcp_connection` 多一行 `TLS: decrypted · chat.example.test · TLS 1.3`，数据里分隔处一行 `-- TLS taken over at <proceed/>: decrypted data below (…) --` / `-- TLS not decrypted: ciphertext below --` | MCP 的输出是文本，不是 JSON |
 | 9 | 没写 | 接管时被拒的那一条，分隔线放在数据最后（线后没有数据），连接以出错结束，错误原文写在概览里 | 那条连接在 TLS 握手时就断了 |
 
-> 2026-11-22 追加的 `TLS-FINGERPRINT.md` 把 §3.1「在 `<proceed/>` 那一刻决定」改成等第一个 ClientHello 到齐再决定（失败表多一个客户端 TLS 指纹），那一版在下一个提交里做。
+> 2026-11-22 追加的 `TLS-FINGERPRINT.md` 把 §3.1「在 `<proceed/>` 那一刻决定」改成等第一个 ClientHello 到齐再决定（失败表多一个客户端 TLS 指纹），§3.1 已按它改写；验证见那份文档 §6。
 
 ## 7. 验证记录（2026-11-22）
 

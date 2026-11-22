@@ -102,7 +102,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/ai-service/DESIGN.md` —— AI 服务层（#86）：服务商与模型（两层）、功能表（模块声明、每个功能选一个模型）、Claude 与 OpenAI 兼容客户端、钥匙串、退回与冷却、实时字幕走云端的节奏、纠错 + 翻译合一、设置页「AI」；§8 记着下一版的「一键部署本地大模型」。
 - `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
 - `docs/phone-transfer/` —— 手机互传 REQUIREMENTS + TECH_DESIGN：局域网 HTTP 接口、加密信令格式、三个公共信令后端、WebRTC 建连与 NAT 诊断、DataChannel 分块协议、WKWebView 宿主桥。
-- `docs/packet-capture/` —— 网络抓包 v2（2026-11）：REQUIREMENTS（五个一键场景、三栏窗口）+ TECH_DESIGN（内核换成包内的 mitmproxy、桥脚本的事件与指令、§1 探针与实测记录（含还没验证的几项）、§10 分步落地）；`TOOLS.md` = 第二批功能的方案（筛噪音、请求参数分栏、重发、Mock、Protobuf / gRPC 解码；引擎侧已实现，Swift 侧待做）；`WIREGUARD-DEVICES.md` = WireGuard 多台设备（一台一张码、迁移、设备栏按名字显示）；`STARTTLS.md` = XMPP STARTTLS 解密（用 Baobox 自己的证书接管，不要私钥）；`TECH_DESIGN_V1.md` 是自研内核的旧方案，留档。
+- `docs/packet-capture/` —— 网络抓包 v2（2026-11）：REQUIREMENTS（五个一键场景、三栏窗口）+ TECH_DESIGN（内核换成包内的 mitmproxy、桥脚本的事件与指令、§1 探针与实测记录（含还没验证的几项）、§10 分步落地）；`TOOLS.md` = 第二批功能的方案（筛噪音、请求参数分栏、重发、Mock、Protobuf / gRPC 解码；引擎侧已实现，Swift 侧待做）；`WIREGUARD-DEVICES.md` = WireGuard 多台设备（一台一张码、迁移、设备栏按名字显示）；`STARTTLS.md` = XMPP STARTTLS 解密（用 Baobox 自己的证书接管，不要私钥）；`TLS-FINGERPRINT.md` = 握手失败自动放行按「设备 + 域名 + 客户端 TLS 指纹」记（浏览器和 App 互不影响）；`TECH_DESIGN_V1.md` 是自研内核的旧方案，留档。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `mac/Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
