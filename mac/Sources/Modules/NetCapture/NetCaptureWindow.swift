@@ -88,6 +88,13 @@ final class NetCaptureWindowController {
     private var window: NSWindow?
     private init() {}
 
+    /// 打开窗口并切到「配置」页（菜单栏「网络抓包设置…」、HTTP 页「抓包设置…」、设置窗口里的按钮）。
+    func showConfig(item: NetCaptureConfigItem? = nil) {
+        show()
+        NetCaptureWindowState.shared.tab = .config
+        if let item { NetCaptureWindowState.shared.configItem = item }
+    }
+
     func show() {
         // 打开窗口时（新建，或关掉后再打开）：引擎在跑就停在「HTTP / WebSocket 包」，否则停在「配置」。已经开着就不动。
         if window?.isVisible != true {
@@ -511,17 +518,11 @@ struct NetCaptureRootView: View {
     }
 
     private var moreMenu: some View {
+        // 本地 MCP 的开关在配置页「工具 → 本地 MCP」（一个设置只放一个地方，CONFIG-LAYOUT.md §1）。
         Menu {
-            Toggle("netcapture.mcp.toggle", isOn: Binding(
-                get: { mcp.isRunning },
-                set: { $0 ? mcp.start() : mcp.stop() }))
-            Divider()
             Button("netcapture.settings.exportHar") { exportHAR() }
                 .disabled(store.flows.isEmpty)
-            Button("netcapture.window.settings") {
-                guard let registry = AppDelegate.shared?.registry else { return }
-                SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
-            }
+            Button("netcapture.window.captureSettings") { windowState.tab = .config }
         } label: {
             Image(systemName: "ellipsis.circle")
         }

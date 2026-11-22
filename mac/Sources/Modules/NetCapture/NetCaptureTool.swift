@@ -24,6 +24,8 @@ final class NetCaptureTool: ToolModule {
         MockRuleStore.shared.load()
         // WireGuard 设备表在后台读进来；首次启动新版本时把原来那一份密钥迁成第一台设备（docs/packet-capture/WIREGUARD-DEVICES.md §3）。
         WireGuardDeviceStore.shared.load()
+        // 本地 MCP 记住开关：上次开着就接着开（CONFIG-LAYOUT.md §3）。只听本机。
+        CaptureMCPServer.shared.startIfEnabled()
         // 上次崩溃时系统代理可能还指着已经不存在的引擎，那样整机断网；启动时补一次还原。
         DispatchQueue.global(qos: .utility).async {
             SystemProxyController.restoreIfLeftover()
@@ -83,6 +85,11 @@ final class NetCaptureTool: ToolModule {
 
     func settingsTab() -> AnyView {
         AnyView(NetCaptureSettingsView())
+    }
+
+    /// 「网络抓包设置…」打开抓包窗口的「配置」页：抓包的设置都在那里（docs/packet-capture/CONFIG-LAYOUT.md §1）。
+    var settingsAction: (@MainActor () -> Void)? {
+        { NetCaptureWindowController.shared.showConfig() }
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

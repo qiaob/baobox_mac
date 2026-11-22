@@ -1,16 +1,17 @@
 import AppKit
 import SwiftUI
 
-// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2）：左边一列开关，右边是选中那一项的内容。
+// 抓包窗口的「配置」页（docs/packet-capture/CONTROL.md §2、CONFIG-LAYOUT.md）：左边一列开关，右边是选中那一项的内容。
+// 这一页 = 抓包的全部设置（设置窗口那页只剩一个入口）。
 //
-// 左边三组：证书（这台 Mac 信任没有、解密 HTTPS、给其他设备装证书）、抓包来源（本机、手动代理、WireGuard，各一个总开关）、
-// 工具（模拟器、终端 / 脚本、Android USB）。每项一行，关着开着都只占一行，页面不会越开越长。
+// 左边四组：证书（这台 Mac、解密 HTTPS 与范围、给其他设备装证书）、抓包来源（本机、手动代理、WireGuard，各一个总开关）、
+// 工具（模拟器、终端 / 脚本、Android USB、本地 MCP）、高级（端口与上限）。每项一行，关着开着都只占一行，页面不会越开越长。
 // 右边显示选中项的内容：子开关、地址、二维码（默认就够大，手机隔着屏幕能扫）。打开某个总开关时顺便选中它 ——
 // 开 WireGuard 接下来就是扫码。打开开关不切标签页：在这一页上通常要连着开几个。
 
-/// 左边列表里能选中的项（「这台 Mac」「解密 HTTPS」两行自己就是全部内容，不能选）。
+/// 左边列表里能选中的项。
 enum NetCaptureConfigItem: Hashable {
-    case certPage, mac, manualProxy, wireguard, simulator, terminal, androidUSB
+    case thisMac, decrypt, certPage, mac, manualProxy, wireguard, simulator, terminal, androidUSB, mcp, advanced
 }
 
 struct NetCaptureConfigView: View {
@@ -32,6 +33,10 @@ struct NetCaptureConfigView: View {
     @ViewBuilder
     private var detail: some View {
         switch state.configItem {
+        case .thisMac: ThisMacDetail()
+        case .decrypt: DecryptDetail()
+        case .mcp: MCPDetail()
+        case .advanced: AdvancedDetail()
         case .certPage: CertPageDetail()
         case .mac: MacDetail()
         case .manualProxy: ManualProxyDetail()
@@ -50,7 +55,15 @@ private struct ConfigSidebar: View {
     @ObservedObject private var engine = NetCaptureEngine.shared
     @ObservedObject private var state = NetCaptureWindowState.shared
     @ObservedObject private var wireguardDevices = WireGuardDeviceStore.shared
+    @ObservedObject private var mcp = CaptureMCPServer.shared
     @AppStorage(NetCaptureEnv.Keys.decryptHTTPS) private var decrypt = true
+    @AppStorage(NetCaptureEnv.Keys.decryptScope) private var scope = "all"
+    @AppStorage(NetCaptureEnv.Keys.allowDomains) private var allowDomains = ""
+    @AppStorage(NetCaptureEnv.Keys.denyDomains) private var denyDomains = ""
+    @AppStorage(NetCaptureEnv.Keys.port) private var port = 9090
+    @AppStorage(NetCaptureEnv.Keys.maxFlows) private var maxFlows = 1000
+    @AppStorage(NetCaptureEnv.Keys.bodyCap) private var bodyCap = 5 * 1024 * 1024
+    @AppStorage(NetCaptureEnv.Keys.mcpPort) private var mcpPort = 9191
     @AppStorage(NetCaptureEnv.Keys.macHTTP) private var macHTTP = true
     @AppStorage(NetCaptureEnv.Keys.macWebSocket) private var macWebSocket = true
     @AppStorage(NetCaptureEnv.Keys.macTCP) private var macTCP = false
@@ -60,7 +73,8 @@ private struct ConfigSidebar: View {
             VStack(alignment: .leading, spacing: 6) {
                 groupTitle("netcapture.config.cert.title")
                 group {
-                    ConfigRow(icon: "checkmark.seal", title: "netcapture.config.cert.thisMac") {
+                    // 点开是信任状态、移除信任、证书名称、重新生成、清理旧证书（原来在设置页）。
+                    ConfigRow(item: .thisMac, icon: "checkmark.seal", title: "netcapture.config.cert.thisMac") {
                         if session.caTrusted {
                             Label("netcapture.config.cert.trusted", systemImage: "checkmark.seal.fill")
                                 .font(.callout).foregroundStyle(NetCaptureColors.accent)
@@ -69,14 +83,12 @@ private struct ConfigSidebar: View {
                                 .controlSize(.small)
                                 .disabled(session.working != nil)
                         }
+                        chevron
                     }
                     rowDivider
-                    ConfigRow(icon: "lock.open", title: "netcapture.config.cert.decrypt") {
-                        Button("netcapture.config.cert.scope") {
-                            guard let registry = AppDelegate.shared?.registry else { return }
-                            SettingsWindowController.shared.show(registry: registry, tab: "netcapture")
-                        }
-                        .buttonStyle(.link).controlSize(.small)
+                    // 点开是范围和名单；小字说当前范围。
+                    ConfigRow(item: .decrypt, icon: "lock.open", title: "netcapture.config.cert.decrypt",
+                              subtitle: decrypt ? scopeSummary : nil) {
                         rowSwitch(Binding(get: { decrypt }, set: { session.setDecryptHTTPS($0) }))
                     }
                     rowDivider
@@ -118,6 +130,19 @@ private struct ConfigSidebar: View {
                     toolRow(.terminal, icon: "terminal", title: "netcapture.config.terminal.title")
                     rowDivider
                     toolRow(.androidUSB, icon: "cable.connector", title: "netcapture.config.usb.title")
+                    rowDivider
+                    ConfigRow(item: .mcp, icon: "sparkles", title: "netcapture.config.mcp.title",
+                              subtitle: mcp.isRunning ? "127.0.0.1:\(String(mcpPort))" : nil) {
+                        rowSwitch(selecting(.mcp, get: { mcp.isRunning }, set: { mcp.setEnabled($0) }))
+                    }
+                }
+
+                groupTitle("netcapture.config.group.advanced")
+                group {
+                    ConfigRow(item: .advanced, icon: "gauge.with.dots.needle.33percent", title: "netcapture.config.advanced.title",
+                              subtitle: L("netcapture.config.advanced.summary \(String(port)) \(String(maxFlows)) \(bodyCap / (1024 * 1024))")) {
+                        chevron
+                    }
                 }
 
                 Text("netcapture.settings.privacyStatement")
@@ -153,8 +178,20 @@ private struct ConfigSidebar: View {
     }
 
     private func toolRow(_ item: NetCaptureConfigItem, icon: String, title: LocalizedStringKey) -> some View {
-        ConfigRow(item: item, icon: icon, title: title) {
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        ConfigRow(item: item, icon: icon, title: title) { chevron }
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+    }
+
+    /// 「解密 HTTPS」那一行的小字：全部域名 / 不解密 N 个域名 / 只解密 N 个域名。
+    private var scopeSummary: String {
+        let current = DecryptScope.from(setting: scope, allowText: allowDomains, denyText: denyDomains)
+        switch current.mode {
+        case .all, .none: return L("netcapture.config.decrypt.summaryAll")
+        case .deny: return L("netcapture.config.decrypt.summaryDeny \(current.domains.count)")
+        case .allow: return L("netcapture.config.decrypt.summaryAllow \(current.domains.count)")
         }
     }
 
@@ -220,7 +257,7 @@ enum ConfigDetailMetrics {
 }
 
 /// 右边那一块：图标 + 标题（+ 这一项的总开关）、一句说明、内容。
-private struct ConfigDetail<Content: View>: View {
+struct ConfigDetail<Content: View>: View {
     let icon: String
     let title: LocalizedStringKey
     let detail: LocalizedStringKey
@@ -448,6 +485,13 @@ private struct WireGuardDetail: View {
             Text("netcapture.config.wg.note").font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: WireGuardDeviceList.width, alignment: .leading)
+            // 新设备的起始端口跟着 WireGuard 走（原来在设置页，CONFIG-LAYOUT.md §3）。
+            ConfigForm {
+                ConfigFormRow(title: "netcapture.settings.wireguardPort", note: "netcapture.settings.wireguardPortNote") {
+                    PortField(key: NetCaptureEnv.Keys.wireguardPort, fallback: 51820)
+                }
+            }
+            .frame(maxWidth: WireGuardDeviceList.width)
         }
     }
 }

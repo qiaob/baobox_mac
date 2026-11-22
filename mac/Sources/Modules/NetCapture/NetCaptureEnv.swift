@@ -96,6 +96,8 @@ enum NetCaptureEnv {
         static let allowDomains = "netcapture.allowDomains"        // 换行分隔
         static let denyDomains = "netcapture.denyDomains"          // 换行分隔
         static let mcpPort = "netcapture.mcpPort"
+        /// 本地 MCP 的开关（记住；App 启动时为 true 就启动服务）。
+        static let mcpEnabled = "netcapture.mcpEnabled"
         static let mcpRedactAuth = "netcapture.mcpRedactAuth"
         static let clearOnStop = "netcapture.clearOnStop"
         /// 设备别名字典（ip → 用户自定义别名），供多设备 Tab 展示（§17）。
@@ -126,6 +128,7 @@ enum NetCaptureEnv {
             Keys.allowDomains: "",
             Keys.denyDomains: "",
             Keys.mcpPort: 9191,
+            Keys.mcpEnabled: false,
             Keys.mcpRedactAuth: true,
             Keys.clearOnStop: false,
             Keys.macHTTP: true,

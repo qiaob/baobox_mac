@@ -31,7 +31,10 @@ final class CaptureMCPServer: ObservableObject {
         // 仅绑 loopback（127.0.0.1），不对外暴露。
         params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1",
                                                            port: NWEndpoint.Port(rawValue: NetCaptureEnv.mcpPort)!)
-        guard let listener = try? NWListener(using: params) else { return }
+        guard let listener = try? NWListener(using: params) else {
+            UserDefaults.standard.set(false, forKey: NetCaptureEnv.Keys.mcpEnabled)
+            return
+        }
         self.listener = listener
 
         listener.stateUpdateHandler = { [weak self] state in
@@ -39,7 +42,11 @@ final class CaptureMCPServer: ObservableObject {
                 MainActor.assumeIsolated {
                     switch state {
                     case .ready: self?.isRunning = true
-                    case .failed, .cancelled: self?.isRunning = false
+                    case .failed:
+                        // 起不来（端口被占）：开关回到关，记住的也是关（CONFIG-LAYOUT.md §3）。
+                        self?.isRunning = false
+                        UserDefaults.standard.set(false, forKey: NetCaptureEnv.Keys.mcpEnabled)
+                    case .cancelled: self?.isRunning = false
                     default: break
                     }
                 }
@@ -55,6 +62,17 @@ final class CaptureMCPServer: ObservableObject {
         listener?.cancel()
         listener = nil
         isRunning = false
+    }
+
+    /// 配置页「本地 MCP」的开关：开 / 关并记住（下次启动照这个来）。
+    func setEnabled(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: NetCaptureEnv.Keys.mcpEnabled)
+        on ? start() : stop()
+    }
+
+    /// App 启动时：上次开着就接着开。
+    func startIfEnabled() {
+        if UserDefaults.standard.bool(forKey: NetCaptureEnv.Keys.mcpEnabled) { start() }
     }
 
     // MARK: - 注册进 Claude Code / Codex（显式动作，后台线程调用）
