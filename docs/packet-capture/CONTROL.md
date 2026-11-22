@@ -293,3 +293,18 @@
 | 17 | 没写 | 桥收到一条 TCP 消息就删掉引擎里攒的旧消息 | 引擎会把整条连接的消息留到结束，长连接越攒越多 |
 | 18 | 没写 | 暂停时标签条下多一条提示和「继续」；本机卡片在证书没信任时多一行说明 | 一眼看清暂停是什么意思；第一次打开会弹验证框，先说一声 |
 | 19 | 没写 | 修了 MCP 服务从不应答的老问题 | 见 §6 |
+
+## 10. 本地 MCP 的六处修正（2026-11-22）
+
+对着用户正在用的 Baobox 把 21 个工具实测一遍后改的：
+
+| # | 问题 | 现在 |
+|---|---|---|
+| 1 | `allow_device` 任何 IP 都直接放行（`203.0.113.7` 没在等也回 `allowed`） | 只放行 `pending_devices` 里的；别的 IP 返回错误并列出此刻在等的（没有就写 `(none)`）。`deny_device` 照旧任何 IP 都能拒 |
+| 2 | `get_tcp_connection` 默认 `format: auto` 把二进制块整块转十六进制（4.6 KB 的 TLS 块 ≈ 18 KB 文字） | auto 下不像文本的块只给前 256 字节的十六进制，下一行 `[… N more bytes (binary; use format: hex to get all of it)]`；块开头是 TLS 记录的先标一行 `(TLS record: handshake)` / `(TLS record: application data, encrypted)`。`format: hex` 不变（每块仍最多 8 KB）。纯逻辑在 `Logic/MCPFormat.swift`（`MCPBlockText`） |
+| 3 | Mock 规则的头读出来是 `<redacted>`，AI 原样写回就把真实值盖成字面 `<redacted>` | `set_mock_rule` 收到值恰好是 `<redacted>` 的头，沿用这条规则里同名头（不分大小写、按出现顺序对应）原来的值；原来没有就不写入这个头，放进回复的 `errors`（`MCPHeaderRestore`） |
+| 4 | 重发出来的请求在摘要和详情里看不出是重发 | 摘要末尾 `[replay of <原 id>]`（不知道原 id 时 `[replay]`），`get_flow` 多一行 `Replay of: <原 id>`。原 id 在发重发时记下（界面的「重发」「编辑后重发」和 MCP 的 `replay_flow` 都记），不发给引擎 |
+| 5 | `set_config` 改了端口、引擎还没重启时，`get_config` 已经报新端口 | 引擎在跑时报它此刻在用的：`port`、`socks_port`、`config_page_port`（配置页服务开着时是它真正在听的端口）、`body_cap`、`mcp_port`（MCP 服务开着时是它在听的端口）、`config_page_url`；设置里改了、下次启动才生效的列在 `pending_next_start`（例 `{"port": 19690}`）。引擎没在跑时照旧报设置里的值。`wireguard_devices[].endpoint` 本来就按每台固定的端口报 |
+| 6 | `list_devices` 没起名的局域网设备写成 `192.168.0.9 192.168.0.9 · 1 flows` | 一行 = 设备键 · 类型（This Mac / LAN / WireGuard）· 名字（有才写）· 条数（1 flow / N flows）· 最近一次 |
+
+验证（真引擎 19640–19645，同 `WIREGUARD-DEVICES.md` §11 的宿主程序），17 项全过：没人在等时 `allow_device 203.0.113.7` → `error: 203.0.113.7 is not waiting to be allowed; pending devices: (none)`，有一台局域网设备在等时错误里列出它、放行它照常成功，`deny_device` 任意 IP 照常；`replay_flow` 之后 `latest_flows` / `list_flows` / `search_flows` 里那一行末尾 `[replay of 4C4F04A6-…]`、`get_flow` 有 `Replay of:`；Mock 规则读回来的 `Authorization` / `Set-Cookie` 是 `<redacted>`，原样写回后真实值还在，多写一个原来没有的 `Cookie: <redacted>` 没写入、回复里报了；一条没解密的 XMPP（6 块）`limit=6` auto 3728 字、hex 10567 字，ClientHello 和服务器那 1224 字节都标了 `(TLS record: handshake)`、后者带 `[… 968 more bytes …]`；`set_config port=19690` 之后 `get_config` 仍报 `port 19640 / socks_port 19642 / config_page_port 19641`、`pending_next_start: {"port": 19690}`，改回去就没有了，引擎停着时报设置里的值；`list_devices` 是 `127.0.0.1 · This Mac · 2 flows · …` 和 `192.168.0.9 · LAN · 1 flow · …`。单元测试 `MCPFormatTests` 7 个。

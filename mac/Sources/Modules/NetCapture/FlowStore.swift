@@ -60,6 +60,8 @@ struct Flow: Identifiable, Sendable {
     var messages: [FlowMessage] = []
     /// 这条是「重发」发出去的（docs/packet-capture/TOOLS.md §3）。
     var isReplay = false
+    /// 重发的是哪一条（列表里那条的 id）；不知道是 nil。MCP 的摘要据此写 `[replay of <id>]`。
+    var replayOf: UUID?
     /// 应答它的 Mock 规则 id；不是 Mock 应答的为 nil（TOOLS.md §4）。
     var mockRuleID: String?
     /// Protobuf / gRPC / msgpack 正文由引擎解成的文本（TOOLS.md §5），请求、响应各一份。
@@ -226,6 +228,16 @@ final class FlowStore: ObservableObject {
 
     var maxFlows: Int { NetCaptureEnv.maxFlows }
 
+    /// 发出去还没回来的重发：新那一行的 id → 重发的是哪一条。
+    private var replayOrigins: [UUID: UUID] = [:]
+
+    /// 记下这次重发的来源（`NetCaptureSession.replay` 发之前调），请求事件到了填进那一行。
+    func noteReplay(_ request: ReplayRequest) {
+        guard let origin = request.origin else { return }
+        replayOrigins[request.id] = origin
+        if replayOrigins.count > 200 { replayOrigins.removeAll() }
+    }
+
     /// 单条连接最多留多少条 WebSocket 消息（超了丢最旧的）。
     static let maxMessagesPerFlow = 500
 
@@ -252,6 +264,7 @@ final class FlowStore: ObservableObject {
                 flow.httpVersion = request.httpVersion
                 flow.requestSniffed = request.sniffed
                 flow.isReplay = request.isReplay
+                if request.isReplay { flow.replayOf = replayOrigins.removeValue(forKey: request.id) }
                 flow.requestDecoded = request.decoded
                 if let index = index(of: request.id) { flows[index] = flow } else { flows.append(flow) }
                 changed = true

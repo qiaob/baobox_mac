@@ -11,9 +11,12 @@ struct ReplayDraft: Identifiable {
     var bodyText: String
     /// 原正文不是文本（图片、protobuf…，见 `BodyText`）：不给改，原样发送。
     let binaryBody: Data?
+    /// 重发的是哪一条。
+    let origin: UUID
 
     /// 用抓到的请求预填。长度、压缩、分块这三个头不显示（桥脚本会丢掉重算），正文是解压后的。
     init(flow: Flow) {
+        origin = flow.id
         method = flow.method
         url = flow.url
         headersText = HeaderText.text(flow.requestHeaders)
@@ -38,7 +41,8 @@ struct ReplayDraft: Identifiable {
                              method: method.trimmingCharacters(in: .whitespaces).uppercased(),
                              url: url.trimmingCharacters(in: .whitespacesAndNewlines),
                              headers: HeaderText.headers(headersText),
-                             body: body)
+                             body: body,
+                             origin: origin)
     }
 }
 

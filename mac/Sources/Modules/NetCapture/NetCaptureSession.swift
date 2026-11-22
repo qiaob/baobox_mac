@@ -198,6 +198,7 @@ final class NetCaptureSession: ObservableObject {
     /// 让引擎把这条请求再发一次。引擎没在跑就先只起引擎，就绪后再发。
     /// 发出去的请求是列表里新的一行，id 就是 `request.id`（调用方据此先选中它）。
     func replay(_ request: ReplayRequest) {
+        FlowStore.shared.noteReplay(request)
         ensureEngine { [weak self] in self?.engine.send(.replay(request)) }
     }
 

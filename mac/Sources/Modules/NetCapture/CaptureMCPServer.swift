@@ -11,6 +11,8 @@ final class CaptureMCPServer: ObservableObject {
     static let shared = CaptureMCPServer()
 
     @Published private(set) var isRunning = false
+    /// 此刻在听的端口（设置里的端口改了要关掉再打开才生效）。
+    private(set) var listeningPort: UInt16?
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.baobox.netcapture.mcp")
@@ -36,6 +38,7 @@ final class CaptureMCPServer: ObservableObject {
             return
         }
         self.listener = listener
+        listeningPort = NetCaptureEnv.mcpPort
 
         listener.stateUpdateHandler = { [weak self] state in
             DispatchQueue.main.async {
@@ -335,7 +338,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
     private static let baseToolSchemas: [[String: Any]] = [
         [
             "name": "list_flows",
-            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key>.",
+            "description": "List recent captured HTTP / WebSocket flows (the HTTP / WebSocket tab; summaries). Optional filters: limit, host, method, status, device. device = device key from list_devices (wg:<id> for a WireGuard device, otherwise the client IP). Each summary ends with @<device key>, and requests sent by replay_flow (or Replay in the window) with [replay of <original id>].",
             "inputSchema": ["type": "object", "properties": [
                 "limit": ["type": "integer"],
                 "host": ["type": "string"],
@@ -361,7 +364,7 @@ private final class MCPHTTPSession: @unchecked Sendable {
         ],
         [
             "name": "list_devices",
-            "description": "List capturing source devices with flow count and last activity. Each line starts with the device key: wg:<id> for a WireGuard device (one per phone, named on the Config tab), otherwise the client IP (this Mac, LAN devices). Use the key as the `device` argument to list_flows / search_flows / list_tcp_connections.",
+            "description": "List capturing source devices with flow count and last activity. Each line: device key · type (This Mac / LAN / WireGuard) · name if it has one · flows · last activity. The key is wg:<id> for a WireGuard device (one per phone, named on the Config tab), otherwise the client IP. Use the key as the `device` argument to list_flows / search_flows / list_tcp_connections.",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
@@ -495,6 +498,7 @@ enum MCPTools {
             let dec = flow.decrypted ? "" : " [passthrough]"
             let dev = flow.deviceKey
             return "\(flow.id.uuidString) \(flow.method) \(status) \(flow.url) · \(dur) · \(flow.responseBytes)B\(dec) @\(dev)"
+                + replayMark(flow)
         }.joined(separator: "\n")
     }
 
@@ -511,9 +515,20 @@ enum MCPTools {
         if buckets.isEmpty { return "(no devices)" }
         let iso = ISO8601DateFormatter()
         let sorted = buckets.sorted { $0.value.last > $1.value.last }
-        return sorted.map { ip, bucket in
-            "\(ip) \(deviceLabel(ip)) · \(bucket.count) flows · \(iso.string(from: bucket.last))"
+        return sorted.map { key, bucket in
+            let (kind, name) = deviceKind(key)
+            return MCPDeviceLine.format(key: key, kind: kind, name: name, count: bucket.count, last: iso.string(from: bucket.last))
         }.joined(separator: "\n")
+    }
+
+    /// 设备的类型和名字（没起名字是 nil，不重复 IP）。
+    private static func deviceKind(_ key: String) -> (MCPDeviceLine.Kind, String?) {
+        if key == NetCaptureEnv.unknownDeviceKey { return (.unknown, nil) }
+        if let id = WireGuardDeviceTable.deviceID(fromKey: key) {
+            return (.wireguard, WireGuardNameSnapshot.shared.name(id: id) ?? "(deleted)")
+        }
+        let alias = NetCaptureEnv.deviceAlias(for: key)
+        return (key == "127.0.0.1" || key == "::1" ? .thisMac : .lan, alias)
     }
 
     /// MCP 侧设备名（英文，AI 面向）：WireGuard 设备 → 设备表里的名字（删了是 (deleted WireGuard device)）；
@@ -528,8 +543,15 @@ enum MCPTools {
         return key
     }
 
+    /// 重发出来的那一行：` [replay of <原 id>]`，不知道原 id 就 ` [replay]`（界面上标「重发」用的同一个字段）。
+    private static func replayMark(_ flow: Flow) -> String {
+        guard flow.isReplay else { return "" }
+        return flow.replayOf.map { " [replay of \($0.uuidString)]" } ?? " [replay]"
+    }
+
     private static func detail(_ flow: Flow) -> String {
         var lines: [String] = ["\(flow.method) \(flow.url)"]
+        if flow.isReplay { lines.append("Replay of: " + (flow.replayOf?.uuidString ?? "(unknown flow)")) }
         lines.append("Status: \(flow.statusCode.map(String.init) ?? "-") · \(flow.durationMs.map { "\($0)ms" } ?? "-")")
         lines.append("Device: \(flow.deviceKey) (\(deviceLabel(flow.deviceKey)))")
         lines.append("-- Request headers --")

@@ -28,6 +28,8 @@ final class NetCaptureEngine: ObservableObject {
     @Published private(set) var pendingDevices: [String] = []
     /// 引擎报告的版本号（就绪后才有）。
     @Published private(set) var engineVersion = ""
+    /// 这次运行用的正文上限（设置改了要下次启动才生效；MCP 的 get_config 报此刻在用的值）。
+    private(set) var runningBodyCap: Int?
 
     /// 用户允许过的设备。只在这次 App 运行期间有效，不存盘；引擎重启（切换监听范围）时带过去。
     private var allowedDevices: Set<String> = []
@@ -93,6 +95,7 @@ final class NetCaptureEngine: ObservableObject {
         let confDir = NetCaptureEnv.engineConfDir
         try? FileManager.default.createDirectory(at: confDir, withIntermediateDirectories: true)
         let bodyCap = NetCaptureEnv.bodyCap
+        runningBodyCap = bodyCap
 
         let process = Process()
         process.executableURL = NetCaptureEnv.engineURL

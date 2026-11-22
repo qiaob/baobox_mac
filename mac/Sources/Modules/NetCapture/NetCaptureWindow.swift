@@ -852,7 +852,7 @@ struct NetCaptureRootView: View {
     /// 原样重发。
     private func replay(_ flow: Flow) {
         send(ReplayRequest(id: UUID(), method: flow.method, url: flow.url,
-                           headers: flow.requestHeaders, body: flow.requestBody))
+                           headers: flow.requestHeaders, body: flow.requestBody, origin: flow.id))
     }
 
     /// 发出去的请求是列表里新的一行：先选中它（id 是这边定的），并让它看得见 ——

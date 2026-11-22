@@ -10,7 +10,7 @@ enum MCPControlTools {
     static let schemas: [[String: Any]] = [
         [
             "name": "get_config",
-            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_devices (one per phone: id, name, UDP port, endpoint), config_page_url, pending_devices, mcp_redact_auth.",
+            "description": "Every switch and value of the capture window's Config tab, as JSON: the four master switches (mac, manual_proxy, wireguard, cert_page) and This Mac's sub-switches (mac_http, mac_websocket, mac_tcp), paused, decrypt_https and the decryption scope, ports, body cap, list limit, clear_on_stop, wifi_name; plus read-only state: engine, ca_trusted, proxy_address, wireguard_devices (one per phone: id, name, UDP port, endpoint), config_page_url, pending_devices, mcp_redact_auth. Ports, addresses and body_cap are what the running engine uses; values saved but only applied at the next start are listed in pending_next_start (e.g. {\"port\": 19690}).",
             "inputSchema": ["type": "object", "properties": [:]],
         ],
         [
@@ -58,7 +58,7 @@ enum MCPControlTools {
         ],
         [
             "name": "get_tcp_connection",
-            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default: text where the block looks like text). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. On an XMPP connection that reached STARTTLS, a TLS line says whether Baobox decrypted it, and a marker line in the data separates the plaintext before <proceed/> from what follows (decrypted XMPP, or TLS ciphertext). Raw data is not redacted.",
+            "description": "One TCP connection with its data. TCP is a byte stream, so by default adjacent data in the same direction is merged into blocks, each with direction, offset (running per direction) and length; segments=true returns the reads as they arrived instead. format: hex, text, or auto (default): auto gives text where a block looks like text, and for a binary block only the first 256 bytes as hex plus how many bytes are left (blocks that start with a TLS record say so); format=hex gives every block in hex (up to 8 KB each). limit = number of blocks / reads (default 50). Bytes past the body cap are listed as not saved. On an XMPP connection that reached STARTTLS, a TLS line says whether Baobox decrypted it, and a marker line in the data separates the plaintext before <proceed/> from what follows (decrypted XMPP, or TLS ciphertext). Raw data is not redacted.",
             "inputSchema": ["type": "object", "properties": [
                 "id": ["type": "string"], "limit": ["type": "integer"],
                 "format": ["type": "string", "enum": ["auto", "hex", "text"]], "segments": ["type": "boolean"],
@@ -76,7 +76,7 @@ enum MCPControlTools {
         ],
         [
             "name": "set_mock_rule",
-            "description": "Create a mock rule (no id, or an unknown id) or change one (fields not given keep their value). Fields: enabled, method, host (required for a new rule), path, status (100-599), headers ([[name, value], ...]), body (text) or body_base64. Only decrypted requests are answered. Returns the saved rule.",
+            "description": "Create a mock rule (no id, or an unknown id) or change one (fields not given keep their value). Fields: enabled, method, host (required for a new rule), path, status (100-599), headers ([[name, value], ...]; a value of exactly <redacted>, as list_mock_rules shows auth headers, keeps the rule's current value of that header), body (text) or body_base64. Only decrypted requests are answered. Returns the saved rule.",
             "inputSchema": ["type": "object", "properties": [
                 "id": ["type": "string"], "enabled": ["type": "boolean"], "method": ["type": "string"],
                 "host": ["type": "string"], "path": ["type": "string"], "status": ["type": "integer"],
@@ -100,7 +100,7 @@ enum MCPControlTools {
         ],
         [
             "name": "allow_device",
-            "description": "Allow a LAN device waiting to use this Mac as its proxy (its IP from get_config's pending_devices).",
+            "description": "Allow a LAN device that is waiting to use this Mac as its proxy. Only IPs in get_config's pending_devices can be allowed; any other IP is refused with the current pending list.",
             "inputSchema": ["type": "object", "properties": ["ip": ["type": "string"]], "required": ["ip"]],
         ],
         [
@@ -132,10 +132,20 @@ enum MCPControlTools {
         case "delete_mock_rule": return deleteMockRule(arguments)
         case "replay_flow": return replay(arguments)
         case "allow_device", "deny_device":
-            guard let ip = string(arguments["ip"]), !ip.isEmpty else { return "error: ip is required" }
+            guard let ip = string(arguments["ip"])?.trimmingCharacters(in: .whitespaces), !ip.isEmpty else { return "error: ip is required" }
             let allow = name == "allow_device"
-            DispatchQueue.main.sync {
-                MainActor.assumeIsolated { allow ? NetCaptureEngine.shared.allow(device: ip) : NetCaptureEngine.shared.deny(device: ip) }
+            // 只放行正在等待的设备：放行一个没来敲过门的 IP 等于替用户开了口子（拒绝任何 IP 都可以）。
+            let pending = DispatchQueue.main.sync {
+                MainActor.assumeIsolated { () -> [String]? in
+                    let engine = NetCaptureEngine.shared
+                    if allow, !engine.pendingDevices.contains(ip) { return engine.pendingDevices }
+                    allow ? engine.allow(device: ip) : engine.deny(device: ip)
+                    return nil
+                }
+            }
+            if let pending {
+                return "error: \(ip) is not waiting to be allowed; pending devices: "
+                    + (pending.isEmpty ? "(none)" : pending.joined(separator: ", "))
             }
             return allow ? "allowed \(ip)" : "denied \(ip)"
         default:
@@ -151,10 +161,18 @@ enum MCPControlTools {
         let trusted = CaptureCA.shared.isGenerated && CaptureCA.shared.isTrusted()
         let defaults = UserDefaults.standard
         let scope = defaults.string(forKey: NetCaptureEnv.Keys.decryptScope) ?? "all"
+        // 端口、地址报引擎此刻实际在用的；设置里改了、下次启动才生效的放进 pending_next_start。引擎没在跑就报设置里的值。
+        var running: (port: UInt16?, bodyCap: Int?, pagePort: UInt16?, mcpPort: UInt16?) = (nil, nil, nil, nil)
         var object: [String: Any] = DispatchQueue.main.sync {
             MainActor.assumeIsolated { () -> [String: Any] in
                 let session = NetCaptureSession.shared
                 let engine = NetCaptureEngine.shared
+                if engine.isActive, let listeners = engine.listeners {
+                    running.port = listeners.port
+                    running.bodyCap = engine.runningBodyCap
+                }
+                running.pagePort = ConfigPageServer.shared.listeningPort
+                running.mcpPort = CaptureMCPServer.shared.isRunning ? CaptureMCPServer.shared.listeningPort : nil
                 let engineState: String
                 switch engine.state {
                 case .running: engineState = "running"
@@ -176,7 +194,9 @@ enum MCPControlTools {
                     "proxy_address": engine.port.map { "\(lan ? NetworkInterfaces.primaryIP() : "127.0.0.1"):\($0)" } ?? NSNull(),
                     "wireguard_devices": MCPControlTools.wireguardDeviceObjects(),
                 ]
-                state["config_page_url"] = session.certPageOn ? NetworkInterfaces.landingPageURL : NSNull()
+                state["config_page_url"] = session.certPageOn
+                    ? "http://\(NetworkInterfaces.primaryIP()):\(running.pagePort ?? NetCaptureEnv.configPagePort)/?k=\(NetCaptureEnv.pairingToken)"
+                    : NSNull()
                 return state
             }
         }
@@ -187,12 +207,18 @@ enum MCPControlTools {
         object["decrypt_scope"] = scope == "allowlist" ? "allowlist" : "all"
         object["allow_domains"] = DecryptScope.parseDomains(defaults.string(forKey: NetCaptureEnv.Keys.allowDomains) ?? "")
         object["deny_domains"] = DecryptScope.parseDomains(defaults.string(forKey: NetCaptureEnv.Keys.denyDomains) ?? "")
-        object["port"] = Int(NetCaptureEnv.port)
-        object["socks_port"] = Int(NetCaptureEnv.socksPort)
-        object["config_page_port"] = Int(NetCaptureEnv.configPagePort)
+        let port = running.port ?? NetCaptureEnv.port
+        object["port"] = Int(port)
+        object["socks_port"] = Int(EngineListeners.neighbour(of: port, offset: 2))
+        object["config_page_port"] = Int(running.pagePort ?? EngineListeners.neighbour(of: port, offset: 1))
         object["wireguard_port"] = Int(NetCaptureEnv.wireguardPort)
-        object["mcp_port"] = Int(NetCaptureEnv.mcpPort)
-        object["body_cap"] = NetCaptureEnv.bodyCap
+        object["mcp_port"] = Int(running.mcpPort ?? NetCaptureEnv.mcpPort)
+        object["body_cap"] = running.bodyCap ?? NetCaptureEnv.bodyCap
+        var pending: [String: Any] = [:]
+        if let current = running.port, current != NetCaptureEnv.port { pending["port"] = Int(NetCaptureEnv.port) }
+        if let current = running.bodyCap, current != NetCaptureEnv.bodyCap { pending["body_cap"] = NetCaptureEnv.bodyCap }
+        if let current = running.mcpPort, current != NetCaptureEnv.mcpPort { pending["mcp_port"] = Int(NetCaptureEnv.mcpPort) }
+        if !pending.isEmpty { object["pending_next_start"] = pending }
         object["max_flows"] = NetCaptureEnv.maxFlows
         object["clear_on_stop"] = NetCaptureEnv.clearOnStop
         object["wifi_name"] = defaults.string(forKey: NetCaptureEnv.Keys.wifiName) ?? ""
@@ -203,7 +229,7 @@ enum MCPControlTools {
 
     private static let readOnlyKeys: Set<String> = [
         "engine", "capturing", "ca_trusted", "proxy_address", "socks_port", "config_page_port", "config_page_url",
-        "wireguard_devices", "pending_devices", "mcp_port", "mcp_redact_auth",
+        "wireguard_devices", "pending_devices", "mcp_port", "mcp_redact_auth", "pending_next_start",
     ]
     private static let bodyCaps = [1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024]
 
@@ -594,9 +620,14 @@ enum MCPControlTools {
                 case .data(let data, let offset):
                     let room = max(0, blockLimit - shown)
                     let visible = data.prefix(room)
+                    if format != "text", format != "hex", !TCPPayload.looksLikeText(visible) {
+                        // auto 下的二进制：只给开头一小段十六进制（一块 4.6 KB 的 TLS 整块转 hex 是 18 KB 文字）。
+                        text += "\n" + MCPBlockText.binary(data, offset: offset)
+                        shown += min(data.count, MCPBlockText.binaryPreview)
+                        continue
+                    }
                     shown += visible.count
-                    let asText = format == "text" || (format == "auto" && TCPPayload.looksLikeText(visible))
-                    text += "\n" + (asText ? TCPPayload.text(visible) : TCPPayload.hexDump(visible, startOffset: offset))
+                    text += "\n" + MCPBlockText.render(visible, offset: offset, format: format == "hex" ? "hex" : "text")
                     if visible.count < data.count { text += "\n[\(data.count - visible.count) more bytes not shown]" }
                 case .missing(let count, let offset):
                     text += "\n[\(count) bytes not saved at offset \(offset)]"
@@ -646,9 +677,16 @@ enum MCPControlTools {
             guard let status = int(arguments["status"]) else { return "error: status must be an integer" }
             rule.status = status
         }
+        var errors: [String] = []
         if arguments["headers"] != nil {
             guard let headers = headerPairs(arguments["headers"]) else { return "error: headers must be [[name, value], ...]" }
-            rule.headers = headers
+            // 读到的是脱敏后的（`<redacted>`），原样写回不能把真实值盖掉：换回这条规则原来的同名头；原来没有的不写入。
+            let previous = id.flatMap { wanted in existing.first { $0.id == wanted } }?.headers ?? []
+            let restored = MCPHeaderRestore.restore(headers, from: previous)
+            rule.headers = restored.headers
+            errors += restored.unresolved.map {
+                "header \($0) is \(MCPHeaderRestore.placeholder) but the rule had no such header to keep; it was not written"
+            }
         }
         if let body = string(arguments["body"]) { rule.body = Data(body.utf8) }
         if let encoded = string(arguments["body_base64"]) {
@@ -659,7 +697,9 @@ enum MCPControlTools {
         guard rule.isValid else { return "error: a rule needs a host and a status of 100-599" }
         let saved = rule
         DispatchQueue.main.sync { MainActor.assumeIsolated { MockRuleStore.shared.save(saved) } }
-        return json(ruleObject(saved))
+        var reply = ruleObject(saved)
+        if !errors.isEmpty { reply["errors"] = errors }
+        return json(reply)
     }
 
     private static func deleteMockRule(_ arguments: [String: Any]) -> String {
@@ -681,7 +721,8 @@ enum MCPControlTools {
               let flow = FlowSnapshotStore.shared.get().first(where: { $0.id.uuidString.caseInsensitiveCompare(idText) == .orderedSame })
         else { return "flow not found" }
         guard flow.decrypted else { return "error: this flow was not decrypted; there is no request to send again" }
-        var request = ReplayRequest(id: UUID(), method: flow.method, url: flow.url, headers: flow.requestHeaders, body: flow.requestBody)
+        var request = ReplayRequest(id: UUID(), method: flow.method, url: flow.url, headers: flow.requestHeaders, body: flow.requestBody,
+                                    origin: flow.id)
         if let method = string(arguments["method"]), !method.isEmpty { request.method = method.uppercased() }
         if let url = string(arguments["url"]), !url.isEmpty { request.url = url }
         if arguments["headers"] != nil {

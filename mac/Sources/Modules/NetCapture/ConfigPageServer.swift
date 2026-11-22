@@ -17,6 +17,12 @@ final class ConfigPageServer: @unchecked Sendable {
     private var proxyPort: UInt16 = 0
     private let lock = NSLock()
     private var manualProxyValue = false
+    private var portValue: UInt16?
+
+    /// 此刻在听的端口；没开是 nil（MCP 的 get_config 报此刻在用的值）。
+    var listeningPort: UInt16? {
+        lock.lock(); defer { lock.unlock() }; return portValue
+    }
 
     /// 「手动代理」开着没有（主线程写，服务队列读）：没开时页面不给配代理那几步。
     var manualProxyOn: Bool {
@@ -29,6 +35,7 @@ final class ConfigPageServer: @unchecked Sendable {
     /// 开始监听。已在监听就先停掉重来（端口可能变了）。
     func start(port: UInt16) {
         let proxyPort = NetCaptureEnv.port
+        lock.lock(); portValue = port; lock.unlock()
         queue.async {
             self.listener?.cancel()
             self.listener = nil
@@ -46,6 +53,7 @@ final class ConfigPageServer: @unchecked Sendable {
     }
 
     func stop() {
+        lock.lock(); portValue = nil; lock.unlock()
         queue.async {
             self.listener?.cancel()
             self.listener = nil
