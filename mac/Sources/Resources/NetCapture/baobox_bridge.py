@@ -28,6 +28,7 @@ from pathlib import Path
 from mitmproxy import certs, connection, contentviews, ctx, http, tls
 from mitmproxy.connection import ConnectionState
 from mitmproxy.proxy import commands, events, layer
+from mitmproxy.proxy.layers import modes
 from mitmproxy.proxy.layers.tls import parse_client_hello
 
 PREFIX = "BAOBOX "
@@ -107,6 +108,15 @@ def client_fingerprint(client_hello):
     except Exception:
         return None
     return hashlib.sha256(("%s|%s|%s" % (ciphers, extensions, alpn)).encode()).hexdigest()[:12]
+
+
+XMPP_OPENINGS = (b"<stream:stream", b"<?xml")
+
+
+def maybe_xmpp(head):
+    """The client's first bytes open an XMPP stream, or are still too short to tell (a strict prefix of one of the
+    openings, e.g. `<?x`): the STARTTLS layer goes in and decides once it has seen a stream header."""
+    return bool(head) and any(head.startswith(o) or o.startswith(head) for o in XMPP_OPENINGS)
 
 
 def xmpp_stream_header(data):
@@ -213,6 +223,11 @@ class StartTLSLayer(layer.Layer):
                     self.hello = b""
             return
         if isinstance(event, events.ConnectionClosed):
+            if self.hello is not None:
+                # The connection closes (or half-closes) while a ClientHello is being held: what arrived so far still
+                # goes on and is recorded, nothing is taken over.
+                held, self.hello = self.hello, None
+                yield from self.release_hello(held)
             # Like the engine's TCP layer: pass a half-close on, finish when both sides are done.
             done = not ((client.state & ConnectionState.CAN_READ) or (server.state & ConnectionState.CAN_READ))
             if done:
@@ -226,6 +241,8 @@ class StartTLSLayer(layer.Layer):
 
     def hold_hello(self, data):
         """After <proceed/>: hold the client's bytes until the ClientHello is complete, then take over or pass on."""
+        if not data:
+            return                          # an empty read says nothing yet
         self.hello += data
         try:
             hello = parse_client_hello(self.hello) if self.hello[:1] == b"\x16" else None
@@ -241,8 +258,13 @@ class StartTLSLayer(layer.Layer):
             yield from self.child.handle_event(events.DataReceived(self.context.client, held))
             return
         # Passed through (failed before, or not TLS at all): the held bytes go on as they are, and are recorded.
-        self.bridge.starttls_data(self.state, True, held)
-        yield commands.SendData(self.context.server, held)
+        yield from self.release_hello(held)
+
+    def release_hello(self, held):
+        if held:
+            self.bridge.starttls_data(self.state, True, held)
+            if self.context.server.state & ConnectionState.CAN_WRITE:
+                yield commands.SendData(self.context.server, held)
 
     def done(self, _):
         yield from ()
@@ -1119,12 +1141,20 @@ class Bridge:
             return
         if any(isinstance(item, StartTLSLayer) for item in context.layers):
             return  # inside a connection already taken over: the decrypted stream is plain TCP
-        head = nextlayer.data_client().lstrip()
-        if not (head.startswith(b"<stream:stream") or head.startswith(b"<?xml")):
+        if len(context.layers) == 1 and isinstance(context.layers[0], (modes.HttpProxy, modes.HttpUpstreamProxy)):
+            # Bytes written straight to the HTTP proxy port, before any CONNECT: not a tunnel. Leave it to the HTTP
+            # proxy layer (otherwise a LAN device could get past "allow" / "block" and fill the TCP tab).
             return
-        # A bare `<?xml` may still turn into an XMPP stream header in the next read (some clients write the XML
-        # declaration on its own); the layer only takes over once it has seen one.
+        head = nextlayer.data_client().lstrip()
+        if not maybe_xmpp(head):
+            return
+        # Only connections that may use the engine at all: this Mac, tunnel devices, LAN devices the user allowed
+        # (with Manual Proxy on). Anything else is not taken over and not recorded.
         ip = client_ip(client)
+        if self.proxy_refused(client) or not (is_loopback(ip) or via_wireguard(client) or ip in self.allowed):
+            return
+        # A bare `<?xml` (or less) may still turn into an XMPP stream header in the next read (some clients write the
+        # XML declaration on its own); the layer only takes over once it has seen one.
         rec = self.recording and not (is_loopback(ip) and not via_wireguard(client) and not self.mac_tcp)
         state = StartTLSState(str(uuid.uuid4()), device_key(client), rec)
         self.starttls[client.id] = state

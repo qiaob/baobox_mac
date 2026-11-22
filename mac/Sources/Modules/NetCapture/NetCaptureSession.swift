@@ -24,6 +24,8 @@ final class NetCaptureSession: ObservableObject {
     @Published private(set) var manualProxyOn = false
     /// 「WireGuard」：引擎给每台设备开一个 WireGuard 监听（设备表在 `WireGuardDeviceStore`）。
     @Published private(set) var wireguardOn = false
+    /// 用户最后一次对 WireGuard 开关的意图。设备表还在读时先开后关，读完的回调照这个来，不再把它打开。
+    private var wireguardWanted = false
     /// 「给其他设备装证书」：配置页服务开着，卡片上显示二维码。
     @Published private(set) var certPageOn = false
     /// 暂停：HTTP 和 TCP 都不记录新的（CONTROL.md §5）。不记住，引擎每次新启动都从「记录中」开始。
@@ -163,6 +165,7 @@ final class NetCaptureSession: ObservableObject {
         macOn = false
         manualProxyOn = false
         wireguardOn = false
+        wireguardWanted = false
         certPageOn = false
         engineOnly = false
         ConfigPageServer.shared.stop()
@@ -186,6 +189,7 @@ final class NetCaptureSession: ObservableObject {
         macOn = false
         manualProxyOn = false
         wireguardOn = false
+        wireguardWanted = false
         certPageOn = false
         engineOnly = false
         ConfigPageServer.shared.stop()
@@ -335,6 +339,7 @@ final class NetCaptureSession: ObservableObject {
     /// 「WireGuard」总开关。打开时等设备表读完（首次启动新版本时要先迁移），再让引擎给每台设备开一个监听。
     /// 一台设备都没有也照样打开（窗口会接着弹出「添加设备」）。
     func setWireGuard(_ on: Bool) {
+        wireguardWanted = on
         guard on else {
             guard wireguardOn else { return }
             wireguardOn = false
@@ -343,7 +348,7 @@ final class NetCaptureSession: ObservableObject {
         }
         guard !wireguardOn else { return }
         WireGuardDeviceStore.shared.ensureLoaded { [weak self] in
-            guard let self, !self.wireguardOn else { return }
+            guard let self, self.wireguardWanted, !self.wireguardOn else { return }
             self.wireguardOn = true
             self.reconcile()
         }

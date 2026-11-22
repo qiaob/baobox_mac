@@ -88,8 +88,10 @@ final class NetCaptureTool: ToolModule {
     }
 
     /// 「网络抓包设置…」打开抓包窗口的「配置」页：抓包的设置都在那里（docs/packet-capture/CONFIG-LAYOUT.md §1）。
+    /// Intel 机、包里没有引擎时窗口里只有一句原因：照旧开设置窗口那一页（那里也写着原因）。
     var settingsAction: (@MainActor () -> Void)? {
-        { NetCaptureWindowController.shared.showConfig() }
+        guard NetCaptureEnv.engineUnavailable == nil else { return nil }
+        return { NetCaptureWindowController.shared.showConfig() }
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

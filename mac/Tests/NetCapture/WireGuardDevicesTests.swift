@@ -108,6 +108,21 @@ final class WireGuardDevicesTests: XCTestCase {
     func testCleanName() {
         XCTAssertEqual(WireGuardDeviceTable.cleanName("  vivo \n"), "vivo")
         XCTAssertNil(WireGuardDeviceTable.cleanName(" \t\n"))
+        // 换行、制表等控制字符换成空格（MCP 传进来的名字不过滤会把列表撑成几行）。
+        XCTAssertEqual(WireGuardDeviceTable.cleanName("测试\niPhone\t2\u{0007}"), "测试 iPhone 2")
+        // 截到 64 个字符（按字符算，不按字节）。
+        let long = String(repeating: "设", count: 100)
+        XCTAssertEqual(WireGuardDeviceTable.cleanName(long)?.count, 64)
+        XCTAssertEqual(WireGuardDeviceTable.cleanName(String(repeating: "a", count: 63) + "   b"), String(repeating: "a", count: 63))
+    }
+
+    func testDecodeReport() {
+        let good = WireGuardDeviceTable.encode([WireGuardDevice(id: idA, name: "a", port: 1)])
+        XCTAssertEqual(WireGuardDeviceTable.decodeReport(good), .init(devices: [WireGuardDevice(id: idA, name: "a", port: 1)],
+                                                                      dropped: 0, unreadable: false))
+        let mixed = Data(#"[{"id":"\#(idA)","name":"a","port":1},{"id":"bad","name":"b","port":2}]"#.utf8)
+        XCTAssertEqual(WireGuardDeviceTable.decodeReport(mixed).dropped, 1)
+        XCTAssertTrue(WireGuardDeviceTable.decodeReport(Data("{".utf8)).unreadable)
     }
 
     // MARK: - 迁移
@@ -202,7 +217,7 @@ final class WireGuardDevicesTests: XCTestCase {
         let result = try files.load(migratedName: "", legacyPort: 1)
         XCTAssertEqual(result.devices.map(\.id), [idA, idB, idC])
         XCTAssertEqual(result.keys, [idA: keysA])
-        files.removeKeys(id: idA)
+        try files.removeKeys(id: idA)
         XCTAssertNil(files.readKeys(id: idA))
     }
 
@@ -222,5 +237,96 @@ final class WireGuardDevicesTests: XCTestCase {
         XCTAssertTrue(WireGuardActivity.isRecent(now.addingTimeInterval(-60), now: now))
         XCTAssertFalse(WireGuardActivity.isRecent(now.addingTimeInterval(-600), now: now))
         XCTAssertFalse(WireGuardActivity.isRecent(nil, now: now))
+    }
+
+    // MARK: - 审查后的修正
+
+    /// 有条目被丢、或者整个文件坏了：原文件先复制一份 `devices.broken-<时间>.json` 再继续（下次写盘就盖掉了）。
+    func testBrokenTableIsBackedUp() throws {
+        let (files, root) = tempFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: files.folder, withIntermediateDirectories: true)
+        let original = Data(#"[{"id":"\#(idA)","name":"vivo","port":51820},{"id":"oops"}]"#.utf8)
+        try original.write(to: files.tableURL)
+        XCTAssertEqual(files.readTable()?.map(\.id), [idA])
+        let backups = try FileManager.default.contentsOfDirectory(atPath: files.folder.path).filter { $0.hasPrefix("devices.broken-") }
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(try Data(contentsOf: files.folder.appendingPathComponent(backups[0])), original)
+
+        // 好的文件不备份。
+        let (clean, cleanRoot) = tempFiles()
+        defer { try? FileManager.default.removeItem(at: cleanRoot) }
+        try clean.writeTable([WireGuardDevice(id: idA, name: "a", port: 1)])
+        _ = clean.readTable()
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: clean.folder.path).contains { $0.hasPrefix("devices.broken-") })
+    }
+
+    /// 两个 Baobox 同时迁移：表里是 B，钥匙却搬到了 A 名下。下次读的时候把这把没人认的钥匙还给 B。
+    func testOrphanKeyGoesBackToTheDeviceMissingOne() throws {
+        let (files, root) = tempFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = try WireGuardKeyFile.replace(at: files.legacyKeyURL)
+        try files.writeTable([WireGuardDevice(id: idA, name: "设备 1", port: 51820)])          // 进程 A 写表
+        try files.writeTable([WireGuardDevice(id: idB, name: "设备 1", port: 51820)])          // 进程 B 写表（盖掉 A）
+        XCTAssertEqual(rename(files.legacyKeyURL.path, files.keyURL(id: idA).path), 0)       // 进程 A 搬走了旧钥匙
+
+        let result = try files.load(migratedName: "x", legacyPort: 1)
+        XCTAssertEqual(result.devices.map(\.id), [idB])
+        XCTAssertEqual(result.keys[idB], legacy)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files.keyURL(id: idB).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: files.keyURL(id: idA).path))
+    }
+
+    /// 没人认的钥匙不止一把、或者缺钥匙的不止一台：分不清是谁的，不动。
+    func testReclaimOnlyOneToOne() {
+        XCTAssertEqual(WireGuardMigration.reclaim(missing: [idB], orphans: [idA]), [idB: idA])
+        XCTAssertEqual(WireGuardMigration.reclaim(missing: [idB], orphans: [idA, idC]), [:])
+        XCTAssertEqual(WireGuardMigration.reclaim(missing: [idA, idB], orphans: [idC]), [:])
+        XCTAssertEqual(WireGuardMigration.reclaim(missing: [], orphans: [idC]), [:])
+    }
+
+    /// 旧钥匙没搬成（目录不让写）：这一次用旧文件出码、开监听（`keyFiles`），报一个写盘问题；钥匙不算丢。
+    func testFailedMoveUsesTheOldFileThisTime() throws {
+        let (files, root) = tempFiles()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: files.folder.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let legacy = try WireGuardKeyFile.replace(at: files.legacyKeyURL)
+        try files.writeTable([WireGuardDevice(id: idA, name: "设备 1", port: 51820)])        // 上次写了表、没搬文件
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: files.folder.path)
+
+        let result = try files.load(migratedName: "x", legacyPort: 1)
+        XCTAssertEqual(result.keys[idA], legacy)
+        XCTAssertEqual(result.keyFiles[idA], files.legacyKeyURL)
+        XCTAssertEqual(result.problems.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: files.legacyKeyURL.path))
+    }
+
+    /// 写设备表失败（迁移时）：抛出去，旧文件原样留着，下次再迁。
+    func testMigrationTableWriteFailureKeepsTheOldFile() throws {
+        let (files, root) = tempFiles()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try WireGuardKeyFile.replace(at: files.legacyKeyURL)
+        try Data("not a folder".utf8).write(to: files.folder)                                  // 目录的位置被一个文件占着
+        XCTAssertThrowsError(try files.load(migratedName: "x", legacyPort: 51820))
+        XCTAssertTrue(files.legacyKeysExist)
+        try FileManager.default.removeItem(at: files.folder)
+        let retry = try files.load(migratedName: "设备 1", legacyPort: 51820)
+        XCTAssertEqual(retry.devices.map(\.port), [51820])
+        XCTAssertFalse(files.legacyKeysExist)
+    }
+
+    /// 删钥匙失败要报出来，不能吞掉；本来就没有不算错。
+    func testRemoveKeysReportsFailure() throws {
+        let (files, root) = tempFiles()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: files.folder.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        XCTAssertNoThrow(try files.removeKeys(id: idA))
+        _ = try files.createKeys(id: idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: files.folder.path)
+        XCTAssertThrowsError(try files.removeKeys(id: idA))
     }
 }

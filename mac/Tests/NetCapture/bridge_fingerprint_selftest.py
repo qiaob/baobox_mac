@@ -1,4 +1,5 @@
-"""Self-test of the bridge's client TLS fingerprint (docs/packet-capture/TLS-FINGERPRINT.md §3.1, §4.2).
+"""Self-test of the bridge's client TLS fingerprint (docs/packet-capture/TLS-FINGERPRINT.md §3.1, §4.2) and of when the
+STARTTLS layer goes in (a first read shorter than "<?xml" must not be decided as plain TCP).
 
 The bridge only runs inside the bundled mitmproxy, so this runs there too (it imports the real
 Resources/NetCapture/baobox_bridge.py and mitmproxy's own ClientHello parser):
@@ -83,6 +84,9 @@ def run():
     check("other cipher suites -> different", fingerprint(client_hello(CIPHERS + [0xC02F], EXTENSIONS)) != base)
     check("one more extension type -> different", fingerprint(client_hello(CIPHERS, EXTENSIONS + [(23, b"")])) != base)
     check("incomplete record -> parser asks for more", bridge.parse_client_hello(BASE[:40]) is None)
+    for head, expected in [(b"<?xml version='1.0'?>", True), (b"<stream:stream to='x'>", True), (b"<?x", True), (b"<", True),
+                           (b"<stre", True), (b"<html>", False), (b"GET / HTTP/1.1", False), (b"\x16\x03\x01", False), (b"", False)]:
+        check("maybe_xmpp(%r) -> %s" % (head, expected), bridge.maybe_xmpp(head) == expected)
     print("SELFTEST " + ("OK" if all(results) else "FAILED") + " (%d checks)" % len(results), flush=True)
 
 

@@ -82,4 +82,30 @@ final class MCPFormatTests: XCTestCase {
         XCTAssertEqual(MCPDeviceLine.format(key: "192.168.0.23", kind: .lan, name: "测试机", count: 2, last: "T"),
                        "192.168.0.23 · LAN · 测试机 · 2 flows · T")
     }
+
+    // MARK: - 只给本机的 AI 工具用
+
+    private func gate(_ headers: [String: String], method: String = "POST") -> MCPRequestGate.Rejection? {
+        MCPRequestGate.check(method: method, headers: headers, port: 9191)
+    }
+
+    func testRequestGate() {
+        let ok = ["host": "127.0.0.1:9191", "content-type": "application/json"]
+        XCTAssertNil(gate(ok))
+        XCTAssertNil(gate(["host": "localhost:9191", "content-type": "application/json; charset=utf-8"]))
+        XCTAssertNil(gate(["host": "LOCALHOST:9191", "content-type": "Application/JSON"]))
+        // 网页发的：带 Origin（哪怕其余都对）。
+        XCTAssertEqual(gate(ok.merging(["origin": "https://evil.example"]) { $1 })?.status, "403 Forbidden")
+        XCTAssertEqual(gate(ok.merging(["origin": "null"]) { $1 })?.status, "403 Forbidden")
+        // DNS 重绑定：Host 是别的名字；端口不对；没有 Host。
+        XCTAssertEqual(gate(["host": "evil.example:9191", "content-type": "application/json"])?.status, "403 Forbidden")
+        XCTAssertEqual(gate(["host": "127.0.0.1:9192", "content-type": "application/json"])?.status, "403 Forbidden")
+        XCTAssertEqual(gate(["content-type": "application/json"])?.status, "403 Forbidden")
+        // no-cors 的简单请求：text/plain、表单。
+        XCTAssertEqual(gate(["host": "127.0.0.1:9191", "content-type": "text/plain"])?.status, "415 Unsupported Media Type")
+        XCTAssertEqual(gate(["host": "127.0.0.1:9191"])?.status, "415 Unsupported Media Type")
+        // 预检和别的方法。
+        XCTAssertEqual(gate(["host": "127.0.0.1:9191"], method: "OPTIONS")?.status, "405 Method Not Allowed")
+        XCTAssertEqual(gate(ok, method: "GET")?.status, "405 Method Not Allowed")
+    }
 }

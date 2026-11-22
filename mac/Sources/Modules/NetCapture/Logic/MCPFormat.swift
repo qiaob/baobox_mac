@@ -90,3 +90,35 @@ enum MCPDeviceLine {
         return parts.joined(separator: " · ")
     }
 }
+
+/// 本地 MCP 只给本机的 AI 工具用，不给网页用（审查 #1）。网页可以用 `fetch(..., {mode: "no-cors"})` 发一个不触发预检的
+/// POST 来调写工具，配合 DNS 重绑定还能读到回复（WireGuard 配置里有私钥）。Claude Code / Codex 不带 `Origin`、
+/// `Host` 是 `127.0.0.1:<端口>`、POST 的是 JSON；浏览器发的不满足其中至少一条。
+enum MCPRequestGate {
+    struct Rejection: Equatable {
+        /// `403 Forbidden` 这样的状态行。
+        let status: String
+        let reason: String
+    }
+
+    /// `headers` 的键是小写的。nil = 放行。
+    static func check(method: String, headers: [String: String], port: UInt16) -> Rejection? {
+        if headers["origin"] != nil {
+            return Rejection(status: "403 Forbidden", reason: "requests from web pages are not accepted")
+        }
+        let host = (headers["host"] ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        guard host == "127.0.0.1:\(port)" || host == "localhost:\(port)" else {
+            return Rejection(status: "403 Forbidden", reason: "Host must be 127.0.0.1:\(port) or localhost:\(port)")
+        }
+        // 预检（OPTIONS）不应答 CORS，浏览器就发不出带 JSON 的跨域请求；GET（SSE 流）这里不提供。
+        guard method.uppercased() == "POST" else {
+            return Rejection(status: "405 Method Not Allowed", reason: "only POST is accepted")
+        }
+        let type = (headers["content-type"] ?? "").split(separator: ";").first
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        guard type == "application/json" else {
+            return Rejection(status: "415 Unsupported Media Type", reason: "Content-Type must be application/json")
+        }
+        return nil
+    }
+}

@@ -15,10 +15,14 @@ final class CaptureMCPServer: ObservableObject {
     private(set) var listeningPort: UInt16?
 
     private var listener: NWListener?
+    /// 取消了、还没关完的那一个（端口还占着）。
+    private var stopping: NWListener?
+    /// 关完它就起新的（刚关又开）。
+    private var startWhenStopped = false
     private let queue = DispatchQueue(label: "com.baobox.netcapture.mcp")
 
     /// 注册进 AI 配置时用的服务器名。
-    static let serverName = "baobox-netcapture"
+    nonisolated static let serverName = "baobox-netcapture"
 
     private init() {}
 
@@ -27,43 +31,83 @@ final class CaptureMCPServer: ObservableObject {
     // MARK: - 启停
 
     func start() {
-        guard !isRunning else { return }
+        // 已经有监听器（在跑或正在起来）就不再起一个。
+        guard listener == nil else { return }
+        // 上一个还在关（取消是异步的，端口还占着）：等它关完再起，免得刚关又开时新的绑不上端口。
+        if stopping != nil {
+            startWhenStopped = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                // 兜底：迟迟收不到 cancelled 也照起。
+                guard let self, self.startWhenStopped else { return }
+                self.startWhenStopped = false
+                self.stopping = nil
+                self.start()
+            }
+            return
+        }
+        let port = NetCaptureEnv.mcpPort
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         // 仅绑 loopback（127.0.0.1），不对外暴露。
-        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1",
-                                                           port: NWEndpoint.Port(rawValue: NetCaptureEnv.mcpPort)!)
-        guard let listener = try? NWListener(using: params) else {
-            UserDefaults.standard.set(false, forKey: NetCaptureEnv.Keys.mcpEnabled)
-            return
-        }
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return }
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: endpointPort)
+        guard let listener = try? NWListener(using: params) else { return }
         self.listener = listener
-        listeningPort = NetCaptureEnv.mcpPort
+        listeningPort = port
 
-        listener.stateUpdateHandler = { [weak self] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    switch state {
-                    case .ready: self?.isRunning = true
-                    case .failed:
-                        // 起不来（端口被占）：开关回到关，记住的也是关（CONFIG-LAYOUT.md §3）。
-                        self?.isRunning = false
-                        UserDefaults.standard.set(false, forKey: NetCaptureEnv.Keys.mcpEnabled)
-                    case .cancelled: self?.isRunning = false
-                    default: break
-                    }
+                    guard let self, let listener else { return }
+                    self.handleListener(listener, state: state)
                 }
             }
         }
         listener.newConnectionHandler = { connection in
-            MCPHTTPSession(connection: connection, queue: DispatchQueue(label: "com.baobox.netcapture.mcpconn")).start()
+            MCPHTTPSession(connection: connection, queue: DispatchQueue(label: "com.baobox.netcapture.mcpconn"), port: port).start()
         }
         listener.start(queue: queue)
     }
 
+    /// 监听器的状态变化。只认现在这一个：停掉又打开时，旧监听器晚到的 cancelled / failed 不能把新的状态改掉。
+    private func handleListener(_ changed: NWListener, state: NWListener.State) {
+        if changed === stopping {
+            if case .cancelled = state {
+                stopping = nil
+                if startWhenStopped {
+                    startWhenStopped = false
+                    start()
+                }
+            }
+            return
+        }
+        guard changed === listener else { return }
+        switch state {
+        case .ready:
+            isRunning = true
+        case .failed:
+            // 起不来（端口被占）：这次开关显示关；记住的 `netcapture.mcpEnabled` 不改，下次启动再试。
+            // 只有用户自己关掉才记成关（`setEnabled(false)`）。
+            listener = nil
+            listeningPort = nil
+            isRunning = false
+            stopping = changed
+            changed.cancel()
+        case .cancelled:
+            isRunning = false
+        default:
+            break
+        }
+    }
+
     func stop() {
-        listener?.cancel()
+        startWhenStopped = false
+        if let listener {
+            stopping = listener
+            listener.cancel()
+        }
         listener = nil
+        listeningPort = nil
         isRunning = false
     }
 
@@ -223,11 +267,14 @@ final class CaptureMCPServer: ObservableObject {
 private final class MCPHTTPSession: @unchecked Sendable {
     private let connection: NWConnection
     private let queue: DispatchQueue
+    /// 服务听的端口：`Host` 头只认 `127.0.0.1:<它>` / `localhost:<它>`。
+    private let port: UInt16
     private var buffer = Data()
 
-    init(connection: NWConnection, queue: DispatchQueue) {
+    init(connection: NWConnection, queue: DispatchQueue, port: UInt16) {
         self.connection = connection
         self.queue = queue
+        self.port = port
     }
 
     func start() {
@@ -239,8 +286,8 @@ private final class MCPHTTPSession: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             if let data { self.buffer.append(data) }
             if error != nil { self.connection.cancel(); return }
-            if let (headers, body) = self.tryParseRequest() {
-                self.handle(headers: headers, body: body)
+            if let (method, headers, body) = self.tryParseRequest() {
+                self.handle(method: method, headers: headers, body: body)
             } else if isComplete {
                 self.connection.cancel()
             } else {
@@ -249,13 +296,15 @@ private final class MCPHTTPSession: @unchecked Sendable {
         }
     }
 
-    /// 尝试解析完整 HTTP 请求（headers 到 \r\n\r\n，body 满足 Content-Length）。不完整返回 nil。
-    private func tryParseRequest() -> (headers: [String: String], body: Data)? {
+    /// 尝试解析完整 HTTP 请求（请求行、headers 到 \r\n\r\n，body 满足 Content-Length）。不完整返回 nil。
+    private func tryParseRequest() -> (method: String, headers: [String: String], body: Data)? {
         guard let range = buffer.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) else { return nil }
         let headerText = String(data: buffer.subdata(in: buffer.startIndex..<range.lowerBound),
                                 encoding: .isoLatin1) ?? ""
+        let lines = headerText.components(separatedBy: "\r\n")
+        let method = lines.first?.split(separator: " ").first.map(String.init) ?? ""
         var headers: [String: String] = [:]
-        for line in headerText.components(separatedBy: "\r\n").dropFirst() {
+        for line in lines.dropFirst() {
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = String(line[line.startIndex..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
@@ -266,10 +315,15 @@ private final class MCPHTTPSession: @unchecked Sendable {
         let available = buffer.distance(from: bodyStart, to: buffer.endIndex)
         guard available >= length else { return nil }
         let end = buffer.index(bodyStart, offsetBy: length)
-        return (headers, buffer.subdata(in: bodyStart..<end))
+        return (method, headers, buffer.subdata(in: bodyStart..<end))
     }
 
-    private func handle(headers: [String: String], body: Data) {
+    private func handle(method httpMethod: String, headers: [String: String], body: Data) {
+        // 网页发来的（带 Origin、Host 不对、不是 JSON 的 POST、预检）一律拒绝。
+        if let rejection = MCPRequestGate.check(method: httpMethod, headers: headers, port: port) {
+            respond(status: rejection.status, json: ["error": rejection.reason])
+            return
+        }
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
             respond(status: "400 Bad Request", json: ["error": "invalid JSON"])
             return

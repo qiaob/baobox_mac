@@ -19,6 +19,8 @@ final class WireGuardDeviceStore: ObservableObject {
     @Published private(set) var lastSeen: [String: Date] = [:]
 
     private var keys: [String: WireGuardKeys] = [:]
+    /// 密钥不在 `<id>.json` 的设备（迁移时旧文件没搬成）：监听用这个文件。
+    private var keyFiles: [String: URL] = [:]
     private var whenLoaded: [() -> Void] = []
     private var loading = false
     private let io = DispatchQueue(label: "com.baobox.netcapture.wireguard", qos: .userInitiated)
@@ -30,36 +32,39 @@ final class WireGuardDeviceStore: ObservableObject {
     // MARK: - 读
 
     /// 启动时（`activate()`）在后台读设备表，必要时先把多设备之前的那一份密钥迁成第一台设备。
+    /// 迁移写设备表失败：报 `StorageWriteFailure`，保持「没读完」（不能添加设备，免得新设备占掉旧端口、旧钥匙作废），
+    /// 下一次 `ensureLoaded`（打开 WireGuard、MCP 加设备）再试；等着的事留到读成功再做。
     func load() {
         guard !loaded, !loading else { return }
         loading = true
         let files = NetCaptureEnv.wireguardFiles
-        // 迁出来的那台叫什么：用户给 10.0.0.1 起过别名就用它，否则「设备 1」。
-        let migratedName = NetCaptureEnv.deviceAlias(for: WireGuardKeys.clientAddress) ?? Self.formatName(1)
+        // 迁出来的那台叫什么：用户给 10.0.0.1 起过别名就用它，否则「设备 1」。别名留着不删：
+        // 家里的网段可能真有一台 10.0.0.1 的局域网设备，那个名字是给它起的。
+        let migratedName = NetCaptureEnv.deviceAlias(for: WireGuardKeys.clientAddress)
+            .flatMap(WireGuardDeviceTable.cleanName) ?? Self.formatName(1)
         let legacyPort = NetCaptureEnv.wireguardPort
         let committed = committed
         io.async {
-            let result: WireGuardDeviceFiles.LoadResult
-            do {
-                result = try files.load(migratedName: migratedName, legacyPort: legacyPort)
-            } catch {
-                StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: error.localizedDescription)
-                result = WireGuardDeviceFiles.LoadResult(devices: files.readTable() ?? [], keys: [:], migrated: nil)
-            }
-            committed.devices = result.devices
+            let outcome = Result { try files.load(migratedName: migratedName, legacyPort: legacyPort) }
+            if case .success(let result) = outcome { committed.devices = result.devices }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if result.migrated != nil {
-                        // 迁完了：10.0.0.1 的别名不再有用（隧道设备改按设备表认）。
-                        NetCaptureEnv.setDeviceAlias(nil, for: WireGuardKeys.clientAddress)
-                    }
-                    self.keys = result.keys
-                    self.publish(result.devices)
                     self.loading = false
-                    self.loaded = true
-                    let actions = self.whenLoaded
-                    self.whenLoaded = []
-                    actions.forEach { $0() }
+                    switch outcome {
+                    case .failure(let error):
+                        StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: error.localizedDescription)
+                    case .success(let result):
+                        for problem in result.problems {
+                            StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: problem)
+                        }
+                        self.keys = result.keys
+                        self.keyFiles = result.keyFiles
+                        self.publish(result.devices)
+                        self.loaded = true
+                        let actions = self.whenLoaded
+                        self.whenLoaded = []
+                        actions.forEach { $0() }
+                    }
                 }
             }
         }
@@ -81,7 +86,7 @@ final class WireGuardDeviceStore: ObservableObject {
     var listeners: [WireGuardListener] {
         let files = NetCaptureEnv.wireguardFiles
         return devices.filter { keys[$0.id] != nil }
-            .map { WireGuardListener(keyFile: files.keyURL(id: $0.id).path, port: $0.port) }
+            .map { WireGuardListener(keyFile: (keyFiles[$0.id] ?? files.keyURL(id: $0.id)).path, port: $0.port) }
     }
 
     /// 二维码上的端点：Mac 现在的局域网 IP + 这台的端口。
@@ -106,10 +111,12 @@ final class WireGuardDeviceStore: ObservableObject {
     enum StoreError: LocalizedError {
         case noFreePort
         case notFound
+        case notLoaded
         var errorDescription: String? {
             switch self {
             case .noFreePort: return "no free UDP port"
             case .notFound: return "no such device"
+            case .notLoaded: return "the device list could not be read yet"
             }
         }
     }
@@ -117,6 +124,11 @@ final class WireGuardDeviceStore: ObservableObject {
     /// 添加一台：建钥匙（权限 600）、分端口、写设备表，然后引擎换监听（WireGuard 开着时）。
     /// 先写密钥再写设备表：设备表写不下去只多一个没人用的密钥文件，不会出现一台没有钥匙的设备。
     func add(name: String, completion: @escaping (Result<WireGuardDevice, Error>) -> Void) {
+        // 设备表没读成（迁移写盘失败）时不能加：新设备会占掉旧二维码的端口。
+        guard loaded else {
+            completion(.failure(StoreError.notLoaded))
+            return
+        }
         let cleaned = WireGuardDeviceTable.cleanName(name) ?? defaultName()
         let files = NetCaptureEnv.wireguardFiles
         let start = NetCaptureEnv.wireguardPort
@@ -124,15 +136,17 @@ final class WireGuardDeviceStore: ObservableObject {
         let committed = committed
         io.async {
             let result = Result { () throws -> (WireGuardDevice, WireGuardKeys, [WireGuardDevice]) in
+                // 旧的单份密钥还没迁走（上次搬文件失败）：它的端口（旧设置里的那个）也算占着。
+                let legacy: Set<UInt16> = files.legacyKeysExist ? [start] : []
                 guard let port = WireGuardDeviceTable.nextPort(start: start, used: committed.devices.map(\.port),
-                                                               reserved: reserved) else { throw StoreError.noFreePort }
+                                                               reserved: reserved.union(legacy)) else { throw StoreError.noFreePort }
                 let device = WireGuardDevice(id: WireGuardDeviceTable.newID(), name: cleaned, port: port)
                 let keys = try files.createKeys(id: device.id)
                 let next = committed.devices + [device]
                 do {
                     try files.writeTable(next)
                 } catch {
-                    files.removeKeys(id: device.id)
+                    try? files.removeKeys(id: device.id)
                     throw error
                 }
                 committed.devices = next
@@ -173,17 +187,25 @@ final class WireGuardDeviceStore: ObservableObject {
     /// 删除：从设备表里去掉、删掉它的密钥，引擎换监听。已经抓到的包还在列表里（名字显示「已删除的设备」）。
     func remove(id: String, completion: ((Bool) -> Void)? = nil) {
         let files = NetCaptureEnv.wireguardFiles
+        let legacy = keyFiles[id]
         mutate({ list in
             guard list.contains(where: { $0.id == id }) else { throw StoreError.notFound }
             list.removeAll { $0.id == id }
         }, afterWrite: {
-            files.removeKeys(id: id)
+            do {
+                try files.removeKeys(id: id)
+                // 这台用的还是旧的单份密钥（没搬成）：删设备就是不要这把钥匙了。
+                if let legacy { try FileManager.default.removeItem(at: legacy) }
+            } catch {
+                StorageWriteFailure.report(L("netcapture.wireguard.storageName"), reason: error.localizedDescription)
+            }
         }, then: { ok in
             guard ok else {
                 completion?(false)
                 return
             }
             self.keys[id] = nil
+            self.keyFiles[id] = nil
             FlowStore.shared.refreshDeviceLabels()
             NetCaptureSession.shared.wireguardDevicesChanged()
             completion?(true)

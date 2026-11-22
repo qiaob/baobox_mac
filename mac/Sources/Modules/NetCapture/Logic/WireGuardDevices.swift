@@ -37,16 +37,38 @@ enum WireGuardDeviceTable {
         UUID(uuidString: id) != nil && id == id.lowercased()
     }
 
-    /// 名字去掉首尾空白；空的不算名字。
+    /// 名字最长这么多个字符（界面上一行放得下，MCP 也不能塞进一大段）。
+    static let maxNameLength = 64
+
+    /// 名字整理：换行、制表等控制字符换成空格，去掉首尾空白，截到 `maxNameLength` 个字符；空的不算名字。
+    /// 界面输入、MCP、读设备表都走这里。
     static func cleanName(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        var scalars = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars {
+            scalars.append(CharacterSet.controlCharacters.contains(scalar) ? " " : scalar)
+        }
+        let trimmed = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+        let capped = String(trimmed.prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
+        return capped.isEmpty ? nil : capped
+    }
+
+    /// 解设备表的结果：留下来的设备、丢掉了几条、整个文件是不是读不出来（调用方据此先把原文件备份一份）。
+    struct DecodeReport: Equatable {
+        var devices: [WireGuardDevice]
+        var dropped: Int
+        var unreadable: Bool
     }
 
     /// 解设备表。整个文件不是数组 → 空表；坏的条目（id 不是小写 UUID、没有名字、端口不对）跳过；
     /// 重复的 id、重复的端口只留第一条（两个监听抢一个端口，引擎会起不来）。
     static func decode(_ data: Data) -> [WireGuardDevice] {
-        guard let items = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { return [] }
+        decodeReport(data).devices
+    }
+
+    static func decodeReport(_ data: Data) -> DecodeReport {
+        guard let items = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            return DecodeReport(devices: [], dropped: 0, unreadable: true)
+        }
         var seenIDs = Set<String>()
         var seenPorts = Set<UInt16>()
         var devices: [WireGuardDevice] = []
@@ -61,7 +83,7 @@ enum WireGuardDeviceTable {
             seenPorts.insert(port)
             devices.append(WireGuardDevice(id: id, name: name, port: port))
         }
-        return devices
+        return DecodeReport(devices: devices, dropped: items.count - devices.count, unreadable: false)
     }
 
     static func encode(_ devices: [WireGuardDevice]) -> Data {
@@ -108,6 +130,14 @@ enum WireGuardMigration {
         case finishMove(deviceID: String)
     }
 
+    /// 两个 Baobox 同时迁移（worktree 构建和 /Applications 里那份共用支持目录）时，钥匙可能落在设备表里没有的 id 下，
+    /// 而表里那台没有钥匙。这种「没人认的钥匙」只在恰好一把、缺钥匙的设备恰好一台时还给它（多了分不清是谁的，不动）。
+    /// 返回 设备 id → 那把钥匙的文件 id。
+    static func reclaim(missing: [String], orphans: [String]) -> [String: String] {
+        guard missing.count == 1, orphans.count == 1 else { return [:] }
+        return [missing[0]: orphans[0]]
+    }
+
     /// `legacyValid`：旧密钥文件在、而且读得出来（读不出来的不迁，留着也不碍事）。
     static func plan(tableExists: Bool, devices: [WireGuardDevice], legacyValid: Bool,
                      keyFileExists: (String) -> Bool) -> Plan {
@@ -130,10 +160,25 @@ struct WireGuardDeviceFiles: Sendable {
     func keyURL(id: String) -> URL { folder.appendingPathComponent("\(id).json") }
 
     /// 读设备表；文件不存在返回 nil（和「空表」分开：迁移要看它）。
+    /// 有条目被丢掉、或者整个文件读不出来：先把原文件复制成 `devices.broken-<时间>.json` 留着（下次写盘就盖掉了），再继续。
     func readTable() -> [WireGuardDevice]? {
         guard let data = try? Data(contentsOf: tableURL) else { return nil }
-        return WireGuardDeviceTable.decode(data)
+        let report = WireGuardDeviceTable.decodeReport(data)
+        if report.unreadable || report.dropped > 0 { backUpTable() }
+        return report.devices
     }
+
+    /// 坏的设备表备份到哪（同 Mock 规则的 `mock-rules.broken-<时间>.json`）。
+    func backUpTable() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let backup = folder.appendingPathComponent("devices.broken-\(formatter.string(from: Date())).json")
+        guard !FileManager.default.fileExists(atPath: backup.path) else { return }
+        try? FileManager.default.copyItem(at: tableURL, to: backup)
+    }
+
+    /// 旧的单份密钥还在、读得出来（还没迁完）。
+    var legacyKeysExist: Bool { WireGuardKeyFile.read(at: legacyKeyURL) != nil }
 
     func writeTable(_ devices: [WireGuardDevice]) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -149,16 +194,23 @@ struct WireGuardDeviceFiles: Sendable {
         try WireGuardKeyFile.replace(at: keyURL(id: id))
     }
 
-    func removeKeys(id: String) {
-        try? FileManager.default.removeItem(at: keyURL(id: id))
+    /// 删掉一台的密钥；文件本来就没有不算错。
+    func removeKeys(id: String) throws {
+        let url = keyURL(id: id)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     struct LoadResult: Equatable, Sendable {
         var devices: [WireGuardDevice]
         /// 读得出来的密钥；缺了或坏了的设备不在这里。
         var keys: [String: WireGuardKeys]
-        /// 这一次（或补完上次）迁出来的设备：调用方据此删掉 `10.0.0.1` 的旧别名。
+        /// 这一次（或补完上次）迁出来的设备。
         var migrated: WireGuardDevice?
+        /// 密钥不在 `<id>.json` 的设备（旧文件没搬成）：引擎的监听用这个文件。
+        var keyFiles: [String: URL] = [:]
+        /// 要报给用户的写盘问题（`StorageWriteFailure`）。
+        var problems: [String] = []
     }
 
     /// 读设备表和各台密钥，必要时先把旧的单份密钥迁成第一台设备。
@@ -169,34 +221,73 @@ struct WireGuardDeviceFiles: Sendable {
         let legacy = WireGuardKeyFile.read(at: legacyKeyURL)
         var devices = table ?? []
         var migrated: WireGuardDevice?
+        var keyFiles: [String: URL] = [:]
+        var problems: [String] = []
         let plan = WireGuardMigration.plan(tableExists: table != nil, devices: devices, legacyValid: legacy != nil,
                                            keyFileExists: { FileManager.default.fileExists(atPath: keyURL(id: $0).path) })
+        var moveTo: String?
         switch plan {
         case .nothing:
             break
         case .migrate:
             let device = WireGuardDevice(id: WireGuardDeviceTable.newID(),
-                                         name: WireGuardDeviceTable.cleanName(migratedName) ?? migratedName,
+                                         name: WireGuardDeviceTable.cleanName(migratedName) ?? "1",
                                          port: legacyPort)
             devices = [device]
             try writeTable(devices)
             migrated = device
-            moveLegacy(to: device.id)
+            moveTo = device.id
         case .finishMove(let id):
             migrated = devices.first { $0.id == id }
-            moveLegacy(to: id)
+            moveTo = id
+        }
+        if let id = moveTo, let error = moveLegacy(to: id) {
+            // 没搬成：这一次直接用旧文件（钥匙一样，扫过旧码的手机照样能连），下次启动再搬。
+            keyFiles[id] = legacyKeyURL
+            problems.append(error)
         }
         var keys: [String: WireGuardKeys] = [:]
         for device in devices {
-            if let found = readKeys(id: device.id) { keys[device.id] = found }
+            if let file = keyFiles[device.id], let found = WireGuardKeyFile.read(at: file) {
+                keys[device.id] = found
+            } else if let found = readKeys(id: device.id) {
+                keys[device.id] = found
+            }
         }
-        return LoadResult(devices: devices, keys: keys, migrated: migrated)
+        // 没人认的钥匙还给缺钥匙的那台（两个 Baobox 同时迁移留下的）。
+        let missing = devices.map(\.id).filter { keys[$0] == nil }
+        if !missing.isEmpty {
+            let known = Set(devices.map(\.id))
+            for (deviceID, orphanID) in WireGuardMigration.reclaim(missing: missing, orphans: orphanKeyIDs(excluding: known)) {
+                guard let found = readKeys(id: orphanID) else { continue }
+                if rename(keyURL(id: orphanID).path, keyURL(id: deviceID).path) == 0 {
+                    keys[deviceID] = found
+                } else {
+                    keyFiles[deviceID] = keyURL(id: orphanID)
+                    keys[deviceID] = found
+                    problems.append(String(cString: strerror(errno)))
+                }
+            }
+        }
+        return LoadResult(devices: devices, keys: keys, migrated: migrated, keyFiles: keyFiles, problems: problems)
     }
 
-    /// 旧密钥文件改名成这台的密钥（同一个卷上，原子的；权限原样是 600）。
-    private func moveLegacy(to id: String) {
+    /// 目录里 `<小写 uuid>.json`、读得出钥匙、又不是表里任何一台的文件。
+    func orphanKeyIDs(excluding known: Set<String>) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.compactMap { name -> String? in
+            guard name.hasSuffix(".json") else { return nil }
+            let id = String(name.dropLast(5))
+            guard WireGuardDeviceTable.isValidID(id), !known.contains(id), readKeys(id: id) != nil else { return nil }
+            return id
+        }.sorted()
+    }
+
+    /// 旧密钥文件改名成这台的密钥（同一个卷上，原子的；权限原样是 600）。失败返回原因。
+    private func moveLegacy(to id: String) -> String? {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        _ = rename(legacyKeyURL.path, keyURL(id: id).path)
+        guard rename(legacyKeyURL.path, keyURL(id: id).path) == 0 else { return String(cString: strerror(errno)) }
+        return nil
     }
 }
 

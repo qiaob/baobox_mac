@@ -88,6 +88,8 @@
 | 7 | 没写 | 详情概览的「协议」写成「XMPP · 已解密 / 未解密」；「复制全部」里分隔线也是一行；合块不跨过分隔线（线两边同方向的段不合在一起，偏移照样按方向累计） | 复制出去也看得出从哪里开始是 TLS；跨线合块会把明文和密文糊成一块 |
 | 8 | MCP 多一个字段 `tls` | `list_tcp_connections` 每行 `tls=decrypted` 或 `tls=failed(<reason>)`；`get_tcp_connection` 多一行 `TLS: decrypted · chat.example.test · TLS 1.3`，数据里分隔处一行 `-- TLS taken over at <proceed/>: decrypted data below (…) --` / `-- TLS not decrypted: ciphertext below --` | MCP 的输出是文本，不是 JSON |
 | 9 | 没写 | 接管时被拒的那一条，分隔线放在数据最后（线后没有数据），连接以出错结束，错误原文写在概览里 | 那条连接在 TLS 握手时就断了 |
+| 10 | 「客户端头几个字节是 XMPP 流开头就换上 STARTTLS 层」 | 层栈只有 HTTP 代理层（还没 `CONNECT`，有人直接往代理端口写 XML）时不换；换之前先看这个来源能不能用引擎（本机、隧道设备、已允许且「手动代理」开着的局域网设备），不能的不接管、不记录（独立审查 #2） | 原来局域网设备直接往代理端口写 XML，能绕过「允许 / 屏蔽」在 TCP 页刷出行 |
+| 11 | 只看到 `<?xml` 就先换上（本节 #2） | 第一段比 `<?xml` / `<stream:stream` 还短、但是它们的开头（例如 `<?x`）时也先换上，看到完整的 stream 头才算 XMPP（审查 #8）；攒 ClientHello 时客户端半关或连接断开，已经攒下的照样发出去、记进字节；空的一次读不算数 | 引擎自己的判断不会等，交给它就成了普通 TCP、再也接不了；审查用的测试程序复现过：`<?x` 原来装不上层，半关时攒下的 20 字节原来没发也没记 |
 
 > 2026-11-22 追加的 `TLS-FINGERPRINT.md` 把 §3.1「在 `<proceed/>` 那一刻决定」改成等第一个 ClientHello 到齐再决定（失败表多一个客户端 TLS 指纹），§3.1 已按它改写；验证见那份文档 §6。
 
