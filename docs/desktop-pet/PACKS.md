@@ -10,6 +10,7 @@
 - 交互（单击 / 双击 / 抚摸 / 喂食 / 陪玩 / 睡醒）与通知气泡见 `INTERACTION.md`。
 - **2D 帧图形象照旧支持**（自制用），格式见 §4.2。
 - **VRM 二次元形象**：`.vrm`（带 VRM 扩展的 GLB）直接放进形象文件夹就能用，动作、表情、卡通光影都是 App 现场生成的，见 `VRM.md`。
+- **Windows 版有自己的一份**（2026-11-22 拆仓库后）：[baobox_windows](https://github.com/qiaob/baobox_windows) 里有 `assets/pets/` 和内置毛绒形象、动捕走路数据的拷贝。这里新增或改了素材不会同步过去，要两边各改一次。
 - **直接读 GLB / glTF，不转 USDZ**。与 DESIGN.md §7.3「出厂前统一转 USDZ」不同：本机没有 Reality Converter / Blender，用户自己往文件夹里放模型时也做不到转换；SceneKit / Model I/O 又都不认 glTF，所以 App 内自带一个最小读取器（§5）。
 - 素材全部转存在本仓库（个人自用，按用户决定不做授权审查）。原计划的 Frakassets 2D 素材包放在 itch.io，脚本请求一律 429，App 里下载不了，已放弃。
 

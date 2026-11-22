@@ -11,27 +11,25 @@
 
 ## 构建与验证（重要）
 
-- **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；三个平台各有一条构建工作流（`.github/workflows/build-{macos,windows,linux}.yml`），手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。Windows 与 Linux 的 Rust 代码在本机就能编译与测试。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
+- **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；macOS 构建工作流 `.github/workflows/build-macos.yml` 手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
 - Mac 上构建：`brew install xcodegen && xcodegen generate && open Baobox.xcodeproj`（或 `xcodebuild -scheme Baobox build`）。
 - Mac 有单元测试 target `BaoboxTests`：纯逻辑测试，只编 `mac/Tests/` 与 `mac/project.yml` 里 `BaoboxTests.sources` 列出的纯逻辑源码（用量 `Core/CLIUsage/`、会话索引 `Core/CLISession/`、会议引擎接口 `Core/MeetingEngine/`、会议纯逻辑 `Modules/Meeting/Logic/`、通知模型与判断 `Core/Notify/Model/` 等），不链接、不启动 App；要测的代码只能依赖 Foundation 和这些目录。在 `mac/` 下 `xcodegen generate && xcodebuild -scheme Baobox test` 就能跑（或在 Xcode 里 ⌘U）；macOS 构建工作流每次也跑。
-- Rust（`shared/`、`windows/`、`linux/`）：CI 卡 `cargo fmt --check` 和 `cargo clippy --all-targets -- -D warnings`，工具链固定 **1.90.0**（#115，升级时改两个工作流里的版本、顺手修掉新冒出来的警告）。
-  本机：`cargo +1.90.0 fmt`、`cargo +1.90.0 clippy --all-targets`；Windows 的 crate 在 Mac 上加 `--target x86_64-pc-windows-gnu` 检查；
-  Linux 的 crate 依赖 GTK，在 Mac 上用 Docker（`rust:1.90-bookworm` 里装 `libgtk-3-dev pkg-config`）。测试里的常量断言写成 `const { assert!(…) }`（clippy 不许运行期 `assert!(常量)`）。
+- Windows / Linux（Rust）不在这个仓库：2026-11-22 拆到 [qiaob/baobox_windows](https://github.com/qiaob/baobox_windows)、[qiaob/baobox_linux](https://github.com/qiaob/baobox_linux)，两边共用的 Rust 库在 [qiaob/baobox_shared](https://github.com/qiaob/baobox_shared)（按标签作 Cargo git 依赖）。工具链、fmt / clippy 规则见各仓库的 CLAUDE.md。
 - 无法编译时的自查：① 只引用真实存在的类型/方法（先 grep 确认签名）；② 每个 `L()` / `Text()` 的 key 都已入 `Localizable.xcstrings`（可跑下方脚本校验）；③ 所有 `@Published` 只在主线程写；④ `Process` / `NWConnection` / `URLSession` 不在主线程同步等待。
 
-## 仓库结构（2026-08 起三平台并列）
+## 仓库结构
 
 ```
 mac/       macOS 实现（Swift + SwiftUI/AppKit）—— 下文说的一切都在这里
-windows/   Windows 实现（Rust + Win32/GDI）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击 + 桌面宠物
-linux/     Linux 实现（Rust + X11）—— 常驻 App：截图 + 剪贴板 + 防休眠 + 窗口管理 + AI 助手 + 键盘点击
-shared/    三平台共用的 Rust 库：baobox-core（纯逻辑）、baobox-image（PNG/灰度）
 docs/      产品文档与使用手册
+assets/    桌面宠物的可下载形象包（Mac 版 `PetCatalog` 按固定提交下载；Windows 仓库另有一份）
 ```
 
-**改 macOS 代码请进 `mac/`**；跨平台的纯逻辑（几何、选区状态机、标注模型、长截屏拼接、
-文件名规则、剪贴板历史、敏感内容识别、文本格式识别、窗口布局几何、AI 用量与会话日志）放 `shared/baobox-core`，三边共用一份实现与测试。详见
-`docs/multiplatform/ARCHITECTURE.md`。
+**改 macOS 代码请进 `mac/`**。2026-11-22 起其他平台各在自己的仓库：
+[baobox_windows](https://github.com/qiaob/baobox_windows)、[baobox_linux](https://github.com/qiaob/baobox_linux)，
+两者共用的 Rust 纯逻辑（几何、选区状态机、标注模型、长截屏拼接、文件名规则、剪贴板历史……）在
+[baobox_shared](https://github.com/qiaob/baobox_shared)，架构说明见那边的 `docs/ARCHITECTURE.md`。
+Mac 不链接这些 Rust 代码，共享的是规格与算法。
 
 ## 架构（框架先行，加工具 = 加模块）
 
@@ -83,7 +81,7 @@ BaoboxApp(@main, Settings scene)
 
 ## docs/ 布局
 
-- `docs/multiplatform/ARCHITECTURE.md` —— 三平台目录划分、什么共用什么不共用、移植踩到的真实差异、各平台进度。
+- 多平台架构（目录划分、什么共用、移植差异、各平台进度）已随拆仓库移到 [baobox_shared/docs/ARCHITECTURE.md](https://github.com/qiaob/baobox_shared/blob/main/docs/ARCHITECTURE.md)；`docs/multiplatform/README.md` 只留一条指路。
 - `docs/manual/` —— **使用手册**：每个工具、每项功能的完整说明（面向用户，README 里的链接都指向这里）。
 - `docs/REQUIREMENTS.md` / `docs/TECH_DESIGN.md` —— 全局需求与 M1 技术设计（第 6 节是模块规划总表）。
 - `docs/design/ui-design-v1.html` —— UI 设计稿与**设计令牌（配色）**：accent 浅 `#17A398` / 深 `#2BC4B8`，深浅两套变量。
@@ -123,7 +121,7 @@ BaoboxApp(@main, Settings scene)
 
 1. `project.yml` 里 **只有 `MARKETING_VERSION` 一处**版本号改成新版本，`chore(release): X.Y.Z — 摘要` 直接提交 main。（`CFBundleShortVersionString` / `CFBundleVersion` 现在写的是 `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`，跟着构建设置走 —— 以前写死字面量，导致工作流在命令行上覆盖版本号根本不起作用，v0.0.7 的包里仍写着上一版的号。）
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`。
-3. `.github/workflows/release.yml` 自动：三个平台并行构建（macOS Release + **ad-hoc 签名** → zip；Linux / Windows 按标签改 Cargo.toml 版本号 → `cargo rustc --release -D warnings` → tar.gz / zip），最后 `publish` 一次性创建 GitHub Release 挂上全部产物（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。Mac 包必须有，Linux / Windows 编不过就先不挂、不挡发版（#112）。想先验证打包：Actions 里手动跑 Release（填个试打包版本号），产物在那次运行的 Artifacts 里，不发布。
+3. `.github/workflows/release.yml` 自动：macOS Release 构建 + **ad-hoc 签名** → zip，`publish` 创建 GitHub Release 挂上产物（notes 自动生成，中文说明可事后 `gh release edit` 补，格式参照 v0.0.4；同名 Release 已存在时只补传产物，不报错）。Windows / Linux 在各自仓库发版（0.0.9 是最后一个三平台一起发的版本）。想先验证打包：Actions 里手动跑 Release（填个试打包版本号），产物在那次运行的 Artifacts 里，不发布。
 
 背景与取舍：
 

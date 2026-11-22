@@ -4,7 +4,7 @@
 > 状态：已评审——技术栈、分发方式、系统版本、功能范围均已确认
 
 > **历史文档**（2026-11-10 标注，#116）：这是项目起步时的需求，很多已经变了 —— 现在是 macOS / Windows / Linux 三平台
-> （见 `docs/multiplatform/ARCHITECTURE.md`）；没有付费开发者账号，发布是 ad-hoc 签名、不公证（见 `CLAUDE.md`「发布」）；
+> （2026-11-22 起 Windows / Linux 拆到各自的仓库，见 [baobox_shared/docs/ARCHITECTURE.md](https://github.com/qiaob/baobox_shared/blob/main/docs/ARCHITECTURE.md)）；没有付费开发者账号，发布是 ad-hoc 签名、不公证（见 `CLAUDE.md`「发布」）；
 > Sparkle 自动更新没做（菜单里那项是 M2 占位）；工具也多了很多。**现状以 `README.md`、`docs/manual/` 和各功能目录下的
 > 需求 / 设计文档为准**，这份只留作当初决策的记录。
 
