@@ -23,13 +23,6 @@ enum LauncherCalcValue: Equatable, Sendable {
         case .approx(let value): return value == 0
         }
     }
-
-    var isNegative: Bool {
-        switch self {
-        case .exact(let value): return value < 0
-        case .approx(let value): return value < 0
-        }
-    }
 }
 
 /// 可以作用在一个数上的函数。
@@ -163,12 +156,6 @@ enum LauncherCalcMath {
     static func isInteger(_ value: Decimal) -> Bool {
         guard !value.isNaN else { return false }
         return rounded(value, .plain) == value
-    }
-
-    /// 精确的整数值能放进 Int64 时返回它。
-    static func int64(_ value: LauncherCalcValue) -> Int64? {
-        guard case .exact(let decimal) = value, isInteger(decimal) else { return nil }
-        return Int64(decimal.description)
     }
 
     /// 向零取整：`7.9 → 7`、`-7.9 → -7`（NSDecimalRound 的 .down 是向负无穷取整，所以先取绝对值）。

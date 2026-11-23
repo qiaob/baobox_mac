@@ -5,7 +5,7 @@ import Foundation
 // 一个写法可以指几个单位（`m` = 米 / 分钟），由换算句型按两边量纲是否一致来定。
 // 数据量区分大小写（`MB` 兆字节、`Mb` 兆比特），先查区分大小写的表，查不到再不分大小写查。
 
-enum LauncherCalcDimension: CaseIterable, Sendable {
+enum LauncherCalcDimension: Sendable {
     case length, mass, temperature, area, volume, speed, duration, data
 }
 
