@@ -90,6 +90,8 @@ final class AnnotationToolbar: NSObject {
         ]
         for (tool, symbol, tip) in toolDefs {
             let button = makeIconButton(symbol: symbol, tip: tip, action: #selector(toolTapped(_:)))
+            // textformat 随系统语言变（中文下是「格式」两个字）：文字工具换成自己画的「T」。
+            if tool == .text { button.image = AnnotationTextToolIcon.image(accessibilityDescription: tip) }
             toolForButton[ObjectIdentifier(button)] = tool
             toolButtons.append(button)
             toolsRow.addArrangedSubview(button)
