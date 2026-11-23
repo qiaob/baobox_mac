@@ -33,6 +33,14 @@ final class LauncherQueryTests: XCTestCase {
         XCTAssertEqual(parse("s baobox"), query("sessions", "baobox"))
         XCTAssertEqual(parse("m 站会"), query("meetings", "站会"))
         XCTAssertEqual(parse("w Xcode"), query("windows", "Xcode"))
+        XCTAssertEqual(parse("> 截图"), query("commands", "截图"))
+    }
+
+    func testCommandPrefixNeedsASpaceToo() {
+        XCTAssertEqual(parse(">截图"), query(nil, ">截图"))
+        XCTAssertEqual(parse(">"), query(nil, ">"))
+        XCTAssertEqual(parse("> "), query("commands", ""))
+        XCTAssertEqual(parse(">\u{3000}防休眠"), query("commands", "防休眠"))
     }
 
     func testPrefixIgnoresCase() {

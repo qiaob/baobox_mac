@@ -11,8 +11,10 @@ struct LauncherQuery: Equatable, Sendable {
     let text: String
 
     /// 出厂前缀：键是来源 id、值是前缀（与设置键 `launcher.prefix.<来源 id>` 同一方向，TECH_DESIGN.md §11）。
+    /// 命令用 `>`（同编辑器的命令面板），和字母前缀一样要跟一个空格。
     static let defaultPrefixBySource: [String: String] = [
         "apps": "a",
+        "commands": ">",
         "clipboard": "c",
         "files": "f",
         "sessions": "s",

@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 上次崩溃 / 被强杀留下的本地模型推理进程：现在就结束，不等用到那个模型（#187）。
         OfflineTranslator.terminateStaleServers()
 
+        // 快速入口是总入口，排第一（菜单顺序 = 注册顺序）；它的命令表从注册表里收，所以把注册表交给它。
+        registry.register(LauncherTool(registry: registry))
         registry.register(ScreenshotTool())
         registry.register(ScreenDrawTool())
         registry.register(ClipboardTool())
