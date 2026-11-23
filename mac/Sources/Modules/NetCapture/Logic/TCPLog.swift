@@ -155,6 +155,20 @@ struct TCPLog: Sendable {
         connections.removeAll()
     }
 
+    /// 引擎停了（停止、换监听重启、意外退出）：还开着的连接再也等不到 `tcp_close`，一律标成「已关闭」，结束时间 = `at`，
+    /// 错误一栏写 `reason`（docs/packet-capture/TLS-FINGERPRINT.md §7.3）。返回有没有变化。
+    @discardableResult
+    mutating func endOpen(at: Date, reason: String) -> Bool {
+        var changed = false
+        for index in connections.indices where connections[index].state == .open {
+            connections[index].state = .closed
+            connections[index].endedAt = at
+            connections[index].error = reason
+            changed = true
+        }
+        return changed
+    }
+
     /// 删掉符合条件的连接，返回有没有删掉。
     @discardableResult
     mutating func removeAll(where shouldRemove: (TCPConnection) -> Bool) -> Bool {

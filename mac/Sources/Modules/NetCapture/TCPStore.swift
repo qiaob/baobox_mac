@@ -26,6 +26,13 @@ final class TCPStore: ObservableObject {
         TCPSnapshotStore.shared.set([])
     }
 
+    /// 引擎停了：还开着的连接跟着结束（TLS-FINGERPRINT.md §7.3）。
+    func endOpenConnections(reason: String) {
+        guard log.endOpen(at: Date(), reason: reason) else { return }
+        connections = log.connections
+        TCPSnapshotStore.shared.set(connections)
+    }
+
     /// 清掉某台设备的连接（设备栏右键「清空这台设备的包」）。
     func clearDevice(key: String) {
         guard log.removeAll(where: { $0.deviceKey == key }) else { return }

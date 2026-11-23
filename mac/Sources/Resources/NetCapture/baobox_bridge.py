@@ -486,6 +486,7 @@ class Bridge:
         self.announced = set()           # source IPs already reported as pending
         self.failed = set()              # (device key, host, client fingerprint or None): handshake failed -> pass through
         self.reported = set()            # (device key, host, reason, fingerprint): `tls` already sent
+        self.trusted = set()             # (device key, fingerprint): this kind of client completed a handshake with us
         self.body_cap = 5 * 1024 * 1024
         self.rules = []                  # mock rules, in the order the user keeps them
         self.listen_ports = set()        # ports this engine listens on
@@ -613,6 +614,22 @@ class Bridge:
             port = cmd.get("port")
             if isinstance(port, int) and 0 <= port <= 65535:
                 self.page_port = port
+        elif name == "forget_reported":
+            # The list was cleared (all of it, or one device's rows): report passed-through domains again the next
+            # time they show up. The failure table stays: clearing the list says nothing about the certificate.
+            device = cmd.get("device")
+            if isinstance(device, str) and device:
+                self.reported = {r for r in self.reported if r[0] != device}
+            else:
+                self.reported = set()
+        elif name == "retry_decrypt":
+            # "Try decrypting again" on a passed-through row: forget this device + domain for every fingerprint. The
+            # next connection is taken over again; if the device still refuses the certificate it fails once more,
+            # gets recorded again and shows a new row (TLS-FINGERPRINT.md §7.2).
+            device, host = cmd.get("device"), cmd.get("host")
+            if isinstance(device, str) and isinstance(host, str) and device and host:
+                self.failed = {f for f in self.failed if not (f[0] == device and f[1] == host)}
+                self.reported = {r for r in self.reported if not (r[0] == device and r[1] == host)}
 
     def apply_scope(self, cmd):
         mode = cmd.get("mode")
@@ -879,10 +896,27 @@ class Bridge:
             self.report_tcp_tls(state, "failed", reason="server_handshake_failed")
 
     def tls_established_client(self, data: tls.TlsData):
-        state = self.starttls.get(data.context.client.id)
+        client = data.context.client
+        state = self.starttls.get(client.id)
         if state is not None and state.takeover:
+            self.note_trusted(state.key, state.fingerprint)
             self.report_tcp_tls(state, "decrypted", sni=getattr(data.conn, "sni", None) or state.domain,
                                 version=getattr(data.conn, "tls_version", None))
+            return
+        self.note_trusted(device_key(client), self.fingerprints.get(client.id))
+
+    def note_trusted(self, key, fingerprint):
+        """A handshake with this device + client fingerprint just succeeded: that kind of client trusts Baobox's
+        certificate now, so the failures recorded for it earlier (before the certificate was installed) no longer hold.
+        Once per engine run and (device, fingerprint): on iOS one fingerprint covers Safari, system services and most
+        apps, and services that never accept the certificate (iCloud) would otherwise be taken over again after every
+        success and keep breaking. Entries recorded without a fingerprint are left alone (TLS-FINGERPRINT.md §7.2)."""
+        if fingerprint is None or (key, fingerprint) in self.trusted:
+            return
+        self.trusted.add((key, fingerprint))
+        self.failed = {f for f in self.failed if not (f[0] == key and f[2] == fingerprint)}
+        self.reported = {r for r in self.reported
+                         if not (r[0] == key and r[2] == "handshake_failed" and r[3] == fingerprint)}
 
     # ----- flows ----------------------------------------------------------
 

@@ -91,6 +91,11 @@ enum CaptureCommand: Equatable, Sendable {
     case macTCP(Bool)
     /// 手机配置页的端口，0 = 没开（「给其他设备装证书」）。桥据此把打开代理地址的浏览器转过去、接证书检测。
     case pagePort(UInt16)
+    /// 列表清空了：被放行的域名下次再来时重新报一行「没解密」。`device` = 只清这台（设备键），nil = 全部
+    /// （docs/packet-capture/TLS-FINGERPRINT.md §7.2）。
+    case forgetReported(device: String?)
+    /// 「重新尝试解密」：忘掉这台设备上这个域名的握手失败，下一条连接重新接管（TLS-FINGERPRINT.md §7.2）。
+    case retryDecrypt(device: String, host: String)
 
     /// 带换行符的一行，直接写进管道。
     var line: Data {
@@ -129,6 +134,10 @@ enum CaptureCommand: Equatable, Sendable {
             object = ["cmd": "mac_tcp", "on": on]
         case .pagePort(let port):
             object = ["cmd": "page_port", "port": Int(port)]
+        case .forgetReported(let device):
+            object = device.map { ["cmd": "forget_reported", "device": $0] } ?? ["cmd": "forget_reported"]
+        case .retryDecrypt(let device, let host):
+            object = ["cmd": "retry_decrypt", "device": device, "host": host]
         }
         var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
         data.append(0x0A)
