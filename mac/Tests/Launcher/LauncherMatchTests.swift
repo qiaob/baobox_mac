@@ -49,6 +49,11 @@ final class LauncherMatchTests: XCTestCase {
         XCTAssertEqual(tier(score("365", "Office365")), 600, "字母后面接数字")
     }
 
+    func testVSCodeAbbreviation() {
+        XCTAssertEqual(score("vsc", "VSCode"), 800 - 3, "小写原文 vscode 的开头")
+        XCTAssertEqual(score("vsc", "Visual Studio Code"), 200 - 12 * 4 - 15, "跳字：v…s…c，窗口里跳过 12 个字")
+    }
+
     func testSubstringMatch() {
         XCTAssertEqual(score("ari", "Safari"), 400 - 3)
         XCTAssertEqual(tier(score("co", "Xcode")), 400, "小写 c 跟在 X 后面不是词首")
@@ -232,6 +237,16 @@ final class LauncherMatchTests: XCTestCase {
         XCTAssertEqual(LauncherMatch.score(LauncherMatchQuery("fxm"), in: keys), 1000)
         XCTAssertNil(LauncherMatch.score(LauncherMatchQuery("zzz"), in: keys))
         XCTAssertNil(LauncherMatch.score(LauncherMatchQuery("caf"), in: []))
+    }
+
+    /// 编译期检查：这些类型能跨线程传（以后查询挪到后台队列）。
+    func testValueTypesAreSendable() {
+        func requireSendable<T: Sendable>(_: T.Type) {}
+        requireSendable(LauncherSearchKey.self)
+        requireSendable(LauncherMatchQuery.self)
+        requireSendable(LauncherCandidate.self)
+        requireSendable(LauncherRankingResult.self)
+        requireSendable(LauncherUsageRecords.self)
     }
 
     func testMaskContainsAllVariants() {

@@ -29,7 +29,7 @@ final class LauncherRankingPerformanceTests: XCTestCase {
             }
             let median = LauncherPerfFixture.median(times)
             medians.append(median)
-            lines.append(String(format: "%@=%.2fms(%ld)", query, median, matched))
+            lines.append(String(format: "「%@」=%.2fms(%ld)", query, median, matched))
             XCTAssertLessThanOrEqual(median, 50, "查询「\(query)」的中位数 \(median) ms 超过 Debug 下的宽松上限")
         }
         print(String(format: "LAUNCHER_PERF build(pinyin all)=%.0fms build(no clipboard pinyin)=%.0fms "
@@ -44,8 +44,9 @@ final class LauncherRankingPerformanceTests: XCTestCase {
 /// 用固定种子，每次一样。
 enum LauncherPerfFixture {
 
+    /// 空查询 = 全部命中、只按使用分排（空输入时的建议走这条），是排序量最大的情况。
     static let queries = [
-        "s", "sa", "saf", "chrome", "vsc", "wx", "weixin", "微信", "截图", "docker", "jie", "会议记录",
+        "", "s", "sa", "saf", "chrome", "vsc", "wx", "weixin", "微信", "截图", "docker", "jie", "会议记录",
         "zzqx", "summarize the clipboard",
     ]
 
