@@ -199,6 +199,7 @@ final class NetCaptureEngine: ObservableObject {
     private func teardown() {
         generation += 1
         guard let process else { return }
+        endInFlight()
         if let stdinHandle {
             // 先礼后兵：shutdown 指令 + 关管道（桥读到结束也会自己退）。
             try? stdinHandle.write(contentsOf: CaptureCommand.shutdown.line)
@@ -227,6 +228,7 @@ final class NetCaptureEngine: ObservableObject {
     private func processDidExit(generation finished: Int, status: Int32, message: String) {
         // 我们自己叫停的（generation 已经变了）不算意外。
         guard finished == generation else { return }
+        endInFlight()
         process = nil
         stdinHandle = nil
         reader = nil
@@ -267,6 +269,13 @@ final class NetCaptureEngine: ObservableObject {
         }
         // 认不出来的：给第一行（引擎把具体原因放在前面，最后一行只是「启动出错，退出」）。
         return stderr.split(separator: "\n").first.map(String.init) ?? ""
+    }
+
+    /// 引擎停了（停止、换监听重启、意外退出）：它手上还开着的 TCP 连接、还在等响应的请求再也等不到结束事件了
+    /// （旧进程之后的事件按 generation 丢弃），在列表里跟着结束（docs/packet-capture/TLS-FINGERPRINT.md §7.3）。
+    private func endInFlight() {
+        TCPStore.shared.endOpenConnections(reason: L("netcapture.engine.connectionEnded"))
+        FlowStore.shared.endPending(note: L("netcapture.engine.responseLost"))
     }
 
     // MARK: - 指令

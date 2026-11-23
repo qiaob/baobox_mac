@@ -34,6 +34,25 @@ final class TCPLogTests: XCTestCase {
         XCTAssertEqual(connection.firstSpeaker, .server)
     }
 
+    /// 引擎停了：还开着的标成已关闭（结束时间、说明），已经结束的不动（TLS-FINGERPRINT.md §7.3）。
+    func testEndOpenWhenEngineStops() throws {
+        var log = TCPLog()
+        let closedID = UUID()
+        log.apply([open(), open(id: closedID), .tcpClose(id: closedID, error: "reset", at: t0.addingTimeInterval(1))],
+                  maxConnections: 10)
+        let stop = t0.addingTimeInterval(5)
+        XCTAssertTrue(log.endOpen(at: stop, reason: "engine stopped"))
+        let ended = try XCTUnwrap(log.connections.first { $0.id == connectionID })
+        XCTAssertEqual(ended.state, .closed)
+        XCTAssertEqual(ended.endedAt, stop)
+        XCTAssertEqual(ended.error, "engine stopped")
+        let untouched = try XCTUnwrap(log.connections.first { $0.id == closedID })
+        XCTAssertEqual(untouched.state, .failed)
+        XCTAssertEqual(untouched.error, "reset")
+        XCTAssertEqual(untouched.endedAt, t0.addingTimeInterval(1))
+        XCTAssertFalse(log.endOpen(at: stop, reason: "engine stopped"), "nothing left open")
+    }
+
     func testErrorCloseAndUnknownConnection() {
         var log = TCPLog()
         log.apply([open(), .tcpClose(id: connectionID, error: "reset", at: nil)], maxConnections: 10)

@@ -800,6 +800,11 @@ struct NetCaptureRootView: View {
                 Label("netcapture.flow.copyMarkdown", systemImage: "doc.text")
             }
         }
+        if FlowActions.canRetryDecrypt(flow) {
+            Button { FlowActions.retryDecrypt(flow) } label: {
+                Label("netcapture.flow.retryDecrypt", systemImage: "arrow.clockwise")
+            }
+        }
         Button { FlowActions.copy(flow.decrypted ? flow.url : flow.host) } label: {
             Label("netcapture.flow.copyURL", systemImage: "link")
         }

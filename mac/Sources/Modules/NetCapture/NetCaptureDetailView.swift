@@ -13,6 +13,18 @@ enum FlowActions {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+
+    /// 「没解密 · 握手失败」那种行能「重新尝试解密」：引擎在跑才有失败表可清。
+    @MainActor
+    static func canRetryDecrypt(_ flow: Flow) -> Bool {
+        !flow.decrypted && flow.undecryptedReason == .handshakeFailed && NetCaptureEngine.shared.isRunning
+    }
+
+    /// 忘掉这台设备上这个域名的握手失败，下一条连接重新接管（docs/packet-capture/TLS-FINGERPRINT.md §7.2）。
+    @MainActor
+    static func retryDecrypt(_ flow: Flow) {
+        NetCaptureEngine.shared.send(.retryDecrypt(device: flow.deviceKey, host: flow.host))
+    }
 }
 
 /// 详情区和列表右键里对一条请求能做的事。动作要弹的面板在窗口根视图上，所以由它传进来。
@@ -23,6 +35,29 @@ struct FlowCommands {
     var editAndReplay: (Flow) -> Void
     /// 弹 Mock 面板，用这条请求预填。
     var mock: (Flow) -> Void
+}
+
+/// 「重新尝试解密」：点了之后这一行下面写一句「下一条连接会重新解密」，让人知道做了什么、要等什么。
+struct RetryDecryptButton: View {
+    let flow: Flow
+    @State private var done = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                FlowActions.retryDecrypt(flow)
+                done = true
+            } label: {
+                Label("netcapture.flow.retryDecrypt", systemImage: "arrow.clockwise")
+            }
+            .controlSize(.small)
+            if done {
+                Text("netcapture.flow.retryDecryptDone").font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .id(flow.id)
+    }
 }
 
 /// 复制按钮：复制图标 + 文字，点了之后短暂变成「已复制」，让人知道确实复制上了。
@@ -225,6 +260,9 @@ struct FlowDetailView: View {
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 4)
+                if FlowActions.canRetryDecrypt(flow) {
+                    RetryDecryptButton(flow: flow)
+                }
             }
         }
     }

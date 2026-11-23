@@ -446,6 +446,10 @@ final class CaptureControlEventTests: XCTestCase {
         XCTAssertEqual(text(.lanProxy(true)), "{\"cmd\":\"lan_proxy\",\"on\":true}\n")
         XCTAssertEqual(text(.macTCP(true)), "{\"cmd\":\"mac_tcp\",\"on\":true}\n")
         XCTAssertEqual(text(.pagePort(9091)), "{\"cmd\":\"page_port\",\"port\":9091}\n")
+        XCTAssertEqual(text(.forgetReported(device: nil)), "{\"cmd\":\"forget_reported\"}\n")
+        XCTAssertEqual(text(.forgetReported(device: "wg:abc")), "{\"cmd\":\"forget_reported\",\"device\":\"wg:abc\"}\n")
+        XCTAssertEqual(text(.retryDecrypt(device: "wg:abc", host: "api.example.com")),
+                       "{\"cmd\":\"retry_decrypt\",\"device\":\"wg:abc\",\"host\":\"api.example.com\"}\n")
         XCTAssertEqual(text(.scope(.off)), "{\"cmd\":\"scope\",\"domains\":[],\"mode\":\"none\"}\n")
         XCTAssertEqual(DecryptScope.off.json, #"{"domains":[],"mode":"none"}"#)
     }

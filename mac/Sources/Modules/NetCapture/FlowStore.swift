@@ -323,16 +323,32 @@ final class FlowStore: ObservableObject {
         flows.lastIndex { $0.id == id }
     }
 
-    /// 清空并释放所有 body Data。
+    /// 清空并释放所有 body Data。被放行的域名下次再来时重新出一行「没解密」（桥只报一次，行没了就该再报；TLS-FINGERPRINT.md §7.2）。
     func clear() {
         flows.removeAll(keepingCapacity: false)
         recomputeDevices()
+        recomputeCounts()
+        FlowSnapshotStore.shared.set(flows)
+        NetCaptureEngine.shared.send(.forgetReported(device: nil))
+    }
+
+    /// 引擎停了：还没等到响应的请求再也等不到了，补上结束时间和说明（TLS-FINGERPRINT.md §7.3）。
+    func endPending(note: String) {
+        let now = Date()
+        var changed = false
+        for index in flows.indices where flows[index].isPending {
+            flows[index].endedAt = now
+            flows[index].note = note
+            changed = true
+        }
+        guard changed else { return }
         recomputeCounts()
         FlowSnapshotStore.shared.set(flows)
     }
 
     /// 移除某设备（设备键）的全部 flow；用于设备栏右键「清空这台设备的包」。
     func clearDevice(key: String) {
+        NetCaptureEngine.shared.send(.forgetReported(device: key))
         flows.removeAll { $0.deviceKey == key }
         recomputeDevices()
         recomputeCounts()
