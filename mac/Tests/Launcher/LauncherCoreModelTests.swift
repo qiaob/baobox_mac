@@ -1,0 +1,75 @@
+import Foundation
+import XCTest
+
+/// `Core/Launcher` 的命令与条目模型（docs/launcher/TECH_DESIGN.md §3.1、§3.2）。
+/// 能在测试 target 里构造，也就钉住了这两个文件只依赖 Foundation。
+@MainActor
+final class LauncherCoreModelTests: XCTestCase {
+
+    // MARK: - LauncherCommand
+
+    func testCommandDefaults() {
+        let command = LauncherCommand(id: "caffeinate.stop", title: "关闭防休眠", symbolName: "cup.and.saucer") { _ in }
+        XCTAssertEqual(command.id, "caffeinate.stop")
+        XCTAssertEqual(command.keywords, [])
+        XCTAssertTrue(command.parameters.isEmpty)
+        XCTAssertFalse(command.destructive)
+    }
+
+    func testCommandRunReceivesArguments() {
+        var received: [String: LauncherArgument] = [:]
+        let command = LauncherCommand(
+            id: "caffeinate.start",
+            title: "防休眠",
+            keywords: ["别睡", "保持唤醒"],
+            symbolName: "cup.and.saucer",
+            parameters: [LauncherParameter(name: "duration", kind: .duration, required: false, hint: "多久")]
+        ) { received = $0 }
+
+        XCTAssertEqual(command.parameters.first?.kind, .duration)
+        command.run(["duration": .duration(7200)])
+        XCTAssertEqual(received, ["duration": .duration(7200)])
+    }
+
+    func testParameterKindsAndArgumentsCompare() {
+        XCTAssertEqual(LauncherParameter.Kind.choice(["en", "zh"]), .choice(["en", "zh"]))
+        XCTAssertNotEqual(LauncherParameter.Kind.choice(["en", "zh"]), .choice(["en"]))
+        XCTAssertNotEqual(LauncherParameter.Kind.text, .clipboardRef)
+        XCTAssertNotEqual(LauncherArgument.number(2), .duration(2))
+        XCTAssertEqual(LauncherArgument.clipboardRef, .clipboardRef)
+    }
+
+    // MARK: - LauncherEntry / LauncherSearchable
+
+    private struct FakeSource: LauncherSearchable {
+        let entries: [LauncherEntry]
+        var launcherSourceID: String { "clipboard" }
+        func launcherEntries() -> [LauncherEntry] { entries }
+    }
+
+    func testEntryDefaultsAndActions() {
+        var log: [String] = []
+        let plain = LauncherEntry(id: "1", title: "curl", subtitle: "终端", searchText: "curl localhost",
+                                  symbolName: "doc.on.clipboard") { log.append("paste") }
+        XCTAssertNil(plain.date)
+        XCTAssertTrue(plain.actions.isEmpty)
+
+        let withActions = LauncherEntry(
+            id: "2", title: "token", subtitle: "", searchText: "token", symbolName: "doc.on.clipboard",
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            actions: [
+                LauncherEntryAction(id: "copy", title: "复制", symbolName: "doc.on.doc") { log.append("copy") },
+                LauncherEntryAction(id: "delete", title: "删除", symbolName: "trash", destructive: true) { log.append("delete") },
+            ]
+        ) { log.append("paste2") }
+        XCTAssertEqual(withActions.actions.map(\.id), ["copy", "delete"])
+        XCTAssertEqual(withActions.actions.map(\.destructive), [false, true])
+
+        let source: any LauncherSearchable = FakeSource(entries: [plain, withActions])
+        XCTAssertEqual(source.launcherSourceID, "clipboard")
+        let entries = source.launcherEntries()
+        entries.first?.primary()
+        entries.last?.actions.last?.run()
+        XCTAssertEqual(log, ["paste", "delete"])
+    }
+}

@@ -217,7 +217,7 @@ final class HotkeyCenter: ObservableObject {
     @discardableResult
     func update(id: String, to combo: KeyCombo) -> Bool {
         // 用户可能刚在系统设置里改过键位，重新读一次系统保留表再判定。
-        systemReserved = Self.systemReservedCombos()
+        refreshSystemReserved()
         return reregister(id: id, to: combo, persist: true)
     }
 
@@ -354,9 +354,17 @@ final class HotkeyCenter: ObservableObject {
         return result
     }
 
-    private func isSystemReserved(_ combo: KeyCombo) -> Bool {
+    /// 这个组合此刻是否被系统占用（按缓存的保留表判断；要最新的先调 `refreshSystemReserved()`）。
+    /// 快速入口据此判断 ⌘Space 是否还被 Spotlight 占着（docs/launcher/TECH_DESIGN.md §3.3、§9）。
+    func isSystemReserved(_ combo: KeyCombo) -> Bool {
         systemReserved.contains(Self.comboKey(keyCode: combo.keyCode,
                                               carbonModifiers: combo.carbonModifiers))
+    }
+
+    /// 重新调一次 `CopySymbolicHotKeys` 刷新系统保留表（用户可能刚在系统设置里关掉 / 改了系统快捷键）。
+    /// 只换掉这张表，不重新注册、不改冲突标记 —— 已经注册的快捷键照旧，下次注册 / 改键位时按新表判断。
+    func refreshSystemReserved() {
+        systemReserved = Self.systemReservedCombos()
     }
 
     func combo(for id: String) -> KeyCombo? {
