@@ -128,6 +128,62 @@ final class LauncherRankingTests: XCTestCase {
         let result = rank(candidates, "OCR", records: aliased)
         XCTAssertEqual(result.keys, ["commands/screenshot.ocr", "apps/ocrtool"])
         XCTAssertEqual(result.items.first?.matchScore, LauncherMatch.exactScore)
+        XCTAssertEqual(result.items.map(\.isAliasMatch), [true, false])
+    }
+
+    func testAliasOnAClipboardEntryBeatsAnExactlyNamedApp() {
+        let candidates = [
+            candidate("apps", "notes", "Notes"),
+            candidate("clipboard", "7", "meeting notes 11-23"),
+        ]
+        let aliased = records { r in
+            r.setAlias("notes", for: "clipboard/7")
+            for _ in 0..<7 { r.recordUse(of: "apps/notes", at: now) }
+        }
+        let result = rank(candidates, "Notes", records: aliased)
+        XCTAssertEqual(result.keys, ["clipboard/7", "apps/notes"])
+        XCTAssertEqual(result.items[0].matchScore, LauncherMatch.exactScore, "匹配分仍记 1000")
+        XCTAssertEqual(result.items[0].score, 700, "最终分照算（1000 × 0.7），只是不按它排")
+        XCTAssertGreaterThan(result.items[1].score, result.items[0].score, "App 完全相等 + 常用，分数更高也排在后面")
+    }
+
+    func testAliasRanksBeforeTheRememberedChoice() {
+        let candidates = [
+            candidate("apps", "terminal", "Terminal"),
+            candidate("commands", "translate", "翻译 Translate"),
+            candidate("apps", "tableplus", "TablePlus"),
+        ]
+        let both = records { r in
+            r.setAlias("t", for: "commands/translate")
+            r.recordChoice("apps/terminal", forInput: "t", at: now)
+        }
+        let result = rank(candidates, "t", records: both)
+        XCTAssertEqual(result.keys, ["commands/translate", "apps/terminal", "apps/tableplus"])
+        XCTAssertEqual(result.items.map(\.isAliasMatch), [true, false, false])
+        XCTAssertEqual(result.items.map(\.isRemembered), [false, true, false])
+    }
+
+    func testAliasAndRememberedChoiceOnTheSameEntryAppearOnce() {
+        let candidates = [candidate("apps", "terminal", "Terminal"), candidate("apps", "tableplus", "TablePlus")]
+        let both = records { r in
+            r.setAlias("t", for: "apps/tableplus")
+            r.recordChoice("apps/tableplus", forInput: "t", at: now)
+        }
+        let result = rank(candidates, "t", records: both)
+        XCTAssertEqual(result.keys, ["apps/tableplus", "apps/terminal"])
+        XCTAssertEqual(result.items.first?.isAliasMatch, true)
+        XCTAssertEqual(result.items.first?.isRemembered, true)
+    }
+
+    func testHiddenEntryDoesNotAppearEvenOnAnAliasMatch() {
+        let candidates = [candidate("apps", "notes", "Notes"), candidate("clipboard", "7", "meeting notes 11-23")]
+        let hidden = records { r in
+            r.setAlias("notes", for: "clipboard/7")
+            r.hide("clipboard/7")
+        }
+        let result = rank(candidates, "notes", records: hidden)
+        XCTAssertEqual(result.keys, ["apps/notes"])
+        XCTAssertFalse(result.items.contains(where: \.isAliasMatch))
     }
 
     func testAliasMustBeExact() {
@@ -270,6 +326,21 @@ final class LauncherRankingTests: XCTestCase {
         let result = rank(candidates, query, records: remembered)
         XCTAssertEqual(result.items.first?.isRemembered, true)
         XCTAssertFalse(LauncherRanking.shouldPromoteAIRow(query: query, result: result))
+    }
+
+    func testAIRowNotPromotedOnAnAliasMatch() {
+        let candidates = [candidate("commands", "translate.clipboard", "翻译剪贴板")]
+        let query = "translate clip"
+        let aliased = records { $0.setAlias(query, for: "commands/translate.clipboard") }
+        let result = rank(candidates, query, records: aliased)
+        XCTAssertEqual(result.items.first?.isAliasMatch, true)
+        XCTAssertFalse(LauncherRanking.shouldPromoteAIRow(query: query, result: result))
+
+        // 只看「有别名命中」这一条：就算最高匹配分（假设）低于 400 也不提。
+        let item = LauncherRankedItem(key: "commands/x", sourceID: "commands", matchScore: 1000, usageScore: 0,
+                                      score: 1000, isAliasMatch: true, isRemembered: false)
+        let lowScore = LauncherRankingResult(items: [item], bestMatchScore: 100)
+        XCTAssertFalse(LauncherRanking.shouldPromoteAIRow(query: query, result: lowScore))
     }
 }
 

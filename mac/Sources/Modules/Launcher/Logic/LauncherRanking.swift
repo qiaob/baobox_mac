@@ -1,7 +1,7 @@
 import Foundation
 
 // 快速入口的排序（docs/launcher/TECH_DESIGN.md §5.2）：最终分 = 匹配分 × 来源权重 + 使用分；
-// 「这个输入上次选了谁」排第一，查询完全等于别名时按 1000 分算，隐藏的行不出现。只依赖 Foundation，进 BaoboxTests。
+// 查询完全等于别名的那一行排第一，其次是「这个输入上次选了谁」，隐藏的行不出现。只依赖 Foundation，进 BaoboxTests。
 // 输入是纯值的候选（条目键 + 来源 id + 预先算好的搜索键），不碰带 @MainActor 闭包的 `LauncherEntry` / `LauncherCommand`，
 // 整个排序可以挪到后台队列。计算结果、文本识别不经过这里：它们只在高置信时出现，由引擎固定放在最前。
 
@@ -46,12 +46,14 @@ struct LauncherSourceWeights: Equatable, Sendable {
 struct LauncherRankedItem: Equatable, Sendable {
     let key: String
     let sourceID: String
-    /// 匹配分（`LauncherMatch`；别名命中时为 1000）。
+    /// 匹配分（`LauncherMatch`；别名命中时记 1000）。
     let matchScore: Int
     let usageScore: Double
     /// 最终分 = 匹配分 × 来源权重 + 使用分。
     let score: Double
-    /// 这个输入上次选的就是它：不论分数排第一。
+    /// 查询完全等于它的别名：不论来源权重和分数排第一（在「上次选了谁」之前）。
+    let isAliasMatch: Bool
+    /// 这个输入上次选的就是它：不论分数排在别名命中之后、其余所有行之前。
     let isRemembered: Bool
 }
 
@@ -75,7 +77,8 @@ enum LauncherRanking {
 
     /// 排序。
     ///
-    /// 次序：上次为这个输入选的那一行（且这次也命中、没隐藏）排第一；其余按最终分从高到低，
+    /// 次序：查询完全等于别名的那一行排第一；上次为这个输入选的那一行（且这次也命中、没隐藏）其次
+    /// （两者是同一行时只出现一次）；其余按最终分从高到低，
     /// 同分先看使用分（高的在前），再看标题长度（短的在前），最后按条目键的字典序 —— 结果与候选的先后无关。
     /// 查询为空时所有候选都算命中（匹配分 0），等于按使用分排。
     /// - Parameters:
@@ -92,7 +95,8 @@ enum LauncherRanking {
         var best: Int?
         for candidate in candidates {
             let match: Int
-            if let aliasKey, candidate.key == aliasKey {
+            let isAliasMatch = candidate.key == aliasKey
+            if isAliasMatch {
                 match = LauncherMatch.exactScore
             } else if let score = LauncherMatch.score(matchQuery, in: candidate.searchKeys) {
                 match = score
@@ -107,6 +111,7 @@ enum LauncherRanking {
                 matchScore: match,
                 usageScore: usage,
                 score: Double(match) * weights.weight(for: candidate.sourceID) + usage,
+                isAliasMatch: isAliasMatch,
                 isRemembered: candidate.key == rememberedKey
             )
             scored.append(Scored(item: item, titleLength: candidate.searchKeys.first?.length ?? 0))
@@ -119,9 +124,9 @@ enum LauncherRanking {
     }
 
     /// 「让 AI 来办」要不要提到第一行：其余结果的最高匹配分低于 400 且输入超过 6 个字符（§5.2）。
-    /// 上次为这个输入选过某一行时不提 —— 用户已经表明过要什么。
+    /// 查询等于某一行的别名、或上次为这个输入选过某一行时不提 —— 用户已经表明过要什么。
     static func shouldPromoteAIRow(query: String, result: LauncherRankingResult) -> Bool {
-        if result.items.contains(where: \.isRemembered) { return false }
+        if result.items.contains(where: { $0.isAliasMatch || $0.isRemembered }) { return false }
         return shouldPromoteAIRow(query: query, bestMatchScore: result.bestMatchScore)
     }
 
@@ -138,6 +143,7 @@ enum LauncherRanking {
     }
 
     private static func precedes(_ a: Scored, _ b: Scored) -> Bool {
+        if a.item.isAliasMatch != b.item.isAliasMatch { return a.item.isAliasMatch }
         if a.item.isRemembered != b.item.isRemembered { return a.item.isRemembered }
         if a.item.score != b.item.score { return a.item.score > b.item.score }
         if a.item.usageScore != b.item.usageScore { return a.item.usageScore > b.item.usageScore }
