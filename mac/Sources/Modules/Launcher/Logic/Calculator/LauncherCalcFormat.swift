@@ -4,16 +4,22 @@ import Foundation
 // 不经过 NumberFormatter：把数拆成「一串数字 + 小数点位置」，按有效数字四舍五入、去掉尾零，再拼字符串。
 // 这样输出不随系统地区变化（千分位永远是逗号、小数点永远是句点），Decimal 和 Double 走同一套规则。
 //
-// 有效数字：精确值（Decimal）15 位 —— 但 20 位以内的整数原样全显示；近似值（Double）12 位；单位换算 10 位。
+// 有效数字：精确值（Decimal）15 位 —— 但 20 位以内的整数原样全显示；近似值（Double）12 位；
+// 单位换算显示 6 位（整数部分超过 6 位时取整到个位，10 位以内不用科学计数法），复制的文字保留 10 位。
 // 整数部分超出有效数字、或绝对值小于 1e-6 时用科学计数法（`1.26765060022823e30`、`1.5e-7`）。
 
 enum LauncherCalcFormat {
     enum Precision {
         /// 算术、百分比：精确值 15 位（20 位以内的整数全显示），近似值 12 位。
         case standard
-        /// 单位换算：10 位（换算系数本来就是 Double，`72 °F` 换出来是 22.222222222224616）。
+        /// 单位换算（换算系数本来就是 Double，`72 °F` 换出来是 22.222222222224616）：
+        /// 显示 6 位（`22.2222`、`1,076.39`；整数部分超过 6 位时取整到个位，`1,000,000`），复制保留 10 位。
         case unit
     }
+
+    /// 单位换算结果显示的有效数字、复制的有效数字。
+    private static let unitDisplayDigits = 6
+    private static let unitCopyDigits = 10
 
     struct Number: Equatable {
         /// 带千分位：`1,234.5`
@@ -25,11 +31,19 @@ enum LauncherCalcFormat {
     /// 格式化一个数；不是有限数（NaN、无穷大）返回 nil。
     static func number(_ value: LauncherCalcValue, precision: Precision = .standard) -> Number? {
         guard let digits = decompose(value) else { return nil }
+        if precision == .unit {
+            let copyDigits = round(digits, significant: unitCopyDigits)
+            // 整数部分在 7…10 位时取整到个位，免得 `1,000,000` 变成科学计数法；更长的反正要用科学计数法，按 6 位。
+            let displaySignificant = digits.exponent > unitDisplayDigits && digits.exponent <= unitCopyDigits
+                ? digits.exponent : unitDisplayDigits
+            let displayDigits = round(digits, significant: displaySignificant)
+            return Number(display: render(displayDigits, capacity: unitCopyDigits, grouping: true),
+                          copy: render(copyDigits, capacity: unitCopyDigits, grouping: false))
+        }
         let significant: Int
-        switch (precision, value) {
-        case (.unit, _): significant = 10
-        case (.standard, .approx): significant = 12
-        case (.standard, .exact):
+        switch value {
+        case .approx: significant = 12
+        case .exact:
             let isInteger = digits.exponent >= digits.digits.count
             significant = isInteger && digits.exponent <= 20 ? max(digits.exponent, 1) : 15
         }

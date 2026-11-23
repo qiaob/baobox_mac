@@ -4,7 +4,7 @@ import Foundation
 // 先解析后求值，所以「1/0」能被认成算式、再给出「不能除以零」的说明，而不是直接不出结果。
 //
 //   expression := term (('+' | '-') term)*
-//   term       := factor (('*' | '/' | '%' | 'mod') factor)*      % 只在两个操作数之间才是取余
+//   term       := factor (('*' | '/' | '%' | 'mod') factor)*      % 只在两个操作数之间才是取余（`50% 200` 不算）
 //   factor     := ('-' | '+') factor | power                       -2^2 = -(2^2)
 //   power      := postfix ('^' factor)?                           右结合：2^3^2 = 2^9
 //   postfix    := primary ('°' | 'deg')?
@@ -87,7 +87,10 @@ struct LauncherCalcExprParser {
                 op = .divide
             } else if cursor.take(word: "mod") {
                 op = .remainder
-            } else if cursor.current?.isSymbol("%") == true, startsOperand(cursor.peek(1)) {
+            } else if let percent = cursor.current, percent.isSymbol("%"), let next = cursor.peek(1),
+                      startsOperand(next), !(!percent.spaceBefore && next.spaceBefore) {
+                // `%` 紧贴左边的数、右边隔着空白再跟数（`50% 200`）读起来是百分数，不当取余，整条不出。
+                // `10 % 3`、`10%3` 照旧是取余。
                 cursor.advance()
                 op = .remainder
             } else {

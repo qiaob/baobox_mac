@@ -62,26 +62,26 @@ final class LauncherCalcUnitTests: XCTestCase {
     func testRequirementExamples() {
         assertLauncherCalc("5 英里 公里", "8.04672 公里", "5 英里 → 公里", kind: .unit, copy: "8.04672")
         assertLauncherCalc("5 miles to km", "8.04672 公里", "5 英里 → 公里")
-        assertLauncherCalc("72 f to c", "22.22222222 摄氏度", "72 华氏度 → 摄氏度")
+        assertLauncherCalc("72 f to c", "22.2222 摄氏度", "72 华氏度 → 摄氏度", copy: "22.22222222")
         assertLauncherCalc("1.5 GB in MB", "1,500 MB", "1.5 GB → MB", copy: "1500")
         assertLauncherCalc("3 小时 20 分 秒", "12,000 秒", "3 小时 20 分钟 → 秒")
-        assertLauncherCalc("100 平方米 平方英尺", "1,076.391042 平方英尺", "100 平方米 → 平方英尺")
-        assertLauncherCalc("60 mph kmh", "96.56064 公里/小时", "60 英里/小时 → 公里/小时")
+        assertLauncherCalc("100 平方米 平方英尺", "1,076.39 平方英尺", "100 平方米 → 平方英尺", copy: "1076.391042")
+        assertLauncherCalc("60 mph kmh", "96.5606 公里/小时", "60 英里/小时 → 公里/小时", copy: "96.56064")
     }
 
     func testEnglishInterfaceUsesSymbols() {
         assertLauncherCalc("5 miles to km", "8.04672 km", "5 mi → km", english: true)
-        assertLauncherCalc("100 平方米 平方英尺", "1,076.391042 ft²", "100 m² → ft²", english: true)
-        assertLauncherCalc("72 f to c", "22.22222222 °C", "72 °F → °C", english: true)
+        assertLauncherCalc("100 平方米 平方英尺", "1,076.39 ft²", "100 m² → ft²", english: true)
+        assertLauncherCalc("72 f to c", "22.2222 °C", "72 °F → °C", english: true)
     }
 
     func testSpellingsAndConnectors() {
         assertLauncherCalc("5英里公里", "8.04672 公里", "5 英里 → 公里")
         assertLauncherCalc("5英里是多少公里", "8.04672 公里", "5 英里 → 公里")
         assertLauncherCalc("5 mi = km", "8.04672 公里", "5 英里 → 公里")
-        assertLauncherCalc("72°F to °C", "22.22222222 摄氏度", "72 华氏度 → 摄氏度")
-        assertLauncherCalc("72℉ in ℃", "22.22222222 摄氏度", "72 华氏度 → 摄氏度")
-        assertLauncherCalc("100 km/h to m/s", "27.77777778 米/秒", "100 公里/小时 → 米/秒")
+        assertLauncherCalc("72°F to °C", "22.2222 摄氏度", "72 华氏度 → 摄氏度")
+        assertLauncherCalc("72℉ in ℃", "22.2222 摄氏度", "72 华氏度 → 摄氏度")
+        assertLauncherCalc("100 km/h to m/s", "27.7778 米/秒", "100 公里/小时 → 米/秒")
         assertLauncherCalc("2 sq ft to square inches", "288 平方英寸", "2 平方英尺 → 平方英寸")
     }
 
@@ -91,22 +91,31 @@ final class LauncherCalcUnitTests: XCTestCase {
     }
 
     func testAmbiguousAbbreviationFollowsTheOtherSide() {
-        assertLauncherCalc("5 m to ft", "16.40419948 英尺", "5 米 → 英尺")
+        assertLauncherCalc("5 m to ft", "16.4042 英尺", "5 米 → 英尺")
         assertLauncherCalc("30 m to s", "1,800 秒", "30 分钟 → 秒")
     }
 
     func testDataUnitsAreCaseSensitive() {
         assertLauncherCalc("100 Mb to MB", "12.5 MB", "100 Mb → MB")
-        assertLauncherCalc("1 GiB to MB", "1,073.741824 MB", "1 GiB → MB")
+        assertLauncherCalc("1 GiB to MB", "1,073.74 MB", "1 GiB → MB")
         assertLauncherCalc("1 gb to mb", "1,000 MB", "1 GB → MB")
     }
 
     func testChineseAndImperialUnitsUseExactFactors() {
         assertLauncherCalc("2斤 克", "1,000 克", "2 斤 → 克")
-        assertLauncherCalc("1 lb to g", "453.59237 克", "1 磅 → 克")
-        assertLauncherCalc("1 gal to l", "3.785411784 升", "1 加仑 → 升")
+        assertLauncherCalc("1 lb to g", "453.592 克", "1 磅 → 克", copy: "453.59237")
+        assertLauncherCalc("1 gal to l", "3.78541 升", "1 加仑 → 升", copy: "3.785411784")
         assertLauncherCalc("10 kn to km/h", "18.52 公里/小时", "10 节 → 公里/小时")
-        assertLauncherCalc("1亩 平方米", "666.6666667 平方米", "1 亩 → 平方米")
+        assertLauncherCalc("1亩 平方米", "666.667 平方米", "1 亩 → 平方米")
+    }
+
+    func testDisplayKeepsSixSignificantDigitsAndCopyKeepsTen() {
+        assertLauncherCalc("5 in to cm", "12.7 厘米", "5 英寸 → 厘米", copy: "12.7")
+        assertLauncherCalc("0.000123456789 km to m", "0.123457 米", "0.000123456789 公里 → 米", copy: "0.123456789")
+        // 整数部分超过 6 位时取整到个位，不变成科学计数法。
+        assertLauncherCalc("1000 km to m", "1,000,000 米", "1000 公里 → 米", copy: "1000000")
+        assertLauncherCalc("1234.5678 km to m", "1,234,568 米", "1234.5678 公里 → 米", copy: "1234567.8")
+        assertLauncherCalc("1 light year to km", "9.46073e12 公里", "1 光年 → 公里", copy: "9.460730473e12")
     }
 
     func testNegativeTemperature() {

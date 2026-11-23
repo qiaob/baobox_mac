@@ -72,6 +72,16 @@ final class LauncherCalcArithmeticTests: XCTestCase {
         assertLauncherCalc("10 mod 3", "1", "10 mod 3")
         assertLauncherCalc("-7 % 3", "-1", "-7 mod 3")
         assertLauncherCalc("7.5 % 2", "1.5", "7.5 mod 2")
+        assertLauncherCalc("10%3", "1", "10 mod 3")
+        assertLauncherCalc("10 %3", "1", "10 mod 3")
+    }
+
+    func testPercentGluedToTheLeftNumberThenASpaceIsNotRemainder() {
+        // `50% 200` 读起来是「50% 和 200」，不是「50 除以 200 的余数」：整条不出。
+        assertLauncherCalcNil("50% 200")
+        assertLauncherCalcNil("15% 80")
+        assertLauncherCalcNil("15% (80)")
+        assertLauncherCalcNil("1 + 15% 80")
     }
 
     func testFunctionsAndConstants() {
