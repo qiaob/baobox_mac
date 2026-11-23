@@ -73,14 +73,14 @@ enum LauncherCalcPercent {
                 return .ratio(part: part, whole: whole)
             }
         }
-        // A 的 B%
+        // A 的 B%（A 是一个数、括号或函数：`100 + 100 的 50%` 是 150 还是 100 说不准，不出）
         if let of = topLevelIndex(of: "的", in: tokens), of > 0,
-           let percent = percentLiteral(tokens[(of + 1)...]), let base = operand(tokens[..<of]) {
+           let percent = percentLiteral(tokens[(of + 1)...]), let base = operand(tokens[..<of]), isAtomic(base) {
             return .of(base: base, percent: percent)
         }
         // B% of A
         if let of = topLevelIndex(of: "of", in: tokens), let percent = percentLiteral(tokens[..<of]),
-           let base = operand(tokens[(of + 1)...]) {
+           let base = operand(tokens[(of + 1)...]), isAtomic(base) {
             return .of(base: base, percent: percent)
         }
         // A + B% · A - B% · A * B%
@@ -122,6 +122,15 @@ enum LauncherCalcPercent {
     private static func operand(_ tokens: ArraySlice<LauncherCalcToken>) -> LauncherCalcExpr? {
         guard !tokens.isEmpty else { return nil }
         return LauncherCalcExprParser.parse(Array(tokens))?.expr
+    }
+
+    /// 单个数（可带负号）、括号、函数、常量。
+    private static func isAtomic(_ expr: LauncherCalcExpr) -> Bool {
+        switch expr {
+        case .number, .group, .function, .constant: return true
+        case .negate(let inner): return isAtomic(inner)
+        default: return false
+        }
     }
 
     private static func topLevelIndex(of word: String, in tokens: [LauncherCalcToken]) -> Int? {
