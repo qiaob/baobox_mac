@@ -286,7 +286,7 @@ struct ConfigDetail<Content: View>: View {
     }
 }
 
-/// 「1 手机装 WireGuard App」这样的一步。
+/// 「1 手机装一个 WireGuard 客户端」这样的一步。
 struct StepRow: View {
     let number: Int
     let text: LocalizedStringKey

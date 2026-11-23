@@ -315,6 +315,9 @@ struct WireGuardDeviceSheet: View {
                         StepRow(number: 3, text: "netcapture.config.wg.step3")
                     }
                 }
+                Divider()
+                // 能扫这张码的客户端（§6.1）：点名字弹出下载页的二维码。
+                WireGuardClientAppList()
                 waitLine(device: device, isNew: isNew)
                 HStack {
                     Spacer()
