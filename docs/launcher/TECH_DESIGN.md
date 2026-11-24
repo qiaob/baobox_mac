@@ -243,8 +243,12 @@ struct LauncherKnownFile { let path: String; var date: Date?; var note: String? 
 
 现在声明的只有 Claude Code 助手（`Modules/ClaudeCode/ClaudeLauncherFiles.swift`，写成 `ClaudeCodeTool` 的扩展，不动 `ClaudeCodeTool.swift`）：
 要扫的目录是 `/private/tmp/claude-<uid>`（uid 用 `getuid()`；代码和文档里原来没有这个常量，规律是 2026-11-24 在用户的 Mac 上实测的：
-`/private/tmp/claude-501/<项目>/<会话 UUID>/scratchpad/…`；不存在由扫描在后台跳过，声明时零磁盘 IO）；已知文件是「最近文件」
+`/private/tmp/claude-501/<项目>/<会话 UUID>/scratchpad/…`；不存在由扫描在后台跳过）；已知文件是「最近文件」
 （`ClaudeFileIndex.files`，会话用 Write / Edit 等工具写过的，最多 500 个），说明写「Claude Code · <项目名>」。
+PR 11 独立验证后加：没装 Claude Code（`ClaudeEnv.isInstalled`，模块现有的探测，同菜单，看 `~/.claude` 在不在）两样都返回空，
+免得第一次访问 `ClaudeFileIndex.shared` 时在主线程同步读它的缓存文件（约定 7）；最近文件原来只在启动、打开 Claude 面板、设置页刷新时
+更新，启动后会话新写的进不来 —— 现在每次交出时顺带触发一次 `ClaudeFileIndex.shared.refresh()`（后台、防重入；它自己没有节流，
+所以用 `LauncherRefreshThrottle` 限成最多 30 秒一次）：这次呼出拿到的是旧清单，下次呼出就是新的。
 Codex 助手没有现成的文件清单，不交。用户自己加目录：设置键 `launcher.files.extraRoots`（字符串数组，`~` 开头的展开），和模块声明的合并；设置界面以后做。
 
 ## 4. 面板窗口

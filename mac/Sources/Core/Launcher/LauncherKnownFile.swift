@@ -19,3 +19,21 @@ struct LauncherKnownFile: Equatable, Sendable {
         self.note = note
     }
 }
+
+/// 「最多每隔多久做一次」（PR 11）：模块交已知文件时顺带刷新自己的清单用 —— 呼出一次面板就触发一次后台刷新太勤，
+/// 隔一段时间才刷（这次呼出拿到的是旧清单，下次呼出就是新的）。值类型，调用方自己存着（主线程）。
+struct LauncherRefreshThrottle: Equatable, Sendable {
+    let interval: TimeInterval
+    private(set) var lastRun: Date?
+
+    init(interval: TimeInterval) {
+        self.interval = interval
+    }
+
+    /// 现在该不该做：从来没做过、或者距上次不少于 `interval`。该做时记下这次的时间。
+    mutating func shouldRun(now: Date) -> Bool {
+        if let lastRun, now.timeIntervalSince(lastRun) < interval { return false }
+        lastRun = now
+        return true
+    }
+}
