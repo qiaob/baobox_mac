@@ -41,6 +41,25 @@ final class LauncherClipboardPathsTests: XCTestCase {
         XCTAssertEqual(paths("在/private/tmp/a.py"), ["/private/tmp/a.py"], "汉字后面紧跟着也算开头")
     }
 
+    func testVariantsForPathsGluedToText() {
+        // 独立验证者找到的三种漏网。
+        XCTAssertTrue(paths("文件在/Users/qiao/文档/报告.pdf里").contains("/Users/qiao/文档/报告.pdf"), "末尾多带了「里」")
+        XCTAssertTrue(paths("文件在/Users/qiao/文档/报告.pdf里面").contains("/Users/qiao/文档/报告.pdf"), "多带了两个字")
+        let cmd = paths("cmd=/usr/local/bin/foo,arg=/etc/hosts")
+        XCTAssertTrue(cmd.contains("/usr/local/bin/foo"), "\(cmd)")
+        XCTAssertTrue(cmd.contains("/etc/hosts"), "一段里的第二个路径也找出来：\(cmd)")
+        XCTAssertTrue(paths("path:/var/log/system.log;next").contains("/var/log/system.log"), "带上了 ;next")
+        XCTAssertTrue(paths("见 /Users/me/报告里").contains("/Users/me/报告"), "只去掉末尾一个字的变体（名字本身是汉字）")
+    }
+
+    func testVariantsOfAToken() {
+        XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/b.txt"), ["/a/b.txt"], "没有可变的")
+        XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/foo,arg=/x;y"), ["/a/foo,arg=/x;y", "/a/foo", "/a/foo,arg"],
+                       "只在前两处截断")
+        XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/报告.pdf里面"), ["/a/报告.pdf里面", "/a/报告.pdf里", "/a/报告.pdf"])
+        XCTAssertLessThanOrEqual(LauncherClipboardPaths.variants(of: "/a,b;c=d,e里面").count, LauncherClipboardPaths.maxVariantsPerToken)
+    }
+
     func testNotPaths() {
         for text in ["and/or", "1/2 + 3/4", "https://github.com/a/b.md", "//network/share", "~", "/", "hello world",
                      "a=b", "~other/x.txt", "price 50/50"] {

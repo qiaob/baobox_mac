@@ -15,8 +15,10 @@ struct LauncherTextSnapshot: Equatable, Sendable {
 }
 
 enum LauncherClipboardPaths {
-    /// 一条文字最多抽几个路径。
-    static let maxPerText = 8
+    /// 一条文字最多抽几个路径（含下面的变体）。
+    static let maxPerText = 12
+    /// 一段最多出几个变体（原样 + 在 `,` `;` `=` 处截断的至多 2 个 + 去掉末尾汉字 / 全角字符的至多 2 个）。
+    static let maxVariantsPerToken = 5
     /// 路径最长多少个字节（再长的多半不是路径）。
     static let maxPathBytes = 1024
 
@@ -26,6 +28,9 @@ enum LauncherClipboardPaths {
     ///   但空白后面又是一个路径的开头（`/a/x.txt then /b/y.txt`）就不当整段收。只有一个 `~`（主目录本身）不收。
     /// - 再找文字里以 `/`、`~/`、`file://` 开头的一段：前面是开头、空白、引号、括号、`=`、`:`、`,`、汉字或全角标点，
     ///   到空白、引号、括号、全角标点或行尾为止；末尾的 `.,;:!?` 去掉，`:行号` 去掉；`//` 开头的（网址的一部分）不要。
+    ///   这一段再出几个变体（`variants`，PR 11 独立验证后加）：`文件在/Users/qiao/文档/报告.pdf里` 末尾多带了「里」、
+    ///   `cmd=/usr/local/bin/foo,arg=/etc/hosts` 被当成一整段、`path:/var/log/system.log;next` 带上了 `;next` ——
+    ///   分不清哪个对，都给出来，由来源在后台 `stat` 决定哪个存在。一段之后从它的下一个字接着找（`arg=/etc/hosts` 里的第二个路径）。
     /// 去重，最多 `maxPerText` 个。主目录用来展开 `~`。
     static func extract(from text: String, home: String) -> [String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,15 +59,47 @@ enum LauncherClipboardPaths {
             }
             end = min(end, characters.count)
             let token = String(characters[index..<end])
-            index = max(end, index + 1)
-            guard !token.hasPrefix("//"),
-                  let parsed = LauncherPathInput.parse(trimmingTrailingPunctuation(token), home: home),
-                  let path = cleaned(parsed.pathWithoutLineSuffix ?? parsed.path),
-                  !result.contains(path)
-            else { continue }
-            result.append(path)
+            // 从下一个字接着找：这一段里可能还有别的路径开头（`foo,arg=/etc/hosts`）；路径中间的 `/` 前面是字母数字，不算开头。
+            index += 1
+            guard !token.hasPrefix("//") else { continue }
+            for variant in variants(of: trimmingTrailingPunctuation(token)) where result.count < maxPerText {
+                guard let parsed = LauncherPathInput.parse(trimmingTrailingPunctuation(variant), home: home),
+                      let path = cleaned(parsed.pathWithoutLineSuffix ?? parsed.path),
+                      !result.contains(path)
+                else { continue }
+                result.append(path)
+            }
         }
         return result
+    }
+
+    /// 一段的几种可能：原样；在 `,` `;` `=` 处截断的（前两处）；去掉末尾一个汉字 / 全角字符的、去掉末尾所有汉字 / 全角字符的
+    /// （`报告里` → `报告`；`报告.pdf里面` → `报告.pdf`）。去重，最多 `maxVariantsPerToken` 个，原样的在最前。
+    static func variants(of token: String) -> [String] {
+        var result = [token]
+        func add(_ candidate: Substring) {
+            let text = String(candidate)
+            if !text.isEmpty, !result.contains(text), result.count < maxVariantsPerToken { result.append(text) }
+        }
+        var cuts = 0
+        for index in token.indices where index != token.startIndex && ",;=".contains(token[index]) {
+            add(token[..<index])
+            cuts += 1
+            if cuts == 2 { break }
+        }
+        if let last = token.last, isWide(last) {
+            add(token.dropLast())
+            var stripped = Substring(token)
+            while let tail = stripped.last, isWide(tail) { stripped = stripped.dropLast() }
+            add(stripped)
+        }
+        return result
+    }
+
+    /// 汉字、全角字符（全角 ASCII、全角标点）：中文句子里紧跟在路径后面的字。
+    private static func isWide(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first else { return false }
+        return scalar.properties.isIdeographic || (0xFF00...0xFFEF).contains(scalar.value) || (0x3000...0x303F).contains(scalar.value)
     }
 
     /// 合法的路径：末尾的 `/` 去掉；不是根目录；不太长。
