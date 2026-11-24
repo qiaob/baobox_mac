@@ -261,6 +261,60 @@ final class LauncherFileSearchTests: XCTestCase {
                        "files//Users/me/b.txt", "常开的文件排前面")
     }
 
+    // MARK: - 只来自自己扫的目录的（PR 11）
+
+    private func scannedOnly(_ path: String, tier: Int, daysAgo: Double = 0) -> LauncherCandidate {
+        var candidate = fileCandidate(path, tier: tier, daysAgo: daysAgo)
+        candidate.limitGroup = LauncherFileFilter.limitGroup(for: .scanned)
+        return candidate
+    }
+
+    private func rankUnscoped(_ candidates: [LauncherCandidate], _ query: String,
+                              records: LauncherUsageRecords = LauncherUsageRecords()) -> [String] {
+        LauncherRanking.rank(candidates, query: query, records: records, now: now, sourceLimits: ["files": 5],
+                             groupLimits: [LauncherFileFilter.scannedOnlyGroup: LauncherFileFilter.unscopedScannedOnlyLimit]).keys
+    }
+
+    func testScannedOnlyMeansOnlyFromTheScannedFolders() {
+        XCTAssertEqual(LauncherFileFilter.limitGroup(for: .scanned), LauncherFileFilter.scannedOnlyGroup)
+        XCTAssertNil(LauncherFileFilter.limitGroup(for: [.scanned, .spotlight]), "同时还来自别的来源的不算")
+        XCTAssertNil(LauncherFileFilter.limitGroup(for: [.scanned, .clipboard]))
+        XCTAssertNil(LauncherFileFilter.limitGroup(for: .spotlight))
+        XCTAssertNil(LauncherFileFilter.limitGroup(for: [.known]))
+    }
+
+    func testScannedOnlyFilesTakeAtMostTwoRowsWhenUnscoped() {
+        let scanned = (0..<4).map { scannedOnly("/private/tmp/c/s\($0)-safari.png", tier: 600) }
+        let others = (0..<4).map { fileCandidate("/Users/me/o\($0)-safari.gif", tier: 600, daysAgo: 30) }
+        let few = rankUnscoped(scanned + others.prefix(2), "safari")
+        XCTAssertEqual(few.count, 4)
+        XCTAssertEqual(few.filter { $0.hasPrefix("files//private/tmp/") }.count, 2, "只来自自己扫的目录的最多 2 行")
+        XCTAssertEqual(Array(few.prefix(2)), ["files//Users/me/o0-safari.gif", "files//Users/me/o1-safari.gif"],
+                       "同一档里排在别的文件后面（哪怕它们新得多）")
+        let many = rankUnscoped(scanned + others, "safari")
+        XCTAssertEqual(many.count, 5, "文件总共仍是最多 5 行")
+        XCTAssertEqual(many.filter { $0.hasPrefix("files//private/tmp/") }.count, 1, "别的文件先占，剩下的位置才给它")
+    }
+
+    func testScannedOnlyStillWinsAHigherTier() {
+        let keys = rankUnscoped([fileCandidate("/Users/me/my-safari.gif", tier: 600, daysAgo: 30),
+                                 scannedOnly("/private/tmp/c/safari.png", tier: 1000)], "safari")
+        XCTAssertEqual(keys.first, "files//private/tmp/c/safari.png", "只在同一档里往后排")
+    }
+
+    func testScannedOnlyFillsWhenNothingElseMatches() {
+        let keys = rankUnscoped((0..<4).map { scannedOnly("/private/tmp/c/x\($0).log", tier: 400) }, "x")
+        XCTAssertEqual(keys.count, 2, "别的来源一个都没有时也只出 2 行")
+    }
+
+    func testNoGroupLimitsMeansTheOldOrder() {
+        let candidates = [scannedOnly("/private/tmp/c/new-safari.png", tier: 600),
+                          fileCandidate("/Users/me/old-safari.gif", tier: 600, daysAgo: 30)]
+        XCTAssertEqual(LauncherRanking.rank(candidates, query: "safari", records: LauncherUsageRecords(), now: now).keys,
+                       ["files//private/tmp/c/new-safari.png", "files//Users/me/old-safari.gif"],
+                       "f 前缀下（不传组的限额）照旧按新旧排、不限行数")
+    }
+
     func testFilesSourceLimit() {
         let candidates = (0..<10).map { fileCandidate("/Users/me/f\($0).txt", tier: 800, daysAgo: Double($0)) }
         XCTAssertEqual(LauncherRanking.rank(candidates, query: "f", records: LauncherUsageRecords(), now: now,

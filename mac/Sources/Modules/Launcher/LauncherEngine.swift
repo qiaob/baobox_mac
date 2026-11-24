@@ -101,6 +101,8 @@ final class LauncherEngine {
     /// 没打前缀时这些来源最多出几行：剪贴板几千条，不限的话一个常见词就把 App 和命令挤下去（`c ` 前缀下不限）。
     /// 文件同理：没打前缀时最多 5 行（`f ` 前缀下最多 `LauncherFileFilter.maxResults` 行）。
     static let unscopedSourceLimits = ["clipboard": 5, LauncherFileProvider.sourceID: 5]
+    /// 没打前缀时只来自自己扫的目录的文件最多 2 行（还占文件的 5 行），同档排在别的文件后面（PR 11，§6.4）。
+    static let unscopedGroupLimits = [LauncherFileFilter.scannedOnlyGroup: LauncherFileFilter.unscopedScannedOnlyLimit]
 
     private var allCandidates: [LauncherCandidate] = []
     private var candidatesBySource: [String: [LauncherCandidate]] = [:]
@@ -280,7 +282,8 @@ final class LauncherEngine {
                 .items.filter { $0.usageScore > 0 }
         } else {
             ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
-                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:]).items
+                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:],
+                                          groupLimits: query.isUnscoped ? Self.unscopedGroupLimits : [:]).items
         }
         var rows: [LauncherRow] = instants.prefix(calculationCount).map(\.row)
         // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。

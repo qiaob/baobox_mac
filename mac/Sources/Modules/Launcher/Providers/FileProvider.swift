@@ -96,9 +96,11 @@ final class LauncherFileProvider {
     /// 匹配分是档（排序同分时看使用记录、再看谁新），记使用记录（常开的文件以后排前面）。
     static func item(for result: LauncherFileResult, home: String) -> LauncherItem {
         let hit = result.hit
-        let candidate = LauncherCandidate(sourceID: sourceID, entryID: hit.path,
+        var candidate = LauncherCandidate(sourceID: sourceID, entryID: hit.path,
                                           searchKeys: [LauncherSearchKey(hit.name, pinyin: false)],
                                           date: hit.recency, presetMatchScore: result.tierScore)
+        // 只来自自己扫的目录的：没打前缀时最多 2 行、同档排在别的文件后面（引擎排序时给组的限额）。
+        candidate.limitGroup = LauncherFileFilter.limitGroup(for: hit.origins)
         let parent = LauncherPathDisplay.split(hit.path).parent
         let directory: String
         if let note = hit.note, !note.isEmpty {

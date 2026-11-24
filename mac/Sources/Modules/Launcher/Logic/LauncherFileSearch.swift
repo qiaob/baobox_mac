@@ -165,6 +165,15 @@ enum LauncherFilePolicy {
 enum LauncherFileFilter {
     /// 交给界面的最多条数（没打前缀时排序再按来源上限截成 5 行）。
     static let maxResults = 30
+    /// 只来自自己扫的目录（来源 B）的文件的限额组（PR 11）：没打前缀时最多 2 行（`unscopedScannedOnlyLimit`），
+    /// 同一档里排在来自 Spotlight、已知文件、剪贴板路径的文件后面。固定行和 `f ` 前缀下不受限。
+    static let scannedOnlyGroup = "files.scannedOnly"
+    static let unscopedScannedOnlyLimit = 2
+
+    /// 这条命中的限额组：只来自自己扫的目录的是 `scannedOnlyGroup`；同时还来自别的来源的不算。
+    static func limitGroup(for origins: LauncherFileOrigins) -> String? {
+        origins == .scanned ? scannedOnlyGroup : nil
+    }
     /// 同名的文件最多出几份（最新的几份）。
     static let maxCopiesPerName = 3
 
