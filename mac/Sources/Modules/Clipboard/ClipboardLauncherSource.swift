@@ -44,6 +44,9 @@ final class ClipboardLauncherSource: LauncherSearchable {
 
     /// 图片条目额外能搜到的词（中英文都放：界面是英文时也能打「截图」搜到）。
     static let imageSearchWords = "图片 截图 照片 image screenshot picture photo"
+    /// 图片条目的搜索全文用空格补到这么长。匹配分里「文字比查询长多少就扣多少」（封顶 100，`LauncherMatch`）：不补的话
+    /// 来源 App 名短的图片总排在前面（「图片」比「图片 · Safari」高几分）；补齐后同样命中的扣分一样，按复制时间新的在前。
+    static let imageSearchTextLength = 160
 
     /// 只读 `store.items`（已在内存里，新 → 旧）。相对时间按桶格式化，同一个桶只算一次。
     func launcherEntries() -> [LauncherEntry] {
@@ -117,8 +120,8 @@ final class ClipboardLauncherSource: LauncherSearchable {
             id: item.id.uuidString,
             title: title,
             subtitle: relative,
-            // 标题在最前（快速入口据此只建一个键），后面是「图片 / image / 截图」这些词。
-            searchText: title + "\n" + Self.imageSearchWords,
+            // 标题在最前（快速入口据此只建一个键），后面是「图片 / image / 截图」这些词，再补齐长度。
+            searchText: Self.paddedImageSearchText(title + "\n" + Self.imageSearchWords),
             symbolName: "photo",
             date: item.createdAt,
             image: LauncherEntryImage(cacheKey: filename, loadData: { ClipboardCrypto.read(from: url) }),
@@ -126,6 +129,10 @@ final class ClipboardLauncherSource: LauncherSearchable {
             primary: { PasteService.paste(item, plainText: false, target: LauncherFocus.previousApp,
                                           store: store, monitor: monitor) }
         )
+    }
+
+    static func paddedImageSearchText(_ text: String) -> String {
+        text.padding(toLength: max(imageSearchTextLength, text.count), withPad: " ", startingAt: 0)
     }
 
     /// 「3 分钟前」「昨天」：跟着 App 的界面语言。
