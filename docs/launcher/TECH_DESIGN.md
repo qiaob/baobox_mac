@@ -75,7 +75,8 @@ mac/Sources/Modules/Launcher/
     TextFormatProvider.swift               LauncherTextFormatProvider：文本识别行（调 Core/TextTools 的识别器，§6.3）
     PathProvider.swift                     LauncherPathProvider：输入是路径时在后台读磁盘（存不存在、列目录）、换成行；
                                            LauncherFileActions：文件 / 文件夹行共用的样子和动作（打开、在访达里显示）（§6.5）
-    FileProvider.swift                     LauncherFileProvider：文件搜索的防抖、序号、每回来一批就后台过滤排序、日志、换成行（§6.4）
+    FileProvider.swift                     LauncherFileProvider：文件搜索的序号、每回来一批就后台过滤排序、日志、换成行（§6.4；
+                                           PR 11 起防抖挪进合并器、只对 Spotlight）
     SpotlightFileSearch.swift              LauncherSpotlightFileSearch：文件搜索后端的 Spotlight 实现（NSMetadataQuery，§6.4）
     FileSources.swift                      LauncherFileSources：四个来源并成一个后端；自己扫的目录什么时候扫、已知文件和剪贴板里的路径
                                            什么时候建表（PR 11，§6.4）
@@ -273,7 +274,7 @@ Codex 助手没有现成的文件清单，不交。用户自己加目录：设�
 
 ```
 按键 → LauncherQuery.parse（拆前缀） → 各来源同步查询 → 合并去重 → LauncherRanking.rank 排序 → 取前 50 → 刷新列表
-                                    └→ 异步来源（文件）：80 ms 防抖，带查询序号，过期的结果丢弃
+                                    └→ 异步来源（文件）：内存里的来源立刻在后台查，Spotlight 80 ms 防抖（PR 11），带查询序号，过期的结果丢弃
 ```
 
 三个文件都在 `Logic/`，只依赖 Foundation，输入输出全是 `Sendable` 的纯值（不碰带 `@MainActor` 闭包的 `LauncherEntry` / `LauncherCommand`），整条管线随时能挪到后台队列。
@@ -282,7 +283,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 - 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只有这次呼出装进来的来源（`apps`、`commands`、`files`（PR 6），以及各模块交来的 `clipboard`、`snippets`）的前缀生效；`s ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜会话」得到一片空。
 - 输入是路径（PR 6，§6.5）：没打前缀、输入以 `/` 或 `~` 开头时只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音），也不算、不识别、不搜文件。路径要读磁盘：引擎在结果里给出 `pendingPath`，控制器交给 `LauncherPathProvider` 在后台查，查完 `setPathResult` 再查一次（同剪贴板后台建完键的那条路，选中的行还在就留在它上面）。
-- 文件（PR 6，§6.4）：引擎按 `LauncherFilePolicy` 定这次要不要搜、搜什么（`fileRequest`），手上的结果不是这个请求的就给出 `pendingFiles`，控制器交给 `LauncherFileProvider`（80 ms 防抖、四个来源合并（PR 11）、后台过滤排序），每回来一批 `setFileResult` 再查一次（只回来了一部分来源时 `filesGathering`：不再发，一行都没有时仍显示「正在查找」；控制器不停掉还在搜的同一个请求）。文件行和内存里的候选一起排序（`presetMatchScore` = 匹配的档，权重 0.6）；固定行 —— `目录/文件名` 片段的确切命中，以及输入像文件名时名字正好是它的文件（PR 11）—— 排在计算结果之后、所有建议和普通行之前（PR 11 前片段命中排在识别结果之后）。来了固定行、选中的还是第一行时，选中跟着到新的第一行（`LauncherController.filesFound`），⏎ 就是打开它。新结果回来之前，上一次「名字包含」的结果里名字仍包含现在每个词的先顶着（`LauncherFileFilter.stillMatches`），列表不会每打一个字就收起再长出来。一个前缀可以管几个来源（`LauncherQuery.defaultSourceGroups`）：`c ` = 剪贴板 + 片段（片段没有自己的前缀）。
+- 文件（PR 6，§6.4）：引擎按 `LauncherFilePolicy` 定这次要不要搜、搜什么（`fileRequest`），手上的结果不是这个请求的就给出 `pendingFiles`，控制器交给 `LauncherFileProvider`（四个来源合并：内存里的来源立刻查、Spotlight 80 ms 防抖（PR 11）；后台过滤排序），每回来一批 `setFileResult` 再查一次（只回来了一部分来源时 `filesGathering`：不再发，一行都没有时仍显示「正在查找」；控制器不停掉还在搜的同一个请求）。文件行和内存里的候选一起排序（`presetMatchScore` = 匹配的档，权重 0.6）；固定行 —— `目录/文件名` 片段的确切命中，以及输入像文件名时名字正好是它的文件（PR 11）—— 排在计算结果之后、所有建议和普通行之前（PR 11 前片段命中排在识别结果之后）。来了固定行、选中的还是第一行时，选中跟着到新的第一行（`LauncherController.filesFound`），⏎ 就是打开它。新结果回来之前，上一次「名字包含」的结果里名字仍包含现在每个词的先顶着（`LauncherFileFilter.stillMatches`），列表不会每打一个字就收起再长出来。一个前缀可以管几个来源（`LauncherQuery.defaultSourceGroups`）：`c ` = 剪贴板 + 片段（片段没有自己的前缀）。
 - 计算结果、文本识别（PR 5）：没打来源前缀时，引擎先算（§7）、再识别（§6.3），结果固定排在最前（计算结果第一），不经过排序，后面接排好序的普通行。它们不记使用；⏎ 复制，⌘⏎ 插入前台 App（§7）。
 - 剪贴板最多 5 行（PR 5）：没打前缀时剪贴板最多出 5 行（`LauncherEngine.unscopedSourceLimits`，排序的 `sourceLimits` 参数：超出的跳过、由后面的行补上），免得一个常见词把 App 和命令挤下去；`c ` 前缀下不限。片段不限。文件同理（PR 6）：没打前缀时最多 5 行，`f ` 前缀下最多 30 行（`LauncherFileFilter.maxResults`）。
 - 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空：没打前缀、输入也不是路径时列表里总有建议（§5.4，PR 7）；「没有结果」只在连兜底建议都没有时出现 —— 不足 2 个字符、或者打了来源前缀而那一类一个没中。
@@ -581,7 +582,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 - 后端协议 `LauncherFileSearching`（`Logic/LauncherFileSearch.swift`）：给一个请求（`LauncherFileSearchRequest`），异步交回原始命中（`LauncherFileHit`：路径、是不是文件夹、最近使用、最近修改；PR 11 加从哪几个来源来 `origins`、来源给的说明 `note`）和统计（`LauncherFileSearchBatch`：一共找到多少、读了多少、收齐用了多久、超没超时；PR 11 加 `isComplete`、各来源的统计 `sources`），可取消。实现有三个：Spotlight（`LauncherSpotlightFileSearch`）、内存里的表（`LauncherMemoryFileSearch`）、把几个并起来的合并器（`LauncherMergedFileSearch`）。快速入口用的是合并器（PR 11）；单个来源回调一次，合并器每有一个来源回来就交一次「到目前为止的全部」，最后一次 `isComplete == true`。
 - 过滤、去副本、排序是纯函数（`LauncherFileFilter`，进单元测试），对任何后端、任何来源都一样。
-- `LauncherFileProvider`（App 侧）：80 ms 防抖、带序号（新输入来了就停掉旧的、过期的结果丢掉），后端每交回一批，就在后端的线程上对到目前为止的全部跑过滤排序，回主线程换成行交给控制器 —— 先回来的先出，后回来的并进去再排一次（`complete` 告诉控制器还有没有）。
+- `LauncherFileProvider`（App 侧）：输入一变就交给后端（PR 11 起不在这里防抖，防抖挪进合并器、只对 Spotlight）、带序号（新输入来了就停掉旧的、过期的结果丢掉），后端每交回一批，就在后端的线程上对到目前为止的全部跑过滤排序，回主线程换成行交给控制器 —— 先回来的先出，后回来的并进去再排一次（`complete` 告诉控制器还有没有）。
 - `LauncherFileSources`（App 侧，`Providers/FileSources.swift`，PR 11）：建四个来源和合并器；准备自己扫的目录、已知文件、剪贴板里的路径这三张表（下面「四个来源」）。
 
 **四个来源**（PR 11，2026-11-24）：
@@ -593,7 +594,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | C 各模块已知的文件 | `LauncherMemoryFileSearch`（查存不存在） | 每次呼出取一次 `launcherKnownFiles()`（只读内存），没变就不重建，变了在后台建表 | 内存里的表 + 名字匹配上的那几条在后台 `stat` | Claude Code 会话写过的文件（「最近文件」），副标题带「Claude Code · 项目名」 |
 | D 剪贴板里出现过的路径 | `LauncherMemoryFileSearch`（查存不存在）+ `LauncherClipboardPaths` | 每次呼出拿剪贴板 / 片段条目的搜索全文（`LauncherEntryProvider.sessionTexts`），在后台抽路径（按条目键缓存，文字没变不重抽） | 同 C | 复制过一个文件的完整路径，之后只打文件名就能找到它（用户截图里第二行就是） |
 
-**合并器**（`Logic/LauncherFileMerger.swift`）：同一个请求同时发给四个来源，结果在自己的串行队列上收：每个来源回来就把它的命中打上来源（`origins`），按**规范路径**并进已有的（`LauncherFileMerge.key`：去掉数据卷前缀 `/System/Volumes/Data`；`/tmp`、`/var`、`/etc` 换成 `/private/…` —— Spotlight、自己扫的目录、Claude Code 的最近文件、剪贴板里的写法可能不一样；末尾的 `/` 去掉），同一个文件几个来源都有时来源取并集、说明取先有的、时间取新的，路径写成规范路径；然后交一次到目前为止的全部。某个来源回来时一条都没有、又不是最后一个，就不交。取消和发起排在同一个队列上（先发起的那次一定先被顶掉）；被顶掉的结果按序号丢掉。实测内存里的三个来源 0.1–1 ms 就回来，Spotlight 190–270 ms（刚启动时 460 ms），所以从输入停下到第一批文件行约 82 ms（80 ms 是防抖），全部到齐约 280–300 ms，和原来只问 Spotlight 时一样。
+**合并器**（`Logic/LauncherFileMerger.swift`）：同一个请求发给四个来源 —— **内存里的三个（B、C、D）不等防抖，输入一变就查；Spotlight（A）等输入停下 80 ms（`Source.delay`，`LauncherFileSources.spotlightDelay`）、期间没有新的查询才查**（PR 11 审后定：B、C、D 查一次不到 1 ms，没理由陪 Spotlight 等 80 ms；目的是输入文件名后马上回车时第一行已经是那个文件）。发起在主线程（只是排进合并器的队列），查表、`stat` 都在后台队列，打字路径上没有磁盘 IO。结果在自己的串行队列上收：每个来源回来就把它的命中打上来源（`origins`），按**规范路径**并进已有的（`LauncherFileMerge.key`：去掉数据卷前缀 `/System/Volumes/Data`；`/tmp`、`/var`、`/etc` 换成 `/private/…` —— Spotlight、自己扫的目录、Claude Code 的最近文件、剪贴板里的写法可能不一样；末尾的 `/` 去掉），同一个文件几个来源都有时来源取并集、说明取先有的、时间取新的，路径写成规范路径；什么时候交：立刻查的三个都回来后交一次（它们几乎同时回来，凑齐了交，列表只刷新一次）；之后有延迟的来源（Spotlight）带着新命中回来再交；最后一个来源回来时一定交（`isComplete`）。取消和发起排在同一个队列上（先发起的那次一定先被顶掉）；被顶掉的结果按序号丢掉，等防抖的 Spotlight 在等的时候有了新查询就不查了。实测内存里的三个来源 0.1–1 ms 就回来，Spotlight 190–270 ms（刚启动时 460 ms）：从输入到第一批文件行（固定行）约 1 ms（打字模拟：最后一个字之后 0.4–1.4 ms），全部到齐约 280–310 ms（80 ms 防抖 + Spotlight），和原来只问 Spotlight 时一样。
 - 控制器：手上已有这个请求的部分结果时，引擎不再要求重发（`pendingFiles` 为 nil），但标上 `filesGathering`（一行都没有时照样显示「正在查找」）；控制器只在要的请求变了时才停掉还在搜的那次（`files.inFlight != outcome.fileRequest`）。
 - 选中的行：后台结果回来照旧「选中的行还在就留在它上面」；例外是来了固定行、而选中的还是第一行 —— 选中跟着到新的第一行（`LauncherController.filesFound`），这样输入文件名后 ⏎ 打开的是文件，不是原来排第一的剪贴板条目。用户已经用 ↑↓ 挪开了就不动。
 
@@ -625,7 +626,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 **像文件名：固定行**（PR 11，`Logic/LauncherFileNameQuery.swift`）：
 
 - 判定（纯函数，进单元测试）：整个查询词（去掉 `f ` 前缀、去首尾空白）形如「名字.扩展名」：最后一个点不在开头也不在末尾，扩展名 1–8 个 ASCII 字母数字、至少一个字母（`v2.0`、`3.14`、`1.5` 不算，`.zshrc` 没有名字不算）；空白只能是普通空格（`报告 final.pdf` 算，有制表符、换行的不算）；不含 `/`（那是片段或路径）、不含 `:`（`https://…`、`mailto:…`）；不超过 255 个字节。和网址不互斥：`claude.ai`、`Safari.app`、`main.cc`、`github.com` 都算 —— 找到了名字正好是它的文件才多出固定行，找不到什么都不多出；网址那边的规则不变（所以一个名字正好叫 `github.com` 的文件会排在「打开 github.com」上面，罕见，接受）。
-- 像文件名时请求带上 `pinnedName`；这样的词至少 3 个字符（`a.b`），不带前缀的长度门槛自然满足，立刻（防抖后）搜。有计算结果时照旧不搜。
+- 像文件名时请求带上 `pinnedName`；这样的词至少 3 个字符（`a.b`），不带前缀的长度门槛自然满足，立刻搜（内存里的来源不等防抖）。有计算结果时照旧不搜。
 - 过滤时名字不分大小写地**完全等于**它的进固定行（`LauncherFileResult.pinned`），不进普通排序；名字只是包含它的照旧走普通排序。固定行最多 3 行，次序（`LauncherFileFilter.pinnedOrder`）：来自已知文件（C）或剪贴板路径（D）的在前（它们更可能是用户此刻要的那一个），同等的新的在前（最近使用 / 最近修改），再按路径。片段的确切命中用同一个次序。
 - 位置：计算结果之后、所有建议和普通行之前（引擎的 `files.pinned`）。`f ` 前缀下同样排第一。⏎ 打开，⌘⏎ 在访达里显示。
 - 新结果回来之前：上一次的固定行只在名字仍正好是现在的输入时先顶着（`LauncherEngine.currentFiles`），别的照旧按「名字仍包含每个词」顶着。
@@ -682,13 +683,14 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 扫 `/private/tmp/claude-501` | 不剪枝共 71,012 个文件、8,482 个文件夹；剪枝后记下 17,368 个文件 + 1,025 个文件夹（共 18,393 条、1,026 个目录字符串），52 个目录没进去；每次 57–59 ms（热缓存；冷的第一次 fts 约 350 ms），重扫同样；没有读不了的、没有坏名字 |
 | 表占多少内存 | 估算 1.16 MB（每条约 66 字节，结构 48 字节 + 名字），约 1.3 MB / 2 万条；进程占用第一次多 1.7 MB、之后重扫基本不变 |
 | 在表里查一个词 | 0.1–0.4 ms（`a` 匹配 2614 条也是 0.3 ms） |
-| `add-approval-hook.py`（不带前缀） | 扫的目录 0.2–0.9 ms 找到、剪贴板路径 0.1–0.7 ms 找到（Claude Code 的最近文件里没有它：用户真实的最近文件缓存里查过，没有这个文件）、Spotlight 200–270 ms 0 条；合并后 1 条（来源 scanned + clipboard），固定在第一行、选中；第一批文件行 82–83 ms，全部 281–288 ms |
+| `add-approval-hook.py`（不带前缀） | 扫的目录 0.2–0.9 ms 找到、剪贴板路径 0.1–0.7 ms 找到（Claude Code 的最近文件里没有它：用户真实的最近文件缓存里查过，没有这个文件）、Spotlight 200–270 ms 0 条；合并后 1 条（来源 scanned + clipboard），固定在第一行、选中；内存来源不等防抖后（审后改）第一批文件行约 1 ms，全部约 285 ms |
+| 打字模拟（照控制器，一个字一个字打、间隔 40 ms） | 最后一个字之后 0.4–1.4 ms 固定行就出来了，3 ms 时第一行已经是那个文件；内存来源每个字查一次，Spotlight 只在停下后查一次（单元测试 `testDelayedSourceIsDebounced`），这次查询交两批（内存来源一批、Spotlight 一批） |
 | `f add-approval-hook.py` | 同上，只有这一行 |
 | 只开剪贴板路径（没有 Spotlight、没有扫的目录、没有已知文件） | 0.2 ms 找到它，固定在第一行 |
 | 只开已知文件 | 存在的找到（带「Claude Code · 项目名」）；清单里已经不存在的不出 |
 | 同名多份、来源不同（`TECH_DESIGN.md`：Spotlight 1141 条 + 扫的目录 11 条 + 已知文件 1 条 + 剪贴板路径 1 条，合并后 1152 条） | 固定 3 行：剪贴板里出现过的那份、Claude Code 写过的那份（都是 Spotlight 也有的，来源并在一起），再是别的里最新的那份 |
 | 呼出那一下主线程（2000 条剪贴板 + 500 个已知文件） | 0.3–0.5 ms |
-| 回归（对照 0cfccd8，同一个探针） | `f package.json` 3 行、`f readme` 30 行、`readme`、`窗口` 一模一样，耗时 309–339 ms → 320–338 ms；`TECH_DESIGN`、`f TECH_DESIGN` 只多了探针自己建的那份副本（最新）；`safari`、`xcode` 里 App、命令的次序不变，但不带前缀的 5 行文件里多了 Claude Code 临时目录里的文件（别的会话的截图 `21-safari-app-dark.png`、`xcodes-install.log`），比 Spotlight 里旧的同档文件新，排在它们前面 |
+| 回归（对照 0cfccd8，同一个探针） | `f package.json` 3 行、`f readme` 30 行、`readme`、`窗口`、`safari` 一模一样，Spotlight 那部分耗时不变（全部到齐 309–339 ms → 320–355 ms）；`f TECH_DESIGN` 多了探针自己建的那份副本（`f ` 前缀下不限）；审后改之前 `safari`、`xcode` 不带前缀的 5 行文件里多了 Claude Code 临时目录里的文件（别的会话的截图 `21-safari-app-dark.png`、`xcodes-install.log`，比 Spotlight 里同档的旧文件新），改了以后 `safari` 一个都不出（同档排在 Spotlight 的文件后面，5 行占满了）、`xcode` 里 `xcodes-install.log`（开头匹配）排在同样开头匹配的 Spotlight 文件后面、词首匹配的 `Baobox.xcodeproj` 前面 |
 
 **以后：全量内存索引（没做）**。PR 11 已经把 Spotlight 的盲区（Claude Code 的临时目录、用户加的目录）自己扫了；Spotlight 管得到的地方仍然问 Spotlight。后续方向不变：让 Spotlight 当爬虫，启动后在后台列出全部文件名读进内存（实测 82 万条 40 秒、90 MB 路径文本，在列表里搜一个词约 30 ms），用自己的匹配引擎搜，能支持拼音和首字母。换的时候只写一个新的 `LauncherFileSearching` 来源（或换掉 A），合并、过滤排序、引擎、界面都不动。
 

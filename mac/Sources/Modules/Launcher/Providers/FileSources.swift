@@ -20,6 +20,8 @@ final class LauncherFileSources {
     static let extraRootsKey = "launcher.files.extraRoots"
     /// 剪贴板里哪些来源的文字抽路径（片段就是收藏的剪贴板条目）。
     static let clipboardSourceIDs: Set<String> = ["clipboard", "snippets"]
+    /// Spotlight 等输入停下多久才查（防抖）；内存里的三个来源不等，输入一变就查（PR 11 审后定）。
+    static let spotlightDelay: TimeInterval = 0.08
 
     nonisolated private static let log = Logger(subsystem: "com.baobox.app", category: "launcher")
 
@@ -46,7 +48,7 @@ final class LauncherFileSources {
         self.registry = registry
         self.home = home
         backend = LauncherMergedFileSearch(sources: [
-            .init(name: "spotlight", origin: .spotlight, backend: spotlight),
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: Self.spotlightDelay),
             .init(name: "scanned", origin: .scanned, backend: scanned),
             .init(name: "known", origin: .known, backend: known),
             .init(name: "clipboard", origin: .clipboard, backend: clipboard),

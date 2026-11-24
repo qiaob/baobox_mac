@@ -1,24 +1,22 @@
 import Foundation
 import os
 
-// 快速入口的文件来源（docs/launcher/TECH_DESIGN.md §6.4）：按名字搜文件。打字路径上不搜：
-// 输入停下 80 ms 再交给后端（`LauncherFileSearching`；PR 11 起是四个来源的合并器 `LauncherMergedFileSearch`，
-// 见 `FileSources.swift`），带序号，新输入来了就停掉旧的；后端每交回一批（合并器：每有一个来源回来就交一次到目前为止的全部），
-// 在后台跑过滤、去副本、排序（`LauncherFileFilter`），回主线程换成行交给控制器 —— 先回来的先出，后回来的并进去再排一次。
+// 快速入口的文件来源（docs/launcher/TECH_DESIGN.md §6.4）：按名字搜文件。打字路径上不碰磁盘：
+// 输入一变就交给后端（`LauncherFileSearching`；PR 11 起是四个来源的合并器 `LauncherMergedFileSearch`，见 `FileSources.swift`：
+// 内存里的来源立刻在后台查，Spotlight 在合并器里等输入停下 80 ms 才查），带序号，新输入来了就停掉旧的；
+// 后端每交回一批（合并器：内存里的来源都回来交一次，Spotlight 回来再交一次），在后台跑过滤、去副本、排序（`LauncherFileFilter`），
+// 回主线程换成行交给控制器 —— 先回来的先出，后回来的并进去再排一次。
 // 每次查询收齐后记一条日志：各来源各自的耗时和条数、合并去重后多少、过滤后剩多少 —— 用户据此决定要不要做自己的索引。
 
 @MainActor
 final class LauncherFileProvider {
     static let sourceID = "files"
-    /// 输入停下多久才搜。
-    static let debounceInterval: TimeInterval = 0.08
     nonisolated private static let log = Logger(subsystem: "com.baobox.app", category: "launcher")
 
     private let backend: LauncherFileSearching
     private let home: String
     private var sequence = 0
-    private var debounceWork: DispatchWorkItem?
-    /// 正在搜（含还在等防抖的、只回来了一部分来源的）那个请求：同一个请求别重复发。
+    /// 正在搜（含只回来了一部分来源的）那个请求：同一个请求别重复发。
     private(set) var inFlight: LauncherFileSearchRequest?
     /// 这次查询第一批行交给控制器用了多久（记日志）。
     private var firstRowsMilliseconds: Double?
@@ -36,20 +34,13 @@ final class LauncherFileProvider {
         cancel()
         sequence += 1
         inFlight = request
-        let ticket = sequence
-        let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.start(request, ticket: ticket, completion: completion) }
-        }
-        debounceWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.debounceInterval, execute: work)
+        start(request, ticket: sequence, completion: completion)
     }
 
     /// 不要还没回来的结果了（输入变了、不搜文件了、面板收起）。
     func cancel() {
         guard inFlight != nil else { return }
         sequence += 1
-        debounceWork?.cancel()
-        debounceWork = nil
         inFlight = nil
         backend.cancel()
     }
@@ -57,7 +48,6 @@ final class LauncherFileProvider {
     private func start(_ request: LauncherFileSearchRequest, ticket: Int,
                        completion: @escaping @MainActor (LauncherFileSearchRequest, [LauncherItem], [LauncherItem], Bool) -> Void) {
         guard ticket == sequence else { return }
-        debounceWork = nil
         let home = home
         let issued = DispatchTime.now().uptimeNanoseconds
         firstRowsMilliseconds = nil

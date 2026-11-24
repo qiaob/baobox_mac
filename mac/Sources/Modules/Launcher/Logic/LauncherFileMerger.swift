@@ -78,13 +78,18 @@ enum LauncherFileMerge {
     }
 }
 
-/// 合并器：把几个后端并成一个。每个来源回来一次就交一次「到目前为止的全部」（`isComplete` 在最后一个来源回来时为 true）；
-/// 某个来源回来时一条都没有、又不是最后一个，就不交（列表没什么可变的）。只在自己的串行队列上改状态。
+/// 合并器：把几个后端并成一个。
+/// - 发起：`delay == 0` 的来源（内存里的表）立刻查；有 `delay` 的（Spotlight）等这么久、期间没有新的查询才查（防抖在这里做，
+///   内存里的来源不用陪着等）。
+/// - 交出：立刻查的那几个都回来后交一次（它们都不到 1 ms，凑齐了交，列表只刷新一次），之后每有一个来源带着新命中回来就再交一次；
+///   最后一个来源回来时一定交（`isComplete == true`）。交的总是「到目前为止的全部」。只在自己的串行队列上改状态。
 final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable {
     struct Source {
         let name: String
         let origin: LauncherFileOrigins
         let backend: LauncherFileSearching
+        /// 防抖：这次查询发起后等多久、期间没有新的查询才查它（秒）；0 = 立刻查。
+        var delay: TimeInterval = 0
     }
 
     let sources: [Source]
@@ -99,6 +104,8 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
     private var order: [String] = []
     private var totalCount = 0
     private var timedOut = false
+    /// 上次交出之后又并进了新命中、还没交。
+    private var pendingChange = false
 
     init(sources: [Source]) {
         self.sources = sources
@@ -114,13 +121,20 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
             order = []
             totalCount = 0
             timedOut = false
+            pendingChange = false
             guard !sources.isEmpty else {
                 completion(LauncherFileSearchBatch(hits: [], totalCount: 0, elapsed: 0, timedOut: false))
                 return
             }
             for (index, source) in sources.enumerated() {
-                source.backend.search(request) { [weak self] batch in
-                    self?.queue.async { self?.receive(batch, from: index, ticket: ticket, completion: completion) }
+                if source.delay > 0 {
+                    queue.asyncAfter(deadline: .now() + source.delay) { [weak self] in
+                        // 等的这段时间里又有了新的查询（或取消了）：这次不查了。
+                        guard let self, ticket == self.generation else { return }
+                        start(source, index: index, request: request, ticket: ticket, completion: completion)
+                    }
+                } else {
+                    start(source, index: index, request: request, ticket: ticket, completion: completion)
                 }
             }
         }
@@ -136,6 +150,13 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
 
     // MARK: - 只在 queue 上
 
+    private func start(_ source: Source, index: Int, request: LauncherFileSearchRequest, ticket: Int,
+                       completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void) {
+        source.backend.search(request) { [weak self] batch in
+            self?.queue.async { self?.receive(batch, from: index, ticket: ticket, completion: completion) }
+        }
+    }
+
     private func receive(_ batch: LauncherFileSearchBatch, from index: Int, ticket: Int,
                          completion: @Sendable (LauncherFileSearchBatch) -> Void) {
         guard ticket == generation, reports[index] == nil else { return }
@@ -146,8 +167,12 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
         LauncherFileMerge.merge(batch.hits, origin: source.origin, into: &merged, order: &order)
         totalCount += batch.totalCount
         timedOut = timedOut || batch.timedOut
+        if !batch.hits.isEmpty { pendingChange = true }
         let isComplete = reports.count == sources.count
-        guard isComplete || !batch.hits.isEmpty else { return }
+        let immediateDone = sources.indices.allSatisfy { sources[$0].delay > 0 || reports[$0] != nil }
+        // 立刻查的还没凑齐时先不交（它们几乎同时回来，凑齐了只刷新一次列表）；有延迟的来源（Spotlight）回来就交。
+        guard isComplete || (pendingChange && (immediateDone || source.delay > 0)) else { return }
+        pendingChange = false
         completion(LauncherFileSearchBatch(
             hits: order.compactMap { merged[$0] }, totalCount: totalCount, elapsed: elapsed, timedOut: timedOut,
             isComplete: isComplete, sources: sources.indices.compactMap { reports[$0] }))

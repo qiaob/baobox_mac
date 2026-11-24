@@ -141,12 +141,12 @@ final class LauncherFileMergerTests: XCTestCase {
         let fast = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/private/tmp/c/hook.py")])
         let empty = FakeFileSearch(delay: 0.05, hits: [])
         let merged = LauncherMergedFileSearch(sources: [
-            .init(name: "spotlight", origin: .spotlight, backend: slow),
+            .init(name: "spotlight", origin: .spotlight, backend: slow, delay: 0.05),
             .init(name: "scanned", origin: .scanned, backend: fast),
             .init(name: "known", origin: .known, backend: empty),
         ])
         let batches = search(merged, .nameContains(["o"]))
-        XCTAssertEqual(batches.count, 2, "空的、又不是最后一个回来的来源不交")
+        XCTAssertEqual(batches.count, 2, "立刻查的两个凑齐了交一次，Spotlight 回来再交一次")
         XCTAssertEqual(batches.first?.hits.map(\.path), ["/private/tmp/c/hook.py"], "快的先交")
         XCTAssertEqual(batches.first?.isComplete, false)
         let last = try XCTUnwrap(batches.last)
@@ -156,6 +156,44 @@ final class LauncherFileMergerTests: XCTestCase {
         XCTAssertEqual(last.sources.map(\.name), ["spotlight", "scanned", "known"], "各来源的统计按来源的次序")
         XCTAssertEqual(last.sources.map(\.hitCount), [2, 1, 0])
         XCTAssertEqual(last.totalCount, 3)
+    }
+
+    func testImmediateSourcesAreDeliveredTogether() throws {
+        let a = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/a/x.txt")])
+        let b = FakeFileSearch(delay: 0.05, hits: [LauncherFileHit(path: "/b/x.txt")])
+        let spotlight = FakeFileSearch(delay: 0, hits: [])
+        let merged = LauncherMergedFileSearch(sources: [
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.2),
+            .init(name: "a", origin: .scanned, backend: a),
+            .init(name: "b", origin: .clipboard, backend: b),
+        ])
+        let batches = search(merged, .nameContains(["x"]))
+        XCTAssertEqual(batches.map(\.hits.count), [2, 2], "立刻查的两个都回来才交第一次（不是一个一次）；Spotlight 空着回来时补一次完成")
+        XCTAssertEqual(batches.map(\.isComplete), [false, true])
+    }
+
+    func testDelayedSourceIsDebounced() {
+        let spotlight = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/u/abc.txt")])
+        let memory = FakeFileSearch(delay: 0, hits: [])
+        let merged = LauncherMergedFileSearch(sources: [
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.15),
+            .init(name: "scanned", origin: .scanned, backend: memory),
+        ])
+        let collected = BatchCollector()
+        for word in ["a", "ab"] {
+            merged.search(.nameContains([word])) { collected.append($0) }
+            Thread.sleep(forTimeInterval: 0.03)
+        }
+        let done = expectation(description: "last")
+        merged.search(.nameContains(["abc"])) { batch in
+            collected.append(batch)
+            if batch.isComplete { done.fulfill() }
+        }
+        wait(for: [done], timeout: 5)
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(memory.searchCount, 3, "内存里的来源每次输入都立刻查")
+        XCTAssertEqual(spotlight.searchCount, 1, "有延迟的来源只在输入停下后查一次")
+        XCTAssertEqual(collected.batches.filter(\.isComplete).count, 1)
     }
 
     func testMergedSearchDropsStaleResults() throws {
@@ -207,6 +245,7 @@ private final class FakeFileSearch: LauncherFileSearching, @unchecked Sendable {
     private let lock = NSLock()
     private var generation = 0
     private(set) var cancelCount = 0
+    private(set) var searchCount = 0
 
     init(delay: TimeInterval, hits: [LauncherFileHit]) {
         self.delay = delay
@@ -216,6 +255,7 @@ private final class FakeFileSearch: LauncherFileSearching, @unchecked Sendable {
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void) {
         lock.lock()
         generation += 1
+        searchCount += 1
         let ticket = generation
         lock.unlock()
         let hits = hits
