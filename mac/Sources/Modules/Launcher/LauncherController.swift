@@ -127,6 +127,9 @@ final class LauncherController {
         case 0x30: // Tab：先吃掉，以后是「问 AI」
             return true
         default:
+            // ⌘V / ⌘C / ⌘X / ⌘A / ⌘Z：面板是 key 但 Baobox 不是前台 App（nonactivating），主菜单「编辑」里的
+            // 快捷键这时不生效，粘贴没反应。这里直接把编辑动作交给输入框的编辑器。
+            if let handled = performEditShortcut(event, flags: flags) { return handled }
             // ⌘1…⌘9：直接执行第 N 行。
             if flags.contains(.command), flags.isDisjoint(with: [.control, .option]),
                let slot = Self.digitKeyCodes.firstIndex(of: event.keyCode) {
@@ -135,6 +138,26 @@ final class LauncherController {
             }
             return false
         }
+    }
+
+    /// 标准编辑快捷键。返回 nil = 不是编辑快捷键（交给后面的规则）；否则是「处理了没有」。
+    private func performEditShortcut(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool? {
+        guard flags == .command || flags == [.command, .shift],
+              let key = event.charactersIgnoringModifiers?.lowercased() else { return nil }
+        let shift = flags.contains(.shift)
+        let edit: LauncherFieldHandle.Edit
+        switch (key, shift) {
+        case ("v", false): edit = .paste
+        case ("c", false): edit = .copy
+        case ("x", false): edit = .cut
+        case ("a", false): edit = .selectAll
+        case ("z", false): edit = .undo
+        case ("z", true): edit = .redo
+        default: return nil
+        }
+        let handled = model.field.perform(edit)
+        Self.log.notice("edit shortcut \(key, privacy: .public) handled: \(handled, privacy: .public)")
+        return handled
     }
 
     // MARK: - 执行

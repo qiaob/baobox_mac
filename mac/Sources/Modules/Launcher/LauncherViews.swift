@@ -118,6 +118,28 @@ final class LauncherFieldHandle {
         field?.stringValue = text
     }
 
+    /// 标准编辑动作（粘贴、拷贝、剪切、全选、撤销、重做）。
+    enum Edit { case paste, copy, cut, selectAll, undo, redo }
+
+    /// 直接对输入框的编辑器执行编辑动作，不经主菜单（面板是 key、Baobox 不是前台 App 时主菜单的快捷键不生效）。
+    /// 返回 false = 输入框不在编辑，或这一步现在做不了（没有可撤销的）。
+    func perform(_ edit: Edit) -> Bool {
+        guard let editor = field?.currentEditor() else { return false }
+        switch edit {
+        case .paste: editor.paste(nil)
+        case .copy: editor.copy(nil)
+        case .cut: editor.cut(nil)
+        case .selectAll: editor.selectAll(nil)
+        case .undo:
+            guard let manager = editor.undoManager, manager.canUndo else { return false }
+            manager.undo()
+        case .redo:
+            guard let manager = editor.undoManager, manager.canRedo else { return false }
+            manager.redo()
+        }
+        return true
+    }
+
     /// 让输入框拿焦点。NSTextField 成为第一响应者时会全选里面的文字，所以保留的上次输入直接打字就覆盖。
     func focus() {
         guard let field, let window = field.window else { return }
