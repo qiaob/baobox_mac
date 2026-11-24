@@ -223,12 +223,17 @@ final class LauncherController {
     }
 
     /// 文件搜好了（或先回来了一部分来源）：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
-    /// 例外：来了固定行（输入像文件名、找到了名字正好是它的文件）、而选中的还是第一行 —— 选中跟着到新的第一行，⏎ 就是打开它。
+    /// 例外：来了固定行、而选中的还是第一行、又不是固定的文件行（剪贴板、建议）—— 选中跟着到新的第一行，⏎ 就是打开它；
+    /// 选中的本来就是固定文件行时留在它上面（同名、更新的排到前面也不跳）。见 `LauncherFileSelectionPolicy`。
     private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
                             complete: Bool) {
         guard panel.isVisible else { return }
+        let selectedID = model.rows.indices.contains(model.selectedIndex) ? model.rows[model.selectedIndex].id : nil
+        let selectedIsPinnedFile = selectedID.map { engine.pinnedFileRowIDs.contains($0) } ?? false
         engine.setFileResult(pinned: pinned, ranked: ranked, for: request, complete: complete)
-        refresh(keepSelection: pinned.isEmpty || model.selectedIndex != 0)
+        refresh(keepSelection: LauncherFileSelectionPolicy.keepsSelection(newPinnedCount: pinned.count,
+                                                                         selectedIndex: model.selectedIndex,
+                                                                         selectedIsPinnedFile: selectedIsPinnedFile))
         panel.setHeight(model.panelHeight)
     }
 

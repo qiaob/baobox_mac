@@ -129,6 +129,8 @@ final class LauncherEngine {
     private var fileResult: (request: LauncherFileSearchRequest, pinned: [LauncherItem], ranked: [LauncherItem], complete: Bool)?
     /// 这次显示的后台来的行（路径、文件），按行 id：执行、Tab 补全时按 id 找回来。
     private var asyncItemsByKey: [String: LauncherItem] = [:]
+    /// 这次显示的固定文件行（片段的确切命中、名字正好是输入的）的行 id：控制器据此决定选中跟不跟到新的第一行。
+    private(set) var pinnedFileRowIDs: Set<String> = []
 
     init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -164,6 +166,7 @@ final class LauncherEngine {
         pathResult = nil
         fileResult = nil
         asyncItemsByKey = [:]
+        pinnedFileRowIDs = []
         textActions = []
         suggestionsByKey = [:]
         pastedText = nil
@@ -202,6 +205,7 @@ final class LauncherEngine {
     /// 最后接兜底建议（§5.4）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
+        pinnedFileRowIDs = []
 
         // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
         if let attachment {
@@ -287,6 +291,7 @@ final class LauncherEngine {
         var rows: [LauncherRow] = instants.prefix(calculationCount).map(\.row)
         // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。
         rows += files.pinned.map(\.row)
+        pinnedFileRowIDs = Set(files.pinned.map(\.row.id))
         rows += suggestions.leadingRows
         rows += instants.dropFirst(calculationCount).map(\.row)
         rows += ranked.compactMap { item(forKey: $0.key)?.row }

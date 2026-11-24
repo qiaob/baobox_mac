@@ -33,3 +33,16 @@ struct LauncherFileResultState: Equatable, Sendable {
         LauncherFileResultState(request: request, complete: false)
     }
 }
+
+/// 后台的文件结果回来、列表重排时，选中的行留不留在原来那一行上（PR 11）。纯逻辑，进 BaoboxTests。
+enum LauncherFileSelectionPolicy {
+    /// 留（按行 id 找回，它还在就留在它上面，不管排到第几行）还是跟到新的第一行：
+    /// - 这一批没有固定行：留（同其余后台结果）。
+    /// - 用户用方向键 / 鼠标挪开了（选中的不是第 0 行）：留。
+    /// - 选中的第 0 行本身就是固定的文件行：留（独立验证后定）—— 后到的 Spotlight 带来同名、更新的文件排到它前面时，
+    ///   两行标题一样，用户这一刻按 ⏎ 打开的得是他看到的那个。
+    /// - 选中的第 0 行不是固定文件行（剪贴板、建议……）：跟到新的第一行 —— 输入文件名后 ⏎ 就是打开它。
+    static func keepsSelection(newPinnedCount: Int, selectedIndex: Int, selectedIsPinnedFile: Bool) -> Bool {
+        newPinnedCount == 0 || selectedIndex != 0 || selectedIsPinnedFile
+    }
+}
