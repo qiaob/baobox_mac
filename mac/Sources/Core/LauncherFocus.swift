@@ -129,7 +129,7 @@ enum LauncherFocus {
             }
         case .finish(let outcome):
             pending = nil
-            log.notice("focus wait \(outcome.rawValue, privacy: .public) after \(milliseconds(since: wait.start), format: .fixed(precision: 0), privacy: .public) ms (\(wait.polls, privacy: .public) checks): front \(bundleID(pid: snapshot.frontmostPID), privacy: .public), target \(bundleID(wait.target), privacy: .public), keyboard (AX) \(bundleID(pid: snapshot.keyboardPID), privacy: .public), NSApp.isActive \(NSApp.isActive, privacy: .public), Baobox key window \(snapshot.ownWindowIsKey, privacy: .public); AX reads \(wait.keyboardReadTotal, format: .fixed(precision: 1), privacy: .public) ms in total, longest \(wait.keyboardReadMax, format: .fixed(precision: 1), privacy: .public) ms")
+            log.notice("focus wait \(outcome.rawValue, privacy: .public) after \(milliseconds(since: wait.start), format: .fixed(precision: 0), privacy: .public) ms (\(wait.polls, privacy: .public) checks): front \(bundleID(pid: snapshot.frontmostPID), privacy: .public), target \(bundleID(wait.target), privacy: .public), keyboard (AX) \(bundleID(pid: snapshot.keyboardPID), privacy: .public) [\(policyLabel(pid: snapshot.keyboardPID), privacy: .public)], NSApp.isActive \(NSApp.isActive, privacy: .public), Baobox key window \(snapshot.ownWindowIsKey, privacy: .public); AX reads \(wait.keyboardReadTotal, format: .fixed(precision: 1), privacy: .public) ms in total, longest \(wait.keyboardReadMax, format: .fixed(precision: 1), privacy: .public) ms")
             run(wait.action, target: wait.target)
         }
     }
@@ -166,7 +166,8 @@ enum LauncherFocus {
                                              targetPID: target.processIdentifier,
                                              ownPID: ProcessInfo.processInfo.processIdentifier,
                                              ownWindowIsKey: NSApp.keyWindow != nil,
-                                             keyboardPID: keyboard.pid)
+                                             keyboardPID: keyboard.pid,
+                                             keyboardHolderIsRegular: isRegularApp(pid: keyboard.pid))
         return (snapshot, keyboard.milliseconds)
     }
 
@@ -194,7 +195,8 @@ enum LauncherFocus {
         func check() {
             let read = readKeyboardFocus()
             let keyboard = read.pid
-            let decision = LauncherKeyboardGate.decide(keyboardPID: keyboard, targetPID: targetPID,
+            let decision = LauncherKeyboardGate.decide(keyboardPID: keyboard, holderIsRegular: isRegularApp(pid: keyboard),
+                                                       targetPID: targetPID,
                                                        ownPID: ProcessInfo.processInfo.processIdentifier)
             let result: KeyboardCheck
             switch decision {
@@ -211,7 +213,7 @@ enum LauncherFocus {
                 }
                 result = .stillOurs
             }
-            log.notice("keyboard check before ⌘V: keyboard (AX) \(bundleID(pid: keyboard), privacy: .public) (read in \(read.milliseconds, format: .fixed(precision: 1), privacy: .public) ms), front \(bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), target \(bundleID(pid: targetPID), privacy: .public) → \(String(describing: result), privacy: .public)")
+            log.notice("keyboard check before ⌘V: keyboard (AX) \(bundleID(pid: keyboard), privacy: .public) [\(policyLabel(pid: keyboard), privacy: .public)] (read in \(read.milliseconds, format: .fixed(precision: 1), privacy: .public) ms), front \(bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), target \(bundleID(pid: targetPID), privacy: .public) → \(String(describing: result), privacy: .public)")
             completion(result)
         }
         check()
@@ -265,7 +267,24 @@ enum LauncherFocus {
         return (pid, milliseconds)
     }
 
+    /// 这个 pid 的 App 是不是普通的 Dock App；找不到这个 App（或 pid 为 nil）时为 nil。
+    private static func isRegularApp(pid: pid_t?) -> Bool? {
+        guard let pid, let app = NSRunningApplication(processIdentifier: pid) else { return nil }
+        return app.activationPolicy == .regular
+    }
+
     // MARK: - 日志
+
+    /// 日志里拿键盘的 App 是哪一类：regular / accessory / prohibited / unknown。
+    private static func policyLabel(pid: pid_t?) -> String {
+        guard let pid, let app = NSRunningApplication(processIdentifier: pid) else { return "unknown" }
+        switch app.activationPolicy {
+        case .regular: return "regular"
+        case .accessory: return "accessory"
+        case .prohibited: return "prohibited"
+        @unknown default: return "other"
+        }
+    }
 
     /// 日志里的 App：bundle id（没有就写 pid），nil 写 "nil"。不记名字以外的东西。
     static func bundleID(_ app: NSRunningApplication?) -> String {

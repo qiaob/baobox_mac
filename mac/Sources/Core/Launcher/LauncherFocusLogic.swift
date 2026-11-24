@@ -21,6 +21,10 @@ struct LauncherFocusSnapshot: Equatable {
     var ownWindowIsKey: Bool
     /// 辅助功能读到的系统键盘焦点所在 App（`AXFocusedApplication`）；没有权限、读不到时为 nil（= 不拿它判断）。
     var keyboardPID: pid_t?
+    /// 拿着键盘的那个 App 是不是普通的 Dock App（`activationPolicy == .regular`）；找不到这个 App 时为 nil。
+    /// 只有**不是**普通 App 的（Raycast、Alfred 这类菜单栏 / 后台 App）才算「键盘被占着」：
+    /// 前台 App 和实际拿键盘的进程不是同一个 pid 的正常情况（某些壳 App）不能挡。
+    var keyboardHolderIsRegular: Bool? = nil
 }
 
 /// 某一刻焦点回去了没有。
@@ -34,8 +38,12 @@ enum LauncherFocusVerdict: Equatable {
 
     static func of(_ snapshot: LauncherFocusSnapshot) -> LauncherFocusVerdict {
         guard !snapshot.ownWindowIsKey, snapshot.frontmostPID == snapshot.targetPID else { return .waiting }
-        guard let keyboard = snapshot.keyboardPID, keyboard != snapshot.targetPID else { return .ready }
-        return keyboard == snapshot.ownPID ? .waiting : .heldElsewhere(keyboard)
+        switch LauncherKeyboardGate.decide(keyboardPID: snapshot.keyboardPID, holderIsRegular: snapshot.keyboardHolderIsRegular,
+                                           targetPID: snapshot.targetPID, ownPID: snapshot.ownPID) {
+        case .paste: return .ready
+        case .waitForSelf: return .waiting
+        case .blocked(let pid): return .heldElsewhere(pid)
+        }
     }
 }
 
@@ -87,14 +95,18 @@ enum LauncherKeyboardGate: Equatable {
     case paste
     /// 还在 Baobox 自己这儿：再等一小会儿（并进等焦点的上限）。
     case waitForSelf
-    /// 在第三个 App 那里：不发 ⌘V（否则内容粘进那个 App），内容留在剪贴板，回执说清原因。
+    /// 在第三个**不是普通 Dock App** 的 App（Raycast、Alfred 这类菜单栏 / 后台 App）那里：不发 ⌘V（否则内容粘进那个 App），
+    /// 内容留在剪贴板，回执说清原因。
     case blocked(pid_t)
 
-    /// - Parameter targetPID: 要粘进的 App；nil = 没有目标（粘给前台，此时只防「键盘在我们自己这儿」）。
-    static func decide(keyboardPID: pid_t?, targetPID: pid_t?, ownPID: pid_t) -> LauncherKeyboardGate {
+    /// - Parameters:
+    ///   - holderIsRegular: 拿着键盘的 App 是不是普通 Dock App；nil = 找不到这个 App。是普通 App、或找不到时照常粘贴
+    ///     （前台 App 和实际拿键盘的进程不是同一个 pid 的正常情况不能挡）。
+    ///   - targetPID: 要粘进的 App；nil = 没有目标（粘给前台，此时只防「键盘在我们自己这儿」）。
+    static func decide(keyboardPID: pid_t?, holderIsRegular: Bool?, targetPID: pid_t?, ownPID: pid_t) -> LauncherKeyboardGate {
         guard let keyboard = keyboardPID else { return .paste }
         if keyboard == ownPID { return .waitForSelf }
-        if let targetPID, keyboard != targetPID { return .blocked(keyboard) }
+        if let targetPID, keyboard != targetPID, holderIsRegular == false { return .blocked(keyboard) }
         return .paste
     }
 }

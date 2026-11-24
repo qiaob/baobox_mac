@@ -7,9 +7,12 @@ final class LauncherFocusLogicTests: XCTestCase {
     private let own: pid_t = 200
     private let raycast: pid_t = 300
 
-    private func snapshot(front: pid_t?, ownKey: Bool = false, keyboard: pid_t? = nil) -> LauncherFocusSnapshot {
+    /// 拿键盘的是 Raycast 时它不是普通 Dock App（菜单栏 App）；别的默认当普通 App。
+    private func snapshot(front: pid_t?, ownKey: Bool = false, keyboard: pid_t? = nil,
+                          holderIsRegular: Bool? = nil) -> LauncherFocusSnapshot {
         LauncherFocusSnapshot(frontmostPID: front, targetPID: target, ownPID: own, ownWindowIsKey: ownKey,
-                              keyboardPID: keyboard)
+                              keyboardPID: keyboard,
+                              keyboardHolderIsRegular: holderIsRegular ?? (keyboard == raycast ? false : true))
     }
 
     // MARK: - 某一刻回去了没有
@@ -36,6 +39,11 @@ final class LauncherFocusLogicTests: XCTestCase {
 
     func testHeldElsewhereWhenAThirdAppHasTheKeyboard() {
         XCTAssertEqual(LauncherFocusVerdict.of(snapshot(front: target, keyboard: raycast)), .heldElsewhere(raycast))
+    }
+
+    func testARegularThirdAppWithTheKeyboardIsNotHeldElsewhere() {
+        XCTAssertEqual(LauncherFocusVerdict.of(snapshot(front: target, keyboard: 400, holderIsRegular: true)), .ready,
+                       "前台 App 和拿键盘的进程不是同一个 pid 的正常情况（壳 App）")
     }
 
     // MARK: - 等的过程
@@ -76,21 +84,27 @@ final class LauncherFocusLogicTests: XCTestCase {
     // MARK: - 发 ⌘V 前
 
     func testGatePastesWhenKeyboardIsWithTheTargetOrUnknown() {
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: target, targetPID: target, ownPID: own), .paste)
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: nil, targetPID: target, ownPID: own), .paste,
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: target, holderIsRegular: true, targetPID: target, ownPID: own), .paste)
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: nil, holderIsRegular: nil, targetPID: target, ownPID: own), .paste,
                        "没有辅助功能权限 / 读不到：照常粘贴")
     }
 
     func testGateWaitsWhileKeyboardIsStillOurs() {
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: own, targetPID: target, ownPID: own), .waitForSelf)
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: own, targetPID: nil, ownPID: own), .waitForSelf)
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: own, holderIsRegular: false, targetPID: target, ownPID: own),
+                       .waitForSelf)
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: own, holderIsRegular: false, targetPID: nil, ownPID: own),
+                       .waitForSelf)
     }
 
-    func testGateBlocksWhenAThirdAppHasTheKeyboard() {
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: raycast, targetPID: target, ownPID: own), .blocked(raycast),
-                       "⌘V 会粘进 Raycast：不发")
-        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: raycast, targetPID: nil, ownPID: own), .paste,
-                       "没有目标（粘给前台）时不知道该在哪儿，只防我们自己")
+    func testGateBlocksOnlyANonRegularThirdApp() {
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: raycast, holderIsRegular: false, targetPID: target, ownPID: own),
+                       .blocked(raycast), "Raycast 这类菜单栏 App 拿着键盘：⌘V 会粘进它，不发")
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: 400, holderIsRegular: true, targetPID: target, ownPID: own),
+                       .paste, "是普通 Dock App：照常粘贴（不能挡壳 App 这类正常情况）")
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: 400, holderIsRegular: nil, targetPID: target, ownPID: own),
+                       .paste, "找不到这个 App：照常粘贴")
+        XCTAssertEqual(LauncherKeyboardGate.decide(keyboardPID: raycast, holderIsRegular: false, targetPID: nil, ownPID: own),
+                       .paste, "没有目标（粘给前台）时不知道该在哪儿，只防我们自己")
     }
 
     // MARK: - 动作的上下文只在闭包里
