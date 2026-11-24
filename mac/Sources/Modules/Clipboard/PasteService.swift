@@ -6,8 +6,10 @@ enum PasteService {
     /// - Parameter overrideText: 非 nil 时粘贴它而不是 `item.text`（预览区里做过转换）。
     ///   转换结果只在内存里，历史条目本身不变。
     @MainActor
+    /// - Parameter target: 粘贴到哪个 App。nil = 剪贴板面板唤起时记下的前台 App；快速入口传它自己记下的那个。
     static func paste(_ item: ClipboardItem, plainText: Bool,
                       overrideText: String? = nil,
+                      target explicitTarget: NSRunningApplication? = nil,
                       store: ClipboardStore, monitor: ClipboardMonitor) {
         // 1) 忽略本次回填产生的 pasteboard 变更
         monitor.ignoreNextChange = true
@@ -22,7 +24,7 @@ enum PasteService {
 
         // 2) 关闭面板前先取出唤起时记录的前台 App —— 那才是真正的粘贴目标。
         //    面板拿过焦点，此刻的 frontmostApplication 已经不可靠。
-        let target = ClipboardPanelController.current?.previousApp
+        let target = explicitTarget ?? ClipboardPanelController.current?.previousApp
         ClipboardPanelController.current?.hide()
 
         // 3) 已授权辅助功能 → 切回目标 App 并合成 ⌘V；否则明确告知降级为仅复制。

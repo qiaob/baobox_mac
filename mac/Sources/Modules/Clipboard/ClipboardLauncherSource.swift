@@ -84,7 +84,9 @@ final class ClipboardLauncherSource: LauncherSearchable {
                 searchText: searchText,
                 symbolName: kind == .history ? "doc.text" : "text.badge.star",
                 date: item.createdAt,
-                primary: { PasteService.paste(item, plainText: false, store: store, monitor: monitor) }
+                // 目标是呼出快速入口前的前台 App（`LauncherFocus`）：面板拿过焦点，此刻的前台 App 不可靠。
+                primary: { PasteService.paste(item, plainText: false, target: LauncherFocus.previousApp,
+                                              store: store, monitor: monitor) }
             ))
         }
         return entries

@@ -76,6 +76,7 @@ final class LauncherController {
         let start = DispatchTime.now()
         if panel.isVisible {
             hide()
+            LauncherFocus.restore()
         } else {
             show(startedAt: start)
         }
@@ -84,6 +85,8 @@ final class LauncherController {
     /// 呼出（菜单「打开快速入口」也走这里）。已经开着就什么都不做。
     func show(startedAt start: DispatchTime = .now()) {
         guard !panel.isVisible else { return }
+        // 必须在面板拿焦点之前记：收起后要把焦点还给它，粘贴 / 插入也以它为目标。
+        LauncherFocus.capture()
         if let hiddenAt, Date().timeIntervalSince(hiddenAt) >= Self.keepInputInterval {
             text = ""
         }
@@ -168,8 +171,9 @@ final class LauncherController {
                 run(at: model.selectedIndex)
             }
             return true
-        case 0x35: // Esc
+        case 0x35: // Esc：收起并把焦点还给原来的 App（点别处收起的不还：用户已经点到别的窗口了）
             hide()
+            LauncherFocus.restore()
             return true
         case 0x30: // Tab：先吃掉，以后是「问 AI」
             return true
@@ -219,6 +223,8 @@ final class LauncherController {
         guard let item = engine.item(forKey: id) else { return }
         usage.recordUse(key: item.candidate.key, input: queryText, now: Date())
         hide()
+        // 先把焦点还给原来的 App，再执行：粘贴、窗口管理这类动作都作用于它。
+        LauncherFocus.restore()
         let action = item.run
         DispatchQueue.main.async {
             MainActor.assumeIsolated { action() }
@@ -235,10 +241,11 @@ final class LauncherController {
         }
         guard let text = instant.copyText else { return }
         hide()
+        LauncherFocus.restore()
         // 下一个 runloop 再插：等面板让开、焦点回到原来的输入框。
         DispatchQueue.main.async {
             Task { @MainActor in
-                let result = await TextInserter.insert(text)
+                let result = await TextInserter.insert(text, into: LauncherFocus.previousApp)
                 if !result.inserted { Self.toast(L("launcher.toast.insertCopied")) }
             }
         }
@@ -249,6 +256,7 @@ final class LauncherController {
         guard let text = instant.copyText else { return }
         TextInserter.copyToClipboard(text)
         hide()
+        LauncherFocus.restore()
         Self.toast(L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))"))
     }
 
