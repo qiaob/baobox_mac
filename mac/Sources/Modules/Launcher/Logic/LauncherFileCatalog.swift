@@ -209,6 +209,9 @@ final class LauncherMemoryFileSearch: LauncherFileSearching, @unchecked Sendable
         _ = bumpGeneration()
     }
 
+    /// 单个来源：换表后由合并器再调一次 `search`，这里不用做什么。
+    func requeryImmediateSources() {}
+
     /// 还在磁盘上的（最多查 `maxVerified` 条，新的在前）：是不是文件夹、修改时间换成磁盘上的。
     static func existing(_ hits: [LauncherFileHit]) -> [LauncherFileHit] {
         let candidates = hits.count > maxVerified

@@ -259,4 +259,6 @@ private final class ControllableSpotlight: LauncherFileSearching, @unchecked Sen
         generation += 1
         lock.unlock()
     }
+
+    func requeryImmediateSources() {}
 }

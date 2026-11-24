@@ -75,6 +75,9 @@ final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Senda
         queue.addOperation { [self] in stopCurrent() }
     }
 
+    /// 单个来源：没有要重查的内存来源（合并器才用）。
+    func requeryImmediateSources() {}
+
     /// 名字（`kMDItemFSName`）包含每个词，不分大小写和声调；片段是名字等于最后一段（不分大小写）。
     static func predicate(for request: LauncherFileSearchRequest) -> NSPredicate {
         switch request.kind {

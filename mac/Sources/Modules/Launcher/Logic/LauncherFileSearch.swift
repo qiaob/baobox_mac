@@ -40,12 +40,9 @@ protocol LauncherFileSearching: AnyObject, Sendable {
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void)
     /// 停掉还没回来的那次。
     func cancel()
-    /// 来源的表换了：同一次查询只把内存里的来源再查一遍（合并器，PR 11 复查后加）；单个来源不用管（默认什么都不做）。
+    /// 来源的表换了：同一次查询只把内存里的来源再查一遍（合并器，PR 11 复查后加）；单个来源写一个空的。
+    /// 故意不给默认实现：包一层的后端（计数、日志）忘了转发就编不过，而不是悄悄变成「什么都不做」（复查探针里踩到过）。
     func requeryImmediateSources()
-}
-
-extension LauncherFileSearching {
-    func requeryImmediateSources() {}
 }
 
 /// 后端一次交回的东西。

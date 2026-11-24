@@ -395,4 +395,6 @@ private final class FakeFileSearch: LauncherFileSearching, @unchecked Sendable {
         cancelCount += 1
         lock.unlock()
     }
+
+    func requeryImmediateSources() {}
 }
