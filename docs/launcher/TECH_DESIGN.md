@@ -611,7 +611,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 **自己扫的目录**（来源 B，`Logic/LauncherFileScanner.swift`）：
 
 - 根：各模块 `launcherFileRoots()` 声明的 + 设置键 `launcher.files.extraRoots`；去重、去掉在别的根里面的（`normalizedRoots`）；扫之前 `realpath` 解析成真实路径（`/tmp/x` → `/private/tmp/x`），不存在的跳过、记日志。
-- 遍历用 fts（`fts_open` / `fts_read`，`FTS_PHYSICAL | FTS_COMFOLLOW | FTS_NOCHDIR | FTS_XDEV`：软链不跟（避免环），根本身例外；不切换工作目录；不跨卷）。2026-11-24 在 `/private/tmp/claude-501` 上比了三种写法（剪枝后 1.7 万个文件）：fts 热缓存 40 ms、`FileManager` 按 URL 枚举 112 ms、按路径枚举 580 ms。修改时间用遍历时就有的 stat，不另外读。
+- 遍历用 fts（`fts_open` / `fts_read`，`FTS_PHYSICAL | FTS_COMFOLLOW | FTS_NOCHDIR | FTS_XDEV`：软链不跟进去（避免环），根本身例外 —— 指向文件的软链记成普通文件条目（名字是软链的、修改时间是它指向的文件的，PR 11 独立验证后加），指向目录的、断了的不记；不切换工作目录；不跨卷）。2026-11-24 在 `/private/tmp/claude-501` 上比了三种写法（剪枝后 1.7 万个文件）：fts 热缓存 40 ms、`FileManager` 按 URL 枚举 112 ms、按路径枚举 580 ms。修改时间用遍历时就有的 stat，不另外读。
 - 剪枝（`LauncherFileScanRules`，同 `LauncherFileFilter` 的目录规则）：隐藏的（点开头）、`node_modules` / `.git` / `DerivedData` / `build` / `build.noindex` / `.build` / `Pods` / `.Trash`、`*.noindex`、`~/Library` 不记也不进去；`.app` 不记（App 来源有）不进去；别的包（`.xcodeproj`、`.pages`……）记下、不进去。隐藏的文件不记。没权限的目录（`FTS_DNR` / `FTS_ERR`）跳过、计数；名字不是合法 UTF-8 的跳过、计数。
 - 上限：单个根最多 20 万条、最多 5 秒，碰到就停（留下已经扫到的）、日志里标 `stopped at the limit`。
 - 表（`Logic/LauncherFileCatalog.swift`）：只存「所在目录（同一个目录的条目共用一个字符串）、名字、折叠过的名字、是不是文件夹、修改时间」，一条 48 字节加名字的字符串；折叠 = 纯 ASCII 只转小写，其余去掉声调、全角转半角、转小写、合成成 NFC（APFS 上的名字可能是分解形式），查询词同样折叠后按字节找（`memmem`），和 Spotlight 的 `CONTAINS[cd]` 同样的意思；片段按名字相等找。超过 5000 条匹配时留修改时间新的。换表 = 整张换（锁保护那一个引用），查询拿的是快照，在来源自己的后台队列上查。
@@ -632,7 +632,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 **像文件名：固定行**（PR 11，`Logic/LauncherFileNameQuery.swift`）：
 
-- 判定（纯函数，进单元测试）：整个查询词（去掉 `f ` 前缀、去首尾空白）形如「名字.扩展名」：最后一个点不在开头也不在末尾，扩展名 1–8 个 ASCII 字母数字、至少一个字母（`v2.0`、`3.14`、`1.5` 不算，`.zshrc` 没有名字不算）；空白只能是普通空格（`报告 final.pdf` 算，有制表符、换行的不算）；不含 `/`（那是片段或路径）、不含 `:`（`https://…`、`mailto:…`）；不超过 255 个字节。和网址不互斥：`claude.ai`、`Safari.app`、`main.cc`、`github.com` 都算 —— 找到了名字正好是它的文件才多出固定行，找不到什么都不多出；网址那边的规则不变（所以一个名字正好叫 `github.com` 的文件会排在「打开 github.com」上面，罕见，接受）。
+- 判定（纯函数，进单元测试）：整个查询词（去掉 `f ` 前缀、去首尾空白）形如「名字.扩展名」：最后一个点不在开头也不在末尾，扩展名 1–10 个 ASCII 字母数字、至少一个字母（PR 11 独立验证后从 8 放宽：`Localizable.xcstrings`、`x.properties` 要能拿到固定行；`v2.0`、`3.14`、`1.5` 不算，`.zshrc` 没有名字不算）；空白只能是普通空格（`报告 final.pdf` 算，有制表符、换行的不算）；不含 `/`（那是片段或路径）、不含 `:`（`https://…`、`mailto:…`）；不超过 255 个字节。和网址不互斥：`claude.ai`、`Safari.app`、`main.cc`、`github.com` 都算 —— 找到了名字正好是它的文件才多出固定行，找不到什么都不多出；网址那边的规则不变（所以一个名字正好叫 `github.com` 的文件会排在「打开 github.com」上面，罕见，接受）。
 - 像文件名时请求带上 `pinnedName`；这样的词至少 3 个字符（`a.b`），不带前缀的长度门槛自然满足，立刻搜（内存里的来源不等防抖）。有计算结果时照旧不搜。
 - 过滤时名字不分大小写地**完全等于**它的进固定行（`LauncherFileResult.pinned`），不进普通排序；名字只是包含它的照旧走普通排序。固定行最多 3 行，次序（`LauncherFileFilter.pinnedOrder`，PR 11 独立验证后改成三档 `copyTier`）：① 用户碰过的（已知文件 C、剪贴板路径 D）→ ② 其余不是只来自扫的目录的（Spotlight，项目里真正的文件）→ ③ 只来自扫的目录的（Claude Code 临时目录里的副本）；档内新的在前（最近使用 / 最近修改），再按路径。原来只分「碰过的 / 其余」、其余按新旧：验证者实测 `main.swift`，3 行全是各会话探针的副本（扫的目录里的更新），项目里的 `~/cmb/…/main.swift` 被挤掉了。现在只有扫的目录里才有的文件（用户最初那个例子）照样排第一，项目里有同名文件时项目里的在前。片段的确切命中用同一个次序。
 - 位置：计算结果之后、所有建议和普通行之前（引擎的 `files.pinned`）。`f ` 前缀下同样排第一。⏎ 打开，⌘⏎ 在访达里显示。

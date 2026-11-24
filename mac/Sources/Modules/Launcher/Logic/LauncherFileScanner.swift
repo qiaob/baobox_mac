@@ -5,7 +5,7 @@ import Foundation
 // 用 fts（BSD 的目录遍历）：2026-11-24 在 `/private/tmp/claude-501`（7 万个文件）上比了三种写法，剪枝后 1.7 万个文件，
 // fts 热缓存 40 ms、`FileManager` 按 URL 枚举 112 ms、按路径枚举 580 ms。
 // 遍历时就剪枝（同 `LauncherFileFilter` 的目录规则）：依赖、版本库、编译产物、`*.noindex`、隐藏的、包里面的都不进去；
-// 软链不跟（避免环）；没权限的跳过；名字不是合法 UTF-8 的跳过；单个根有条数上限和时间上限，超了就停，留下已扫到的。
+// 软链不跟进去（避免环）—— 指向文件的软链记成普通文件条目，指向目录的、断了的不记（PR 11 独立验证后定）；没权限的跳过；名字不是合法 UTF-8 的跳过；单个根有条数上限和时间上限，超了就停，留下已扫到的。
 // 只依赖 Foundation，进 BaoboxTests。
 
 /// 扫描的上限。
@@ -177,24 +177,36 @@ enum LauncherFileScanner {
                 guard LauncherFileScanRules.recordsFile(named: name) else { continue }
                 record(entry, name: name, isDirectory: false, into: &catalog)
                 report.files += 1
+            case FTS_SL:
+                // 软链：指向文件的记成普通文件（名字是软链的名字，修改时间是它指向的文件的）；指向目录的不跟进去、不记。
+                guard let path = entry.pointee.fts_path, let fullPath = String(validatingUTF8: path) else {
+                    report.invalidNames += 1
+                    continue
+                }
+                let name = (fullPath as NSString).lastPathComponent
+                guard LauncherFileScanRules.recordsFile(named: name),
+                      let target = LauncherFileStat.lookup(fullPath), !target.isDirectory
+                else { continue }
+                record(entry, name: name, isDirectory: false, modified: target.modified.timeIntervalSince1970, into: &catalog)
+                report.files += 1
             case FTS_DNR, FTS_ERR, FTS_NS:
                 report.unreadable += 1
             default:
-                // FTS_DP（目录的后序）、FTS_SL / FTS_SLNONE（软链，不跟）、FTS_DC（环）、FTS_DEFAULT（套接字这类）：不记。
+                // FTS_DP（目录的后序）、FTS_SLNONE（断了的软链）、FTS_DC（环）、FTS_DEFAULT（套接字这类）：不记。
                 break
             }
         }
         return report
     }
 
-    /// 记一条：所在目录是父项上记下的下标（`fts_number`），修改时间来自遍历时就有的 stat。
+    /// 记一条：所在目录是父项上记下的下标（`fts_number`），修改时间来自遍历时就有的 stat（软链传它指向的文件的）。
     private static func record(_ entry: UnsafeMutablePointer<FTSENT>, name: String, isDirectory: Bool,
-                               into catalog: inout LauncherFileCatalog) {
+                               modified knownModified: Double? = nil, into catalog: inout LauncherFileCatalog) {
         guard let parent = entry.pointee.fts_parent else { return }
         let directory = Int32(truncatingIfNeeded: parent.pointee.fts_number)
         guard directory >= 0, Int(directory) < catalog.directories.count else { return }
-        var modified: Double = 0
-        if let stat = entry.pointee.fts_statp {
+        var modified: Double = knownModified ?? 0
+        if knownModified == nil, let stat = entry.pointee.fts_statp {
             modified = Double(stat.pointee.st_mtimespec.tv_sec) + Double(stat.pointee.st_mtimespec.tv_nsec) / 1_000_000_000
         }
         catalog.append(directory: directory, name: name, isDirectory: isDirectory, modified: modified)

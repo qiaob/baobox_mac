@@ -20,13 +20,14 @@ final class LauncherFileNameQueryTests: XCTestCase {
 
     func testLooksLikeAFileName() {
         for text in ["add-approval-hook.py", "TECH_DESIGN.md", "报告 final.pdf", "a.b", "archive.tar.gz", "Safari.app",
-                     "claude.ai", "main.cc", "github.com", "3.mp4", "IMG_1234.HEIC", "发票.jpg", "icon@2x.png", "x.markdown"] {
+                     "claude.ai", "main.cc", "github.com", "3.mp4", "IMG_1234.HEIC", "发票.jpg", "icon@2x.png", "x.markdown",
+                     "Localizable.xcstrings", "x.properties"] {
             XCTAssertEqual(LauncherFileNameQuery.fileName(in: text), text, text)
         }
     }
 
     func testDoesNotLookLikeAFileName() {
-        for text in ["v2.0", "3.14", "1.5", "1.2.3", "README", ".zshrc", "abc.", ".", "a.p-g", "a.toolongext",
+        for text in ["v2.0", "3.14", "1.5", "1.2.3", "README", ".zshrc", "abc.", ".", "a.p-g", "a.waytoolongext", "a.12345678901",
                      "https://example.com/a.md", "mailto:a@b.com", "docs/launcher/TECH_DESIGN.md", "a\tb.txt", "a\nb.txt",
                      " a.txt", "a.txt ", "", "   .md", "foo:bar.txt", String(repeating: "x", count: 252) + ".txt"] {
             XCTAssertNil(LauncherFileNameQuery.fileName(in: text), text)

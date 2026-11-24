@@ -73,12 +73,12 @@ final class LauncherFileScannerTests: XCTestCase {
         let paths = Set(catalog.entries.indices.map { catalog.path(at: $0) })
         let expected: Set<String> = [
             "scratchpad", "scratchpad/add-approval-hook.py", "scratchpad/notes", "scratchpad/notes/报告 final.pdf",
-            "proj", "proj/Tool.xcodeproj", "proj/src", "proj/src/main.swift",
+            "proj", "proj/Tool.xcodeproj", "proj/src", "proj/src/main.swift", "proj/link.py",
         ]
         XCTAssertEqual(paths, Set(expected.map { realRoot + "/" + $0 }))
         let report = try XCTUnwrap(reports.first)
         XCTAssertEqual(report.root, realRoot, "根解析成真实路径（/var → /private/var）")
-        XCTAssertEqual(report.files, 3)
+        XCTAssertEqual(report.files, 4, "指向文件的软链 link.py 记成普通文件；指向根的 loop 不跟、不记")
         XCTAssertEqual(report.directories, 5)
         XCTAssertEqual(report.prunedDirectories, 6, ".cache、node_modules、build、out.noindex、Tool.app 没进去，Tool.xcodeproj 记下没进去")
         XCTAssertFalse(report.stoppedEarly)
@@ -90,6 +90,30 @@ final class LauncherFileScannerTests: XCTestCase {
         XCTAssertGreaterThan(catalog.entries[hook].modified, 0, "修改时间来自遍历时的 stat")
         XCTAssertEqual(catalog.matches(.nameContains(["APPROVAL"]), limit: 10).total, 1)
         XCTAssertTrue(catalog.hit(at: catalog.entries.indices.first { catalog.entries[$0].name == "notes" } ?? 0).isDirectory)
+    }
+
+    func testSymlinksToFilesAreRecordedOthersAreNot() throws {
+        try make("real/target.txt")
+        try make("real/dir", directory: true)
+        try make("real/dir/inside.txt")
+        let links = root.appendingPathComponent("links")
+        try FileManager.default.createDirectory(at: links, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: links.appendingPathComponent("to-file.txt"),
+                                                   withDestinationURL: root.appendingPathComponent("real/target.txt"))
+        try FileManager.default.createSymbolicLink(at: links.appendingPathComponent("to-dir"),
+                                                   withDestinationURL: root.appendingPathComponent("real/dir"))
+        try FileManager.default.createSymbolicLink(at: links.appendingPathComponent("dangling.txt"),
+                                                   withDestinationURL: root.appendingPathComponent("nope.txt"))
+        let (catalog, _) = LauncherFileScanner.scan(roots: [root.path], home: home)
+        let realRoot = try XCTUnwrap(LauncherFileScanner.realPath(root.path))
+        let paths = Set(catalog.entries.indices.map { catalog.path(at: $0) })
+        XCTAssertTrue(paths.contains(realRoot + "/links/to-file.txt"), "指向文件的软链记成普通文件")
+        XCTAssertFalse(paths.contains(realRoot + "/links/to-dir"), "指向目录的不记")
+        XCTAssertFalse(paths.contains(realRoot + "/links/to-dir/inside.txt"), "也不跟进去")
+        XCTAssertFalse(paths.contains(realRoot + "/links/dangling.txt"), "断了的不记")
+        let link = try XCTUnwrap(catalog.entries.indices.first { catalog.entries[$0].name == "to-file.txt" })
+        XCTAssertFalse(catalog.entries[link].isDirectory)
+        XCTAssertGreaterThan(catalog.entries[link].modified, 0, "修改时间是它指向的文件的")
     }
 
     func testScanStopsAtTheEntryLimit() throws {

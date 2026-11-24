@@ -6,13 +6,14 @@ import Foundation
 // 只看这段文字：纯函数，每次按键跑一次。只依赖 Foundation，进 BaoboxTests。
 
 enum LauncherFileNameQuery {
-    /// 扩展名最多几个字符（`.xcstrings` 9 个不算；`.markdown` 8 个、`.properties` 太长 —— 常见的都在 8 个以内）。
-    static let maxExtensionLength = 8
+    /// 扩展名最多几个字符：10 个（PR 11 独立验证后从 8 放宽，`Localizable.xcstrings`、`x.properties` 要能拿到固定行；
+    /// 同「目录/文件名」片段的规则）。
+    static let maxExtensionLength = 10
     /// 文件名最长 255 个字节。
     static let maxNameBytes = 255
 
     /// 输入（已去掉前缀和首尾空白）像一个文件名时返回它，否则 nil。规则：
-    /// - 形如「名字.扩展名」：最后一个点不在开头也不在末尾，扩展名 1–8 个 ASCII 字母数字、至少一个字母
+    /// - 形如「名字.扩展名」：最后一个点不在开头也不在末尾，扩展名 1–10 个 ASCII 字母数字、至少一个字母
     ///   （`v2.0`、`3.14`、`1.5` 这类数字不算；`.zshrc` 没有名字，不算）；
     /// - 空白只能是普通空格（`报告 final.pdf`）：有制表符、换行的不算；不含 `/`（那是片段或路径，各有各的路）；
     /// - 不是带 scheme 的网址（不含 `:`：`https://x.com/a.md`、`mailto:a@b.com`；访达里的名字也不会有 `:`）。
