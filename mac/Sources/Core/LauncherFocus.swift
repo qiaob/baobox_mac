@@ -33,8 +33,6 @@ enum LauncherFocus {
     private static let log = Logger(subsystem: "com.baobox.app", category: "launcher")
     /// 等焦点时多久看一次。
     static let pollInterval: TimeInterval = 0.015
-    /// 读系统键盘焦点的辅助功能超时（秒）：卡住的 App 别把我们拖住。
-    private static let axTimeout: Float = 0.05
 
     /// 呼出快速入口那一刻的前台 App；当时前台就是 Baobox 自己（比如从设置窗口里呼出）则为 nil。
     private(set) static var previousApp: NSRunningApplication?
@@ -53,6 +51,9 @@ enum LauncherFocus {
         let start: TimeInterval
         var wait: LauncherFocusWait
         var polls = 0
+        /// 读辅助功能键盘焦点用了多久（毫秒）：总共、最长的一次（日志里看真机上要多久）。
+        var keyboardReadTotal: Double = 0
+        var keyboardReadMax: Double = 0
         let action: @MainActor () -> Void
 
         init(target: NSRunningApplication, start: TimeInterval, action: @escaping @MainActor () -> Void) {
@@ -118,7 +119,9 @@ enum LauncherFocus {
             return
         }
         wait.polls += 1
-        let snapshot = snapshot(for: wait.target)
+        let (snapshot, readMilliseconds) = snapshot(for: wait.target)
+        wait.keyboardReadTotal += readMilliseconds
+        wait.keyboardReadMax = max(wait.keyboardReadMax, readMilliseconds)
         switch wait.wait.step(snapshot, now: uptime()) {
         case .keepWaiting:
             DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) {
@@ -126,7 +129,7 @@ enum LauncherFocus {
             }
         case .finish(let outcome):
             pending = nil
-            log.notice("focus wait \(outcome.rawValue, privacy: .public) after \(milliseconds(since: wait.start), format: .fixed(precision: 0), privacy: .public) ms (\(wait.polls, privacy: .public) checks): front \(bundleID(pid: snapshot.frontmostPID), privacy: .public), target \(bundleID(wait.target), privacy: .public), keyboard (AX) \(bundleID(pid: snapshot.keyboardPID), privacy: .public), NSApp.isActive \(NSApp.isActive, privacy: .public), Baobox key window \(snapshot.ownWindowIsKey, privacy: .public)")
+            log.notice("focus wait \(outcome.rawValue, privacy: .public) after \(milliseconds(since: wait.start), format: .fixed(precision: 0), privacy: .public) ms (\(wait.polls, privacy: .public) checks): front \(bundleID(pid: snapshot.frontmostPID), privacy: .public), target \(bundleID(wait.target), privacy: .public), keyboard (AX) \(bundleID(pid: snapshot.keyboardPID), privacy: .public), NSApp.isActive \(NSApp.isActive, privacy: .public), Baobox key window \(snapshot.ownWindowIsKey, privacy: .public); AX reads \(wait.keyboardReadTotal, format: .fixed(precision: 1), privacy: .public) ms in total, longest \(wait.keyboardReadMax, format: .fixed(precision: 1), privacy: .public) ms")
             run(wait.action, target: wait.target)
         }
     }
@@ -156,12 +159,15 @@ enum LauncherFocus {
         }
     }
 
-    private static func snapshot(for target: NSRunningApplication) -> LauncherFocusSnapshot {
-        LauncherFocusSnapshot(frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                              targetPID: target.processIdentifier,
-                              ownPID: ProcessInfo.processInfo.processIdentifier,
-                              ownWindowIsKey: NSApp.keyWindow != nil,
-                              keyboardPID: keyboardFocusPID())
+    /// 此刻的状态，和读辅助功能键盘焦点用了多少毫秒。
+    private static func snapshot(for target: NSRunningApplication) -> (LauncherFocusSnapshot, Double) {
+        let keyboard = readKeyboardFocus()
+        let snapshot = LauncherFocusSnapshot(frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                                             targetPID: target.processIdentifier,
+                                             ownPID: ProcessInfo.processInfo.processIdentifier,
+                                             ownWindowIsKey: NSApp.keyWindow != nil,
+                                             keyboardPID: keyboard.pid)
+        return (snapshot, keyboard.milliseconds)
     }
 
     // MARK: - 粘贴前看一眼键盘
@@ -186,7 +192,8 @@ enum LauncherFocus {
         let deadline = max(focusDeadline, uptime() + pollInterval)
         let targetPID = (target ?? NSWorkspace.shared.frontmostApplication)?.processIdentifier
         func check() {
-            let keyboard = keyboardFocusPID()
+            let read = readKeyboardFocus()
+            let keyboard = read.pid
             let decision = LauncherKeyboardGate.decide(keyboardPID: keyboard, targetPID: targetPID,
                                                        ownPID: ProcessInfo.processInfo.processIdentifier)
             let result: KeyboardCheck
@@ -204,7 +211,7 @@ enum LauncherFocus {
                 }
                 result = .stillOurs
             }
-            log.notice("keyboard check before ⌘V: keyboard (AX) \(bundleID(pid: keyboard), privacy: .public), front \(bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), target \(bundleID(pid: targetPID), privacy: .public) → \(String(describing: result), privacy: .public)")
+            log.notice("keyboard check before ⌘V: keyboard (AX) \(bundleID(pid: keyboard), privacy: .public) (read in \(read.milliseconds, format: .fixed(precision: 1), privacy: .public) ms), front \(bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), target \(bundleID(pid: targetPID), privacy: .public) → \(String(describing: result), privacy: .public)")
             completion(result)
         }
         check()
@@ -242,17 +249,20 @@ enum LauncherFocus {
                                         icon: "keyboard", isUserFeedback: true))
     }
 
-    /// 辅助功能读到的系统键盘焦点所在 App 的 pid。没有权限、读不到时为 nil。
-    static func keyboardFocusPID() -> pid_t? {
-        guard AXIsProcessTrusted() else { return nil }
+    /// 辅助功能读到的系统键盘焦点所在 App 的 pid（没有权限、读不到时为 nil），和这一次读用了多少毫秒。
+    /// 不设超时：对系统级元素设超时会改掉本进程**所有**辅助功能调用的默认超时（窗口管理、划词取词、键盘点击都受影响）；
+    /// 这一步问的是系统，不是目标 App。到底要多久看日志里的毫秒数。
+    static func readKeyboardFocus() -> (pid: pid_t?, milliseconds: Double) {
+        guard AXIsProcessTrusted() else { return (nil, 0) }
+        let start = uptime()
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, axTimeout)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let status = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value)
+        let milliseconds = (uptime() - start) * 1000
+        guard status == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return (nil, milliseconds) }
         var pid: pid_t = 0
-        guard AXUIElementGetPid(unsafeBitCast(value, to: AXUIElement.self), &pid) == .success else { return nil }
-        return pid
+        guard AXUIElementGetPid(unsafeBitCast(value, to: AXUIElement.self), &pid) == .success else { return (nil, milliseconds) }
+        return (pid, milliseconds)
     }
 
     // MARK: - 日志
