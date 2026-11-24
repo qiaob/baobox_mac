@@ -29,6 +29,7 @@ final class LauncherFileProvider {
     func search(_ request: LauncherFileSearchRequest,
                 completion: @escaping @MainActor (LauncherFileSearchRequest, _ pinned: [LauncherItem], _ ranked: [LauncherItem]) -> Void) {
         cancel()
+        sequence += 1
         inFlight = request
         let ticket = sequence
         let work = DispatchWorkItem { [weak self] in
