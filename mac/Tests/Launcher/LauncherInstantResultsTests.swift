@@ -93,6 +93,14 @@ final class LauncherInstantResultsTests: XCTestCase {
         XCTAssertEqual(LauncherConversions.detail(badge: "JWT", label: "exp"), "JWT · exp")
     }
 
+    func testLongLabelIsShortened() {
+        let label = "redirect_uri_for_the_oauth_callback_handler"
+        let detail = LauncherConversions.detail(badge: "URL", label: label)
+        XCTAssertEqual(detail, "URL · redirect_uri_for_the_oa…")
+        XCTAssertEqual(detail.count, "URL · ".count + LauncherConversions.maxLabelLength)
+        XCTAssertEqual(LauncherConversions.detail(badge: "cURL", label: "a\nb"), "cURL · a b", "标签也压成一行")
+    }
+
     // MARK: - 压成一行
 
     func testSingleLineCollapsesWhitespace() {

@@ -76,10 +76,17 @@ enum LauncherConversions {
         return []
     }
 
-    /// 「徽章 · 标签」；标签为空时只有徽章。
+    /// 右侧小字里的标签最多这么多个字符（URL 参数名、请求头名可能很长；右侧小字不截断，太长会把值挤没）。
+    static let maxLabelLength = 24
+
+    /// 「徽章 · 标签」；标签为空时只有徽章，过长时截断加省略号。
     static func detail(badge: String, label: String) -> String {
-        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return label.isEmpty ? badge : "\(badge) · \(label)"
+        var label = singleLine(label)
+        guard !label.isEmpty else { return badge }
+        if label.count > maxLabelLength {
+            label = String(label.prefix(maxLabelLength - 1)) + "…"
+        }
+        return "\(badge) · \(label)"
     }
 
     /// 压成一行：连续的空白（含换行、制表符）换成一个空格，去首尾空白，最多 `maxLength` 个字符。
