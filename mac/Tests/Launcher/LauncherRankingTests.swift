@@ -55,6 +55,7 @@ final class LauncherRankingTests: XCTestCase {
         XCTAssertEqual(weights.weight(for: "apps"), 1.0)
         XCTAssertEqual(weights.weight(for: "snippets"), 0.9)
         XCTAssertEqual(weights.weight(for: "clipboard"), 0.7)
+        XCTAssertEqual(weights.weight(for: "files"), 0.6)
         XCTAssertEqual(weights.weight(for: "sessions"), 0.8)
     }
 
