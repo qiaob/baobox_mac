@@ -37,6 +37,9 @@ final class LauncherController {
     private var text = ""
     /// 拆掉前缀后的查询词：执行时记「这个输入选了谁」用（和排序时查的是同一个）。
     private var queryText = ""
+    /// 按 ⌘V 时剪贴板里带换行的原文（输入框只有一行，换行被换成了空格）：输入框里的文字还是它时，
+    /// 建议行用它（交给翻译、总结、存为片段，算字数，§5.4）；一改动就作废。和输入一起保留 60 秒。
+    private var pastedText: String?
     private var hiddenAt: Date?
     /// 这次呼出的命令和 App 条目（后台建好剪贴板的搜索键后，和条目一起重新装进引擎）。
     private var baseItems: [LauncherItem] = []
@@ -97,6 +100,7 @@ final class LauncherController {
         LauncherFocus.capture()
         if let hiddenAt, Date().timeIntervalSince(hiddenAt) >= Self.keepInputInterval {
             text = ""
+            pastedText = nil
         }
         baseItems = commands.items() + apps.items
         engine.textActions = commands.textActions()
@@ -149,11 +153,15 @@ final class LauncherController {
     private func textChanged(_ newText: String) {
         guard panel.isVisible, newText != text else { return }
         text = newText
+        if let pastedText, LauncherPastedText.original(pastedText, matching: newText) == nil {
+            self.pastedText = nil
+        }
         refresh()
         panel.setHeight(model.panelHeight)
     }
 
     private func refresh(keepSelection: Bool = false) {
+        engine.pastedText = pastedText
         let outcome = engine.search(text, records: usage.records, now: Date())
         queryText = outcome.queryText
         if outcome.duration > Self.slowQueryThreshold {
@@ -257,9 +265,17 @@ final class LauncherController {
         case ("z", true): edit = .redo
         default: return nil
         }
+        if edit == .paste { notePaste() }
         let handled = model.field.perform(edit)
         Self.log.notice("edit shortcut \(key, privacy: .public) handled: \(handled, privacy: .public)")
         return handled
+    }
+
+    /// ⌘V：粘贴之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（输入框会把换行压成空格）。
+    /// 只在用户按 ⌘V 这一下读，不在打字路径上。没有文字或只有一行时清掉上一次记的。
+    private func notePaste() {
+        let pasted = NSPasteboard.general.string(forType: .string)
+        pastedText = pasted.flatMap { LauncherPastedText.isWorthKeeping($0) ? $0 : nil }
     }
 
     // MARK: - 执行

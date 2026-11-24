@@ -102,6 +102,8 @@ final class LauncherEngine {
     var textActions: [LauncherCatalogCommand] = []
     /// 这次输入的建议行（动作类），按行 id。每次查询换一批。
     private var suggestionsByKey: [String: LauncherSuggestion] = [:]
+    /// 按 ⌘V 时记下的带换行的原文（控制器每次查询前设）：输入框里的文字还是它时，建议行用它（§5.4）。
+    var pastedText: String?
     /// 主目录：认路径时展开 `~`。
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
@@ -146,6 +148,7 @@ final class LauncherEngine {
         asyncItemsByKey = [:]
         textActions = []
         suggestionsByKey = [:]
+        pastedText = nil
     }
 
     func item(forKey key: String) -> LauncherItem? {
@@ -206,7 +209,7 @@ final class LauncherEngine {
         // 建议（§5.4）：对应建议排在计算结果之后、识别结果之前，兜底建议排在最后。
         let suggestions = LauncherSuggestionProvider.suggestions(
             for: query, textActions: textActions, hasCalculation: calculationCount > 0,
-            hasRecognition: instants.count > calculationCount, records: records, now: now)
+            hasRecognition: instants.count > calculationCount, pasted: pastedText, records: records, now: now)
         instantsByKey = Dictionary((instants + suggestions.instants).map { ($0.row.id, $0) },
                                    uniquingKeysWith: { first, _ in first })
         suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })

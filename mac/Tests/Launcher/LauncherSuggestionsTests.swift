@@ -76,6 +76,33 @@ final class LauncherSuggestionsTests: XCTestCase {
         XCTAssertEqual(recognized.fallbackKinds, [.plainText], "也不把总结、润色提前")
     }
 
+    func testPastedMultilineTextIsUsedWhileTheFieldStillShowsIt() {
+        let original = "第一段：快速入口\n第二段：放进任何东西\n第三段"
+        let field = "第一段：快速入口 第二段：放进任何东西 第三段"
+        let result = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse(field), hasCalculation: false,
+                                                   hasRecognition: false, pasted: original)
+        XCTAssertEqual(result.text, original, "交给动作的是带换行的原文")
+        XCTAssertEqual(result.fallbackKinds, [.longText], "多行的原文算一大段文字（虽然不到 80 个字）")
+        XCTAssertEqual(result.leading, [.wordCount(LauncherTextStats.count(original))])
+        guard case .wordCount(let stats)? = result.leading.first else { return XCTFail("没有字数") }
+        XCTAssertEqual(stats.characters, original.count, "字符数按原文算，换行也算")
+
+        let edited = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse(field + "了"), hasCalculation: false,
+                                                   hasRecognition: false, pasted: original)
+        XCTAssertEqual(edited.text, field + "了", "改动过就用输入框里的文字")
+        XCTAssertEqual(edited.fallbackKinds, [.plainText])
+        XCTAssertEqual(edited.leading, [])
+    }
+
+    func testPastedTextDoesNotChangeOtherKindsOfInput() {
+        XCTAssertEqual(LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("hello"), hasCalculation: false,
+                                                     hasRecognition: false, pasted: "hello\n"),
+                       plan("hello"), "原文去掉首尾空白后只有一行：和直接打的一样")
+        XCTAssertEqual(LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("a b"), hasCalculation: false,
+                                                     hasRecognition: false, pasted: nil),
+                       plan("a b"))
+    }
+
     func testCalculationKeepsOnlyThePlainFallback() {
         let result = plan("12*(3+4)", calculation: true)
         XCTAssertEqual(result.leading, [])

@@ -3,7 +3,8 @@ import AppKit
 // 快速入口的建议行（docs/launcher/TECH_DESIGN.md §5.4）：把 `LauncherSuggestionPolicy` 定下的计划换成面板的行 ——
 // 对应建议固定在最前（计算结果之后、文本识别之前），兜底建议接在普通结果之后。
 // 文字动作来自各模块的 `launcherCommands()`（只收一个文字参数的命令），快速入口不认识它们是谁：
-// 标题 =「命令名「引用」」，右侧小字是所属工具名；执行时把输入框里上屏的文字（去首尾空白）作为那个文字参数交过去。
+// 标题 =「命令名「引用」」，右侧小字是所属工具名；执行时把输入框里上屏的文字（去首尾空白）作为那个文字参数交过去 ——
+// 粘贴进来、还没改动过的多行文字交原文（带换行，`LauncherPastedText`）。
 // 打字时只做这些内存里的计算：不调模型、不联网、不读盘；选中一行回车才真的执行。
 
 /// 建议行 ⏎ 做什么。
@@ -63,11 +64,12 @@ struct LauncherSuggestions {
 @MainActor
 enum LauncherSuggestionProvider {
 
-    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次）。
+    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次）；`pasted`：按 ⌘V 时记下的带换行的原文。
     static func suggestions(for query: LauncherQuery, textActions: [LauncherCatalogCommand],
-                            hasCalculation: Bool, hasRecognition: Bool,
+                            hasCalculation: Bool, hasRecognition: Bool, pasted: String? = nil,
                             records: LauncherUsageRecords, now: Date) -> LauncherSuggestions {
-        let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition)
+        let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition,
+                                                 pasted: pasted)
         var suggestions = LauncherSuggestions()
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {

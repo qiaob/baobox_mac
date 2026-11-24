@@ -24,7 +24,8 @@ struct LauncherInputClassification: Equatable, Sendable {
 }
 
 enum LauncherInputClassifier {
-    /// 不少于这么多个字符算「一大段文字」。输入框是单行的，粘进来的换行会被换成空格（探针实测），所以只能按长度认。
+    /// 不少于这么多个字符算「一大段文字」。输入框是单行的，粘进来的换行会被换成空格（探针实测），输入框里的文字只能按长度认；
+    /// 按 ⌘V 时记下的原文（`LauncherPastedText`）带换行，也算一大段文字。
     static let longTextLength = 80
     /// 单词 / 短语最多几个词、最多几个字符（同划词助手「学习」出词典卡的门槛 `LearnText.isWordLike`）。
     static let maxWordCount = 3
@@ -68,7 +69,7 @@ enum LauncherInputClassifier {
         }
     }
 
-    /// 不少于 80 个字符，或者带换行（别的路子交来的原文）。数到第 80 个就停，几 MB 的粘贴也不用整段数。
+    /// 不少于 80 个字符，或者带换行（粘贴时记下的原文）。数到第 80 个就停，几 MB 的粘贴也不用整段数。
     static func isLong(_ text: String) -> Bool {
         text.index(text.startIndex, offsetBy: longTextLength, limitedBy: text.endIndex) != nil
             || text.contains(where: \.isNewline)
