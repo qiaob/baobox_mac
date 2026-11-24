@@ -253,13 +253,20 @@ Codex 助手没有现成的文件清单，不交。用户自己加目录：设�
 
 ## 4. 面板窗口
 
-沿用快速切换面板和剪贴板面板已经验证过的形态：`QuickSwitchWindow`（borderless + `.nonactivatingPanel`、`canBecomeKey = true`、`.floating`、不激活 Baobox）。输入框拿键盘焦点，但前台 App 不变，收起后焦点自然回到原处。PR 8 起窗口类换成同样写法的 `LauncherWindow`：多做一件事 —— 给输入框一个不接拖放的字段编辑器（§5.5「拖放」）。
+沿用快速切换面板和剪贴板面板已经验证过的形态：`QuickSwitchWindow`（borderless + `.nonactivatingPanel`、`canBecomeKey = true`、`.floating`、不激活 Baobox）。输入框拿键盘焦点，但前台 App 不变；收起后焦点**不一定**自然回到原处（见下面「焦点」）。PR 8 起窗口类换成同样写法的 `LauncherWindow`：多做一件事 —— 给输入框一个不接拖放的字段编辑器（§5.5「拖放」）。
 
 和 `QuickSwitchPanelHost` 的差别：它是固定 640×420、内容由调用方给；快速入口要高度跟内容变（只有输入框 → 长出列表 → 展开回答区）。做法：
 
 - 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`（PR 8 起换成同样写法的 `LauncherWindow`，多一个不接拖放的字段编辑器），键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听（点外面认左键和右键；PR 8 起左键等松开再决定，见下面）。
 - 宽 680 固定。窗口顶边固定（向下长），变化时不做动画（跟手优先）。高度不靠 `fittingSize`（里面有 `ScrollView`，量不准），由内容算：`LauncherLayout.height(for:)` = 搜索栏 56 + 分隔线 1 + 内容（提示 / 「没有结果」一行 40；结果每行 40、计算结果那一行 58，最多 8.5 个普通行高、前几行里有计算结果时多给它高出来的 18，底下照样露半行；没超时上下各留 6、超了只留上面的 6）。`NSHostingView.sizingOptions = []`（同会议控制条、字幕条），SwiftUI 不反过来改窗口大小；根视图贴顶对齐，窗口和内容在同一次刷新里更新（`setFrame(display: false)`），改完下一轮重算阴影。
 - 位置：鼠标所在屏幕可见区域水平居中，顶边在从上往下 1/5 处；结果长到最多时底边也要在屏幕里，矮屏往上挪。不能拖动（`isMovableByWindowBackground = false`，顶边要固定）。
+- 焦点（2026-11-24 修，`Core/LauncherFocus.swift` + 纯逻辑 `Core/Launcher/LauncherFocusLogic.swift`）：
+  - 现象：用户在终端里呼出快速入口，回车执行「纯文本粘贴上一条」，面板收了、终端里什么都没粘出来。原因是别的启动器也绑了 ⌘Space，收起后键盘焦点被 WindowServer 还给了它（时序见 §9「别的启动器也绑了同一个键」）。
+  - 探针实测（macOS 27.2）：面板 `orderOut` 的同一拍本进程 `NSApp.keyWindow` 就是 nil、`NSApp.isActive` 就是 false（面板是 key 时本进程的 `NSApp.isActive` 是 true，`NSRunningApplication.current.isActive` 是 false）；`frontmostApplication` 始终是原来的 App；对本来就在前台的 App 调 `activate()` 返回 true、WindowServer 什么都不做；两个进程叠着借焦点、后借的收起，键盘回到先借的那个（自己的两个进程也复现）；真的换一次前台会清掉借焦点（探针验证过，但这条路**不用**：两个 App 抢一个快捷键本身是坏状态，不为它绕路，也不让菜单栏闪）。公开 API 里 `NSRunningApplication.isActive`、`menuBarOwningApplication` 都看不出「键盘在第三个 App 那里」，只有辅助功能的 `AXFocusedApplication` 可能看得出 —— 跟不跟着借焦点走没测成（探针没有辅助功能权限），所以每次都把它和前台 App 一起记进日志，等真机日志定。
+  - 等焦点：呼出前 `LauncherFocus.capture()` 记前台 App（是 Baobox 自己时记 nil）。执行任何一行（普通行、建议行、⌘⏎ 插入、⏎ 复制后的回执）都是「收起 → `LauncherFocus.restore(then:)` → 回调里执行」：先请求把前台还给它（Baobox 自己在前台时先 `yieldActivation(to:)`，macOS 14 起的协作式激活），然后每 15 ms 看一次，**前台是它、Baobox 没有 key 窗口、读得到系统键盘焦点时键盘也在它那里**才回调，最多等 300 ms，超时也回调；连着两次读到键盘在第三个 App 那里就不等了（它不会自己还回来），照样回调。呼出前的 App 为 nil 或已退出时立即回调。再次呼出、App 退出时作废还在等的那次（动作不执行，记日志）。Esc / 再按一次快捷键收起只请求激活，不等。
+  - 发 ⌘V 前看一眼键盘（`LauncherFocus.checkKeyboardBeforePaste`，规则 `LauncherKeyboardGate`）：只对快速入口的动作（`isRunningAction`）—— `PasteService` 修饰键松开后、`TextInserter` 走粘贴那条路之前（辅助功能直接写入那条路不受借焦点影响，不看）。键盘在目标那里或读不到 → 照常粘贴；还在 Baobox 自己这儿 → 每 15 ms 再看，并进等焦点的 300 ms 上限；在第三个 App 那里 → **不发 ⌘V**（否则内容粘进那个 App），内容留在剪贴板，回执「键盘正被 <名字> 占着，没有粘贴；内容已复制，按 ⌘V 粘贴」；快速入口是 ⌘Space、占着键盘的是已知启动器（`LauncherHotkeyConflict`）时回执改成「<名字> 也在用 ⌘Space，两个会同时响应。请在其中一个里换个快捷键」。全局快捷键、剪贴板面板（⌘⇧V）的粘贴不挡（检测还没验证过，不拿它们冒险），只记日志。`TextInserter` 挡下时返回 `.copied(.keyboardElsewhere)`，快速入口不再补「没能直接插入」那句。
+  - 动作开始执行后 1 秒内 `LauncherFocus.isRunningAction` 为 true、`actionTarget` 是呼出前的 App：`PasteService.paste` 取目标的顺序是「传入的 → 剪贴板面板记下的 → 快速入口此刻的目标」（`LauncherPasteTarget`），于是「纯文本粘贴上一条」这类不传目标的命令从快速入口执行时也知道往哪粘，从自己的全局快捷键触发时不变。粘不出去（没有目标、前台是 Baobox 自己）且是从快速入口来的：回执「已复制，没能粘贴到原来的窗口」（`clipboard.paste.copiedNotPasted`）。`TextInserter.insert` 的默认目标没跟进：快速入口里唯一的调用（⌘⏎）显式传了目标，别的调用方（听写）插入时快速入口早就不在了。
+  - 日志（只记 bundle id、布尔值、毫秒数）：category `launcher` 记呼出时记下的前台 App 和 `NSApp.isActive`（`captured front app …`）、每次等焦点的结果（`focus wait returned / heldElsewhere / timedOut after … ms`，带回调那一刻的前台、目标、`keyboard (AX)`、`NSApp.isActive`、Baobox 有没有 key 窗口）、发 ⌘V 前的检查（`keyboard check before ⌘V: keyboard (AX) …, front …, target … → clear / heldBy / stillOurs`）、作废（`cancelled`）、面板里的冲突提示（`hotkey conflict hint shown`）；category `clipboard` 记 `PasteService` 的目标来源（explicit / clipboardPanel / launcher / missing）、有没有辅助功能权限、走了哪条分支、发 ⌘V 那一刻的前台和 `keyboard (AX)`、从进入到发出的毫秒数、等修饰键用了多久，没发时记 `not posting ⌘V`。
 - 每次呼出新建窗口、收起时销毁（现有两个面板都这么做）。呼出延迟目标：按键到窗口可见 ≤ 60 ms，待验证；超了再改成常驻一个实例。控制器用 `os.Logger`（subsystem `com.baobox.app`，category `launcher`）记从 `toggle()` 到 `orderFront` 返回的毫秒数（`panel shown in … ms`）和超过 5 ms 的查询（`slow query`），没用 `os_signpost`。
 - 输入框用 `NSTextField` 包一层而不是 SwiftUI `TextField`：需要拿到「输入法正在组字」（`hasMarkedText()`）来区分 ⏎ 是上屏还是执行，还要拦 Tab、↑ ↓、⌘K、⌘1–9。实现：
   - 面板的本地键盘监听先问字段编辑器 `hasMarkedText()`，组字中所有键都放给输入法。
@@ -422,7 +429,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 邮箱 / 颜色 | 翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 |
 
 - 行：标题 =「命令名「引用」」（`launcher.suggest.action %@ %@`；引用压成一行、最多 24 个字符，超出末尾加省略号），右侧是所属工具名（划词助手 / 剪贴板）或「网页」「文件」，图标是命令自己的 SF Symbol；行 id = `textaction/<id>`。
-- 执行（`LauncherController.runSuggestion`）：先记一次使用（`recordUse(key: "textaction/<id>", input: "")`，不记「这个输入选了谁」—— 那是给排序里的普通行用的）；改输入的（搜文件）调输入框的 `replaceText`（走编辑器 `insertText`，能撤销）、面板不收；其余同命令：收起面板、`LauncherFocus.restore()` 把焦点还给原来的 App、下一个 runloop 再执行，交给动作的是输入框里上屏的文字（去首尾空白）。⌘⏎ 同 ⏎。颜色、字数这类复制行走 `LauncherInstant` 的现成路径（复制 / 插入同样先还焦点）。
+- 执行（`LauncherController.runSuggestion`）：先记一次使用（`recordUse(key: "textaction/<id>", input: "")`，不记「这个输入选了谁」—— 那是给排序里的普通行用的）；改输入的（搜文件）调输入框的 `replaceText`（走编辑器 `insertText`，能撤销）、面板不收；其余同命令：收起面板、`LauncherFocus.restore(then:)` 等焦点回到原来的 App 再执行（§4「焦点」），交给动作的是输入框里上屏的文字（去首尾空白）。⌘⏎ 同 ⏎。颜色、字数这类复制行走 `LauncherInstant` 的现成路径（复制 / 插入同样先还焦点）。
 
 **接进引擎**（`LauncherEngine.search`，只加接入点）：行的次序 = 计算结果 → 固定的文件行（§6.4 的 `files.pinned`：片段的确切命中、名字正好是输入的文件；PR 11 起挪到对应建议前面）→ 对应建议 → 识别结果 → 排好序的普通行（含文件）→ 兜底建议；输入是路径时提前返回，不出任何建议。`LauncherSuggestionProvider`（App 侧，带 `L()` 文案和执行闭包）每次输入算一次；复制行并进 `instantsByKey`，动作行进 `suggestionsByKey`（`engine.suggestion(forKey:)`）。「让 AI 来办」提前的旧规则（`shouldPromoteAIRow`）现在没有界面用它，二期把「让 AI 来办」加进兜底建议时再接。
 
@@ -478,7 +485,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 - 动作排序同兜底建议：档位 − min(30, 使用分 ÷ 10)，使用记录的键是 `imageaction/<id>`（和文字的 `textaction/` 分开记：同一个动作对文字、对图片用得多不多是两回事）。默认次序：取字、翻译图里的文字、钉在屏幕上、预览、保存成文件。
 - 输入框里打字 = 筛这些行：标题匹配得上（`LauncherMatch`：开头、词首、包含、跳字，拼音全拼和首字母也算，所以 `qz` 能找到「取字」、`ping` 能找到「钉在屏幕上」）就留下；「正在识别…」那一行打了字就不出。不出 App、命令、剪贴板、文件这些普通结果，也不出文字的兜底建议。
-- 执行：图片动作同建议行（先记使用、收起面板、还焦点、下一个 runloop 执行，交过去的是附件那份字节）；「<命令名>图里的文字」收起、还焦点后等这次取字的结果，有字就交给动作，没有回执一句。⌘1–⌘9、鼠标单击照旧。
+- 执行：图片动作同建议行（先记使用、收起面板、等焦点回去再执行，交过去的是附件那份字节）；「<命令名>图里的文字」收起、还焦点后等这次取字的结果，有字就交给动作，没有回执一句。⌘1–⌘9、鼠标单击照旧。
 - 识别完后同一个输入再查一次（选中规则见 §4「选中行」：没手动选过就是第一行）。
 
 **文件**：
@@ -785,7 +792,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 - 每次输入变化调一次 `evaluate`：`now` = 当前时间，`calendar` / `timeZone` = 系统当前，`locale` = App 的界面语言（`L10n.locale`，呼出时取一次）。打了来源前缀（`a `、`c `、`> `）时不算。
 - 有结果就固定排在第一行，不经过排序、不记使用。行比普通行高（58）：结果用 20 号粗体，下面一行小字是 `interpretation`，右侧小字是种类（计算 / 百分比 / 单位换算 / 进制 / 日期 / 时区 / 时间戳），图标 `equal`。
-- ⏎ = 把 `copyText` 复制到剪贴板（普通复制，进剪贴板历史：这是用户要的一份新内容）并收起，发一条回执「已复制 …」（同防休眠开关的回执：`NotifyCenter`，`isUserFeedback`，宠物开着是气泡，否则系统通知）。⌘⏎ = 收起后下一个 runloop 经 `TextInserter.insert` 插入前台 App（和听写、划词助手同一条路：辅助功能写入 → 借剪贴板粘贴（不进历史）→ 都不行就复制并回执「没能直接插入，已复制」）。其余行的 ⌘⏎ 同 ⏎。
+- ⏎ = 把 `copyText` 复制到剪贴板（普通复制，进剪贴板历史：这是用户要的一份新内容）并收起，发一条回执「已复制 …」（同防休眠开关的回执：`NotifyCenter`，`isUserFeedback`，宠物开着是气泡，否则系统通知）。⌘⏎ = 收起、等焦点回去（§4「焦点」）后经 `TextInserter.insert` 插入原来的 App（和听写、划词助手同一条路：辅助功能写入 → 借剪贴板粘贴（不进历史）→ 都不行就复制并回执「没能直接插入，已复制」）。其余行的 ⌘⏎ 同 ⏎。
 - 出错的结果（`failure` 非空，如除以零）：照样显示那句说明（16 号、次要色，别让人当成答案），⏎ 不做事、面板不收。
 - 第一次调要建单位、地名、DateFormatter 这些静态表：预热时先算几条（探针实测第一次 1.3–1.5 ms，识别器第一次 1.8–2.0 ms，之后每条 0.02–0.4 ms）。
 
@@ -888,6 +895,13 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
   3. 查到 ⌘Space 不在保留表里、且 `launcher.toggle` 还标着冲突（或没绑定）→ `HotkeyCenter.update(id:to:)` 绑上，设置页状态变「已绑定」，发一条回执通知。
   4. 之后如果用户又把 Spotlight 的快捷键开回来：下次启动时检测到冲突，按快捷键页现有的冲突样式标出来，不自动改。
 - 不调用任何私有接口去关 Spotlight 的快捷键，也不用事件拦截抢在系统前面吃掉 ⌘Space：前者是改用户看不见的系统设置，后者行为不稳定。
+- **别的启动器也绑了同一个键时会发生什么**（2026-11-24 用户真机实测，WindowServer 日志）：用户的 Raycast 也用 ⌘Space（`raycastGlobalHotkey = "Command-49"`）。两个 App 用 `RegisterEventHotKey` 注册同一个组合，系统两边都通知、两边都注册成功 —— `HotkeyCenter` 只在注册失败（和系统保留的 Spotlight 键比对）时算冲突，测不出别的 App 注册了同一个组合，这是系统限制，冲突检测不动。按一次 ⌘Space 的时序（16:53:48–50）：
+  1. 48.228 Raycast `StealKeyFocusReturningID`：它的窗口借走键盘焦点（key thief），前台 App 仍是终端；Raycast 的窗口没有显示出来。
+  2. 48.281 Baobox 的面板 `StealKeyFocusReturningID`，把 Raycast 记成「上一个借焦点的」；用户在快速入口里打字、选行都正常。
+  3. 50.543 回车 → 面板 `orderOut`，50.547 `ReleaseKeyFocusWithID`：键盘还给了「上一个」= Raycast，不是终端。
+  4. 50.607 回车的 key-up、50.690 合成的 ⌘V 的目的地都是 Raycast；对终端的 `activate()` 在 WindowServer 里没有动作（它一直是前台）。
+  5. 51.531 才清掉（用户点了一下，`PostFilteredEventTapData`），键盘回到终端。三次试都一样。
+  不改 Raycast 的话，每次按 ⌘Space 两个都响应，从快速入口粘贴都会送进 Raycast。我们的做法：不为这种状态绕路（不强切前台），粘贴前读得出键盘在第三个 App 那里就不发 ⌘V、回执点明冲突（§4「焦点」）；再提前提示 —— 快速入口的快捷键是 ⌘Space、且已知启动器（`LauncherHotkeyConflict`：Raycast `com.raycast.macos`；Alfred 4 起 `com.runningwithcrayons.Alfred`，2、3 带 `-2` / `-3` 后缀，它的偏好设置 App `Alfred-Preferences` 不算）正在运行（`NSWorkspace.runningApplications`，只读内存）时：设置页快捷键那一行下面一条醒目的提示（「<名字> 正在运行，它默认也用 ⌘Space。两个同时响应时，从快速入口粘贴会送到 <名字> 那里。请在 <名字> 的设置里换一个快捷键，或者在这里另录一个。」，每秒重看一次），面板列表最下面一行不可选的小字（同一句的短版，呼出时定）。它实际绑的是什么读不到，所以说「默认也用」。换了快捷键或退出那个 App 后自然消失；不弹窗、不发通知。出厂快捷键仍是 ⌘Space（用户定）。
 - 面板里的键（↑ ↓ ⏎ Tab Esc ⌘K ⌘1–9）由面板的本地键盘监听处理，不注册全局快捷键。
 - 语音输入的「按住右 ⌥」（二期）：面板是 key window 时用本地 `flagsChanged` 监听，不需要全局监听。
 

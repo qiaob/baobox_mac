@@ -70,13 +70,13 @@ enum TextInserter {
         case .copy(let reason):
             return fail(reason)
         case .paste:
-            return await paste(text, copyOnFailure: copyOnFailure)
+            return await paste(text, into: app, copyOnFailure: copyOnFailure)
         case .accessibility:
             if let element = probe?.element, await writeViaAccessibility(text, into: element) {
                 return .ax
             }
             log.notice("accessibility write did not take in \(bundle, privacy: .public), pasting instead")
-            return await paste(text, copyOnFailure: copyOnFailure)
+            return await paste(text, into: app, copyOnFailure: copyOnFailure)
         }
     }
 
@@ -119,7 +119,12 @@ enum TextInserter {
         return .copied(reason)
     }
 
-    private static func paste(_ text: String, copyOnFailure: Bool) async -> Result {
+    private static func paste(_ text: String, into app: NSRunningApplication, copyOnFailure: Bool) async -> Result {
+        // 快速入口的动作（⌘⏎ 插入）：发 ⌘V 前先看系统键盘焦点（docs/launcher/TECH_DESIGN.md §4）。
+        // 在第三个 App 那里（别的启动器留下的借焦点）就不粘 —— 会粘进那个 App；复制给用户，回执已由 `LauncherFocus` 发出。
+        if LauncherFocus.isRunningAction, await LauncherFocus.checkKeyboardBeforePaste(target: app) != .clear {
+            return copyOnFailure ? copy(text, reason: .keyboardElsewhere) : .copied(.keyboardElsewhere)
+        }
         // 划词翻译正借着剪贴板（一秒内就还原）：等它还完再粘。抢着写的话，它一还原就把我们的文字盖掉了。
         for _ in 0..<20 where PasteboardBorrow.isActive {
             try? await Task.sleep(nanoseconds: 50_000_000)

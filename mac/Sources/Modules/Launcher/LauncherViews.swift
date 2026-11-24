@@ -20,6 +20,8 @@ enum LauncherLayout {
     static let maxVisibleRows: CGFloat = 8.5
     /// 「没有结果」/ 提示文字那一行。
     static let messageHeight: CGFloat = 40
+    /// 面板最下面那行不可选的小字提示（快捷键和别的启动器撞了，§9），含上面的分隔线。
+    static let noticeHeight: CGFloat = 30
 
     /// 一行的高度。
     static func rowHeight(for row: LauncherRow) -> CGFloat {
@@ -50,9 +52,10 @@ enum LauncherLayout {
         }
     }
 
-    /// 结果最多时的高度（定位时保证这么高也放得下）：第一行是计算结果、后面一长串。
+    /// 结果最多时的高度（定位时保证这么高也放得下）：第一行是计算结果、后面一长串，最下面还有一行提示。
     static var maxHeight: CGFloat {
         height(for: .results([calculationRowHeight] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
+            + noticeHeight
     }
 }
 
@@ -95,6 +98,8 @@ final class LauncherPanelModel: ObservableObject {
     @Published var attachment: LauncherAttachmentChip?
     /// 每取到一批缩略图 +1：列表重画、换上缩略图。
     @Published private(set) var thumbnailsVersion = 0
+    /// 列表最下面一行不可选的小字提示（快捷键和别的启动器撞了，§9）；nil = 不显示。呼出时定，换了快捷键 / 退出那个 App 后下次就没了。
+    @Published var notice: String?
 
     func thumbnailsChanged() {
         thumbnailsVersion += 1
@@ -104,7 +109,7 @@ final class LauncherPanelModel: ObservableObject {
     /// 打字换了一批结果、键盘选行之后，停着不动的鼠标下面换了一行，都不算。
     private var hoverBaseline: NSPoint?
 
-    var panelHeight: CGFloat { LauncherLayout.height(for: content) }
+    var panelHeight: CGFloat { LauncherLayout.height(for: content) + (notice == nil ? 0 : LauncherLayout.noticeHeight) }
 
     /// 换一批结果。`emptyInput`：查询词为空（没结果时显示提示，而不是「没有结果」）。
     /// `newInput`：输入变了 → 选中第一行，「手动选过」清零；false = 同一个输入、后台结果回来（文件、路径、搜索键、识别结果）——
@@ -320,6 +325,10 @@ struct LauncherPanelView: View {
             case .results:
                 resultList
             }
+            if let notice = model.notice {
+                Divider()
+                noticeLine(notice)
+            }
         }
         .frame(width: LauncherLayout.width, height: model.panelHeight, alignment: .top)
         .background(.ultraThinMaterial)
@@ -356,6 +365,23 @@ struct LauncherPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .frame(height: LauncherLayout.messageHeight)
+    }
+
+    /// 最下面那行提示：小字、不可选（不是一行结果，键盘、鼠标都选不到）。
+    private func noticeLine(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+            Text(verbatim: text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .frame(height: LauncherLayout.noticeHeight - 1)
     }
 
     private var resultList: some View {

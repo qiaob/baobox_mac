@@ -550,6 +550,7 @@ final class DictationController: ObservableObject {
         case .noAccessibility: return L("dictation.reason.noAccessibility")
         case .noTextFocus: return L("dictation.reason.noTextFocus")
         case .busy: return L("dictation.reason.busy")
+        case .keyboardElsewhere: return L("dictation.reason.keyboardElsewhere")
         }
     }
 

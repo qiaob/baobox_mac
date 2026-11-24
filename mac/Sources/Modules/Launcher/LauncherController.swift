@@ -3,7 +3,7 @@ import os
 
 // 快速入口的控制器（docs/launcher/TECH_DESIGN.md §1、§4、§5）：呼出 / 收起、一次面板会话的状态（输入、结果、选中行）、
 // 按键、执行。呼出时现建命令表、取 App 索引的快照、取各模块交来的条目（剪贴板、片段）装进引擎；每次输入变化同步查一次（只读内存）；
-// 执行时先记使用、收起面板，下一个 runloop 再执行 —— 很多命令作用于前台 App / 当前窗口，要等面板让开。
+// 执行时先记使用、收起面板，等焦点真的回到原来的 App 再执行（`LauncherFocus.restore(then:)`）—— 很多命令作用于前台 App / 当前窗口。
 // 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
@@ -92,6 +92,7 @@ final class LauncherController {
     /// 模块 willTerminate：同步写掉没落盘的使用记录。
     func willTerminate() {
         usage.flush()
+        LauncherFocus.cancel(reason: "quitting")
         apps.stop()
         paths.cancel()
         files.cancel()
@@ -119,6 +120,10 @@ final class LauncherController {
             text = ""
             pastedText = nil
         }
+        // 快捷键和正在运行的别的启动器撞了（§9）：列表最下面一行小字提示；换了快捷键 / 退出那个 App 后下次呼出就没了。
+        let conflict = LauncherHotkeyConflictCheck.conflictingLauncherName()
+        model.notice = conflict.map { L("launcher.panel.hotkeyConflict \($0)") }
+        if let conflict { Self.log.notice("hotkey conflict hint shown: \(conflict, privacy: .public)") }
         baseItems = commands.items() + apps.items
         engine.textActions = commands.textActions()
         engine.imageActions = commands.imageActions()
@@ -531,17 +536,13 @@ final class LauncherController {
         perform(item.run, for: item)
     }
 
-    /// 执行一行的动作：先记使用（路径行不记），收起面板，下一个 runloop 再执行。
+    /// 执行一行的动作：先记使用（路径行不记），收起面板，等焦点回到原来的 App 再执行（粘贴、窗口管理这类动作都作用于它）。
     private func perform(_ action: @escaping @MainActor () -> Void, for item: LauncherItem) {
         if item.recordsUsage {
             usage.recordUse(key: item.candidate.key, input: queryText, now: Date())
         }
         hide()
-        // 先把焦点还给原来的 App，再执行：粘贴、窗口管理这类动作都作用于它。
-        LauncherFocus.restore()
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated { action() }
-        }
+        LauncherFocus.restore(then: action)
     }
 
     /// Tab：选中的是路径行时，把输入框换成它的完整路径（文件夹末尾带 `/`，于是立刻列出它里面的内容）；
@@ -559,7 +560,7 @@ final class LauncherController {
     }
 
     /// 建议行（§5.4）：兜底建议记一次使用（`textaction/<id>`；不记「这个输入选了谁」，那是给排序里的普通行用的）。
-    /// 改输入的（搜文件名 → `f <文字>`）面板不收；其余同命令：收起面板、把焦点还给原来的 App、下一个 runloop 再执行。
+    /// 改输入的（搜文件名 → `f <文字>`）面板不收；其余同命令：收起面板、等焦点回到原来的 App 再执行。
     private func runSuggestion(_ suggestion: LauncherSuggestion) {
         if let key = suggestion.usageKey {
             usage.recordUse(key: key, input: "", now: Date())
@@ -571,20 +572,18 @@ final class LauncherController {
             textChanged(newText)
         case .run(let action):
             hide()
-            LauncherFocus.restore()
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { action() }
-            }
+            LauncherFocus.restore(then: action)
         case .runOnImageText(let recognition, let action):
             // 「<命令名>图里的文字」：挂上图片时开始的那次取字多半已经跑完；还没跑完（或是图片文件的路径、回车才开始取）就等它。
             hide()
-            LauncherFocus.restore()
-            recognition.whenDone { result in
-                guard let text = LauncherRecognizedContent.text(result.text) else {
-                    Self.toast(L("launcher.toast.noTextInImage"))
-                    return
+            LauncherFocus.restore {
+                recognition.whenDone { result in
+                    guard let text = LauncherRecognizedContent.text(result.text) else {
+                        Self.toast(L("launcher.toast.noTextInImage"))
+                        return
+                    }
+                    action(text)
                 }
-                action(text)
             }
         }
     }
@@ -603,12 +602,13 @@ final class LauncherController {
         }
         guard let text = instant.copyText else { return }
         hide()
-        LauncherFocus.restore()
-        // 下一个 runloop 再插：等面板让开、焦点回到原来的输入框。
-        DispatchQueue.main.async {
+        // 等面板让开、焦点回到原来的输入框再插。
+        LauncherFocus.restore {
+            let target = LauncherFocus.actionTarget
             Task { @MainActor in
-                let result = await TextInserter.insert(text, into: LauncherFocus.previousApp)
-                if !result.inserted { Self.toast(L("launcher.toast.insertCopied")) }
+                let result = await TextInserter.insert(text, into: target)
+                // 键盘被别的 App 占着时，`LauncherFocus` 已经发过说明原因的回执。
+                if !result.inserted, result != .copied(.keyboardElsewhere) { Self.toast(L("launcher.toast.insertCopied")) }
             }
         }
     }
@@ -618,8 +618,8 @@ final class LauncherController {
         guard let text = instant.copyText else { return }
         TextInserter.copyToClipboard(text)
         hide()
-        LauncherFocus.restore()
-        Self.toast(L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))"))
+        let toast = L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))")
+        LauncherFocus.restore { Self.toast(toast) }
     }
 
     /// 回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。
