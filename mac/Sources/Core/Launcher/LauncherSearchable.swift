@@ -16,6 +16,21 @@ struct LauncherEntryAction {
     let run: @MainActor () -> Void
 }
 
+/// 条目是一张图片时（剪贴板历史里的图片，docs/launcher/TECH_DESIGN.md §3.2、§5.5）：行首的缩略图、
+/// Tab 把它挂成输入里的附件，都从这里取。`launcherEntries()` 仍然零磁盘 IO —— 交出来的只是「怎么取」，
+/// 快速入口在行要显示时 / 按 Tab 时才在后台调。
+struct LauncherEntryImage: Sendable {
+    /// 同一张图不变的键（剪贴板：图片文件名，即内容的哈希）：快速入口按它缓存缩略图。
+    let cacheKey: String
+    /// 读出这张图的编码字节（PNG / TIFF…）。快速入口只在后台线程调（来源可能要读盘、解密）；读不到返回 nil。
+    let loadData: @Sendable () -> Data?
+
+    init(cacheKey: String, loadData: @escaping @Sendable () -> Data?) {
+        self.cacheKey = cacheKey
+        self.loadData = loadData
+    }
+}
+
 /// 来源交出来的一个条目。
 struct LauncherEntry {
     /// 来源内唯一（不同来源之间可能重复，快速入口按「来源 id + 条目 id」区分）。
@@ -30,6 +45,11 @@ struct LauncherEntry {
     var date: Date? = nil
     /// ⌘K 里的其余动作。
     var actions: [LauncherEntryAction] = []
+    /// 条目是一张图片：行首显示缩略图，Tab 把它挂成输入里的附件；nil = 不是图片（行首是 `symbolName`）。
+    var image: LauncherEntryImage? = nil
+    /// true = 只在打了来源前缀时出现（`c 图片`），不带前缀的搜索里不出 —— 图片条目的标题都差不多（「图片 · 微信」），
+    /// 搜 App 名时混进来只是噪音。
+    var onlyWithPrefix = false
     /// ⏎ 的主动作。
     let primary: @MainActor () -> Void
 }

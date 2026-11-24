@@ -78,9 +78,79 @@ final class LauncherCoreModelTests: XCTestCase {
         XCTAssertNotEqual(LauncherParameter.Kind.text, .clipboardRef)
         XCTAssertNotEqual(LauncherArgument.number(2), .duration(2))
         XCTAssertEqual(LauncherArgument.clipboardRef, .clipboardRef)
+        XCTAssertNotEqual(LauncherParameter.Kind.image, .text)
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47])
+        XCTAssertEqual(LauncherArgument.image(.data(bytes)), .image(.data(bytes)))
+        XCTAssertNotEqual(LauncherArgument.image(.data(bytes)), .image(.data(Data([0x89]))))
+        XCTAssertNotEqual(LauncherArgument.image(.file(URL(fileURLWithPath: "/a.png"))),
+                          .image(.file(URL(fileURLWithPath: "/b.png"))))
+        XCTAssertNotEqual(LauncherImage.data(bytes), .file(URL(fileURLWithPath: "/a.png")))
+    }
+
+    // MARK: - 图片动作
+
+    func testCommandsAreNotImageActionsByDefault() {
+        let command = LauncherCommand(id: "screenshot.capture", title: "截图", symbolName: "viewfinder") { _ in }
+        XCTAssertFalse(command.isImageAction)
+        XCTAssertNil(command.imageParameterName)
+        XCTAssertNil(command.suggestion.imageTextPriority, "文字动作默认不用在图里的文字上")
+        XCTAssertFalse(LauncherCommand.textAction(id: "t", title: "翻译", symbolName: "x") { _ in }.isImageAction)
+    }
+
+    func testImageActionFactoryHandsTheImageOver() {
+        var received: [LauncherImage] = []
+        let command = LauncherCommand.imageAction(id: "screenshot.image.pin", title: "钉在屏幕上", symbolName: "pin",
+                                                  keywords: ["贴图"], suggestion: LauncherSuggestionTraits(priority: 20)) {
+            received.append($0)
+        }
+        XCTAssertTrue(command.isImageAction)
+        XCTAssertFalse(command.isTextAction)
+        XCTAssertEqual(command.imageParameterName, "image")
+        XCTAssertEqual(command.parameters.first?.kind, .image)
+        XCTAssertEqual(command.parameters.first?.required, true)
+        XCTAssertEqual(command.keywords, ["贴图"])
+        XCTAssertEqual(command.suggestion.priority, 20)
+        let file = LauncherImage.file(URL(fileURLWithPath: "/tmp/a.png"))
+        command.run(["image": .image(file)])
+        command.run([:])
+        command.run(["image": .text("a.png")])
+        XCTAssertEqual(received, [file], "没给图片、给错类型都不执行")
+    }
+
+    func testOnlyOneRequiredImageParameterMakesAnImageAction() {
+        func command(_ parameters: [LauncherParameter]) -> LauncherCommand {
+            LauncherCommand(id: "x", title: "x", symbolName: "x", parameters: parameters) { _ in }
+        }
+        let image = LauncherParameter(name: "picture", kind: .image, required: true, hint: "")
+        XCTAssertTrue(command([image]).isImageAction)
+        XCTAssertEqual(command([image]).imageParameterName, "picture")
+        XCTAssertFalse(command([LauncherParameter(name: "picture", kind: .image, required: false, hint: "")]).isImageAction)
+        XCTAssertFalse(command([image, image]).isImageAction)
+        XCTAssertFalse(command([LauncherParameter(name: "t", kind: .text, required: true, hint: "")]).isImageAction)
+    }
+
+    func testImageTextPriorityIsPartOfTheTraits() {
+        let traits = LauncherSuggestionTraits(priority: 10, imageTextPriority: 15)
+        XCTAssertEqual(traits.imageTextPriority, 15)
+        XCTAssertNotEqual(traits, LauncherSuggestionTraits(priority: 10))
     }
 
     // MARK: - LauncherEntry / LauncherSearchable
+
+    func testEntryImageDefaults() {
+        let plain = LauncherEntry(id: "1", title: "curl", subtitle: "", searchText: "curl", symbolName: "doc.text") {}
+        XCTAssertNil(plain.image)
+        XCTAssertFalse(plain.onlyWithPrefix)
+
+        let bytes = Data([1, 2, 3])
+        let picture = LauncherEntry(id: "2", title: "图片 · 微信", subtitle: "3 分钟前", searchText: "图片 · 微信\nimage",
+                                    symbolName: "photo",
+                                    image: LauncherEntryImage(cacheKey: "abc.png", loadData: { bytes }),
+                                    onlyWithPrefix: true) {}
+        XCTAssertEqual(picture.image?.cacheKey, "abc.png")
+        XCTAssertEqual(picture.image?.loadData(), bytes)
+        XCTAssertTrue(picture.onlyWithPrefix)
+    }
 
     private struct FakeSource: LauncherSearchable {
         let entries: [LauncherEntry]

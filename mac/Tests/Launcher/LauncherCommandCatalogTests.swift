@@ -139,6 +139,50 @@ final class LauncherCommandCatalogTests: XCTestCase {
         XCTAssertEqual(actions.map(\.command.title), ["第一个"])
     }
 
+    // MARK: - 图片动作
+
+    private func imageAction(_ id: String, _ title: String = "取字", tool: String = "截图") -> LauncherCatalogCommand {
+        LauncherCatalogCommand(command: .imageAction(id: id, title: title, symbolName: "text.viewfinder") { _ in },
+                               toolID: "tool", toolName: tool)
+    }
+
+    private let requiredImage = LauncherParameter(name: "image", kind: .image, required: true, hint: "图片")
+
+    func testImageActionsNeverJoinTheSearchableCommands() {
+        let declared = [imageAction("screenshot.image.ocr"), entry("b", "B")]
+        XCTAssertEqual(ids(LauncherCommandCatalog.merge(automatic: [entry("a", "A")], declared: declared)), ["a", "b"])
+        XCTAssertEqual(ids(LauncherCommandCatalog.merge(automatic: [entry("a", "A")], declared: declared,
+                                                        includesParameterized: true)), ["a", "b"],
+                       "收带参数的命令时也不收图片动作：没有图片可给时执行不了")
+    }
+
+    func testImageActionWithAHotkeyIDDoesNotHideTheHotkeyCommand() {
+        let merged = LauncherCommandCatalog.merge(automatic: [entry("screenshot.ocr", "屏幕取字")],
+                                                  declared: [imageAction("screenshot.ocr")])
+        XCTAssertEqual(merged.map(\.command.title), ["屏幕取字"])
+    }
+
+    func testImageActionsAreTheDeclaredCommandsWithExactlyOneRequiredImageParameter() {
+        let declared = [
+            imageAction("i1"),
+            textAction("text"),
+            entry("plain", "无参数"),
+            entry("optional", "图片可选", parameters: [LauncherParameter(name: "image", kind: .image, required: false, hint: "")]),
+            entry("two", "图片 + 时长", parameters: [requiredImage, duration]),
+            entry("manual", "手写的图片动作", parameters: [requiredImage]),
+            imageAction("i2", "钉在屏幕上"),
+        ]
+        XCTAssertEqual(ids(LauncherCommandCatalog.imageActions(declared: declared)), ["i1", "manual", "i2"])
+        XCTAssertEqual(ids(LauncherCommandCatalog.textActions(declared: declared)), ["text"], "两张表互不相干")
+    }
+
+    func testImageActionsDropEmptyExcludedAndDuplicateIDs() {
+        let actions = LauncherCommandCatalog.imageActions(
+            declared: [imageAction(""), imageAction("launcher.toggle"), imageAction("a", "第一个"), imageAction("a", "第二个")],
+            excludedIDs: ["launcher.toggle"])
+        XCTAssertEqual(actions.map(\.command.title), ["第一个"])
+    }
+
     // MARK: - 搜索文字
 
     func testSearchTextsStartWithTitleThenKeywordsThenToolAndTitle() {

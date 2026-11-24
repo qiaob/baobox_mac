@@ -165,13 +165,15 @@ enum LauncherSuggestionRanking {
     /// 排序键 = 优先级（输入属于 `boostedKinds` 时是 0）− min(30, 使用分 ÷ 10)，小的在前；
     /// 同分看原来的优先级（小的在前），再看传入的先后（模块注册顺序、模块里声明的顺序）。
     /// 所以用了 7 次以上（使用分 300）的能往前挪三个档位，用过一两次的只在同档里往前；14 天不用减半（使用分自带衰减）。
+    /// `usageKeyPrefix`：使用记录的键前缀（图片的建议用 `imageaction/`，§5.5）。
     static func order(_ candidates: [LauncherSuggestionCandidate], kinds: Set<LauncherTextKind>,
-                      records: LauncherUsageRecords, now: Date, limit: Int = maxRows) -> [Int] {
+                      records: LauncherUsageRecords, now: Date, limit: Int = maxRows,
+                      usageKeyPrefix: String = usageKeyPrefix) -> [Int] {
         let applicable = candidates.indices.filter { !candidates[$0].traits.kinds.isDisjoint(with: kinds) }
         let keyed = applicable.map { index -> (index: Int, key: Double, base: Int) in
             let traits = candidates[index].traits
             let priority = traits.boostedKinds.isDisjoint(with: kinds) ? traits.priority : boostedPriority
-            let usage = records.usageScore(for: usageKey(for: candidates[index].id), now: now)
+            let usage = records.usageScore(for: usageKeyPrefix + candidates[index].id, now: now)
             return (index, Double(priority) - min(maxUsagePromotion, usage / usagePointsPerStep), traits.priority)
         }
         let sorted = keyed.sorted { a, b in

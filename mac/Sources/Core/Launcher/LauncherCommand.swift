@@ -16,6 +16,8 @@ struct LauncherParameter {
         case choice([String])
         /// 剪贴板最新一条：模型只输出占位值 `"@clipboard"`，内容由代码在执行时去取（§8.2）。
         case clipboardRef
+        /// 一张图片（输入里挂着的附件、贴进来的图片文件），值见 `LauncherImage`（docs/launcher/TECH_DESIGN.md §5.5）。
+        case image
     }
 
     /// 模型输出里的键，也是 `run` 收到的字典里的键，如 "duration"。
@@ -36,6 +38,8 @@ enum LauncherArgument: Equatable, Sendable {
     case choice(String)
     /// 剪贴板最新一条的引用，不带内容 —— 执行时由代码去取，所以剪贴板里的文字没法冒充指令（§8.2）。
     case clipboardRef
+    /// 一张图片：内存里的编码字节或磁盘上的图片文件（`LauncherImage`）。
+    case image(LauncherImage)
 }
 
 /// 一条命令。`run` 只调模块已有的方法，不新增能力（§3.1）。
@@ -52,7 +56,8 @@ struct LauncherCommand {
     /// true = 有破坏性，要按两次 ⏎。
     var destructive: Bool = false
     /// 作为「对当前输入的建议」时的属性（适用哪几类输入、默认排在哪）。只对文字动作（恰好一个必填 `.text` 参数，
-    /// 见 `isTextAction`）有用，其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4）。
+    /// 见 `isTextAction`）和图片动作（恰好一个必填 `.image` 参数，见 `isImageAction`，只看 `priority`）有用，
+    /// 其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4、§5.5）。
     var suggestion = LauncherSuggestionTraits()
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void

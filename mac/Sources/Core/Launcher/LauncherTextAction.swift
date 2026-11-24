@@ -33,12 +33,17 @@ struct LauncherSuggestionTraits: Equatable, Sendable {
     var priority: Int = 50
     /// 输入属于这几类时提到最前（单词 → 学习；一大段文字 → 总结、润色；网址 → 二维码）。
     var boostedKinds: Set<LauncherTextKind> = []
+    /// 文字动作也用在图片里认出的文字上：输入里挂着图片（或输入是一个图片文件的路径）时，出一行「<命令名>图里的文字」，
+    /// 和图片动作排在一起，值是那时的档位（同图片动作的 `priority`）；执行时先本机取字、再把认出的文字交给它
+    /// （docs/launcher/TECH_DESIGN.md §5.5）。nil（默认）= 不出。图片动作不看它。
+    var imageTextPriority: Int?
 
     init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,
-         boostedKinds: Set<LauncherTextKind> = []) {
+         boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil) {
         self.kinds = kinds
         self.priority = priority
         self.boostedKinds = boostedKinds
+        self.imageTextPriority = imageTextPriority
     }
 }
 
