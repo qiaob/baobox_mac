@@ -20,3 +20,55 @@ enum LauncherTextKind: String, CaseIterable, Sendable {
     /// 其余的文字。
     case plainText
 }
+
+/// 一条文字动作作为建议时的属性：对哪些输入适用、默认排在哪。不是文字动作的命令用不到它。
+///
+/// 优先级是档位，小的在前；快速入口自己的两条是「上网搜」30、「搜文件名」40。现在各模块用的档位：
+/// 10 翻译 / 学习，20 解释 / 总结，50 存为片段 / 钉成贴卡 / 二维码，60 润色。
+/// 同一档里用得多的在前，用得很多（7 次以上）的能往前挪三档；输入属于 `boostedKinds` 时直接排到所有档位前面。
+struct LauncherSuggestionTraits: Equatable, Sendable {
+    /// 对这几类输入适用（默认：任何文字）。
+    var kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases)
+    /// 默认优先级（档位），小的在前。
+    var priority: Int = 50
+    /// 输入属于这几类时提到最前（单词 → 学习；一大段文字 → 总结、润色；网址 → 二维码）。
+    var boostedKinds: Set<LauncherTextKind> = []
+
+    init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,
+         boostedKinds: Set<LauncherTextKind> = []) {
+        self.kinds = kinds
+        self.priority = priority
+        self.boostedKinds = boostedKinds
+    }
+}
+
+extension LauncherCommand {
+    /// 文字动作的那个参数的名字（`textAction(…)` 造的命令都用它）。
+    static let textParameterKey = "text"
+
+    /// 文字动作：`parameters` 恰好是一个必填的 `.text` 参数。它只作为「对当前输入的建议」出现在列表最后，
+    /// 执行时输入框里的文字就是这个参数；不进普通的搜索结果（没有文字可给时执行不了）。
+    var isTextAction: Bool {
+        guard parameters.count == 1, let parameter = parameters.first else { return false }
+        return parameter.kind == .text && parameter.required
+    }
+
+    /// 文字动作的参数名；不是文字动作为 nil。
+    var textParameterName: String? {
+        isTextAction ? parameters.first?.name : nil
+    }
+
+    /// 造一条文字动作：一个必填的文字参数，`run` 直接收到那段文字。
+    /// - Parameter hint: 写进提示词的参数说明（二期「一句话 → 命令」用）。
+    static func textAction(id: String, title: String, symbolName: String,
+                           suggestion: LauncherSuggestionTraits = LauncherSuggestionTraits(),
+                           hint: String = "要处理的文字",
+                           run: @escaping @MainActor (String) -> Void) -> LauncherCommand {
+        LauncherCommand(id: id, title: title, symbolName: symbolName,
+                        parameters: [LauncherParameter(name: textParameterKey, kind: .text, required: true, hint: hint)],
+                        suggestion: suggestion) { arguments in
+            guard case .text(let text)? = arguments[textParameterKey] else { return }
+            run(text)
+        }
+    }
+}

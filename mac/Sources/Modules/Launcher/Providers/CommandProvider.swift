@@ -21,7 +21,8 @@ final class LauncherCommandProvider {
         return items(from: Self.catalog(from: registry))
     }
 
-    /// 命令表：快捷键动作 + 模块声明的，排除快速入口自己的呼出键和「按住 + 松开」类的动作，这一期只收无参数的。
+    /// 命令表：快捷键动作 + 模块声明的，排除快速入口自己的呼出键和「按住 + 松开」类的动作，这一期只收无参数的
+    /// （文字动作另走 `textActions()`）。
     static func catalog(from registry: ToolRegistry) -> [LauncherCatalogCommand] {
         var automatic: [LauncherCatalogCommand] = []
         for (tool, definitions) in registry.allHotkeys() {
@@ -39,6 +40,15 @@ final class LauncherCommandProvider {
         }
         return LauncherCommandCatalog.merge(automatic: automatic, declared: declared,
                                             excludedIDs: [LauncherTool.toggleHotkeyID])
+    }
+
+    /// 此刻各模块声明的文字动作（呼出时调一次）：只作为「对当前输入的建议」出现（§5.4），不进普通的搜索结果。
+    func textActions() -> [LauncherCatalogCommand] {
+        guard let registry else { return [] }
+        let declared = registry.tools.flatMap { tool in
+            tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
+        }
+        return LauncherCommandCatalog.textActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
     }
 
     /// 快捷键动作 → 无参数命令。开关类动作此刻有 `stateTitle` 就用它当标题（「关闭防休眠」）。

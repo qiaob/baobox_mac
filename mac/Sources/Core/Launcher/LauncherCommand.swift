@@ -51,6 +51,9 @@ struct LauncherCommand {
     var parameters: [LauncherParameter] = []
     /// true = 有破坏性，要按两次 ⏎。
     var destructive: Bool = false
+    /// 作为「对当前输入的建议」时的属性（适用哪几类输入、默认排在哪）。只对文字动作（恰好一个必填 `.text` 参数，
+    /// 见 `isTextAction`）有用，其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4）。
+    var suggestion = LauncherSuggestionTraits()
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void
 }

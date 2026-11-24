@@ -92,6 +92,53 @@ final class LauncherCommandCatalogTests: XCTestCase {
         XCTAssertTrue(LauncherCommandCatalog.merge(automatic: [], declared: []).isEmpty)
     }
 
+    // MARK: - 文字动作
+
+    private func textAction(_ id: String, _ title: String = "翻译", tool: String = "划词助手") -> LauncherCatalogCommand {
+        LauncherCatalogCommand(command: .textAction(id: id, title: title, symbolName: "character.bubble") { _ in },
+                               toolID: "tool", toolName: tool)
+    }
+
+    private let optionalText = LauncherParameter(name: "text", kind: .text, required: false, hint: "文字")
+    private let requiredText = LauncherParameter(name: "text", kind: .text, required: true, hint: "文字")
+
+    func testTextActionsNeverJoinTheSearchableCommands() {
+        let declared = [textAction("selectiontranslate.text.translate"), entry("b", "B")]
+        XCTAssertEqual(ids(LauncherCommandCatalog.merge(automatic: [entry("a", "A")], declared: declared)), ["a", "b"])
+        XCTAssertEqual(ids(LauncherCommandCatalog.merge(automatic: [entry("a", "A")], declared: declared,
+                                                        includesParameterized: true)), ["a", "b"],
+                       "收带参数的命令时也不收文字动作：没有文字可给时执行不了")
+    }
+
+    func testTextActionWithAHotkeyIDDoesNotHideTheHotkeyCommand() {
+        let merged = LauncherCommandCatalog.merge(
+            automatic: [entry("selectiontranslate.translateSelection", "翻译选中文字")],
+            declared: [textAction("selectiontranslate.translateSelection")])
+        XCTAssertEqual(merged.map(\.command.title), ["翻译选中文字"])
+    }
+
+    func testTextActionsAreTheDeclaredCommandsWithExactlyOneRequiredTextParameter() {
+        let declared = [
+            textAction("t1"),
+            entry("plain", "无参数"),
+            entry("optional", "文字可选", parameters: [optionalText]),
+            entry("two", "两个参数", parameters: [requiredText, duration]),
+            entry("duration", "时长", parameters: [duration]),
+            entry("manual", "手写的文字动作", parameters: [requiredText]),
+            textAction("t2", "存为片段", tool: "剪贴板"),
+        ]
+        let actions = LauncherCommandCatalog.textActions(declared: declared)
+        XCTAssertEqual(ids(actions), ["t1", "manual", "t2"])
+        XCTAssertEqual(actions.last?.toolName, "剪贴板")
+    }
+
+    func testTextActionsDropEmptyExcludedAndDuplicateIDs() {
+        let actions = LauncherCommandCatalog.textActions(
+            declared: [textAction(""), textAction("launcher.toggle"), textAction("a", "第一个"), textAction("a", "第二个")],
+            excludedIDs: ["launcher.toggle"])
+        XCTAssertEqual(actions.map(\.command.title), ["第一个"])
+    }
+
     // MARK: - 搜索文字
 
     func testSearchTextsStartWithTitleThenKeywordsThenToolAndTitle() {
