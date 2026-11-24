@@ -100,11 +100,13 @@ final class LauncherFileProvider {
                                           searchKeys: [LauncherSearchKey(hit.name, pinyin: false)],
                                           date: hit.recency, presetMatchScore: result.tierScore)
         let parent = LauncherPathDisplay.split(hit.path).parent
-        var directory = LauncherPathDisplay.directoryLabel(parent, home: home)
+        let directory: String
         if let note = hit.note, !note.isEmpty {
             // 说明和目录加起来别比单独的目录长太多：目录让出说明占的地方（最少留 30 个字符）。
             let budget = max(30, LauncherPathDisplay.maxDirectoryLabelLength - note.count - 3)
             directory = note + " · " + LauncherPathDisplay.directoryLabel(parent, home: home, maxLength: budget)
+        } else {
+            directory = LauncherPathDisplay.directoryLabel(parent, home: home)
         }
         // `.app` 已经被过滤掉了（App 来源有），所以这里没有要当 App 启动的包。
         return LauncherFileActions.item(candidate: candidate, path: hit.path, title: hit.name, subtitle: directory,

@@ -56,7 +56,7 @@ final class LauncherFileSources {
     /// 模块 activate：几秒后扫一次。
     func activate() {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstScanDelay) { [weak self] in
-            MainActor.assumeIsolated { self?.rescanIfStale(force: true) }
+            MainActor.assumeIsolated { self?.rescanIfStale() }
         }
     }
 
@@ -64,7 +64,7 @@ final class LauncherFileSources {
     func panelShown(clipboardTexts: [LauncherTextSnapshot]) {
         updateKnownFiles()
         updateClipboardPaths(clipboardTexts)
-        rescanIfStale(force: false)
+        rescanIfStale()
     }
 
     // MARK: - B 自己扫的目录
@@ -81,9 +81,10 @@ final class LauncherFileSources {
         return LauncherFileScanRules.normalizedRoots(declared + extra)
     }
 
-    private func rescanIfStale(force: Bool) {
+    /// 没扫过、或距上次超过 30 秒：在后台扫（启动后几秒那次之前就呼出了面板，那次就算第一次）。
+    private func rescanIfStale() {
         guard !scanning else { return }
-        if !force, let lastScanStarted, Date().timeIntervalSince(lastScanStarted) < Self.rescanInterval { return }
+        if let lastScanStarted, Date().timeIntervalSince(lastScanStarted) < Self.rescanInterval { return }
         let roots = scanRoots()
         lastScanStarted = Date()
         guard !roots.isEmpty else {
@@ -133,6 +134,9 @@ final class LauncherFileSources {
         buildQueue.async {
             let start = DispatchTime.now().uptimeNanoseconds
             let (files, extracted) = box.index.update(texts, home: home)
+            // 和上次一样（没复制新东西、或新复制的里面没有路径）就不重建表。
+            guard files != box.lastFiles else { return }
+            box.lastFiles = files
             let catalog = LauncherFileCatalog(files: files)
             let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
             DispatchQueue.main.async {
@@ -150,4 +154,6 @@ final class LauncherFileSources {
 /// 剪贴板路径缓存的盒子：只在 `LauncherFileSources.buildQueue` 这一个串行队列上读写。
 final class LauncherClipboardPathIndexBox: @unchecked Sendable {
     var index = LauncherClipboardPathIndex()
+    /// 上一次建表用的路径（没变就不重建）。
+    var lastFiles: [LauncherFileCatalog.File]?
 }
