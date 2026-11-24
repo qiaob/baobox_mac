@@ -10,14 +10,16 @@ enum PasteService {
     /// - Parameter overrideText: 非 nil 时粘贴它而不是 `item.text`（预览区里做过转换）。
     ///   转换结果只在内存里，历史条目本身不变。
     /// - Parameter target: 粘贴到哪个 App。取的顺序（`LauncherPasteTarget`）：传入的 → 剪贴板面板唤起时记下的前台 App →
-    ///   快速入口正在执行的动作的目标（`LauncherFocus.actionTarget`：「纯文本粘贴上一条」这类不传目标的命令从快速入口执行时）。
-    ///   都没有 = 粘给此刻的前台 App（全局快捷键触发时就是它）。
+    ///   快速入口正在执行的动作的目标（`LauncherFocus.actionContext`：剪贴板条目、「纯文本粘贴上一条」这类命令从快速入口执行时）。
+    ///   都没有 = 粘给此刻的前台 App（全局快捷键触发时就是它）。快速入口的上下文进门就同步读走，后面的异步步骤只用读走的值。
     @MainActor
     static func paste(_ item: ClipboardItem, plainText: Bool,
                       overrideText: String? = nil,
                       target explicitTarget: NSRunningApplication? = nil,
                       store: ClipboardStore, monitor: ClipboardMonitor) {
         let began = ProcessInfo.processInfo.systemUptime
+        // 0) 是不是快速入口的动作：只在动作闭包同步执行时看得到，进门就读走（全局快捷键、剪贴板面板来的这里是 nil）。
+        let launcherAction = LauncherFocus.actionContext
         // 1) 忽略本次回填产生的 pasteboard 变更
         monitor.ignoreNextChange = true
         guard writeToPasteboard(item, plainText: plainText, overrideText: overrideText) else {
@@ -34,10 +36,10 @@ enum PasteService {
         //    面板拿过焦点，此刻的 frontmostApplication 已经不可靠。
         let choice = LauncherPasteTarget.resolve(explicit: explicitTarget,
                                                  clipboardPanel: ClipboardPanelController.current?.previousApp,
-                                                 launcher: LauncherFocus.actionTarget)
+                                                 launcher: launcherAction?.target)
         let target = choice.app
-        // 从快速入口执行的（剪贴板条目、「纯文本粘贴上一条」这类命令）：粘不出去时要给一句回执。
-        let fromLauncher = LauncherFocus.isRunningAction && choice.source != .clipboardPanel
+        // 从快速入口执行的（剪贴板条目、「纯文本粘贴上一条」这类命令）：发 ⌘V 前看键盘，粘不出去时要给一句回执。
+        let fromLauncher = LauncherPasteTarget.isFromLauncher(inLauncherAction: launcherAction != nil, source: choice.source)
         ClipboardPanelController.current?.hide()
 
         // 3) 已授权辅助功能 → 切回目标 App 并合成 ⌘V；否则明确告知降级为仅复制。
@@ -140,7 +142,9 @@ enum PasteService {
             if check == .clear {
                 post()
             } else {
+                // 内容在进门时已经写进剪贴板：说清原因，让用户自己 ⌘V。
                 log.notice("paste: not posting ⌘V (\(String(describing: check), privacy: .public)); left on the clipboard")
+                LauncherFocus.postBlockedReceipt(check)
             }
         }
     }

@@ -577,12 +577,14 @@ final class LauncherController {
             // 「<命令名>图里的文字」：挂上图片时开始的那次取字多半已经跑完；还没跑完（或是图片文件的路径、回车才开始取）就等它。
             hide()
             LauncherFocus.restore {
+                // 取字可能要等：动作的上下文先读走，取到了再在它里面执行（上下文只在闭包同步执行时有）。
+                let context = LauncherFocus.actionContext
                 recognition.whenDone { result in
                     guard let text = LauncherRecognizedContent.text(result.text) else {
                         Self.toast(L("launcher.toast.noTextInImage"))
                         return
                     }
-                    action(text)
+                    LauncherFocus.continueAction(in: context) { action(text) }
                 }
             }
         }
@@ -604,9 +606,10 @@ final class LauncherController {
         hide()
         // 等面板让开、焦点回到原来的输入框再插。
         LauncherFocus.restore {
-            let target = LauncherFocus.actionTarget
+            // 目标在闭包里同步读走；插入是异步的，显式把目标和「粘贴前看键盘」交给 `TextInserter`。
+            let target = LauncherFocus.actionContext?.target
             Task { @MainActor in
-                let result = await TextInserter.insert(text, into: target)
+                let result = await TextInserter.insert(text, into: target, checkKeyboardBeforePaste: true)
                 // 键盘被别的 App 占着时，`LauncherFocus` 已经发过说明原因的回执。
                 if !result.inserted, result != .copied(.keyboardElsewhere) { Self.toast(L("launcher.toast.insertCopied")) }
             }

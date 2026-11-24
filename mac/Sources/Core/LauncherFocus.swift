@@ -21,26 +21,29 @@ import os
 /// - 公开 API 里只有辅助功能的 `AXFocusedApplication` 可能看得出「键盘在第三个 App 那里」（`NSRunningApplication.isActive`、
 ///   `menuBarOwningApplication` 都只看前台）。它跟不跟着借焦点走没测成（探针没有辅助功能权限）：每次都把它和前台 App 记进日志。
 ///
-/// 放在 Core 而不是快速入口模块里：别的模块交给快速入口的动作（剪贴板的粘贴、`TextInserter`）也要读它。
+/// 放在 Core 而不是快速入口模块里：别的模块交给快速入口的动作（剪贴板的粘贴）也要读它。
 @MainActor
 enum LauncherFocus {
+    /// 正在执行的快速入口动作的上下文。
+    struct ActionContext {
+        /// 呼出前的前台 App；当时前台是 Baobox 自己、或它已经退出时为 nil。
+        let target: NSRunningApplication?
+    }
+
     private static let log = Logger(subsystem: "com.baobox.app", category: "launcher")
     /// 等焦点时多久看一次。
     static let pollInterval: TimeInterval = 0.015
-    /// 动作开始执行后，「快速入口动作的目标」对别的模块可见多久。
-    static let actionTargetLifetime: TimeInterval = 1
     /// 读系统键盘焦点的辅助功能超时（秒）：卡住的 App 别把我们拖住。
     private static let axTimeout: Float = 0.05
 
     /// 呼出快速入口那一刻的前台 App；当时前台就是 Baobox 自己（比如从设置窗口里呼出）则为 nil。
     private(set) static var previousApp: NSRunningApplication?
-    /// 正在执行一个快速入口动作（从开始执行起 1 秒内为 true）。
-    private(set) static var isRunningAction = false
-    /// 正在执行的快速入口动作的目标 App（= 呼出前的前台 App，可能为 nil）。只在 `isRunningAction` 时有值。
-    private(set) static var actionTarget: NSRunningApplication?
+    private static let actionScope = LauncherActionScope<ActionContext>()
+    /// 正在执行的快速入口动作：只在动作闭包同步执行的那一段有值，闭包一返回就是 nil（没有时间窗口）。
+    /// 要在之后的异步步骤里用，就在闭包里同步读走（`PasteService.paste` 进门就读）。
+    static var actionContext: ActionContext? { actionScope.current }
 
     private static var pending: PendingWait?
-    private static var actionGeneration = 0
     /// 最近一次等焦点的截止时刻（uptime）：粘贴前「键盘还在我们这儿」时最多等到这里（并进同一个上限）。
     private static var focusDeadline: TimeInterval = 0
 
@@ -78,7 +81,7 @@ enum LauncherFocus {
     /// 执行动作前（面板已经收起）：把焦点还给呼出前的 App，等它真的回去 —— 前台是它、Baobox 没有 key 窗口、
     /// 读得到系统键盘焦点时键盘也在它那里 —— 再回调；每 15 ms 看一次，最多等 300 ms，超时也回调。
     /// 连着两次读到键盘在第三个 App 那里就不等了（照样回调，粘贴那一步会挡下）。
-    /// 呼出前的 App 为 nil 或已退出时立即回调。回调时 `isRunningAction` / `actionTarget` 已经设上。
+    /// 呼出前的 App 为 nil 或已退出时立即回调。`action` 同步执行期间 `actionContext` 有值。
     static func restore(then action: @escaping @MainActor () -> Void) {
         cancel(reason: "superseded")
         let start = uptime()
@@ -128,20 +131,18 @@ enum LauncherFocus {
         }
     }
 
-    /// 执行动作：动作开始后 1 秒内，别的模块（`PasteService`、`TextInserter`）能看到「这是快速入口的动作、目标是谁」。
+    /// 执行动作：动作闭包同步执行的那一段，别的模块（`PasteService`）能看到「这是快速入口的动作、目标是谁」；闭包返回即清掉。
     private static func run(_ action: @MainActor () -> Void, target: NSRunningApplication?) {
-        actionGeneration += 1
-        let generation = actionGeneration
-        isRunningAction = true
-        actionTarget = target
-        DispatchQueue.main.asyncAfter(deadline: .now() + actionTargetLifetime) {
-            MainActor.assumeIsolated {
-                guard actionGeneration == generation else { return }
-                isRunningAction = false
-                actionTarget = nil
-            }
+        actionScope.run(ActionContext(target: target)) { action() }
+    }
+
+    /// 动作里有一步要等（「翻译图里的文字」等取字）：在动作闭包里读走的上下文，等到了再在它里面执行那一步。nil 时直接执行。
+    static func continueAction(in context: ActionContext?, _ body: @MainActor () -> Void) {
+        guard let context else {
+            body()
+            return
         }
-        action()
+        actionScope.run(context) { body() }
     }
 
     /// 请求把前台还给 `app`：Baobox 自己在前台时先让出（协作式激活），它不在前台时请它激活。
@@ -175,9 +176,10 @@ enum LauncherFocus {
         case stillOurs
     }
 
-    /// 快速入口的动作要发 ⌘V 之前调（调用方只在 `isRunningAction` 时调；全局快捷键、剪贴板面板的粘贴不调）：
+    /// 快速入口的动作要发 ⌘V 之前调（只有从快速入口来的粘贴调；全局快捷键、剪贴板面板的粘贴不调）：
     /// 读一次辅助功能的系统键盘焦点，在目标那里（或读不到）→ `.clear`；在 Baobox 自己这儿 → 每 15 ms 再看，
-    /// 最多等到这次等焦点的上限（至少再看一次）；在第三个 App 那里 → `.heldBy`。挡下时已经发过回执，内容留在剪贴板由调用方保证。
+    /// 最多等到这次等焦点的上限（至少再看一次）；在第三个 App 那里 → `.heldBy`。
+    /// 不发回执：调用方确认内容在剪贴板上之后调 `postBlockedReceipt`。
     /// - Parameter target: 要粘进的 App；nil = 粘给前台。
     static func checkKeyboardBeforePaste(target: NSRunningApplication?,
                                          completion: @escaping @MainActor (KeyboardCheck) -> Void) {
@@ -203,7 +205,6 @@ enum LauncherFocus {
                 result = .stillOurs
             }
             log.notice("keyboard check before ⌘V: keyboard (AX) \(bundleID(pid: keyboard), privacy: .public), front \(bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), target \(bundleID(pid: targetPID), privacy: .public) → \(String(describing: result), privacy: .public)")
-            if result != .clear { postBlockedReceipt(result) }
             completion(result)
         }
         check()
@@ -215,8 +216,8 @@ enum LauncherFocus {
         }
     }
 
-    /// 没粘贴的回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。
-    private static func postBlockedReceipt(_ check: KeyboardCheck) {
+    /// 没粘贴的回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。内容已在剪贴板上时才调。
+    static func postBlockedReceipt(_ check: KeyboardCheck) {
         let title: String
         var body = ""
         switch check {

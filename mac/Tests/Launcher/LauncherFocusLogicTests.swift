@@ -93,6 +93,43 @@ final class LauncherFocusLogicTests: XCTestCase {
                        "没有目标（粘给前台）时不知道该在哪儿，只防我们自己")
     }
 
+    // MARK: - 动作的上下文只在闭包里
+
+    func testActionContextOnlyInsideTheClosure() {
+        let scope = LauncherActionScope<String>()
+        XCTAssertNil(scope.current)
+        var seenInside: String?
+        var later: (() -> String?)?
+        scope.run("otty") {
+            seenInside = scope.current
+            // 闭包里排到之后的一步（异步粘贴、全局快捷键 1 秒内再按）：执行时已经读不到。
+            later = { scope.current }
+        }
+        XCTAssertEqual(seenInside, "otty")
+        XCTAssertNil(scope.current, "闭包一返回就清掉，没有时间窗口")
+        XCTAssertNil(later?(), "之后的异步步骤读不到：要用就在闭包里先读走")
+    }
+
+    func testNestedActionContextRestoresTheOuterOne() {
+        let scope = LauncherActionScope<String>()
+        scope.run("outer") {
+            scope.run("inner") { XCTAssertEqual(scope.current, "inner") }
+            XCTAssertEqual(scope.current, "outer")
+        }
+        XCTAssertNil(scope.current)
+    }
+
+    func testFromLauncherOnlyInsideALauncherAction() {
+        XCTAssertTrue(LauncherPasteTarget.isFromLauncher(inLauncherAction: true, source: .launcher))
+        XCTAssertTrue(LauncherPasteTarget.isFromLauncher(inLauncherAction: true, source: .explicit))
+        XCTAssertTrue(LauncherPasteTarget.isFromLauncher(inLauncherAction: true, source: .missing),
+                      "呼出时前台是 Baobox 自己：没有目标，但还是快速入口来的（粘不出去要回执）")
+        XCTAssertFalse(LauncherPasteTarget.isFromLauncher(inLauncherAction: true, source: .clipboardPanel))
+        XCTAssertFalse(LauncherPasteTarget.isFromLauncher(inLauncherAction: false, source: .missing), "全局快捷键 ⌘⌥V")
+        XCTAssertFalse(LauncherPasteTarget.isFromLauncher(inLauncherAction: false, source: .clipboardPanel), "剪贴板面板")
+        XCTAssertFalse(LauncherPasteTarget.isFromLauncher(inLauncherAction: false, source: .explicit))
+    }
+
     // MARK: - 粘贴目标
 
     func testPasteTargetOrder() {

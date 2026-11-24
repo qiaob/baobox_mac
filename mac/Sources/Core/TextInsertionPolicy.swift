@@ -13,7 +13,7 @@ enum TextInsertionPolicy {
         case noTextFocus
         /// 剪贴板正被借用（划词取词 / 上一次粘贴还没还原）。
         case busy
-        /// 键盘正被别的 App 占着（只在快速入口的动作里、发 ⌘V 前读到时出现，docs/launcher/TECH_DESIGN.md §4）。
+        /// 键盘正被别的 App 占着（只在调用方要求发 ⌘V 前看键盘、且读到时出现：快速入口的 ⌘⏎ 插入，docs/launcher/TECH_DESIGN.md §4）。
         case keyboardElsewhere
     }
 
