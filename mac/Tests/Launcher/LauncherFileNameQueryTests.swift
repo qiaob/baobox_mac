@@ -84,13 +84,53 @@ final class LauncherFileNameQueryTests: XCTestCase {
         XCTAssertFalse(results.contains { $0.hit.path == "/Users/me/older/notes.md" }, "同名第 4 份起不出（也不进排序）")
     }
 
-    func testPinnedStillDropsNoise() {
+    func testPinnedDropsNoiseOnlyFromSpotlightAndScannedFolders() {
         let request = LauncherFileSearchRequest.nameContains(["index.js"], pinnedName: "index.js")
         let results = LauncherFileFilter.process([
-            hit("/Users/me/proj/node_modules/x/index.js", origins: [.clipboard]),
+            hit("/Users/me/proj/node_modules/x/index.js", origins: [.spotlight]),
             hit("/Users/me/proj/src/index.js", daysAgo: 3),
+            hit("/Users/me/other/node_modules/y/index.js", daysAgo: 9, origins: [.clipboard]),
         ], request: request, home: home)
-        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/proj/src/index.js"], "过滤规则对所有来源一视同仁")
+        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/other/node_modules/y/index.js", "/Users/me/proj/src/index.js"],
+                       "复制过路径的不看目录规则（还排在前面）；只来自 Spotlight 的照旧去掉")
+    }
+
+    // MARK: - 明确碰过的不看目录规则
+
+    func testTouchedFilesSkipDirectoryRules() {
+        let request = LauncherFileSearchRequest.nameContains(["json"])
+        let kept = LauncherFileFilter.process([
+            hit("/Users/me/.claude/settings.json", origins: [.known]),
+            hit("/Users/me/Library/Application Support/Baobox/Launcher/usage.json", origins: [.clipboard]),
+            hit("/Users/me/proj/build/out.json", origins: [.known, .scanned]),
+            hit("/Users/me/repo/.github/data.json", origins: [.spotlight, .clipboard]),
+        ], request: request, home: home).map(\.hit.path)
+        XCTAssertEqual(Set(kept), ["/Users/me/.claude/settings.json",
+                                   "/Users/me/Library/Application Support/Baobox/Launcher/usage.json",
+                                   "/Users/me/proj/build/out.json", "/Users/me/repo/.github/data.json"],
+                       "隐藏目录、~/Library、build 都照出；同一个文件 Spotlight / 扫的目录也有时按明确碰过的算")
+        let dropped = LauncherFileFilter.process([
+            hit("/Users/me/.claude/a.json", origins: [.spotlight]),
+            hit("/Users/me/Library/Caches/b.json", origins: [.scanned]),
+            hit("/Users/me/proj/node_modules/c.json", origins: [.spotlight, .scanned]),
+        ], request: request, home: home)
+        XCTAssertEqual(dropped.count, 0, "只来自 Spotlight、自己扫的目录的照旧过滤")
+    }
+
+    func testTouchedAppBundlesStillDropped() {
+        let request = LauncherFileSearchRequest.nameContains(["tool"])
+        let paths = LauncherFileFilter.process([
+            hit("/Users/me/Apps/Tool.app", origins: [.known]),
+            hit("/Users/me/Apps/Tool.app/Contents/Resources/tool.json", origins: [.clipboard]),
+        ], request: request, home: home).map(\.hit.path)
+        XCTAssertEqual(paths, ["/Users/me/Apps/Tool.app/Contents/Resources/tool.json"], ".app 本身不出（App 来源有），包里明确碰过的文件照出")
+    }
+
+    func testTouchedFragmentsSkipDirectoryRules() {
+        let request = LauncherFileSearchRequest.exactName("settings.json", pathSuffix: ".claude/settings.json")
+        let results = LauncherFileFilter.process([hit("/Users/me/.claude/settings.json", origins: [.clipboard])],
+                                                 request: request, home: home)
+        XCTAssertEqual(results.map(\.pinned), [true])
     }
 
     func testNoPinnedNameMeansNothingIsPinned() {

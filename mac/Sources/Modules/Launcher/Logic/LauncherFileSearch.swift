@@ -211,7 +211,16 @@ enum LauncherFileFilter {
         return last.lowercased().hasSuffix(".app")
     }
 
-    /// 原始命中 → 给界面的结果：去掉噪音 → 片段只留路径以整个片段结尾的 → 同名的只留最新的 3 份 →
+    /// 一条命中要不要去掉（PR 11 审后定）：来自已知文件（Claude Code 写过的）或剪贴板路径（用户复制过路径的）的，
+    /// 是用户或他的会话明确碰过的文件，不看目录规则（隐藏目录、`~/Library`、`node_modules`、`build`……：
+    /// `~/.claude/settings.json`、`.github/workflows/x.yml` 照出），只去掉 `.app` 本身（App 来源有）；
+    /// 同一个文件 Spotlight / 自己扫的目录也有时按这个算。只来自 Spotlight、自己扫的目录的照旧 `isExcluded(path:home:)`。
+    static func isExcluded(_ hit: LauncherFileHit, home: String) -> Bool {
+        if !hit.origins.isDisjoint(with: .touched) { return hit.name.lowercased().hasSuffix(".app") }
+        return isExcluded(path: hit.path, home: home)
+    }
+
+    /// 原始命中 → 给界面的结果：去掉噪音（`isExcluded(_:home:)`）→ 片段只留路径以整个片段结尾的 → 同名的只留最新的 3 份 →
     /// 按匹配的档排（高的在前），同档新的在前（最近使用 / 最近修改），再按路径 → 最多 `limit` 条。文件夹和文件同等对待。
     /// 固定的行（片段的确切命中、输入像文件名时名字完全等于它的，PR 11）排在最前，最多 3 行，次序见 `pinnedOrder`。
     static func process(_ hits: [LauncherFileHit], request: LauncherFileSearchRequest, home: String,
@@ -222,7 +231,7 @@ enum LauncherFileFilter {
         case .nameContains(let words):
             let queries = words.map { LauncherMatchQuery(folded($0)) }
             let whole = words.count > 1 ? LauncherMatchQuery(folded(words.joined(separator: " "))) : nil
-            for hit in hits where !isExcluded(path: hit.path, home: home) {
+            for hit in hits where !isExcluded(hit, home: home) {
                 if let name = request.pinnedName, hit.name.caseInsensitiveCompare(name) == .orderedSame {
                     pinned.append(LauncherFileResult(hit: hit, tierScore: LauncherMatch.exactScore, pinned: true))
                     continue
@@ -233,7 +242,7 @@ enum LauncherFileFilter {
         case .exactName(let name, let pathSuffix):
             let suffix = "/" + pathSuffix.lowercased()
             for hit in hits where hit.name.caseInsensitiveCompare(name) == .orderedSame
-                && hit.path.lowercased().hasSuffix(suffix) && !isExcluded(path: hit.path, home: home) {
+                && hit.path.lowercased().hasSuffix(suffix) && !isExcluded(hit, home: home) {
                 pinned.append(LauncherFileResult(hit: hit, tierScore: LauncherMatch.exactScore, pinned: true))
             }
         }

@@ -612,12 +612,13 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 表（`Logic/LauncherFileCatalog.swift`）：只存「所在目录（同一个目录的条目共用一个字符串）、名字、折叠过的名字、是不是文件夹、修改时间」，一条 48 字节加名字的字符串；折叠 = 纯 ASCII 只转小写，其余去掉声调、全角转半角、转小写、合成成 NFC（APFS 上的名字可能是分解形式），查询词同样折叠后按字节找（`memmem`），和 Spotlight 的 `CONTAINS[cd]` 同样的意思；片段按名字相等找。超过 5000 条匹配时留修改时间新的。换表 = 整张换（锁保护那一个引用），查询拿的是快照，在来源自己的后台队列上查。
 - 不用 FSEvents（扫一遍只要几十毫秒，30 秒内的新文件下次呼出时就有）。不做全量索引：只扫声明了的根。
 
-**已知文件**（来源 C）：模块经 `launcherKnownFiles()` 交出（§3.4），呼出时取一次；和上一次一样就不重建表，变了在后台建、在主线程换。查询时名字匹配上的那几条（最多 300 条，新的在前）在来源的后台队列上 `stat`：不存在的不交，是不是文件夹和修改时间换成磁盘上的。「最近使用」= 模块给的时间（Claude Code：会话最后一次写它的时间）。不在主线程 `stat`。
+**已知文件**（来源 C）：模块经 `launcherKnownFiles()` 交出（§3.4），不看目录规则（见「过滤噪音」），呼出时取一次；和上一次一样就不重建表，变了在后台建、在主线程换。查询时名字匹配上的那几条（最多 300 条，新的在前）在来源的后台队列上 `stat`：不存在的不交，是不是文件夹和修改时间换成磁盘上的。「最近使用」= 模块给的时间（Claude Code：会话最后一次写它的时间）。不在主线程 `stat`。
 
 **剪贴板里的路径**（来源 D，`Logic/LauncherClipboardPaths.swift`）：
 
 - 呼出时拿剪贴板历史和片段的文字条目（条目键、搜索全文、复制时间；图片条目不算），交给后台串行队列：按条目键缓存「文字 → 抽出的路径」，文字没变不重抽，这次没出现的条目从缓存删掉；按复制时间新的在前、同一个文件（规范路径）只留最新的那次、一共最多 2000 个，建成表。路径的「最近使用」= 复制它的时间。
 - 怎么抽（纯函数，进单元测试）：整段（单行）就是一个路径（同输入框认路径的规则 `LauncherPathInput.parse`：引号、`file://`、反斜杠转义、`~/`、末尾的 `:行号`）→ 先收它；整段有空白时（分不清是带空格的路径还是「路径 + 一句话」）两种都收，但空白后面又是一个路径的开头就不当整段收。再找文字里以 `/`、`~/`、`file://` 开头的一段：前面是开头、空白、引号、括号、`=`、`:`、`,`、汉字或全角标点（不然 `and/or`、`1/2`、网址中间的 `/path` 都会算），到空白、引号、括号、全角标点为止（反斜杠转义的空格算路径的一部分）；末尾的 `.,;:!?` 去掉，`:行号` 去掉，`//` 开头的（网址的一部分）不要。一条最多 8 个。存不存在不在这里查（来源查，只查名字匹配上的）。
+- 不看目录规则（见「过滤噪音」）：复制过 `~/Library/…`、隐藏目录里的路径，之后打它的名字也能找到。
 - 只用搜索全文（条目开头的 200 个字符，§3.2），长文字后面的路径抽不到。隐私：只在内存里，不写盘、不联网；敏感条目（`isConcealed`）剪贴板本来就不交给快速入口。
 - 实测（探针，2000 条剪贴板文字，三分之二带路径）：第一次抽 59 ms（后台），之后有缓存 3.8 ms；呼出那一下主线程上多花 0.3–0.5 ms（拿条目文字 + 已知文件比对）。
 
@@ -646,7 +647,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - **读结果**：`kMDItemPath` 从值表里读不出来（`value(ofAttribute:forResultAt:)` 返回 nil），要经 `NSMetadataItem` 一条条取（1–3 千条 4–10 ms）；类型、最近使用、最近修改放进 `valueListAttributes` 按下标读。**不要用 `NSMetadataItem.values(forAttributes:)`**：每条约 0.3 ms，2785 条要 800 ms。
 - **路径是数据卷上的写法**（`/System/Volumes/Data/Users/me/…`），换回 `/Users/me/…`（`LauncherFileFilter.canonicalPath`，只换主目录下的），否则 `~/Library` 过滤不掉、主目录缩写不成 `~`。
 
-**过滤噪音**（`LauncherFileFilter.isExcluded`）：去掉 `~/Library` 下的；路径里任一段是 `node_modules`、`.git`、`DerivedData`、`build`、`build.noindex`、`.build`、`Pods`、`.Trash`（不分大小写）的；在隐藏文件夹（点开头）里、在任何以 `.noindex` 结尾的文件夹里、在包（`.app`、`.framework`、`.xcodeproj`、`.photoslibrary`、`.pages` 等）里面的；`.app` 本身（App 来源已经有了）。包本身照出（`.xcodeproj`、`.key` 是文档）。实测 Spotlight 本来就不索引隐藏文件夹（主目录下路径里带 `/.` 的命中是 0），这条只是兜底。PR 11 起对四个来源一视同仁（已知文件、剪贴板路径在隐藏文件夹或 `~/Library` 里的也去掉）。
+**过滤噪音**（`LauncherFileFilter.isExcluded`）：去掉 `~/Library` 下的；路径里任一段是 `node_modules`、`.git`、`DerivedData`、`build`、`build.noindex`、`.build`、`Pods`、`.Trash`（不分大小写）的；在隐藏文件夹（点开头）里、在任何以 `.noindex` 结尾的文件夹里、在包（`.app`、`.framework`、`.xcodeproj`、`.photoslibrary`、`.pages` 等）里面的；`.app` 本身（App 来源已经有了）。包本身照出（`.xcodeproj`、`.key` 是文档）。实测 Spotlight 本来就不索引隐藏文件夹（主目录下路径里带 `/.` 的命中是 0），这条只是兜底。PR 11 起（审后定）：来自已知文件（C，Claude Code 写过的）或剪贴板路径（D，用户复制过路径的）的命中**不看这些目录规则**（`LauncherFileFilter.isExcluded(_:home:)`）—— 这是用户或他的会话明确碰过的文件，`~/.claude/settings.json`、`.github/workflows/x.yml`、`~/Library/Application Support/Baobox/…` 都照出（仍然要后台 `stat` 确认在磁盘上）；只有 `.app` 本身照旧不出（App 来源有）。同一个文件 Spotlight / 自己扫的目录也有时按 C / D 算（不过滤）。只来自 Spotlight（A）、自己扫的目录（B）的照旧过滤。注意 Claude Code 的最近文件本身默认不含 `~/.claude/**`（它自己的「包含内部文件」设置，关着时这些文件不会交过来）。
 
 **同名的多份副本**（`keepingNewestCopies`）：同名（不分大小写）的只留最新的 3 份（「最新」= 最近使用和最近修改里新的那个）。注意这条按名字分组：不同目录里恰好同名的不同文件（`docs/launcher/TECH_DESIGN.md` 和 `docs/meeting/TECH_DESIGN.md`）也算同一组 —— 实测 `f TECH_DESIGN` 只出 6 行（`TECH_DESIGN.md`、`TECH_DESIGN_V1.md` 各 3 份）。要某一个就打片段（`launcher/TECH_DESIGN.md`）。
 

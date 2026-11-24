@@ -18,8 +18,10 @@ struct LauncherFileOrigins: OptionSet, Hashable, Sendable {
     /// 剪贴板历史里出现过的路径。
     static let clipboard = LauncherFileOrigins(rawValue: 1 << 3)
 
-    /// 固定行里排在前面的：用户此刻更可能要的那一个（`LauncherFileFilter.pinnedOrder`）。
-    static let preferred: LauncherFileOrigins = [.known, .clipboard]
+    /// 用户或他的会话明确碰过的（Claude Code 写过、复制过路径）：不看目录规则（`LauncherFileFilter.isExcluded(_:home:)`）。
+    static let touched: LauncherFileOrigins = [.known, .clipboard]
+    /// 固定行里排在前面的：用户此刻更可能要的那一个（`LauncherFileFilter.pinnedOrder`）—— 就是明确碰过的那些。
+    static let preferred: LauncherFileOrigins = touched
 }
 
 /// 一个来源这次交回了什么（日志分开记）。
