@@ -16,6 +16,8 @@
 
 新增（`Sources/Modules/Clipboard/TextTools/`）：
 
+> 2026-11-24 起：除 `CommonTextActions.swift`（预览区专有的通用动作）外，下表的识别器文件与 `TextFormatRecognizer.swift` 下沉到 **`Sources/Core/TextTools/`**，剪贴板预览区与快速入口共用（docs/launcher/TECH_DESIGN.md §6.3）；`commonActions(for:)` 随之从 `TextFormatRegistry` 挪成 `CommonTextActions.all(for:)`（总开关判断一并带过去），行为不变。
+
 | 文件 | 职责 | 规模 |
 |---|---|---|
 | `TextFormatRecognizer.swift` | 协议、`FormatMatch` / `FormatAction` / `FormatRow`、识别器注册表与调度 | ~140 |
