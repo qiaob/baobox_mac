@@ -9,6 +9,8 @@ import os
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
 // 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
 // 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
+// 图片（§5.5）：⌘V 时先看剪贴板里是什么（`LauncherPasteClassifier`）—— 图片挂成输入里的附件（输入框左边一个小标签），
+// 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
 
 @MainActor
 final class LauncherController {
@@ -17,6 +19,8 @@ final class LauncherController {
     static let keepInputInterval: TimeInterval = 60
     /// 单次查询超过它记一条日志（设计文档 §10 验证 1 要的数据）。
     static let slowQueryThreshold: TimeInterval = 0.005
+    /// 挂着的图片的缩略图最长边（像素）：标签里约 28pt 高，Retina 上两倍。
+    nonisolated static let attachmentThumbnailPixels = 112
     /// ⌘1…⌘9 的 keyCode（5 和 6 是反直觉的 0x17 / 0x16，同剪贴板面板）。
     private static let digitKeyCodes: [UInt16] = [0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19]
 
@@ -41,6 +45,8 @@ final class LauncherController {
     /// 建议行用它（交给翻译、总结、存为片段，算字数，§5.4）；一改动就作废。和输入一起保留 60 秒。
     private var pastedText: String?
     private var hiddenAt: Date?
+    /// 输入里挂着的图片（§5.5）。只有一张，收起即丢。
+    private var attachment: LauncherAttachment?
     /// 这次呼出的命令和 App 条目（后台建好剪贴板的搜索键后，和条目一起重新装进引擎）。
     private var baseItems: [LauncherItem] = []
 
@@ -104,6 +110,7 @@ final class LauncherController {
         }
         baseItems = commands.items() + apps.items
         engine.textActions = commands.textActions()
+        engine.imageActions = commands.imageActions()
         // 剪贴板、片段：取一次条目（只读内存），缺的搜索键最新的 200 条现在建，其余后台建、建完刷新一次列表。
         let entriesStart = DispatchTime.now().uptimeNanoseconds
         let report = entries.beginSession()
@@ -127,6 +134,13 @@ final class LauncherController {
         guard panel.isVisible else { return }
         panel.hide()
         hiddenAt = Date()
+        // 挂着的图片收起即丢（图片占内存）；输入框里的字那时是这张图的筛选词，也不留。
+        if attachment != nil {
+            attachment = nil
+            model.attachment = nil
+            text = ""
+            pastedText = nil
+        }
         paths.cancel()
         files.cancel()
         engine.clear()
@@ -162,6 +176,7 @@ final class LauncherController {
 
     private func refresh(keepSelection: Bool = false) {
         engine.pastedText = pastedText
+        engine.attachment = attachment
         let outcome = engine.search(text, records: usage.records, now: Date())
         queryText = outcome.queryText
         if outcome.duration > Self.slowQueryThreshold {
@@ -229,9 +244,17 @@ final class LauncherController {
                 run(at: model.selectedIndex)
             }
             return true
-        case 0x35: // Esc：收起并把焦点还给原来的 App（点别处收起的不还：用户已经点到别的窗口了）
+        case 0x35: // Esc：挂着图片时第一下去掉图片（连同筛选的字），第二下才收起；收起时把焦点还给原来的 App（点别处收起的不还）
+            if attachment != nil {
+                removeAttachment(clearingText: true)
+                return true
+            }
             hide()
             LauncherFocus.restore()
+            return true
+        case 0x33 where attachment != nil && text.isEmpty && flags.isDisjoint(with: [.command, .control, .option]):
+            // ⌫：输入框为空时去掉挂着的图片（输入框里有字时照常删字）。
+            removeAttachment(clearingText: false)
             return true
         case 0x30: // Tab：路径行上 = 补全成这一行的完整路径；其余时候先吃掉，以后是「问 AI」
             if flags.isDisjoint(with: [.command, .control, .option]) { complete(at: model.selectedIndex) }
@@ -265,17 +288,114 @@ final class LauncherController {
         case ("z", true): edit = .redo
         default: return nil
         }
-        if edit == .paste { notePaste() }
+        if edit == .paste, let handled = pasteSpecial(from: .general) {
+            Self.log.notice("edit shortcut v handled as a non-text paste: \(handled, privacy: .public)")
+            return handled
+        }
         let handled = model.field.perform(edit)
         Self.log.notice("edit shortcut \(key, privacy: .public) handled: \(handled, privacy: .public)")
         return handled
     }
 
-    /// ⌘V：粘贴之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（输入框会把换行压成空格）。
-    /// 只在用户按 ⌘V 这一下读，不在打字路径上。没有文字或只有一行时清掉上一次记的。
-    private func notePaste() {
-        let pasted = NSPasteboard.general.string(forType: .string)
+    /// ⌘V：先看剪贴板里是什么（只在按 ⌘V 这一下读，不在打字路径上），各走各的（§5.5）：
+    /// 图片 → 挂成附件（不往输入框里粘）；文字 → 记下带换行的原文，交还给输入框照常粘贴。返回 nil = 交给输入框粘贴文字。
+    private func pasteSpecial(from pasteboard: NSPasteboard) -> Bool? {
+        let snapshot = LauncherPasteboardReader.snapshot(pasteboard)
+        let kind = LauncherPasteClassifier.classify(snapshot)
+        Self.log.notice("paste: \(Self.label(kind), privacy: .public) (\(snapshot.types.count, privacy: .public) types)")
+        switch kind {
+        case .image:
+            if let data = LauncherPasteboardReader.imageData(pasteboard) {
+                attach(.data(data))
+                return true
+            }
+            notePaste(snapshot.string)
+            return nil
+        case .file, .text, .nothing:
+            notePaste(snapshot.string)
+            return nil
+        }
+    }
+
+    /// 日志里的类别名（不带路径、内容）。
+    private static func label(_ kind: LauncherPasteKind) -> String {
+        switch kind {
+        case .file: return "file"
+        case .image: return "image"
+        case .text: return "text"
+        case .nothing: return "nothing"
+        }
+    }
+
+    /// 粘贴的文字带换行就记成「这次输入的原文」（输入框会把换行压成空格）；没有文字或只有一行时清掉上一次记的。
+    private func notePaste(_ pasted: String?) {
         pastedText = pasted.flatMap { LauncherPastedText.isWorthKeeping($0) ? $0 : nil }
+    }
+
+    // MARK: - 挂着的图片（§5.5）
+
+    /// 挂上一张图（再挂一张就换掉）：输入框清空（之后打的字是筛这张图的建议），后台出缩略图、取一次字。
+    private func attach(_ image: LauncherImage) {
+        let recognition = LauncherRecognition(image: image)
+        recognition.onFinish = { [weak self] finished in self?.recognitionFinished(finished) }
+        attachment = LauncherAttachment(image: image, recognition: recognition)
+        model.attachment = LauncherAttachmentChip()
+        pastedText = nil
+        if !text.isEmpty {
+            text = ""
+            model.field.replaceText("")
+        }
+        refresh()
+        panel.setHeight(model.panelHeight)
+        recognition.start()
+        loadThumbnail(for: recognition)
+    }
+
+    /// 去掉挂着的图片。`clearingText`：连输入框里的筛选词一起清掉（Esc）。
+    private func removeAttachment(clearingText: Bool) {
+        guard attachment != nil else { return }
+        attachment = nil
+        model.attachment = nil
+        if clearingText, !text.isEmpty {
+            text = ""
+            model.field.replaceText("")
+        }
+        refresh()
+        panel.setHeight(model.panelHeight)
+    }
+
+    /// 缩略图（长边 112 像素，约 28pt 高的两倍）和像素尺寸：后台解，回来时附件已经换了就丢掉。读不出来 = 不是能用的图片：
+    /// 去掉附件，回执一句。
+    private func loadThumbnail(for recognition: LauncherRecognition) {
+        let image = recognition.image
+        let begin = DispatchTime.now().uptimeNanoseconds
+        DispatchQueue.global(qos: .userInitiated).async {
+            let size = LauncherImageLoader.pixelSize(image)
+            let thumbnail = LauncherImageLoader.thumbnail(image, maxPixelSize: Self.attachmentThumbnailPixels)
+            let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - begin) / 1_000_000
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard self.attachment?.recognition === recognition else { return }
+                    guard let thumbnail else {
+                        Self.log.error("attached image is unreadable")
+                        self.removeAttachment(clearingText: false)
+                        Self.toast(L("launcher.toast.imageUnreadable"))
+                        return
+                    }
+                    Self.log.notice("image #\(recognition.id, privacy: .public): thumbnail in \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms")
+                    self.model.attachment = LauncherAttachmentChip(
+                        thumbnail: NSImage(cgImage: thumbnail, size: .zero),
+                        sizeText: size.map { "\(Int($0.width))×\(Int($0.height))" })
+                }
+            }
+        }
+    }
+
+    /// 挂着的这张图取完字了：同一个输入再查一次（选中的行还在就留在它上面）。不是当前附件的（换了、去了）不管。
+    private func recognitionFinished(_ recognition: LauncherRecognition) {
+        guard panel.isVisible, attachment?.recognition === recognition else { return }
+        refresh(keepSelection: true)
+        panel.setHeight(model.panelHeight)
     }
 
     // MARK: - 执行
@@ -333,6 +453,17 @@ final class LauncherController {
             LauncherFocus.restore()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { action() }
+            }
+        case .runOnImageText(let recognition, let action):
+            // 「<命令名>图里的文字」：挂上图片时开始的那次取字多半已经跑完；还没跑完（或是图片文件的路径、回车才开始取）就等它。
+            hide()
+            LauncherFocus.restore()
+            recognition.whenDone { result in
+                guard let text = LauncherRecognizedContent.text(result.text) else {
+                    Self.toast(L("launcher.toast.noTextInImage"))
+                    return
+                }
+                action(text)
             }
         }
     }

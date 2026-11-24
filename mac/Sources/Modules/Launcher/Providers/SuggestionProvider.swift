@@ -13,6 +13,8 @@ enum LauncherSuggestionAction {
     case run(@MainActor () -> Void)
     /// 把输入框换成这段文字，面板不收（「搜文件名含…」= 改成 `f <文字>`）。
     case replaceInput(String)
+    /// 「<命令名>图里的文字」（§5.5）：收起面板，等这次取字有了结果，把认出的文字交给动作；没认出字就回执一句。
+    case runOnImageText(LauncherRecognition, @MainActor (String) -> Void)
 }
 
 /// 一条动作类的建议行。颜色、字数这类 ⏎ 复制的行走 `LauncherInstant`（同计算结果：⏎ 复制、⌘⏎ 插入前台 App）。
