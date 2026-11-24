@@ -453,11 +453,11 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 ## 9. 快捷键
 
-- 快捷键 id `launcher.toggle`，`defaultCombo: nil`（约定 6；最终默认值看需求文档 §7 第 2 条的决定）。
+- 快捷键 id `launcher.toggle`，`defaultCombo` = ⌘Space（2026-11-24 用户定，约定 6 的例外）。Spotlight 的快捷键还开着时 `HotkeyCenter` 按系统保留处理：不注册、标冲突。
 - **⌘Space 自动绑定**（`LauncherSpotlightHotkey`）：
   1. 设置页显示状态：`HotkeyCenter` 的系统保留表里有 ⌘Space → 「被 Spotlight 占用」+ 按钮（打开系统设置的键盘快捷键页，链接待验证）。
   2. 用户点过按钮后，Baobox 重新变成前台时（`didBecomeActive`）以及之后 2 分钟内每 3 秒，调 `refreshSystemReserved()` 重查。
-  3. 查到 ⌘Space 不在保留表里、且 `launcher.toggle` 还没绑定 → `HotkeyCenter.update(id:to:)` 绑上，设置页状态变「已绑定」，发一条回执通知。
+  3. 查到 ⌘Space 不在保留表里、且 `launcher.toggle` 还标着冲突（或没绑定）→ `HotkeyCenter.update(id:to:)` 绑上，设置页状态变「已绑定」，发一条回执通知。
   4. 之后如果用户又把 Spotlight 的快捷键开回来：下次启动时检测到冲突，按快捷键页现有的冲突样式标出来，不自动改。
 - 不调用任何私有接口去关 Spotlight 的快捷键，也不用事件拦截抢在系统前面吃掉 ⌘Space：前者是改用户看不见的系统设置，后者行为不稳定。
 - 面板里的键（↑ ↓ ⏎ Tab Esc ⌘K ⌘1–9）由面板的本地键盘监听处理，不注册全局快捷键。
