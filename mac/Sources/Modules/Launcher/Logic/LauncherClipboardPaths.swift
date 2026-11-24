@@ -82,22 +82,25 @@ enum LauncherClipboardPaths {
         return false
     }
 
+    private static let fileURLPrefix = Array("file://")
+
     private static func startsWithFileURL(_ characters: [Character], at index: Int) -> Bool {
-        let prefix = Array("file://")
-        guard index + prefix.count <= characters.count else { return false }
-        return zip(characters[index..<(index + prefix.count)], prefix).allSatisfy { $0.lowercased() == $1.lowercased() }
+        guard characters[index] == "f" || characters[index] == "F", index + fileURLPrefix.count <= characters.count else { return false }
+        return zip(characters[index..<(index + fileURLPrefix.count)], fileURLPrefix).allSatisfy { $0.lowercased() == $1.lowercased() }
     }
 
-    /// 路径前面可以是什么（不然 `and/or`、`1/2`、网址中间的 `/path` 都会被当成路径）。
+    /// 路径前面可以是这些（不然 `and/or`、`1/2`、网址中间的 `/path` 都会被当成路径）；另外空白和汉字也可以。
+    private static let startBoundaries = Set("\"'`([{<=:,;|“”‘’（【《「『，。；：、")
+    /// 路径到这些为止（另外空白也是）。逗号、分号不算（名字里可能有），末尾的由 `trimmingTrailingPunctuation` 去掉。
+    private static let terminators = Set("\"'`()[]{}<>|“”‘’（）【】《》「」『』，。；：、！？")
+
     private static func isStartBoundary(_ character: Character) -> Bool {
-        if character.isWhitespace { return true }
-        if "\"'`([{<=:,;|“”‘’（【《「『，。；：、".contains(character) { return true }
-        return character.unicodeScalars.first?.properties.isIdeographic == true
+        character.isWhitespace || startBoundaries.contains(character)
+            || character.unicodeScalars.first?.properties.isIdeographic == true
     }
 
-    /// 路径到哪里为止。逗号、分号不算（名字里可能有），末尾的由 `trimmingTrailingPunctuation` 去掉。
     private static func isTerminator(_ character: Character) -> Bool {
-        character.isWhitespace || "\"'`()[]{}<>|“”‘’（）【】《》「」『』，。；：、！？".contains(character)
+        character.isWhitespace || terminators.contains(character)
     }
 
     /// 末尾的句读和多出来的右括号去掉（`/a/b.py.`、`/a/b.py,`、`(see /a/b.py)` 已经在括号处断开）。

@@ -36,7 +36,8 @@ final class LauncherFileSources {
     /// 剪贴板路径的缓存，只在 `buildQueue` 上用。
     private let clipboardIndex = LauncherClipboardPathIndexBox()
     private var lastScanStarted: Date?
-    private var scanning = false
+    /// 有一次扫描在后台跑。
+    private(set) var scanning = false
     /// 上一次交来的已知文件：没变就不重建表。
     private var lastKnownFiles: [LauncherKnownFile]?
 
