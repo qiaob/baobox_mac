@@ -386,7 +386,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 快速入口 | `launcher.findFiles` | 搜文件名含「…」的文件 | 全部 | 40 | — | 把输入框换成 `f <文字>`，面板不收，接着就是只搜文件（§6.4） |
 
   划词助手只声明动作条上打开的动作（翻译永远在），和动作条一致。id 用 `….text.<动作>`，不和快捷键 id（`selectiontranslate.translateSelection` 等）重名 —— 重名的话照 §3.1 的规则也不会顶掉快捷键那条，但分开更清楚。
-- **划词助手的新入口** `run(actionID:onText:)`：只换掉取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限，`SelectionTextResult.route = .provided`；之后照常 `present(…, phase: .result(id))`，会话、浮层、结果缓存、⏎ 复制都是原来那一套。没有选区锚点：锚点取鼠标所在屏幕可见区域的水平中线、从上往下 1/5 处的一个点（同快速入口面板的顶边），结果面板贴在它下方。`editTarget` 为 nil，所以改写类结果的主按钮是「复制」，没有「替换」。「选中后弹动作条」「直达快捷键」两条路径没动。
+- **划词助手的新入口** `run(actionID:onText:)`：只换掉取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限，`SelectionTextResult.route = .provided`；之后照常 `present(…, phase: .result(id))`，会话、浮层、结果缓存、⏎ 复制都是原来那一套。没有选区锚点：结果面板水平居中于鼠标所在屏幕的可见区域，顶边在可见区域从上往下 1/5 处（同快速入口面板的顶边）；内容变高、切换动作时重新摆，还是居中、顶边不动（`SelectionCenteredSlot`，`Modules/SelectionTranslate/SelectionPanelPlacement.swift`，进 BaoboxTests）。原来是「锚点取那条线中点、结果面板贴在锚点下方」，用户看到面板在「中间偏右上」：SwiftUI 第一次排版前报一次 0 × 0，面板先被缩成 1 点宽摆在中线上，宿主视图（`NSHostingView` 默认的 sizingOptions）再按内容撑回 400 宽、左上角不动，于是从中线往右长（离屏探针复现）。居中这一格不理 0 × 0，判断「用户拖过」时差 1 点以内不算（系统给窗口原点取整）。贴选区的那条路没改（按代码它也会收到那次 0 × 0，结果面板应当同样从选区中线往右长，没在真机上看；要不要一起修另说）。`editTarget` 为 nil，所以改写类结果的主按钮是「复制」，没有「替换」。「选中后弹动作条」「直达快捷键」两条路径没动。
 
 **输入分类**（`Logic/LauncherInputClassifier.swift`，纯函数，单元测试一百多条正反例）。输入去首尾空白后归成一类，优先级：
 

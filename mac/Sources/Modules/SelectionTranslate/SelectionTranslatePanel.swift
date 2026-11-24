@@ -6,7 +6,8 @@ import Translation
 
 /// 划词助手浮层：不抢焦点的 NSPanel，两种形态（docs/selection-translate/ASSISTANT.md §2.2）：
 /// - 动作条：一排小按钮，贴在选区上方，宽度跟内容走；
-/// - 结果面板：宽 400，高度跟内容走，贴在选区下方（放不下翻到上方）。
+/// - 结果面板：宽 400，高度跟内容走，贴在选区下方（放不下翻到上方）；
+///   交来的文字（快速入口）没有选区：水平居中、顶边固定（`SelectionCenteredSlot`）。
 /// 另有纯提示（没取到词等）。
 ///
 /// 关闭：点别处、Esc、开始打字、动作条形态下滚轮或 4 秒没碰。判定靠全局事件监听
@@ -19,6 +20,8 @@ final class SelectionTranslatePanelController {
     private(set) var session: SelectionSession?
     /// 这次浮层贴着的位置；内容变了重新摆放要用。
     private var anchor: CGRect?
+    /// 交来的文字：不贴选区，居中摆在这一格里（非 nil 时 `anchor` 不参与定位）。
+    private var centeredSlot: SelectionCenteredSlot?
     /// 上一次由我们摆放的位置。浮层位置和它不一样 = 用户拖过，之后只在原地长高、不再跳回选区旁。
     private var placedOrigin: NSPoint?
     private var userMoved = false
@@ -32,21 +35,22 @@ final class SelectionTranslatePanelController {
     var isVisible: Bool { panel?.isVisible ?? false }
     var frame: CGRect? { panel?.frame }
 
-    func show(session: SelectionSession) {
+    /// - Parameter slot: 交来的文字（快速入口）时给：结果面板居中摆在这一格里，不贴选区。
+    func show(session: SelectionSession, centeredIn slot: SelectionCenteredSlot? = nil) {
         present(AnyView(SelectionRootView(session: session, onSizeChange: { [weak self] size in
             // 回调发生在 SwiftUI 更新过程中：下一拍再改窗口，避免宿主视图在渲染途中被重入布局。
             Task { @MainActor in self?.fit(to: size) }
-        })), session: session, anchor: session.anchor)
+        })), session: session, anchor: session.anchor, centeredIn: slot)
     }
 
     func showNotice(_ message: String, anchor: CGRect?) {
         present(AnyView(SelectionNoticeView(message: message, onClose: { [weak self] in self?.hide() },
                                             onSizeChange: { [weak self] size in
             Task { @MainActor in self?.fit(to: size) }
-        })), session: nil, anchor: anchor)
+        })), session: nil, anchor: anchor, centeredIn: nil)
     }
 
-    private func present(_ root: AnyView, session: SelectionSession?, anchor: CGRect?) {
+    private func present(_ root: AnyView, session: SelectionSession?, anchor: CGRect?, centeredIn slot: SelectionCenteredSlot?) {
         hide()
         let hosting = NSHostingView(rootView: root)
         hosting.frame = NSRect(x: 0, y: 0, width: SelectionPanelMetrics.width, height: 200)
@@ -66,7 +70,8 @@ final class SelectionTranslatePanelController {
         panel.isMovableByWindowBackground = true
         self.session = session
         self.anchor = anchor
-        let origin = Self.placement(for: size, anchor: anchor, above: session?.isBar ?? false)
+        centeredSlot = slot
+        let origin = slot?.origin(for: size) ?? Self.placement(for: size, anchor: anchor, above: session?.isBar ?? false)
         panel.setFrameOrigin(origin)
         self.panel = panel
         placedOrigin = origin
@@ -95,15 +100,24 @@ final class SelectionTranslatePanelController {
     }
 
     /// 内容尺寸变了就跟着改浮层。没被拖过就按选区重新摆放（结果面板在下方、放不下翻到上方；动作条在上方）；
-    /// 拖过的话上沿不动、往下长，再夹回屏幕可见区。
+    /// 交来的文字没被拖过就重新居中、顶边不动；拖过的话上沿不动、往下长，再夹回屏幕可见区。
     private func fit(to contentSize: CGSize) {
         guard let panel else { return }
+        // 居中那一格：不理还没排版时报上来的 0 × 0。理了的话面板先被缩成 1 点宽摆在中线上，宿主视图再按内容把它撑回 400 宽、
+        // 左上角不动 —— 面板就从中线往右长（2026-11-24 用户看到的「中间偏右上」，离屏探针复现）。
+        if centeredSlot != nil, !SelectionCenteredSlot.isMeasured(contentSize) { return }
         let height = SelectionPanelMetrics.clampedHeight(contentSize.height)
         let width = max(1, ceil(contentSize.width))
         let sizeChanged = abs(panel.frame.height - height) > 0.5 || abs(panel.frame.width - width) > 0.5
         guard sizeChanged || placedOrigin == nil else { return }
         let size = NSSize(width: width, height: height)
-        if let placedOrigin, panel.frame.origin != placedOrigin { userMoved = true }
+        if let placedOrigin {
+            // 居中那一格：系统给窗口原点取整，差一点点不算拖过（否则可见区高度的 1/5 不是整数时，第一次改尺寸就被当成拖过、不再居中）。
+            let moved = centeredSlot == nil
+                ? panel.frame.origin != placedOrigin
+                : SelectionCenteredSlot.wasMoved(placed: placedOrigin, actual: panel.frame.origin)
+            if moved { userMoved = true }
+        }
         var origin: NSPoint
         if userMoved {
             origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - height)
@@ -112,7 +126,7 @@ final class SelectionTranslatePanelController {
                 origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - height - 8)
             }
         } else {
-            origin = Self.placement(for: size, anchor: anchor, above: session?.isBar ?? false)
+            origin = centeredSlot?.origin(for: size) ?? Self.placement(for: size, anchor: anchor, above: session?.isBar ?? false)
         }
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         placedOrigin = origin

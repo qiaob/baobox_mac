@@ -197,6 +197,7 @@ targets:
       - path: Sources/Modules/NetCapture/Logic
       - path: Sources/Core/Launcher
       - path: Sources/Modules/Launcher/Logic
+      - path: Sources/Modules/SelectionTranslate/SelectionPanelPlacement.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

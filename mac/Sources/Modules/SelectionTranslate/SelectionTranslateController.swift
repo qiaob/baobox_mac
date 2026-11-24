@@ -179,22 +179,24 @@ final class SelectionTranslateController {
 
     /// 快速入口对一段文字直接跑一个动作（docs/launcher/TECH_DESIGN.md §5.4）：跳过动作条，出这个动作的结果面板。
     /// 和「选中后弹动作条」「快捷键直达」两条路不同的只有取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限：
-    /// - 没有选区锚点：浮层放在鼠标所在屏幕的水平中间、顶边在从上往下 1/5 处（快速入口面板刚才的位置）；
+    /// - 没有选区锚点：结果面板水平居中于鼠标所在屏幕的可见区域、顶边在从上往下 1/5 处（快速入口面板刚才的顶边），
+    ///   内容变高、切换动作时保持居中（`SelectionCenteredSlot`）；
     /// - 不是从哪个输入框选来的（`editTarget` 为 nil）：改写类结果的主按钮是「复制」，不给「替换」。
     func run(actionID: String, onText text: String) {
-        present(SelectionTextResult(text: text, anchorRect: Self.providedTextAnchor(), route: .provided),
-                phase: .result(actionID), keyboardMode: false)
+        let slot = Self.providedTextSlot()
+        // 锚点只给面板里的提示用（「替换没成功」这类）：那一格顶边的中点。拿不到屏幕时为 nil（退回鼠标位置）。
+        let anchor = slot.map { CGRect(x: $0.visible.midX, y: $0.top, width: 0, height: 0) }
+        present(SelectionTextResult(text: text, anchorRect: anchor, route: .provided),
+                phase: .result(actionID), keyboardMode: false, centeredIn: slot)
     }
 
-    /// 交来的文字的浮层锚点：鼠标所在屏幕可见区域的水平中线、从上往下 1/5 处的一个点（同快速入口面板的顶边）。
-    /// 结果面板贴在锚点下方，所以它的顶边就在快速入口面板刚才的顶边附近。拿不到屏幕时为 nil（退回鼠标位置）。
-    private static func providedTextAnchor() -> CGRect? {
+    /// 交来的文字的结果面板摆在哪一格：鼠标所在屏幕的可见区域。拿不到屏幕时为 nil（按鼠标位置摆）。
+    private static func providedTextSlot() -> SelectionCenteredSlot? {
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else {
             return nil
         }
-        let visible = screen.visibleFrame
-        return CGRect(x: visible.midX, y: visible.maxY - visible.height * 0.2, width: 0, height: 0)
+        return SelectionCenteredSlot(visible: screen.visibleFrame)
     }
 
     // MARK: - 手动触发：框选 OCR
@@ -231,7 +233,8 @@ final class SelectionTranslateController {
         }
     }
 
-    private func present(_ result: SelectionTextResult, phase: SelectionSession.Phase, keyboardMode: Bool) {
+    private func present(_ result: SelectionTextResult, phase: SelectionSession.Phase, keyboardMode: Bool,
+                         centeredIn slot: SelectionCenteredSlot? = nil) {
         let text = String(result.text.prefix(Self.maxCharacters))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -246,7 +249,7 @@ final class SelectionTranslateController {
             guard let self, let session, self.panel.session === session else { return }
             self.refreshTransientKeys()
         }
-        panel.show(session: session)
+        panel.show(session: session, centeredIn: slot)
         refreshTransientKeys()
     }
 
