@@ -18,6 +18,7 @@ OCR 的入口天然就是「框一块屏幕」，而这套交互——多屏 ove
 | 标注工具条「取字」按钮（贴图/长截屏右边） | 普通截图会话 → `finishSelection(.ocr)` → `CaptureController.finishRecognize(图)` | 已经框好了，临时决定要文字 |
 | 快捷键 / 菜单「屏幕取字」 | `beginTextRecognition()` → `CaptureSessionMode.ocr` 会话 | 一步到位，最快 |
 | 截图历史条目 · 贴图窗右键 | 直接 `OCRResultWindow.present(image:)` | 对已有图片补一次识别 |
+| 快速入口「取字」（2026-11-24 起） | 截图模块声明的图片动作 `screenshot.image.ocr` → 后台解码（`LauncherImageLoader`）→ `OCRResultWindow.present(image:)` | 任意图片：贴进 / 拖进快速入口的、剪贴板历史里的、访达里的图片文件（docs/launcher/TECH_DESIGN.md §5.5） |
 
 快捷键 `screenshot.ocr` 出厂**不绑定**（沿用项目对易冲突组合的一贯做法）。
 
@@ -67,6 +68,7 @@ Vision 返回的是一堆带归一化 `boundingBox`（原点左下）的碎片�
 ## 设置（截图 Tab 新增一节）
 
 - **识别语言**：中文+英文（默认）/ 仅英文 / 中文+英文+日文。语言选得越少准确率通常越高。
+  读取在 Core 的 `TextRecognizer.LanguageOption.preferred`（键仍是 `screenshot.ocrLanguage`）：快速入口对挂进来的图片在后台取字时也照这个设置。
 - **识别后直接复制，不弹结果窗**：默认关。
 
 存 `screenshot.ocrLanguage` / `screenshot.ocrAutoCopyOnly` 两个 UserDefaults 键。
