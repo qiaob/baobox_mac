@@ -11,6 +11,8 @@ import AppKit
 /// 「图片 / image / 截图」和来源 App 名都能搜到；只在 `c ` 前缀下出现（标题都差不多，不带前缀时只是噪音）。
 /// 缩略图和 Tab 挂成附件要的图片字节交一个「怎么取」（解密读盘），快速入口在后台调 —— 这里仍然零磁盘 IO。
 /// ⏎ 走 `PasteService.paste`，和剪贴板面板回车一样（回填不进历史、切回前台 App 再合成 ⌘V、没有辅助功能权限时说明降级）。
+/// 不传目标：`PasteService` 进门就从快速入口正在执行的动作里读走目标（呼出前的前台 App；它已经退出时为 nil，
+/// 不会把此刻的前台 App 误报成「占着键盘」），docs/launcher/TECH_DESIGN.md §4。
 @MainActor
 final class ClipboardLauncherSource: LauncherSearchable {
     enum Kind {
@@ -101,9 +103,8 @@ final class ClipboardLauncherSource: LauncherSearchable {
                 searchText: searchText,
                 symbolName: kind == .history ? "doc.text" : "text.badge.star",
                 date: item.createdAt,
-                // 目标是呼出快速入口前的前台 App（`LauncherFocus`）：面板拿过焦点，此刻的前台 App 不可靠。
-                primary: { PasteService.paste(item, plainText: false, target: LauncherFocus.previousApp,
-                                              store: store, monitor: monitor) }
+                // 目标由 `PasteService` 从快速入口的动作里读（呼出前的前台 App），这里不传。
+                primary: { PasteService.paste(item, plainText: false, store: store, monitor: monitor) }
             ))
         }
         return entries
@@ -126,8 +127,7 @@ final class ClipboardLauncherSource: LauncherSearchable {
             date: item.createdAt,
             image: LauncherEntryImage(cacheKey: filename, loadData: { ClipboardCrypto.read(from: url) }),
             onlyWithPrefix: true,
-            primary: { PasteService.paste(item, plainText: false, target: LauncherFocus.previousApp,
-                                          store: store, monitor: monitor) }
+            primary: { PasteService.paste(item, plainText: false, store: store, monitor: monitor) }
         )
     }
 

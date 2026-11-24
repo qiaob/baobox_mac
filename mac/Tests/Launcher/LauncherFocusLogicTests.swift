@@ -155,9 +155,11 @@ final class LauncherFocusLogicTests: XCTestCase {
         XCTAssertEqual(noExplicit.source, .clipboardPanel)
         let launcherOnly = LauncherPasteTarget.resolve(explicit: nil, clipboardPanel: nil, launcher: "c")
         XCTAssertEqual(launcherOnly.app, "c")
-        XCTAssertEqual(launcherOnly.source, .launcher, "「纯文本粘贴上一条」从快速入口执行：没传目标，用快速入口的")
+        XCTAssertEqual(launcherOnly.source, .launcher,
+                       "「纯文本粘贴上一条」、剪贴板条目从快速入口执行：没传目标，用快速入口动作里的")
         let none = LauncherPasteTarget.resolve(explicit: String?.none, clipboardPanel: nil, launcher: nil)
         XCTAssertNil(none.app)
-        XCTAssertEqual(none.source, .missing, "全局快捷键触发：没有目标，粘给前台")
+        XCTAssertEqual(none.source, .missing,
+                       "全局快捷键触发，或快速入口的剪贴板条目、而呼出前的 App 已经退出：没有目标，粘给前台（不拿退出的 App 当目标）")
     }
 }
