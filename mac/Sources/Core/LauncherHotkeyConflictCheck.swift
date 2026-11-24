@@ -1,20 +1,32 @@
 import AppKit
 
-/// 此刻快速入口的快捷键是不是和正在运行的别的启动器撞了（docs/launcher/TECH_DESIGN.md §9）：快速入口的设置页、面板最下面的提示、
-/// 粘贴被挡下时的回执都用它。只读内存（`HotkeyCenter` 的登记、`NSWorkspace.runningApplications`），不读盘。规则在 `LauncherHotkeyConflict`。
+/// 此刻快速入口的快捷键是不是确实和正在运行的 Raycast 撞了（docs/launcher/TECH_DESIGN.md §9）：快速入口的设置页、
+/// 面板最下面的提示、粘贴被挡下时的回执都用它。规则在 `LauncherHotkeyConflict.confirmedConflict`。
+/// 读的东西：`HotkeyCenter` 的登记（内存）、`NSWorkspace.runningApplications`（内存），前两样都满足时才读 Raycast 偏好里的
+/// `raycastGlobalHotkey` 这一个键（`CFPreferencesCopyAppValue`，只读，不写、不同步、不读别的键）。
 @MainActor
 enum LauncherHotkeyConflictCheck {
-    /// 快速入口的呼出键此刻是不是 ⌘Space。
-    static var launcherHotkeyIsCommandSpace: Bool {
-        guard let combo = HotkeyCenter.shared.combo(for: LauncherHotkeyConflict.launcherHotkeyID) else { return false }
-        return LauncherHotkeyConflict.isCommandSpace(keyCode: combo.keyCode, carbonModifiers: combo.carbonModifiers)
+    /// 确认撞了的那个 App 的名字（Raycast）；没有证据时为 nil。
+    static func confirmedConflictName() -> String? {
+        let id = LauncherHotkeyConflict.launcherHotkeyID
+        let combo = HotkeyCenter.shared.combo(for: id)
+        let registered = combo != nil && !HotkeyCenter.shared.conflictedIDs.contains(id)
+        let ourCommandSpace = combo.map {
+            LauncherHotkeyConflict.isCommandSpace(keyCode: $0.keyCode, carbonModifiers: $0.carbonModifiers)
+        } ?? false
+        let raycastRunning = ourCommandSpace && registered && NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == LauncherHotkeyConflict.raycastBundleID
+        }
+        // 前面都满足才去读它的偏好（一次 cfprefsd 往返）。
+        let raycastHotkey = raycastRunning ? readRaycastHotkey() : nil
+        return LauncherHotkeyConflict.confirmedConflict(ourKeyCode: combo?.keyCode, ourModifiers: combo?.carbonModifiers,
+                                                        ourRegistered: registered, raycastRunning: raycastRunning,
+                                                        raycastHotkey: raycastHotkey)
     }
 
-    /// 正在运行、默认也用 ⌘Space 的启动器的名字；快速入口的快捷键不是 ⌘Space、或没有这样的 App 时为 nil。
-    static func conflictingLauncherName() -> String? {
-        let combo = HotkeyCenter.shared.combo(for: LauncherHotkeyConflict.launcherHotkeyID)
-        return LauncherHotkeyConflict.conflictingLauncher(
-            keyCode: combo?.keyCode, carbonModifiers: combo?.carbonModifiers,
-            runningBundleIDs: NSWorkspace.shared.runningApplications.map(\.bundleIdentifier))
+    /// Raycast 偏好里的 `raycastGlobalHotkey`（如 `"Command-49"`）；没有、不是字符串时为 nil。
+    private static func readRaycastHotkey() -> String? {
+        CFPreferencesCopyAppValue(LauncherHotkeyConflict.raycastHotkeyKey as CFString,
+                                  LauncherHotkeyConflict.raycastBundleID as CFString) as? String
     }
 }

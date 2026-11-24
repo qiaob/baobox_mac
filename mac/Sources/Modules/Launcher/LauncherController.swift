@@ -120,8 +120,8 @@ final class LauncherController {
             text = ""
             pastedText = nil
         }
-        // 快捷键和正在运行的别的启动器撞了（§9）：列表最下面一行小字提示；换了快捷键 / 退出那个 App 后下次呼出就没了。
-        let conflict = LauncherHotkeyConflictCheck.conflictingLauncherName()
+        // 快捷键确实和正在运行的 Raycast 撞了（§9）：列表最下面一行小字提示；换了快捷键 / 退出那个 App 后下次呼出就没了。
+        let conflict = LauncherHotkeyConflictCheck.confirmedConflictName()
         model.notice = conflict.map { L("launcher.panel.hotkeyConflict \($0)") }
         if let conflict { Self.log.notice("hotkey conflict hint shown: \(conflict, privacy: .public)") }
         baseItems = commands.items() + apps.items

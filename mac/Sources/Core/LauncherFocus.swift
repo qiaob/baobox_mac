@@ -236,7 +236,7 @@ enum LauncherFocus {
             let holder = NSRunningApplication(processIdentifier: pid)
             switch LauncherHotkeyConflict.blockedReceipt(
                 holderBundleID: holder?.bundleIdentifier,
-                launcherHotkeyIsCommandSpace: LauncherHotkeyConflictCheck.launcherHotkeyIsCommandSpace) {
+                confirmedConflict: LauncherHotkeyConflictCheck.confirmedConflictName()) {
             case .hotkeyConflict(let name):
                 title = L("launcher.paste.hotkeyConflict \(name)")
                 body = L("launcher.paste.notPastedCopied")

@@ -98,7 +98,7 @@ final class LauncherPanelModel: ObservableObject {
     @Published var attachment: LauncherAttachmentChip?
     /// 每取到一批缩略图 +1：列表重画、换上缩略图。
     @Published private(set) var thumbnailsVersion = 0
-    /// 列表最下面一行不可选的小字提示（快捷键和别的启动器撞了，§9）；nil = 不显示。呼出时定，换了快捷键 / 退出那个 App 后下次就没了。
+    /// 列表最下面一行不可选的小字提示（快捷键确实和 Raycast 撞了，§9）；nil = 不显示。呼出时定，换了快捷键 / 退出那个 App 后下次就没了。
     @Published var notice: String?
 
     func thumbnailsChanged() {
