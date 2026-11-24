@@ -14,6 +14,9 @@ struct LauncherInputClassification: Equatable, Sendable {
     var isPath = false
     /// 是网址时，打开用的地址（没写 scheme 的已补上：域名补 `https://`，localhost 和 IP 补 `http://`）。
     var url: URL?
+    /// 像网址、但也可能是文件名的（`Safari.app`、`logo.ai`、`main.cc`）：类别按普通文字算，`url` 照样给出，
+    /// 「打开」不排最前、改成兜底建议的第一条（`LauncherURLDetector.detect`）。
+    var isAmbiguousURL = false
     /// 是邮箱时，地址本身（`mailto:` 已去掉）。
     var email: String?
     /// 是颜色时，解析出的颜色。
@@ -28,14 +31,16 @@ enum LauncherInputClassifier {
     static let maxWordLength = 40
 
     /// 分类。优先级：路径（不出建议）> 网址 > 邮箱 > 颜色 > 英文单词 / 短语 > 一大段文字 > 其余。
+    /// 有歧义的网址（可能是文件名）按普通文字算，但带上 `url`、标上 `isAmbiguousURL`。
     static func classify(_ input: String) -> LauncherInputClassification {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return LauncherInputClassification(text: "", kinds: []) }
         if text.hasPrefix("/") || text.hasPrefix("~") {
             return LauncherInputClassification(text: text, kinds: [], isPath: true)
         }
-        if let url = LauncherURLDetector.url(from: text) {
-            return LauncherInputClassification(text: text, kinds: [.url], url: url)
+        if let link = LauncherURLDetector.detect(text) {
+            return LauncherInputClassification(text: text, kinds: link.isAmbiguous ? [.plainText] : [.url],
+                                               url: link.url, isAmbiguousURL: link.isAmbiguous)
         }
         if let email = LauncherURLDetector.email(from: text) {
             return LauncherInputClassification(text: text, kinds: [.email], email: email)
@@ -91,23 +96,33 @@ enum LauncherURLDetector {
         "fi", "dk", "ch", "at", "be", "ru", "ua", "br", "mx", "eu", "asia", "my", "th", "vn", "ph", "id",
     ]
 
+    /// 有歧义的顶级域名：和常见文件扩展名撞车，但也确实常见于网址（`Safari.app` / `linear.app`、`logo.ai` / `claude.ai`、
+    /// `main.cc` / `xxx.cc`）。不带 scheme、不带 `www.`、没有端口和路径时，这样的输入可能是文件名：「打开」不排最前。
+    static let ambiguousTopLevelDomains: Set<String> = ["app", "ai", "cc"]
+
     /// 不当网址打开的 scheme（会执行脚本或带内联数据）。
     private static let blockedSchemes: Set<String> = ["javascript", "data", "vbscript"]
 
     /// 是网址就给出打开用的地址，否则 nil。输入已去首尾空白。
-    /// - `scheme://…`（scheme 是字母开头的字母数字 `+-.`）：原样（`http` / `https` 要有主机部分）。
-    /// - 不带 scheme：`主机[:端口][/路径][?查询][#片段]`，主机是 `localhost`、IPv4 或「几段 + 常见顶级域名」的域名。
     static func url(from text: String) -> URL? {
+        detect(text)?.url
+    }
+
+    /// 是网址就给出打开用的地址和它有没有歧义，否则 nil。输入已去首尾空白。
+    /// - `scheme://…`（scheme 是字母开头的字母数字 `+-.`）：原样（`http` / `https` 要有主机部分），没有歧义。
+    /// - 不带 scheme：`主机[:端口][/路径][?查询][#片段]`，主机是 `localhost`、IPv4 或「几段 + 常见顶级域名」的域名。
+    ///   顶级域名在 `ambiguousTopLevelDomains` 里、又不带 `www.`、端口、路径、查询、片段的（`Safari.app`、`claude.ai`）算有歧义。
+    static func detect(_ text: String) -> (url: URL, isAmbiguous: Bool)? {
         guard !text.isEmpty, text.utf8.count <= maxURLLength, !text.contains(where: \.isWhitespace) else { return nil }
         if let separator = text.range(of: "://") {
             let scheme = text[..<separator.lowerBound]
             let rest = text[separator.upperBound...]
             guard isScheme(scheme), !blockedSchemes.contains(scheme.lowercased()), let first = rest.first else { return nil }
             if ["http", "https"].contains(scheme.lowercased()), "/?#".contains(first) { return nil }
-            return URL(string: text)
+            return URL(string: text).map { ($0, false) }
         }
-        guard let scheme = schemeForBareHost(text) else { return nil }
-        return URL(string: scheme + "://" + text)
+        guard let host = bareHost(text), let url = URL(string: host.scheme + "://" + text) else { return nil }
+        return (url, host.isAmbiguous)
     }
 
     /// 邮箱（可带 `mailto:`）：本地部分是字母数字和 `._%+-`（不以点开头或结尾、不连着两个点），
@@ -129,22 +144,28 @@ enum LauncherURLDetector {
         return String(address)
     }
 
-    /// 不带 scheme 时该补哪个：域名 `https`，localhost 和 IPv4 `http`；不是网址为 nil。
-    private static func schemeForBareHost(_ text: String) -> String? {
+    /// 不带 scheme 时该补哪个（域名 `https`，localhost 和 IPv4 `http`）、有没有歧义；不是网址为 nil。
+    private static func bareHost(_ text: String) -> (scheme: String, isAmbiguous: Bool)? {
         let hostEnd = text.firstIndex(where: { "/?#".contains($0) }) ?? text.endIndex
         let hostAndPort = text[..<hostEnd]
         guard !hostAndPort.isEmpty, !hostAndPort.contains("@") else { return nil }
         var host = hostAndPort
+        var hasPort = false
         if let colon = hostAndPort.firstIndex(of: ":") {
             let port = hostAndPort[hostAndPort.index(after: colon)...]
             guard (1...5).contains(port.count), port.allSatisfy({ ("0"..."9").contains($0) }),
                   let number = Int(port), (1...65_535).contains(number) else { return nil }
             host = hostAndPort[..<colon]
+            hasPort = true
         }
+        // 只有主机名本身（没有端口、路径、查询、片段）时才可能有歧义。
+        let bare = !hasPort && hostEnd == text.endIndex
         let lower = host.lowercased()
-        if lower == "localhost" { return "http" }
-        if isIPv4(lower) { return "http" }
-        return isKnownDomain(lower) ? "https" : nil
+        if lower == "localhost" { return ("http", false) }
+        if isIPv4(lower) { return ("http", false) }
+        guard isKnownDomain(lower), let tld = lower.split(separator: ".").last else { return nil }
+        let ambiguous = bare && !lower.hasPrefix("www.") && ambiguousTopLevelDomains.contains(String(tld))
+        return ("https", ambiguous)
     }
 
     /// 四段 0–255 的数字（`192.168.1.1`）。

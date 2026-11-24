@@ -31,6 +31,24 @@ final class LauncherSuggestionsTests: XCTestCase {
                        [.openURL(try XCTUnwrap(URL(string: "https://example.com/?utm_source=x")))])
     }
 
+    func testAmbiguousLinkOpensFromTheTopOfTheFallbackGroup() throws {
+        for (input, address) in [("Safari.app", "https://Safari.app"), ("logo.ai", "https://logo.ai"),
+                                 ("main.cc", "https://main.cc"), ("claude.ai", "https://claude.ai")] {
+            let result = plan(input)
+            XCTAssertEqual(result.leading, [], "不排最前：\(input)")
+            XCTAssertEqual(result.fallbackLeading, [.openURL(try XCTUnwrap(URL(string: address)))], input)
+            XCTAssertEqual(result.fallbackKinds, [.plainText], input)
+            XCTAssertEqual(result.rankedFallbackLimit, LauncherSuggestionRanking.maxRows - 1, "占掉兜底建议的一个名额")
+        }
+        for (input, address) in [("https://claude.ai", "https://claude.ai"), ("claude.ai/chat", "https://claude.ai/chat")] {
+            let result = plan(input)
+            XCTAssertEqual(result.leading, [.openURL(try XCTUnwrap(URL(string: address)))], input)
+            XCTAssertEqual(result.fallbackLeading, [], input)
+            XCTAssertEqual(result.fallbackKinds, [.url], input)
+            XCTAssertEqual(result.rankedFallbackLimit, LauncherSuggestionRanking.maxRows)
+        }
+    }
+
     func testEmailAndColor() {
         XCTAssertEqual(plan("mailto:me@baobox.dev").leading, [.email("me@baobox.dev")])
         XCTAssertEqual(plan("mailto:me@baobox.dev").fallbackKinds, [.email])

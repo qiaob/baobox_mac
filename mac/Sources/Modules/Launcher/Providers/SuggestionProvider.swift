@@ -71,19 +71,31 @@ enum LauncherSuggestionProvider {
         var suggestions = LauncherSuggestions()
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {
-            suggestions.trailing = fallbackRows(text: plan.text, kinds: kinds, textActions: textActions,
-                                                records: records, now: now)
+            // 有歧义的网址的「打开」排在兜底建议最前面（翻译前面），占一个名额。
+            let first = plan.fallbackLeading.flatMap { leadingRows($0, text: plan.text, inFallback: true) }
+                .compactMap { entry -> LauncherSuggestion? in
+                    if case .action(let suggestion) = entry { return suggestion }
+                    return nil
+                }
+            suggestions.trailing = first + fallbackRows(text: plan.text, kinds: kinds, textActions: textActions,
+                                                        records: records, now: now, limit: plan.rankedFallbackLimit)
         }
         return suggestions
     }
 
     // MARK: - 对应建议
 
-    private static func leadingRows(_ suggestion: LauncherLeadingSuggestion, text: String) -> [LauncherSuggestions.Leading] {
+    /// `inFallback`：放在兜底建议最前面的（有歧义的网址）—— 标题写补好 scheme 的完整地址（「打开 https://claude.ai」），
+    /// 一眼看出说的是网站，不是那个文件名。
+    private static func leadingRows(_ suggestion: LauncherLeadingSuggestion, text: String,
+                                    inFallback: Bool = false) -> [LauncherSuggestions.Leading] {
         let quote = LauncherSuggestionText.quote(text, maxLength: LauncherSuggestionText.leadingQuoteLength)
         switch suggestion {
         case .openURL(let url):
-            let row = LauncherRow(id: "suggest/url", title: L("launcher.suggest.openURL \(quote)"),
+            let shown = inFallback
+                ? LauncherSuggestionText.quote(url.absoluteString, maxLength: LauncherSuggestionText.leadingQuoteLength)
+                : quote
+            let row = LauncherRow(id: "suggest/url", title: L("launcher.suggest.openURL \(shown)"),
                                   source: L("launcher.suggest.source.url"), icon: .symbol("globe"))
             return [.action(LauncherSuggestion(row: row, usageKey: nil, action: .run { NSWorkspace.shared.open(url) }))]
         case .email(let address):
@@ -115,12 +127,13 @@ enum LauncherSuggestionProvider {
     // MARK: - 兜底建议
 
     private static func fallbackRows(text: String, kinds: Set<LauncherTextKind>, textActions: [LauncherCatalogCommand],
-                                     records: LauncherUsageRecords, now: Date) -> [LauncherSuggestion] {
+                                     records: LauncherUsageRecords, now: Date, limit: Int) -> [LauncherSuggestion] {
         let actions = textActions.filter { $0.command.isTextAction }
         let candidates = actions.map { LauncherSuggestionCandidate(id: $0.command.id, traits: $0.command.suggestion) }
             + [LauncherSuggestionRanking.webSearch, LauncherSuggestionRanking.findFiles]
         let quote = LauncherSuggestionText.quote(text)
-        return LauncherSuggestionRanking.order(candidates, kinds: kinds, records: records, now: now).compactMap { index in
+        let order = LauncherSuggestionRanking.order(candidates, kinds: kinds, records: records, now: now, limit: limit)
+        return order.compactMap { index in
             let id = candidates[index].id
             let key = LauncherSuggestionRanking.usageKey(for: id)
             if actions.indices.contains(index) {

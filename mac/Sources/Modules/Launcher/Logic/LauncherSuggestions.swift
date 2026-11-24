@@ -26,8 +26,15 @@ struct LauncherSuggestionPlan: Equatable, Sendable {
     let leading: [LauncherLeadingSuggestion]
     /// 兜底建议按这些类别筛选、提前；nil = 不出兜底建议。
     let fallbackKinds: Set<LauncherTextKind>?
+    /// 排在兜底建议最前面的（在翻译前面）：有歧义的网址（`claude.ai`、`Safari.app`）的「打开」放这里，不排最前。
+    var fallbackLeading: [LauncherLeadingSuggestion] = []
 
     static let none = LauncherSuggestionPlan(text: "", leading: [], fallbackKinds: nil)
+
+    /// 兜底建议里交给排序的最多几行：总数仍是 `LauncherSuggestionRanking.maxRows`，排在最前面的那几条占掉名额。
+    var rankedFallbackLimit: Int {
+        max(0, LauncherSuggestionRanking.maxRows - fallbackLeading.count)
+    }
 }
 
 enum LauncherSuggestionPolicy {
@@ -38,6 +45,7 @@ enum LauncherSuggestionPolicy {
     /// - 打了来源前缀（`a `、`c `、`> `…）、输入为空、输入是路径（以 `/` 或 `~` 开头）：什么都不出。
     /// - 有计算结果：不出对应建议，兜底建议照出（按普通文字）、排在最后。
     /// - 网址 / 邮箱 / 颜色：出对应的那一条（有文本识别结果时也出：「打开」比 URL 的参数表更像是要做的事）。
+    ///   有歧义的网址（可能是文件名：`Safari.app`、`logo.ai`）不排最前，「打开」改成兜底建议的第一条，兜底建议按普通文字。
     /// - 一大段文字：出字数，兜底建议里总结、润色提前；但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算。
     /// - 英文单词 / 短语：没有对应建议，兜底建议里「学习」提前。
     /// - 兜底建议要输入不少于 2 个字符。
@@ -53,9 +61,14 @@ enum LauncherSuggestionPolicy {
                                           fallbackKinds: allowsFallback ? [.plainText] : nil)
         }
         var leading: [LauncherLeadingSuggestion] = []
+        var fallbackLeading: [LauncherLeadingSuggestion] = []
         var kinds = input.kinds
         if let url = input.url {
-            leading.append(.openURL(url))
+            if input.isAmbiguousURL {
+                fallbackLeading.append(.openURL(url))
+            } else {
+                leading.append(.openURL(url))
+            }
         } else if let email = input.email {
             leading.append(.email(email))
         } else if let color = input.color {
@@ -67,7 +80,8 @@ enum LauncherSuggestionPolicy {
                 leading.append(.wordCount(LauncherTextStats.count(input.text)))
             }
         }
-        return LauncherSuggestionPlan(text: input.text, leading: leading, fallbackKinds: allowsFallback ? kinds : nil)
+        return LauncherSuggestionPlan(text: input.text, leading: leading, fallbackKinds: allowsFallback ? kinds : nil,
+                                      fallbackLeading: allowsFallback ? fallbackLeading : [])
     }
 }
 

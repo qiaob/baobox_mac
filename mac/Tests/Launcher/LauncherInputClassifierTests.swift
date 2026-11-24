@@ -86,12 +86,54 @@ final class LauncherInputClassifierTests: XCTestCase {
             ("notion.so", "https://notion.so"),
             ("x.com", "https://x.com"),
             ("my-site.io:8443/admin", "https://my-site.io:8443/admin"),
-            ("openai.ai", "https://openai.ai"),
             ("example.sg", "https://example.sg"),
         ]
         for (text, expected) in samples {
             XCTAssertEqual(kinds(text), [.url], text)
             XCTAssertEqual(url(text), expected, text)
+        }
+    }
+
+    // MARK: - 有歧义的顶级域名（app、ai、cc）
+
+    func testAmbiguousTopLevelDomainsAreLinksButNotUpFront() {
+        let samples: [(String, String)] = [
+            ("Safari.app", "https://Safari.app"),
+            ("logo.ai", "https://logo.ai"),
+            ("main.cc", "https://main.cc"),
+            ("claude.ai", "https://claude.ai"),
+            ("linear.app", "https://linear.app"),
+            ("api.claude.ai", "https://api.claude.ai"),
+        ]
+        for (text, expected) in samples {
+            let result = LauncherInputClassifier.classify(text)
+            XCTAssertTrue(result.isAmbiguousURL, text)
+            XCTAssertEqual(result.kinds, [.plainText], "可能是文件名，按普通文字算：\(text)")
+            XCTAssertEqual(result.url?.absoluteString, expected, text)
+        }
+    }
+
+    func testSchemeWWWPathOrPortMakesTheLinkClear() {
+        let samples: [(String, String)] = [
+            ("https://claude.ai", "https://claude.ai"),
+            ("claude.ai/chat", "https://claude.ai/chat"),
+            ("claude.ai?q=1", "https://claude.ai?q=1"),
+            ("claude.ai#top", "https://claude.ai#top"),
+            ("www.claude.ai", "https://www.claude.ai"),
+            ("linear.app:8443", "https://linear.app:8443"),
+            ("http://main.cc", "http://main.cc"),
+        ]
+        for (text, expected) in samples {
+            let result = LauncherInputClassifier.classify(text)
+            XCTAssertFalse(result.isAmbiguousURL, text)
+            XCTAssertEqual(result.kinds, [.url], text)
+            XCTAssertEqual(result.url?.absoluteString, expected, text)
+        }
+    }
+
+    func testOtherTopLevelDomainsAreNotAmbiguous() {
+        for text in ["example.com", "baobox.dev", "socket.io", "x.com", "notion.so"] {
+            XCTAssertFalse(LauncherInputClassifier.classify(text).isAmbiguousURL, text)
         }
     }
 
