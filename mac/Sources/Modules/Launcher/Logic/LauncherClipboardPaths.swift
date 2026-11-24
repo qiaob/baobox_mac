@@ -27,6 +27,8 @@ enum LauncherClipboardPaths {
         "Users", "private", "tmp", "var", "Applications", "opt", "usr", "Volumes", "Library", "System", "etc", "bin", "sbin",
         "cores", "Network",
     ]
+    /// 比较时不分大小写（APFS 默认不区分大小写，`/users/qiao/…` 也是同一个地方）。
+    private static let knownTopLevelNamesLowercased = Set(knownTopLevelNames.map { $0.lowercased() })
     /// 路径最长多少个字节（再长的多半不是路径）。
     static let maxPathBytes = 1024
 
@@ -159,7 +161,7 @@ enum LauncherClipboardPaths {
             name.append(character)
             next += 1
         }
-        return knownTopLevelNames.contains(name) && (next == characters.count || characters[next] == "/")
+        return knownTopLevelNamesLowercased.contains(name.lowercased()) && (next == characters.count || characters[next] == "/")
     }
 
     /// 空白后面紧跟着一个路径的开头（`/`、`~/`）：这段文字里不止一个路径，不能当整段收。
@@ -197,10 +199,13 @@ enum LauncherClipboardPaths {
 
     /// 路径前面可以是这些（不然 `and/or`、`1/2`、网址中间的 `/path` 都会被当成路径）；另外空白和汉字也可以。
     /// ASCII 的查表、别的按码点查（逐字判断，比按 `Character` 哈希快得多：2000 条中文偏多的文字第一次抽从 220 ms 降下来）。
-    private static let asciiStartBoundaries = asciiTable("\"'`([{<=:,;| \t")
+    /// ASCII 的空白全在表里（空格、Tab、换行 `\n` `\r`、`\u{0B}`、`\u{0C}`；`"\r\n"` 是一个 `Character`，`asciiValue` 是 `\n`）——
+    /// 原来按 `isWhitespace` 判断，改成查表时漏了换行，「Created:\n/路径」这种多行文字里的路径认不出（复查发现）。
+    private static let asciiStartBoundaries = asciiTable("\"'`([{<=:,;|" + asciiWhitespace)
     private static let wideStartBoundaries = scalarSet("“”‘’（【《「『，。；：、")
     /// 路径到这些为止（另外空白也是）。逗号、分号不算（名字里可能有），末尾的由 `trimmingTrailingPunctuation` 去掉。
-    private static let asciiTerminators = asciiTable("\"'`()[]{}<>| \t\n\r")
+    private static let asciiTerminators = asciiTable("\"'`()[]{}<>|" + asciiWhitespace)
+    private static let asciiWhitespace = " \t\n\r\u{0B}\u{0C}"
     private static let wideTerminators = scalarSet("“”‘’（）【】《》「」『』，。；：、！？")
 
     private static func asciiTable(_ characters: String) -> [Bool] {

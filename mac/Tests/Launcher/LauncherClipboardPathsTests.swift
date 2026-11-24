@@ -68,6 +68,23 @@ final class LauncherClipboardPathsTests: XCTestCase {
         XCTAssertEqual(paths(String(repeating: "=/", count: 100)), [], "第一级目录名里没有字母数字的不收")
     }
 
+    func testPathsAtLineStarts() {
+        // 复查发现的回归（4257e95 起）：换行后面开头的路径认不出 —— 终端 / Claude Code 回复里复制的多行文字。
+        XCTAssertEqual(paths("Created:\n/private/tmp/claude-501/p/s/out.json"), ["/private/tmp/claude-501/p/s/out.json"])
+        XCTAssertEqual(paths("第一行\n/Users/qiao/second-line.txt\n第三行"), ["/Users/qiao/second-line.txt"])
+        XCTAssertEqual(paths("files:\r\n/Users/qiao/a.txt\r\n/Users/qiao/b.txt"), ["/Users/qiao/a.txt", "/Users/qiao/b.txt"],
+                       "\\r\\n 分隔的文件列表（\"\\r\\n\" 是一个 Character）")
+        XCTAssertEqual(paths("/Users/qiao/a.txt\nnext line"), ["/Users/qiao/a.txt"], "路径后面紧跟换行：到换行为止")
+        XCTAssertEqual(paths("see\u{0B}/Users/qiao/v.txt\u{0C}/Users/qiao/f.txt"), ["/Users/qiao/v.txt", "/Users/qiao/f.txt"],
+                       "垂直制表符、换页也算空白")
+        XCTAssertEqual(paths("a\u{2028}/Users/qiao/ls.txt"), ["/Users/qiao/ls.txt"], "Unicode 的行分隔符也算")
+    }
+
+    func testKnownTopLevelNamesIgnoreCase() {
+        XCTAssertEqual(paths("见/users/qiao/a.md"), ["/users/qiao/a.md"], "APFS 默认不区分大小写：汉字后面的 /users 也认")
+        XCTAssertTrue(paths("见/Users/qiao/x.pdf和/USERS/qiao/y.md").contains("/USERS/qiao/y.md"))
+    }
+
     func testVariantsOfAToken() {
         XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/b.txt"), ["/a/b.txt"], "没有可变的")
         XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/foo,arg=/x;y"), ["/a/foo,arg=/x;y", "/a/foo", "/a/foo,arg"],
