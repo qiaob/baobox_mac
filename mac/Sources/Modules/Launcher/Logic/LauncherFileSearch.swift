@@ -259,6 +259,15 @@ enum LauncherFileFilter {
         return words.allSatisfy { name.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) != nil }
     }
 
+    /// Spotlight 交回的路径是数据卷上的写法（`/System/Volumes/Data/Users/me/…`，2026-11-24 实测），
+    /// 换回大家熟悉的 `/Users/me/…`：否则 `~/Library` 过滤不掉、主目录缩写不成 `~`。只换主目录下的（搜的就是主目录）。
+    static func canonicalPath(_ path: String, home: String) -> String {
+        let dataVolume = "/System/Volumes/Data"
+        let home = LauncherPathDisplay.trimmingTrailingSlashes(home)
+        guard path.hasPrefix(dataVolume + home + "/") || path == dataVolume + home else { return path }
+        return String(path.dropFirst(dataVolume.count))
+    }
+
     /// 去掉声调、全角转半角（「résumé」「ＡＢＣ」和 resume、ABC 打一样的分）；大小写由打分自己处理。
     static func folded(_ text: String) -> String {
         text.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)

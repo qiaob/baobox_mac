@@ -79,6 +79,21 @@ final class LauncherPathInputTests: XCTestCase {
         XCTAssertEqual(LauncherPathInput.strippingLineSuffix("/a/b.txt:1:2:3"), "/a/b.txt:1", "最多去两段")
     }
 
+    func testContinuesWhileTypingInTheSamePlace() {
+        func continues(_ new: String, _ old: String) -> Bool {
+            guard let a = parse(new), let b = parse(old) else { return false }
+            return a.continues(b)
+        }
+        XCTAssertTrue(continues("~/Down", "~/Dow"), "改最后一段")
+        XCTAssertTrue(continues("~/Dow", "~/Down"), "往回删")
+        XCTAssertTrue(continues("~/Downloads/", "~/Downloads"), "往深里打")
+        XCTAssertTrue(continues("~/Downloads/a", "~/Downloads/"))
+        XCTAssertTrue(continues("~/Downloads", "~/Downloads/a"))
+        XCTAssertTrue(continues("~/Documents", "~/Downloads"), "同一个上一级里换了一项")
+        XCTAssertFalse(continues("/Applications/", "~/Dow"), "贴了别处的路径")
+        XCTAssertFalse(continues("/private/tmp/x/", "~/Downloads/a/b"))
+    }
+
     // MARK: - 显示
 
     func testAbbreviated() {

@@ -4,7 +4,7 @@ import Foundation
 // `LauncherQuery.parse` 拆前缀 → 计算结果、文本识别（没打前缀时，固定在最前）→ `LauncherRanking.rank` 排序 → 换成面板的行。
 // 同步、只读内存，打字路径上不建搜索键、不碰磁盘。
 // 输入是路径时（§6.5）只出路径的行：要读磁盘，由控制器在后台查、查完交回来（`setPathResult`）；
-// 还没回来时先显示上一个路径的行（没有就显示「正在查找」），免得每打一个字列表收起又长出来。
+// 还没回来时，还在同一处打字就先显示上一个路径的行（否则显示「正在查找」），免得每打一个字列表收起又长出来。
 // 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`）：交回的行和内存里的候选一起排序
 // （没打前缀时最多 5 行，权重最低，排在 App、命令之后），带 `/` 的片段的确切命中固定在最前；
 // 新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
@@ -167,7 +167,8 @@ final class LauncherEngine {
         if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
             instantsByKey = [:]
             fileResult = nil
-            let items = pathResult?.items ?? []
+            // 还在同一处打字时先顶着上一次的行；换到别处的路径就先空着（显示「正在查找」）。
+            let items = pathResult.map { $0.input == path || path.continues($0.input) ? $0.items : [] } ?? []
             asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
             return LauncherSearchOutcome(queryText: query.text, rows: items.map(\.row), candidateCount: items.count,

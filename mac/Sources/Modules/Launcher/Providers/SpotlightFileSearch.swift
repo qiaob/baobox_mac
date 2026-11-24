@@ -8,8 +8,10 @@ import Foundation
 //
 // 实测（2026-11-24，M3，主目录 82.5 万条索引）：名字「包含」的查询收齐要 200–440 ms，几乎和命中多少无关
 // （4 条和 2785 条都约 200 ms）；第一次进度通知 10 ms 左右就来，但只有 20 条，排序没法用，所以等收齐。
-// 「等于」的查询（片段）约 50 ms。`kMDItemPath` 从值表里读不出来（返回 nil），要经 `NSMetadataItem` 取，
-// 1–3 千条 4–10 ms。
+// 「等于」的查询（片段）约 50 ms。
+// 读结果：`kMDItemPath` 从值表里读不出来（返回 nil），要经 `NSMetadataItem` 一条条取（1–3 千条 4–10 ms）；
+// 其余几个属性放进值表、按下标读（几乎不花时间）。不要用 `NSMetadataItem.values(forAttributes:)` 一次取几个：
+// 每条约 0.3 ms，2785 条要 800 ms。路径是数据卷上的写法，换回 `/Users/…`（`LauncherFileFilter.canonicalPath`）。
 
 final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Sendable {
     /// 最多读这么多条（按修改时间新的在前读）：再多的只是更旧的噪音，读它们白花时间。
@@ -17,10 +19,12 @@ final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Senda
     /// 收集太久（索引正忙、mds 卡住）就不等了，交回到那时为止的。
     static let timeout: TimeInterval = 3
 
-    private static let attributes = [NSMetadataItemPathKey, NSMetadataItemContentTypeKey,
-                                     NSMetadataItemLastUsedDateKey, NSMetadataItemFSContentChangeDateKey]
+    /// 放进值表、按下标读的属性（路径不在里面：值表里读不出路径）。
+    private static let valueAttributes = [NSMetadataItemContentTypeKey, NSMetadataItemLastUsedDateKey,
+                                          NSMetadataItemFSContentChangeDateKey]
 
     private let queue: OperationQueue
+    private let home: String
 
     // 以下只在 `queue` 上读写。
     private var query: NSMetadataQuery?
@@ -30,7 +34,8 @@ final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Senda
     /// 每开始一次 +1：超时、通知对得上号才交结果。
     private var generation = 0
 
-    init() {
+    init(home: String = NSHomeDirectory()) {
+        self.home = home
         queue = OperationQueue()
         queue.name = "com.baobox.app.launcher.spotlight"
         queue.maxConcurrentOperationCount = 1
@@ -46,6 +51,7 @@ final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Senda
             query.operationQueue = queue
             query.searchScopes = [NSMetadataQueryUserHomeScope]
             query.predicate = Self.predicate(for: request)
+            query.valueListAttributes = Self.valueAttributes
             query.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSContentChangeDateKey, ascending: false)]
             // 通知在 operationQueue 上发出；这里 queue: nil = 就地执行，已经在 `queue` 上了。
             observer = NotificationCenter.default.addObserver(forName: .NSMetadataQueryDidFinishGathering,
@@ -92,13 +98,14 @@ final class LauncherSpotlightFileSearch: LauncherFileSearching, @unchecked Senda
         hits.reserveCapacity(min(total, Self.maxHits))
         for index in 0..<min(total, Self.maxHits) {
             guard let item = query.result(at: index) as? NSMetadataItem,
-                  let values = item.values(forAttributes: Self.attributes),
-                  let path = values[NSMetadataItemPathKey] as? String
+                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
             else { continue }
-            let type = values[NSMetadataItemContentTypeKey] as? String
-            hits.append(LauncherFileHit(path: path, isDirectory: type == "public.folder",
-                                        lastUsed: values[NSMetadataItemLastUsedDateKey] as? Date,
-                                        modified: values[NSMetadataItemFSContentChangeDateKey] as? Date))
+            let type = query.value(ofAttribute: NSMetadataItemContentTypeKey, forResultAt: index) as? String
+            hits.append(LauncherFileHit(
+                path: LauncherFileFilter.canonicalPath(path, home: home),
+                isDirectory: type == "public.folder",
+                lastUsed: query.value(ofAttribute: NSMetadataItemLastUsedDateKey, forResultAt: index) as? Date,
+                modified: query.value(ofAttribute: NSMetadataItemFSContentChangeDateKey, forResultAt: index) as? Date))
         }
         stopCurrent()
         completion(LauncherFileSearchBatch(hits: hits, totalCount: total, elapsed: elapsed, timedOut: timedOut))

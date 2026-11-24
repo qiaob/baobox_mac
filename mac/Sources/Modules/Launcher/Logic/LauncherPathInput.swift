@@ -58,6 +58,14 @@ struct LauncherPathInput: Equatable, Sendable {
         return LauncherPathInput(path: path, pathWithoutLineSuffix: strippingLineSuffix(path), usesTilde: usesTilde)
     }
 
+    /// 输入从 `previous` 改成了这个，还是在同一处打字（同一个上一级目录里改最后一段、往深里打、往回删）：
+    /// 这个路径的结果回来之前，可以先顶着上一次的行，列表不会每打一个字就收起再长出来。
+    /// 换成了别处的路径就不顶 —— 免得显示另一个目录的内容、这时按回车打开错的。
+    func continues(_ previous: LauncherPathInput) -> Bool {
+        if path.hasPrefix(previous.path) || previous.path.hasPrefix(path) { return true }
+        return LauncherPathDisplay.split(path).parent == LauncherPathDisplay.split(previous.path).parent
+    }
+
     /// `\X` → `X`（X 不是字母数字时）：终端里拖进来、shell 补全出来的路径会这样转义空格和括号。
     /// 字母数字前的反斜杠留着（那可能就是名字的一部分），末尾单独一个反斜杠也留着。
     static func unescapingBackslashes(_ text: String) -> String {

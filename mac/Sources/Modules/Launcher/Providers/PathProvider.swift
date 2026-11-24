@@ -79,9 +79,14 @@ final class LauncherPathProvider {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory) else { return nil }
         let name = path == "/" ? "/" : (path as NSString).lastPathComponent
-        let isPackage = isDirectory.boolValue
-            && ((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false)
+        let isPackage = isDirectory.boolValue && isPackageDirectory(URL(fileURLWithPath: path))
         return LauncherPathEntry(name: name, isDirectory: isDirectory.boolValue, isPackage: isPackage)
+    }
+
+    /// 文件夹是不是包（`.app` 这类）。看软链指向的那个：`/Applications/Safari.app` 是指向系统 Cryptex 的软链，
+    /// 软链本身问不出「是包」（2026-11-24 实测，不解析的话 Safari 会被当成文件夹、Tab 会钻进它里面）。
+    nonisolated private static func isPackageDirectory(_ url: URL) -> Bool {
+        (try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false
     }
 
     /// 目录里的项，最多读 `LauncherPathListing.maxEntriesRead` 个（几万项的目录只读前面这些）。读不了（没权限）就是空的。
@@ -101,8 +106,10 @@ final class LauncherPathProvider {
                 var target: ObjCBool = false
                 isDirectory = fileManager.fileExists(atPath: child.path, isDirectory: &target) && target.boolValue
             }
-            // 包（.app）只在文件夹里才可能是；文件不用查。
-            let isPackage = isDirectory && ((try? child.resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false)
+            // 包（.app）只在文件夹里才可能是；文件不用查。软链要看它指向的那个。
+            let isPackage = isDirectory && (values?.isSymbolicLink == true
+                ? isPackageDirectory(child)
+                : ((try? child.resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false))
             entries.append(LauncherPathEntry(name: child.lastPathComponent, isDirectory: isDirectory, isPackage: isPackage))
         }
         return entries

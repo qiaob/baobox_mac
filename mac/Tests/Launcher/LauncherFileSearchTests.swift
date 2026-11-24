@@ -107,6 +107,17 @@ final class LauncherFileSearchTests: XCTestCase {
         }
     }
 
+    func testCanonicalPathDropsTheDataVolumePrefix() {
+        XCTAssertEqual(LauncherFileFilter.canonicalPath("/System/Volumes/Data/Users/me/Library/x.plist", home: home),
+                       "/Users/me/Library/x.plist", "Spotlight 交回数据卷上的写法")
+        XCTAssertEqual(LauncherFileFilter.canonicalPath("/System/Volumes/Data/Users/me", home: home), "/Users/me")
+        XCTAssertEqual(LauncherFileFilter.canonicalPath("/Users/me/a.txt", home: home), "/Users/me/a.txt")
+        XCTAssertEqual(LauncherFileFilter.canonicalPath("/System/Volumes/Data/opt/x", home: home), "/System/Volumes/Data/opt/x",
+                       "主目录以外的不动")
+        XCTAssertEqual(LauncherFileFilter.canonicalPath("/System/Volumes/Data/Users/meow/x", home: home),
+                       "/System/Volumes/Data/Users/meow/x")
+    }
+
     func testProcessDropsNoise() {
         let hits = [hit("/Users/me/Library/Caches/readme.txt"), hit("/Users/me/p/node_modules/x/README.md"),
                     hit("/Users/me/p/README.md")]
