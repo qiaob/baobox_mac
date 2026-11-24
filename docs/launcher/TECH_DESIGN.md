@@ -31,7 +31,12 @@
 ```
 mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些协议
   LauncherCommand.swift                    命令与参数的模型（纯 Foundation）
-  LauncherSearchable.swift                 「我有可搜索的条目」协议 + 条目模型（纯 Foundation）
+  LauncherSearchable.swift                 「我有可搜索的条目」协议 + 条目模型 + 来源整理标题 / 搜索全文的 LauncherEntryText（纯 Foundation）
+
+mac/Sources/Core/TextTools/                文本格式识别器（PR 5 从剪贴板模块下沉，剪贴板预览区与快速入口共用，§6.3）
+
+mac/Sources/Modules/Clipboard/
+  ClipboardLauncherSource.swift            剪贴板历史、文本片段两个来源（§3.2）
 
 mac/Sources/Modules/Launcher/
   LauncherTool.swift                       模块壳：菜单一行、快捷键、设置 Tab、aiFeatures
@@ -46,9 +51,10 @@ mac/Sources/Modules/Launcher/
   Providers/
     AppProvider.swift                      LauncherAppProvider：App 索引（后台建、目录变化时刷新）、图标、打开
     CommandProvider.swift                  LauncherCommandProvider：从 ToolRegistry 收命令 → 条目
+    EntryProvider.swift                    LauncherEntryProvider：各模块 launcherSources() 的条目、搜索键缓存与后台补建、预热（§3.2）
     SystemProvider.swift                   系统设置页、系统命令
-    CalculatorProvider.swift               计算结果行
-    TextFormatProvider.swift               文本识别（调剪贴板的识别器）
+    CalculatorProvider.swift               LauncherCalculatorProvider：计算结果行（§7）
+    TextFormatProvider.swift               LauncherTextFormatProvider：文本识别行（调 Core/TextTools 的识别器，§6.3）
     FileProvider.swift                     NSMetadataQuery（二期）
     WindowProvider.swift                   窗口列表（二期）
     WebSearchProvider.swift                兜底行（二期）
@@ -57,6 +63,8 @@ mac/Sources/Modules/Launcher/
     LauncherRanking.swift                  使用频率与最终排序
     LauncherQuery.swift                    前缀解析（`a `、`c `…）
     LauncherCommandCatalog.swift           命令表的合并规则、命令的搜索文字、搜索键缓存（§3.1）
+    LauncherEntryKeys.swift                别的模块交来的条目要建哪些搜索键、按「条目键 + 文字」的缓存、先建哪些（§3.2）
+    LauncherInstantResults.swift           计算结果 / 文本识别什么时候出、识别结果怎么换成行（§6.3、§7）
     LauncherAppNames.swift                 App 的几个名字去重（§6.1）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
@@ -141,6 +149,7 @@ struct LauncherEntry {
 @MainActor
 protocol LauncherSearchable {
     var launcherSourceID: String { get }             // "clipboard"、"snippets"、"meetings"…
+    var launcherSourceName: String { get }           // 每一行右侧的小字：「剪贴板」「片段」（PR 5 加）
     func launcherEntries() -> [LauncherEntry]        // 只读内存，零 IO
 }
 ```
@@ -149,12 +158,22 @@ protocol LauncherSearchable {
 
 | 来源 | 实现在 | 数据 | ⏎ |
 |---|---|---|---|
-| 剪贴板历史 | `ClipboardTool` | `ClipboardStore.items`（已在内存；`isConcealed` 的条目——密码管理器标记为敏感的——过滤掉，不交出来） | `PasteService.paste` |
-| 文本片段 | `ClipboardTool` | 同上里的片段条目 | 同上 |
+| 剪贴板历史 `clipboard` | `ClipboardTool` → `ClipboardLauncherSource(kind: .history)` | `ClipboardStore.items` 里**没收藏**的文字条目（`.text` / `.link`）；`isConcealed` 的（密码管理器标记为敏感的）不交，图片、文件这一期不交 | `PasteService.paste`（同剪贴板面板回车：回填不进历史、切回前台 App 再合成 ⌘V、没有辅助功能权限时说明降级） |
+| 文本片段 `snippets` | `ClipboardTool` → `ClipboardLauncherSource(kind: .snippets)` | **收藏了**的文字条目（= 片段管理列表 `ClipboardStore.snippets` 的范围：片段就是收藏的条目，docs/snippets/DESIGN.md），同样不交敏感的；同一条只在一个来源里 | 同上 |
 | 会话（二期） | `ClaudeCodeTool` / `AIToolsTool` | 现有的 `CLISessionSource` | 数据源自己的续接 |
 | 会议（二期） | `MeetingTool` | `MeetingStore.records` | `MeetingStore.open(_:)` |
 
-`launcherEntries()` 在面板呼出时调一次并缓存到收起，不是每次按键都调。
+条目怎么填（PR 5）：
+
+- 剪贴板：标题 = 第一行（去首尾空白，最多 80 个字符）；`searchText` = 去掉开头空白后的前 200 个字符（`LauncherEntryText.parts`，只看开头一小段，不整段复制几 MB 的条目）；副标题 = 来源 App · 相对时间（「3 分钟前」，按分钟 / 小时 / 天 / 30 天分桶，同一个桶只格式化一次）；图标 `doc.text`；`date` = 复制时间。
+- 片段：标题 = 片段的名字，没有名字时是内容首行（同片段管理列表）；`searchText` = 关键字 + 内容前 200 个字符；副标题 = 关键字 · 内容首行（有名字时）；图标 `text.badge.star`。
+
+`launcherEntries()` 在面板呼出时调一次并缓存到收起，不是每次按键都调（`Providers/EntryProvider.swift`，`LauncherEntryProvider`）：
+
+- **搜索键**（`Logic/LauncherEntryKeys.swift`）：按「条目键 + 标题 + 全文 + 拼不拼音」缓存，时间变了（剪贴板去重刷新时间戳）不重建。剪贴板标题不转拼音、只建全文一个键（标题总是全文的开头）；片段标题转拼音、全文不转，两个键。这次没出现的条目从缓存里删掉。
+- **呼出时**：缺的键按时间新的在前，最多同步建 200 条，其余交给后台串行队列，建完回主线程记进缓存；面板还开着就重新装一次条目、同一个输入再查一次（选中的行还在就留在它上面）。
+- **预热**：`activate()` 后 5 秒一次（同时让计算引擎、识别器先跑一次，建它们的静态表）；每次收起后 2 秒（「空闲时」）再补一次，补会话中新复制的。
+- 实测（2026-11-24，M3，`swiftc -O` 探针，2000 条剪贴板文字、三分之一是几百到几千字的长文本、21 条收藏）：取 1932 条剪贴板条目 4.3–4.5 ms；呼出这一步（取条目 + 补键 + 换成面板条目）缓存全空时 6.2–6.5 ms（同步建 200 条，其余 1752 条后台 5.5–5.8 ms 建完），缓存都在时 5.2–6.1 ms，会话之间新复制 20 条时 5.9–6.1 ms；对照：2000 条一次全部同步建 5.5 ms。比 §5.2 记的剪贴板建键成本低一个量级（那次的样本更长、同时有编译在跑），分批与预热仍保留，给更长的历史和慢机器留余地。控制器把这一步的耗时和条目数、现建数、后台数记在 `panel shown in … ms` 那条日志里。
 
 ### 3.3 `HotkeyCenter`
 
@@ -168,7 +187,7 @@ protocol LauncherSearchable {
 和 `QuickSwitchPanelHost` 的差别：它是固定 640×420、内容由调用方给；快速入口要高度跟内容变（只有输入框 → 长出列表 → 展开回答区）。做法：
 
 - 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`，键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听（点外面认左键和右键）。
-- 宽 680 固定。窗口顶边固定（向下长），变化时不做动画（跟手优先）。高度不靠 `fittingSize`（里面有 `ScrollView`，量不准），由内容算：`LauncherLayout.height(for:)` = 搜索栏 56 + 分隔线 1 + 内容（提示 / 「没有结果」一行 40；结果每行 40，最多 8.5 行，没超时上下各留 6、超了只留上面的 6）。`NSHostingView.sizingOptions = []`（同会议控制条、字幕条），SwiftUI 不反过来改窗口大小；根视图贴顶对齐，窗口和内容在同一次刷新里更新（`setFrame(display: false)`），改完下一轮重算阴影。
+- 宽 680 固定。窗口顶边固定（向下长），变化时不做动画（跟手优先）。高度不靠 `fittingSize`（里面有 `ScrollView`，量不准），由内容算：`LauncherLayout.height(for:)` = 搜索栏 56 + 分隔线 1 + 内容（提示 / 「没有结果」一行 40；结果每行 40、计算结果那一行 58，最多 8.5 个普通行高、前几行里有计算结果时多给它高出来的 18，底下照样露半行；没超时上下各留 6、超了只留上面的 6）。`NSHostingView.sizingOptions = []`（同会议控制条、字幕条），SwiftUI 不反过来改窗口大小；根视图贴顶对齐，窗口和内容在同一次刷新里更新（`setFrame(display: false)`），改完下一轮重算阴影。
 - 位置：鼠标所在屏幕可见区域水平居中，顶边在从上往下 1/5 处；结果长到最多时底边也要在屏幕里，矮屏往上挪。不能拖动（`isMovableByWindowBackground = false`，顶边要固定）。
 - 每次呼出新建窗口、收起时销毁（现有两个面板都这么做）。呼出延迟目标：按键到窗口可见 ≤ 60 ms，待验证；超了再改成常驻一个实例。控制器用 `os.Logger`（subsystem `com.baobox.app`，category `launcher`）记从 `toggle()` 到 `orderFront` 返回的毫秒数（`panel shown in … ms`）和超过 5 ms 的查询（`slow query`），没用 `os_signpost`。
 - 输入框用 `NSTextField` 包一层而不是 SwiftUI `TextField`：需要拿到「输入法正在组字」（`hasMarkedText()`）来区分 ⏎ 是上屏还是执行，还要拦 Tab、↑ ↓、⌘K、⌘1–9。实现：
@@ -192,7 +211,9 @@ protocol LauncherSearchable {
 
 App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`（排序用的 `LauncherCandidate` + 显示用的 `LauncherRow` + ⏎ 的闭包），引擎按条目键去重后装进来，收起时放掉；每次输入变化在主线程同步跑一次上面的管线。
 
-- 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只有这一期已有来源（`apps`、`commands`）的前缀生效；`f `、`c ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜文件」得到一片空。
+- 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只有这次呼出装进来的来源（`apps`、`commands`，以及各模块交来的 `clipboard`、`snippets`）的前缀生效；`f ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜文件」得到一片空。一个前缀可以管几个来源（`LauncherQuery.defaultSourceGroups`）：`c ` = 剪贴板 + 片段（片段没有自己的前缀）。
+- 计算结果、文本识别（PR 5）：没打来源前缀时，引擎先算（§7）、再识别（§6.3），结果固定排在最前（计算结果第一），不经过排序，后面接排好序的普通行。它们不记使用；⏎ 复制，⌘⏎ 插入前台 App（§7）。
+- 剪贴板最多 5 行（PR 5）：没打前缀时剪贴板最多出 5 行（`LauncherEngine.unscopedSourceLimits`，排序的 `sourceLimits` 参数：超出的跳过、由后面的行补上），免得一个常见词把 App 和命令挤下去；`c ` 前缀下不限。片段不限。
 - 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空但一个没中：显示「没有结果」。
 - 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它），收起面板，下一个 runloop 再执行（很多命令作用于前台 App / 当前窗口，要等面板让开）。
 
@@ -239,7 +260,8 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 别名：查询（去首尾空白、不分大小写）完全等于某一行的别名时，那一行排第一，不看来源权重和分数（剪贴板条目上的别名也排在同名的 App 前面）；匹配分仍记 1000，最终分照公式算。
 - 「这个输入上次选了谁」：输入归一化（去首尾空白、转小写、取前 20 个字符）后完全相同、且那一行这次也命中、没被隐藏时，它排在别名命中之后、其余所有行之前，不看分数。别名和「上次选了谁」是同一行时只出现一次。
 - 隐藏的行不出现（上次选过、等于别名也不出现）。
-- 同分的次序：使用分高的在前 → 标题短的在前 → 条目键的字典序。结果与候选传进来的先后无关。
+- 同分的次序：使用分高的在前 → 时间新的在前（候选带 `date`：剪贴板的复制时间、片段的创建时间；没有时间的 App、命令当作最新，同分时排在有时间的前面 —— 这样是一个全序）→ 标题短的在前 → 条目键的字典序。结果与候选传进来的先后无关。剪贴板不记使用次数，所以同样匹配的剪贴板条目按新旧排。
+- 每个来源最多几行（`sourceLimits`，PR 5）：排好序后取前 N 行时，某个来源超出它的上限就跳过；最高匹配分照样算上被跳过的。
 - 「让 AI 来办」「问 AI」两行固定在末尾；当其余结果的最高匹配分低于 400（没有开头或词首匹配）且输入去首尾空白后不少于 7 个字符（超过 6 个）时，「让 AI 来办」提到第一行（`LauncherRanking.shouldPromoteAIRow`）。有别名命中、或这个输入上次选过某一行时不提。
 
 性能预算：5000 个候选（App 约 300、命令约 150、剪贴板上限、片段……）一次查询 ≤ 5 ms。2026-11-23 在 M3 上实测（造的 5000 个中英文混合候选：App 300、命令 150、片段 550、剪贴板 4000；15 个查询含空查询，各跑多次取中位数；两次运行，同时有别的编译在跑，所以给范围）：
@@ -305,7 +327,20 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 ### 6.3 文本识别（`TextFormatProvider`）
 
-剪贴板的 `TextFormatRecognizer` 们已经是纯函数（`detect(_:) -> FormatMatch?`，自带长度上限）。把识别器这一层从 `Modules/Clipboard/TextTools/` 下沉到 `Core/TextTools/`，两边共用；剪贴板预览区的界面留在剪贴板模块。这是一次只搬文件的重构，单独一个 PR。
+剪贴板的 `TextFormatRecognizer` 们已经是纯函数（`detect(_:) -> FormatMatch?`，自带长度上限）。把识别器这一层从 `Modules/Clipboard/TextTools/` 下沉到 `Core/TextTools/`，两边共用；剪贴板预览区的界面留在剪贴板模块。
+
+落地（PR 5，没有单独开 PR，而是 PR 5 里单独一个只搬文件的提交 + 一个小提交）：
+
+- 搬到 `Core/TextTools/` 的：`TextFormatRecognizer.swift`（模型、协议、长度上限、开关 `TextToolSettings`、注册表 `TextFormatRegistry`）、六个识别器（JWT、JSON、XML、时间、URL / cURL、Base64）和 `CurlCommand.swift`。
+- 留在剪贴板模块 `Modules/Clipboard/TextTools/` 的：`CommonTextActions.swift`（编码下拉、二维码、钉卡片、大窗编辑、`ClipboardQRCode`），它们弹窗口、钉卡片、收剪贴板面板，只属于预览区。原来 `TextFormatRegistry.commonActions(for:)` 在 Core 里调它，挪成了 `CommonTextActions.all(for:)`（总开关判断一并带过去），预览区行为不变。
+- 开关：快速入口走同一个 `detectAll`，剪贴板设置页里关掉的格式（或文本工具总开关）在快速入口也不出。
+
+快速入口里（`Providers/TextFormatProvider.swift`，规则在 `Logic/LauncherInstantResults.swift`）：
+
+- 只在没打来源前缀、输入去首尾空白后不少于 4 个字符、而且没有计算结果时跑（两者都能认时计算优先；计算引擎不处理裸时间戳，所以 `1700000000` 走这里）。
+- 取优先级最高的那个识别结果：表格里有复制值的行最多 3 行，标题 = 值，右侧小字 =「徽章 · 行标签」（「Unix 时间戳（秒）· 本地时间」），⏎ 复制复制值；表格里一行能复制的都没有的格式（Base64、JSON、XML、没有参数的 URL……），按顺序找第一个结果不为空、也和输入不一样的转换动作（下拉里的子项展开；置灰的、出图片的、自己收尾的不算），出一行：标题 = 结果压成一行、最多 300 个字符，右侧 =「徽章 · 动作名」（「Base64 · 解码」「JSON · 格式化」），复制完整结果。
+- 不记使用，图标 `arrow.left.arrow.right`。⌘⏎ 同计算结果，插入前台 App。
+- 单独一个日期（`2026-11-23`）计算引擎不出，时间识别器认（日期时间 → 本地 / UTC / ISO 三行）。
 
 ### 6.4 文件（二期，`FileProvider`）
 
@@ -360,6 +395,14 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - **时区**：城市 → 时区的表（约 85 个常用城市与国家，中文名 + 英文名），另认 IANA 名（不分大小写）、常见缩写（PST / EST / SGT / JST / CET / UTC / GMT…，按字面的固定偏移算，夏天也不变；要跟夏令时走写城市名或 `PT` / `ET`；CST 有歧义不收，IST 按印度）和 `UTC+8` / `UTC+5:30` 写法。句型：某地现在几点；`[甲地] 时刻 [甲地] [to|in|是|换成] [乙地] [几点]` 换算，只写一个地方时另一边是本地（写在连接词后面的是目标，否则是出发地），日期按出发地的「今天」。输出带日期和星期，跨天时标出（前一天 / 后一天），复制 `HH:mm`。
 - **汇率（二期）**：欧洲央行每日汇率表（公开、不用 Key、约 30 种货币，含 CNY / USD / SGD / JPY / HKD）。第一次遇到货币算式时在后台取，按天缓存到 `Launcher/rates.json`；取不到用缓存并标出日期。来源地址和取数失败时的表现待验证。
 - **AI 翻译算式（二期）**：模型只输出一行算式，再过一遍同一个引擎；引擎解析不了就显示「没看懂」，不显示模型自己写的数字。
+
+接进面板（PR 5，`Providers/CalculatorProvider.swift`）：
+
+- 每次输入变化调一次 `evaluate`：`now` = 当前时间，`calendar` / `timeZone` = 系统当前，`locale` = App 的界面语言（`L10n.locale`，呼出时取一次）。打了来源前缀（`a `、`c `、`> `）时不算。
+- 有结果就固定排在第一行，不经过排序、不记使用。行比普通行高（58）：结果用 20 号粗体，下面一行小字是 `interpretation`，右侧小字是种类（计算 / 百分比 / 单位换算 / 进制 / 日期 / 时区 / 时间戳），图标 `equal`。
+- ⏎ = 把 `copyText` 复制到剪贴板（普通复制，进剪贴板历史：这是用户要的一份新内容）并收起，发一条回执「已复制 …」（同防休眠开关的回执：`NotifyCenter`，`isUserFeedback`，宠物开着是气泡，否则系统通知）。⌘⏎ = 收起后下一个 runloop 经 `TextInserter.insert` 插入前台 App（和听写、划词助手同一条路：辅助功能写入 → 借剪贴板粘贴（不进历史）→ 都不行就复制并回执「没能直接插入，已复制」）。其余行的 ⌘⏎ 同 ⏎。
+- 出错的结果（`failure` 非空，如除以零）：照样显示那句说明（16 号、次要色，别让人当成答案），⏎ 不做事、面板不收。
+- 第一次调要建单位、地名、DateFormatter 这些静态表：预热时先算几条（探针实测第一次 1.3–1.5 ms，识别器第一次 1.8–2.0 ms，之后每条 0.02–0.4 ms）。
 
 测试：`mac/Tests/Launcher/Calculator/`，每个句型一组样例（含中英文界面、全半角、边界、出错说明），`now` 写死成 2026-11-23 10:00 上海；反例单独一组（200 多条像算式又不是算式的输入），加上空输入、超长输入、深层嵌套和固定种子的随机输入不崩、很快返回。
 
@@ -508,7 +551,7 @@ UserDefaults 前缀 `launcher.`：
 | 2 | `Logic/`：匹配、排序、前缀解析、使用记录 + 单元测试 | `xcodebuild test` |
 | 3 | 计算引擎 + 单元测试 | `xcodebuild test` |
 | 4 | 模块壳、面板、引擎、命令来源（快捷键动作自动成命令）、App 来源、使用记录落盘 | 真机：呼出、搜 App、执行命令、全屏、输入法 |
-| 5 | 文本识别器下沉到 Core；剪贴板 / 片段来源；计算与文本识别接进面板；⌘K | 真机：粘贴、转换、算式 |
+| 5 | 文本识别器下沉到 Core；剪贴板 / 片段来源；计算与文本识别接进面板（⌘K 不在这个 PR，挪到后面） | 真机：粘贴、转换、算式 |
 | 6 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
 | 7 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
 
