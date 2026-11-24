@@ -14,9 +14,10 @@ final class LauncherRankingTests: XCTestCase {
                       records: LauncherUsageRecords = LauncherUsageRecords(),
                       weights: LauncherSourceWeights = .standard,
                       limit: Int = LauncherRanking.defaultLimit,
-                      sourceLimits: [String: Int] = [:]) -> LauncherRankingResult {
+                      sourceLimits: [String: Int] = [:],
+                      minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores) -> LauncherRankingResult {
         LauncherRanking.rank(candidates, query: query, records: records, now: now, weights: weights, limit: limit,
-                             sourceLimits: sourceLimits)
+                             sourceLimits: sourceLimits, minimumMatchScores: minimumMatchScores)
     }
 
     private func records(_ build: (inout LauncherUsageRecords) -> Void) -> LauncherUsageRecords {
@@ -330,6 +331,76 @@ final class LauncherRankingTests: XCTestCase {
         XCTAssertEqual(result.keys, ["clipboard/2"])
     }
 
+    // MARK: - 剪贴板不认跳字
+
+    /// 一段长剪贴板文本：`summarize notes` 只能按顺序跳字凑上，`meeting notes` 是连续出现的。
+    private let longClip = "please summarize the meeting notes from yesterday and send them to the team before friday"
+
+    func testSubstringMinimumIsTheLowestSubstringScore() {
+        XCTAssertEqual(LauncherMatch.substringMinimumScore, 300)
+        XCTAssertEqual(LauncherRanking.defaultMinimumMatchScores, ["clipboard": 300])
+        XCTAssertGreaterThan(LauncherMatch.substringMinimumScore, LauncherMatch.fuzzyScore, "跳字最高也到不了门槛")
+    }
+
+    func testClipboardNeedsTheQueryAsAContiguousRun() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        let fuzzy = LauncherMatch.score(LauncherMatchQuery("summarize notes"), in: candidates[0].searchKeys)
+        XCTAssertNotNil(fuzzy, "前提：跳字能中")
+        XCTAssertLessThan(fuzzy ?? 1000, LauncherMatch.substringMinimumScore, "前提：只有跳字能中")
+        XCTAssertTrue(rank(candidates, "summarize notes").items.isEmpty, "只有跳字能中：不出")
+        XCTAssertNil(rank(candidates, "summarize notes").bestMatchScore, "被门槛挡掉的也不算进最高匹配分")
+        XCTAssertEqual(rank(candidates, "meeting notes").keys, ["clipboard/1"], "包含这段字：出")
+        XCTAssertEqual(rank(candidates, "please").keys, ["clipboard/1"])
+    }
+
+    func testLengthPenalizedSubstringStillPassesTheBar() {
+        // 「notes」夹在一串字母中间（不是词首），文本又很长：连续子串扣满长度惩罚正好 300，仍然要出。
+        let text = String(repeating: "a", count: 150) + "bnotesb"
+        let candidates = [candidate("clipboard", "1", text)]
+        let result = rank(candidates, "notes")
+        XCTAssertEqual(result.keys, ["clipboard/1"])
+        XCTAssertEqual(result.items.first?.matchScore, LauncherMatch.substringMinimumScore)
+    }
+
+    func testOtherSourcesMayStillMatchFuzzily() {
+        let candidates = [
+            candidate("clipboard", "1", longClip),
+            candidate("snippets", "1", longClip),
+            candidate("apps", "vsc", "Visual Studio Code"),
+            candidate("commands", "x", "summarize every notes"),
+        ]
+        XCTAssertEqual(Set(rank(candidates, "summarize notes").keys), ["snippets/1", "commands/x"])
+        XCTAssertEqual(rank(candidates, "vsc").keys, ["apps/vsc"])
+    }
+
+    func testClipboardPrefixAppliesTheSameBar() {
+        let query = LauncherQuery.parse("c summarize notes")
+        XCTAssertEqual(query.sourceIDs, ["clipboard", "snippets"])
+        let pool = [candidate("clipboard", "1", longClip), candidate("snippets", "2", longClip)]
+            .filter { query.sourceIDs?.contains($0.sourceID) ?? true }
+        XCTAssertEqual(rank(pool, query.text).keys, ["snippets/2"], "`c ` 前缀下剪贴板照样只认包含")
+        XCTAssertEqual(Set(rank(pool, LauncherQuery.parse("c meeting notes").text).keys), ["clipboard/1", "snippets/2"])
+    }
+
+    func testRememberedChoiceAndAliasIgnoreTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        let remembered = records { $0.recordChoice("clipboard/1", forInput: "summarize notes", at: now) }
+        XCTAssertEqual(rank(candidates, "summarize notes", records: remembered).keys, ["clipboard/1"],
+                       "上次为这个输入选过它：照样出")
+        let aliased = records { $0.setAlias("sn", for: "clipboard/1") }
+        XCTAssertEqual(rank(candidates, "sn", records: aliased).keys, ["clipboard/1"])
+    }
+
+    func testEmptyQueryIgnoresTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip), candidate("apps", "a", "Alpha")]
+        XCTAssertEqual(Set(rank(candidates, "").keys), ["clipboard/1", "apps/a"])
+    }
+
+    func testCallerCanDropTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        XCTAssertEqual(rank(candidates, "summarize notes", minimumMatchScores: [:]).keys, ["clipboard/1"])
+    }
+
     // MARK: - 前 N 行与最高匹配分
 
     func testLimit() {
@@ -397,13 +468,14 @@ final class LauncherRankingTests: XCTestCase {
     }
 
     func testAIRowFromRankingResult() {
+        // 用片段：剪贴板不认跳字（见上），片段认。
         let candidates = [
             candidate("apps", "safari", "Safari"),
-            candidate("clipboard", "1", "please summarize the meeting notes from yesterday"),
+            candidate("snippets", "1", "please summarize the meeting notes from yesterday"),
         ]
         let query = "summarize notes"
         let result = rank(candidates, query)
-        XCTAssertEqual(result.keys, ["clipboard/1"], "只有跳字匹配")
+        XCTAssertEqual(result.keys, ["snippets/1"], "只有跳字匹配")
         XCTAssertLessThan(result.bestMatchScore ?? 0, 400)
         XCTAssertTrue(LauncherRanking.shouldPromoteAIRow(query: query, result: result))
 

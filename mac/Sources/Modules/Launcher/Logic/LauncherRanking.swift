@@ -77,6 +77,9 @@ enum LauncherRanking {
     static let aiPromotionScoreThreshold = LauncherMatch.substringScore
     /// ……且输入至少这么多个字符（「超过 6 个」）时，「让 AI 来办」提到第一行。
     static let aiPromotionMinimumLength = 7
+    /// 出厂的按来源最低匹配分：剪贴板要「包含这段字」（连续子串及以上），不认按顺序跳字 ——
+    /// 剪贴板是几百字的长文本，跳字几乎什么都能凑上（`72 f to c` 能在一段 JSON 里跳出来）。片段、App、命令照旧可以跳字。
+    static let defaultMinimumMatchScores = ["clipboard": LauncherMatch.substringMinimumScore]
 
     /// 排序。
     ///
@@ -90,9 +93,12 @@ enum LauncherRanking {
     ///   - now: 当前时间，算使用分的衰减用。
     ///   - sourceLimits: 某些来源最多出几行（没打前缀时剪贴板最多 5 行，免得把 App 和命令挤下去）；
     ///     超出的跳过、由后面的行补上，`limit` 仍是总行数。
+    ///   - minimumMatchScores: 某些来源的最低匹配分，低于它的候选不出、也不算进最高匹配分（出厂：剪贴板不认跳字）。
+    ///     别名命中、「这个输入上次选了它」不受门槛限制；查询为空时不看门槛。
     static func rank(_ candidates: [LauncherCandidate], query: String, records: LauncherUsageRecords, now: Date,
                      weights: LauncherSourceWeights = .standard, limit: Int = LauncherRanking.defaultLimit,
-                     sourceLimits: [String: Int] = [:]) -> LauncherRankingResult {
+                     sourceLimits: [String: Int] = [:],
+                     minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores) -> LauncherRankingResult {
         let matchQuery = LauncherMatchQuery(query)
         let aliasKey = records.key(forAlias: query)
         let rememberedKey = records.rememberedKey(forInput: query)
@@ -110,6 +116,11 @@ enum LauncherRanking {
             } else {
                 continue
             }
+            let isRemembered = candidate.key == rememberedKey
+            if !isAliasMatch, !isRemembered, !matchQuery.isEmpty,
+               let minimum = minimumMatchScores[candidate.sourceID], match < minimum {
+                continue
+            }
             if checksHidden && records.isHidden(candidate.key) { continue }
             let usage = records.usageScore(for: candidate.key, now: now)
             let item = LauncherRankedItem(
@@ -119,7 +130,7 @@ enum LauncherRanking {
                 usageScore: usage,
                 score: Double(match) * weights.weight(for: candidate.sourceID) + usage,
                 isAliasMatch: isAliasMatch,
-                isRemembered: candidate.key == rememberedKey
+                isRemembered: isRemembered
             )
             scored.append(Scored(item: item, titleLength: candidate.searchKeys.first?.length ?? 0,
                                  date: candidate.date ?? .distantFuture))

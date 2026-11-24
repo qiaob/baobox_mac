@@ -395,6 +395,9 @@ enum LauncherMatch {
     static let wordStartScore = 600
     static let substringScore = 400
     static let fuzzyScore = 200
+    /// 连续子串那一档扣满长度惩罚后的最低分（400 − 100 = 300）。不低于它的都至少「包含这段字」，
+    /// 低于它的只可能是按顺序跳字（跳字最高 200 减扣分）—— 排序按来源设最低匹配分时用它当门槛。
+    static let substringMinimumScore = substringScore - lengthPenaltyCap
     /// 查询为空时的匹配分：不过滤，每个候选都算命中、匹配分 0，排序只看使用分。
     static let emptyQueryScore = 0
 
