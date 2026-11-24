@@ -131,6 +131,8 @@ final class LauncherEngine {
     private var asyncItemsByKey: [String: LauncherItem] = [:]
     /// 这次显示的固定文件行（片段的确切命中、名字正好是输入的）的行 id：控制器据此决定选中跟不跟到新的第一行。
     private(set) var pinnedFileRowIDs: Set<String> = []
+    /// 最近一次查询要搜的文件（不搜为 nil）。
+    private var lastFileRequest: LauncherFileSearchRequest?
 
     init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -167,6 +169,7 @@ final class LauncherEngine {
         fileResult = nil
         asyncItemsByKey = [:]
         pinnedFileRowIDs = []
+        lastFileRequest = nil
         textActions = []
         suggestionsByKey = [:]
         pastedText = nil
@@ -189,6 +192,14 @@ final class LauncherEngine {
         fileResult = (request, pinned, ranked, complete)
     }
 
+    /// 文件来源的表换了（扫完了、已知文件 / 剪贴板路径重建了）：最近一次输入正在搜文件时，手上的结果当成不完整
+    /// （先照旧显示，`LauncherFileResultState.expired`），下次 `search` 会要求重搜。没在搜文件返回 false。
+    func expireFileResults() -> Bool {
+        guard lastFileRequest != nil else { return false }
+        fileResult?.complete = false
+        return true
+    }
+
     /// 计算结果、识别结果的行（不是这类行为 nil）。
     func instant(forKey key: String) -> LauncherInstant? {
         instantsByKey[key]
@@ -206,6 +217,7 @@ final class LauncherEngine {
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
         pinnedFileRowIDs = []
+        lastFileRequest = nil
 
         // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
         if let attachment {
@@ -266,6 +278,7 @@ final class LauncherEngine {
         suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID)
+        lastFileRequest = fileRequest
         let files = currentFiles(for: fileRequest)
         asyncItemsByKey = Dictionary((files.pinned + files.ranked).map { ($0.row.id, $0) },
                                      uniquingKeysWith: { first, _ in first })

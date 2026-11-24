@@ -66,6 +66,7 @@ final class LauncherController {
         model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
         thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
         entries.onKeysAdded = { [weak self] in self?.entryKeysAdded() }
+        fileSources.onTablesChanged = { [weak self] in self?.fileTablesChanged() }
     }
 
     /// 模块 activate：后台建 App 索引、读使用记录；几秒后预热一次。
@@ -234,6 +235,15 @@ final class LauncherController {
         refresh(keepSelection: LauncherFileSelectionPolicy.keepsSelection(newPinnedCount: pinned.count,
                                                                          selectedIndex: model.selectedIndex,
                                                                          selectedIsPinnedFile: selectedIsPinnedFile))
+        panel.setHeight(model.panelHeight)
+    }
+
+    /// 文件来源的表换上了（扫完了、已知文件 / 剪贴板路径重建了）：面板开着、这次输入正在搜文件，就重搜一次 ——
+    /// 结果先照旧显示；还在跑的那次用的是旧表，停掉重发。刚呼出就贴文件名、冷扫描还没完时，不用再按一个键才出来。
+    private func fileTablesChanged() {
+        guard panel.isVisible, engine.expireFileResults() else { return }
+        files.cancel()
+        refresh(keepSelection: true)
         panel.setHeight(model.panelHeight)
     }
 

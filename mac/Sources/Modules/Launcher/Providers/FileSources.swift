@@ -32,6 +32,8 @@ final class LauncherFileSources {
     private let clipboard = LauncherMemoryFileSearch(label: "clipboard", verifiesExistence: true)
     /// 交给 `LauncherFileProvider` 的后端：四个来源并起来。
     let backend: LauncherMergedFileSearch
+    /// 自己扫的目录 / 已知文件 / 剪贴板路径的表换上了（主线程）：控制器在面板开着、正在搜文件时重搜一次（PR 11 独立验证后加）。
+    var onTablesChanged: (() -> Void)?
 
     private let scanQueue = DispatchQueue(label: "com.baobox.app.launcher.filescan", qos: .utility)
     private let buildQueue = DispatchQueue(label: "com.baobox.app.launcher.filesources", qos: .utility)
@@ -103,6 +105,7 @@ final class LauncherFileSources {
                 MainActor.assumeIsolated {
                     self.scanning = false
                     self.scanned.replace(catalog)
+                    self.onTablesChanged?()
                     for report in reports {
                         Self.log.notice("file roots: \(report.root, privacy: .private) \(report.missing ? "missing" : "scanned", privacy: .public) in \(report.elapsed * 1000, format: .fixed(precision: 0), privacy: .public) ms, \(report.files, privacy: .public) files + \(report.directories, privacy: .public) folders, \(report.prunedDirectories, privacy: .public) folders pruned, \(report.unreadable, privacy: .public) unreadable, \(report.invalidNames, privacy: .public) invalid names\(report.stoppedEarly ? " (stopped at the limit)" : "", privacy: .public)")
                     }
@@ -123,7 +126,10 @@ final class LauncherFileSources {
                 LauncherFileCatalog.File(path: $0.path, lastUsed: $0.date, note: $0.note)
             })
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self.known.replace(catalog) }
+                MainActor.assumeIsolated {
+                    self.known.replace(catalog)
+                    self.onTablesChanged?()
+                }
             }
         }
     }
@@ -144,6 +150,7 @@ final class LauncherFileSources {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.clipboard.replace(catalog)
+                    self.onTablesChanged?()
                     if extracted > 0 {
                         Self.log.notice("clipboard paths: \(extracted, privacy: .public) of \(texts.count, privacy: .public) entries read, \(catalog.count, privacy: .public) paths, \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms")
                     }

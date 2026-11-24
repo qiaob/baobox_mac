@@ -97,6 +97,29 @@ final class LauncherFileResultStateTests: XCTestCase {
     }
 
     @MainActor
+    func testTableSwapRequeriesTheCurrentInput() {
+        // 刚呼出就输入文件名、自己扫的目录还没扫完：表换上之后不用再按一个键就出来。
+        let spotlight = ControllableSpotlight(files: [], latency: 0.05)
+        let memory = LauncherMemoryFileSearch(label: "test.swap", verifiesExistence: false)
+        let merger = LauncherMergedFileSearch(sources: [
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.08),
+            .init(name: "scanned", origin: .scanned, backend: memory),
+        ])
+        let launcher = MiniLauncher(backend: merger)
+        launcher.type("hook.py")
+        pump(0.3)
+        XCTAssertEqual(launcher.have?.complete, true)
+        XCTAssertTrue(launcher.results.isEmpty, "扫描还没完：没有")
+        memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/scratchpad/hook.py", modified: Date())]))
+        launcher.tablesChanged()
+        pump(0.02)
+        XCTAssertEqual(launcher.results.first?.hit.path, "/private/tmp/c/scratchpad/hook.py", "换表后重搜，内存来源立刻出")
+        XCTAssertEqual(launcher.results.first?.pinned, true)
+        pump(0.3)
+        XCTAssertEqual(launcher.starts.count, 2, "只重发了一次")
+    }
+
+    @MainActor
     func testSameRequestIsNotResentWhileGathering() {
         let (launcher, spotlight) = makeLauncher(
             spotlightFiles: [LauncherFileHit(path: "/Users/me/a/report.pdf")], scanned: ["/private/tmp/c/report.pdf"])
@@ -146,6 +169,14 @@ private final class MiniLauncher {
         } else {
             cancel()
         }
+    }
+
+    /// 控制器的 `fileTablesChanged`：正在搜文件就把结果当成不完整、停掉还在跑的、再查一次。
+    func tablesChanged() {
+        guard LauncherFilePolicy.request(for: LauncherQuery.parse(text), hasCalculation: false) != nil else { return }
+        have = have?.expired
+        cancel()
+        refresh()
     }
 
     private func start(_ request: LauncherFileSearchRequest) {
