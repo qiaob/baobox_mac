@@ -214,15 +214,21 @@ final class HotkeyCenter: ObservableObject {
         _ = performRegister(def: def, combo: combo)
     }
 
+    /// 某个快捷键的键位在设置里变了（录了新的 / 恢复默认，不论成功与否）。`object` = 快捷键 id。主线程发出。
+    /// 只用来让依赖键位的界面重算（快速入口设置页的冲突提示），不参与注册和冲突判断。
+    static let comboDidChangeNotification = Notification.Name("com.baobox.hotkey.comboDidChange")
+
     @discardableResult
     func update(id: String, to combo: KeyCombo) -> Bool {
         // 用户可能刚在系统设置里改过键位，重新读一次系统保留表再判定。
         refreshSystemReserved()
+        defer { NotificationCenter.default.post(name: Self.comboDidChangeNotification, object: id) }
         return reregister(id: id, to: combo, persist: true)
     }
 
     func resetToDefault(id: String) {
         guard let existing = registrations[id] else { return }
+        defer { NotificationCenter.default.post(name: Self.comboDidChangeNotification, object: id) }
         guard let defaultCombo = existing.def.defaultCombo else {
             // 默认即"未绑定"：注销现有热键并清掉持久化。
             if let ref = existing.hotKeyRef {
