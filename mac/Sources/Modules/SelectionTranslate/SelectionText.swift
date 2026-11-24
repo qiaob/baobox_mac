@@ -48,17 +48,13 @@ enum SelectionText {
     // MARK: - AX 路径
 
     /// 读前台 App 当前焦点元素的选中文字。取不到（没选中 / App 不暴露）返回 nil。
+    /// 读焦点元素、读选中文字这两步在 Core 的 `SelectedTextReader`（快速入口也用，不设时限时同原来）。
     @MainActor
     static func fetchViaAccessibility() -> SelectionTextResult? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let element = SelectedTextReader.focusedElement(pid: app.processIdentifier) else { return nil }
 
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
-
-        guard let text = selectedText(of: element),
+        guard let text = SelectedTextReader.selectedText(of: element),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         var result = SelectionTextResult(text: text, anchorRect: selectionBounds(of: element), route: .accessibility)
         var settable = DarwinBoolean(false)
@@ -73,7 +69,7 @@ enum SelectionText {
     /// 替换前再读一次那个输入框此刻选中的文字（docs/selection-translate/ASSISTANT.md §2.4）。
     @MainActor
     static func currentSelection(of target: SelectionEditTarget) -> String? {
-        selectedText(of: target.element)
+        SelectedTextReader.selectedText(of: target.element)
     }
 
     /// 选区所在的整句：读全文 + 选区范围，按句末标点往两边找，最多 300 字。读不到 / 就是选区本身时返回 nil。
@@ -88,27 +84,6 @@ enum SelectionText {
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length > 0 else { return nil }
         return SelectionSentence.extract(from: value as NSString,
                                          selection: NSRange(location: range.location, length: range.length))
-    }
-
-    /// 先读 kAXSelectedText；没有就用「全文 + 选区范围」切（不少文本视图只给后者）。
-    private static func selectedText(of element: AXUIElement) -> String? {
-        var ref: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &ref) == .success,
-           let text = ref as? String, !text.isEmpty {
-            return text
-        }
-        var valueRef: CFTypeRef?
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let value = valueRef as? String,
-              AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
-              let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() else { return nil }
-        var range = CFRange()
-        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length > 0 else { return nil }
-        // AX 的 CFRange 按 UTF-16 计，与 NSString 同口径。
-        let ns = value as NSString
-        guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
-        return ns.substring(with: NSRange(location: range.location, length: range.length))
     }
 
     /// 选区的屏幕位置（AppKit 坐标）。拿不到返回 nil。

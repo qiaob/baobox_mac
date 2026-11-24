@@ -12,6 +12,7 @@ import Foundation
 // 兜底建议（文字动作、上网搜、搜文件）接在最后 —— 输入不为空时列表里总有事可做，「没有结果」只在连兜底建议都没有时出现。
 // 输入里挂着图片时（§5.5）只出这张图的建议（识别结果 + 图片动作），输入框里的字是筛选词；
 // 输入是一个图片文件的路径时，路径行后面接同一组图片动作。
+// 输入框为空时（§3.7）：「选中的 / 刚复制的」（⏎ 放进输入框）→ 各模块的情景建议 → 最常用的，共不超过 9 行。
 
 /// 行左边的图标。
 enum LauncherRowIcon: Equatable {
@@ -131,6 +132,11 @@ final class LauncherEngine {
     private var asyncItemsByKey: [String: LauncherItem] = [:]
     /// 最近一次查询要搜的文件（不搜为 nil）。
     private var lastFileRequest: LauncherFileSearchRequest?
+    /// 输入框为空时最前面的行（§3.7：「选中的 / 刚复制的」、情景建议）：控制器呼出时设、读到选区后再换。
+    var emptyState = LauncherEmptyState()
+    /// 这次显示出来的空状态的行，按行 id（执行、Tab、缩略图时找回来）；输入不为空时为空。
+    private var shownContext: [String: LauncherContextItem] = [:]
+    private var shownSituational: [String: LauncherItem] = [:]
 
     init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -172,10 +178,18 @@ final class LauncherEngine {
         pastedText = nil
         imageActions = []
         attachment = nil
+        emptyState = LauncherEmptyState()
+        shownContext = [:]
+        shownSituational = [:]
     }
 
     func item(forKey key: String) -> LauncherItem? {
-        itemsByKey[key] ?? asyncItemsByKey[key]
+        shownSituational[key] ?? itemsByKey[key] ?? asyncItemsByKey[key]
+    }
+
+    /// 空着时的「选中的 / 刚复制的」那一行（不是这类行为 nil）。
+    func contextItem(forKey key: String) -> LauncherContextItem? {
+        shownContext[key]
     }
 
     /// 后台查好了一个路径的行（`LauncherPathProvider`）。输入还是这个路径时，下一次 `search` 就用它们。
@@ -209,11 +223,14 @@ final class LauncherEngine {
 
     /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果，再放固定的文件行（片段的确切命中、名字正好是输入的），
     /// 再放对应建议、识别结果；
-    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）；
+    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行 —— 输入框为空（没打前缀）时前面还有「选中的 / 刚复制的」和情景建议，
+    /// 共不超过 9 行（`LauncherContextRules.layout`）；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）；
     /// 最后接兜底建议（§5.4）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
         lastFileRequest = nil
+        shownContext = [:]
+        shownSituational = [:]
 
         // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
         if let attachment {
@@ -290,7 +307,9 @@ final class LauncherEngine {
         }
         let ranked: [LauncherRankedItem]
         if query.text.isEmpty {
-            ranked = LauncherRanking.rank(pool, query: "", records: records, now: now, limit: Self.emptyQueryLimit)
+            // 多取几条：和情景建议重复的要让出来（§3.7），上限在下面按空状态的规则截。
+            ranked = LauncherRanking.rank(pool, query: "", records: records, now: now,
+                                          limit: Self.emptyQueryLimit + LauncherContextRules.maxSituational)
                 .items.filter { $0.usageScore > 0 }
         } else {
             ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
@@ -302,7 +321,26 @@ final class LauncherEngine {
         rows += files.pinned.map(\.row)
         rows += suggestions.leadingRows
         rows += instants.dropFirst(calculationCount).map(\.row)
-        rows += ranked.compactMap { item(forKey: $0.key)?.row }
+        var rankedKeys = ranked.map(\.key)
+        if query.text.isEmpty {
+            if query.isUnscoped {
+                // 输入框为空（§3.7）：「选中的 / 刚复制的」→ 情景建议 → 最常用的，共不超过 9 行。
+                let layout = LauncherContextRules.layout(context: emptyState.context.map(\.row.id),
+                                                         situational: emptyState.situational.map(\.candidate.key),
+                                                         mostUsed: rankedKeys)
+                shownContext = Dictionary(emptyState.context.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                    .filter { layout.context.contains($0.key) }
+                shownSituational = Dictionary(emptyState.situational.map { ($0.candidate.key, $0) },
+                                              uniquingKeysWith: { first, _ in first })
+                    .filter { layout.situational.contains($0.key) }
+                rows += layout.context.compactMap { shownContext[$0]?.row }
+                rows += layout.situational.compactMap { shownSituational[$0]?.row }
+                rankedKeys = layout.mostUsed
+            } else {
+                rankedKeys = Array(rankedKeys.prefix(Self.emptyQueryLimit))
+            }
+        }
+        rows += rankedKeys.compactMap { item(forKey: $0)?.row }
         rows += suggestions.trailing.map(\.row)
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
         // 结果不完整（只回来了一部分来源）也算还要搜：改错字（R → R' → R）时 R 的搜索已经被顶掉了，不重发 Spotlight 就再也不来。

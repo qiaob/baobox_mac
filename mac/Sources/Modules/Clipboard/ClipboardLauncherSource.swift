@@ -103,6 +103,8 @@ final class ClipboardLauncherSource: LauncherSearchable {
                 searchText: searchText,
                 symbolName: kind == .history ? "doc.text" : "text.badge.star",
                 date: item.createdAt,
+                // 完整原文（已在内存里）：快速入口把「刚复制的」放进输入框时取。
+                fullText: { text },
                 // 目标由 `PasteService` 从快速入口的动作里读（呼出前的前台 App），这里不传。
                 primary: { PasteService.paste(item, plainText: false, store: store, monitor: monitor) }
             ))
