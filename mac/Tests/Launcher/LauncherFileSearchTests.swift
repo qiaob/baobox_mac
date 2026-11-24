@@ -136,6 +136,21 @@ final class LauncherFileSearchTests: XCTestCase {
                                "/Users/me/notes/TECH_DESIGN_v2.md"])
     }
 
+    func testCopiesPreferTouchedThenSpotlightOverScannedOnly() {
+        // 验证者构造的数据：扫的目录里 3 份更新的副本，原来会把 Spotlight 的副本全挤掉。
+        var scanned = (0..<3).map { hit("/private/tmp/c\($0)/x.txt", daysAgo: Double($0) * 0.1) }
+        for index in scanned.indices { scanned[index].origins = [.scanned] }
+        var spotlight = [hit("/Users/me/a/x.txt", daysAgo: 20), hit("/Users/me/b/x.txt", daysAgo: 30)]
+        for index in spotlight.indices { spotlight[index].origins = [.spotlight] }
+        var copied = hit("/Users/me/old/x.txt", daysAgo: 90)
+        copied.origins = [.clipboard]
+        let kept = process(scanned + spotlight + [copied], .nameContains(["x.txt"]))
+        XCTAssertEqual(Set(kept), ["/Users/me/old/x.txt", "/Users/me/a/x.txt", "/Users/me/b/x.txt"],
+                       "碰过的 → Spotlight → 只来自扫的目录的，档内新的在前")
+        let onlyScanned = process(scanned + [hit("/Users/me/a/y.txt")], .nameContains(["x.txt"]))
+        XCTAssertEqual(onlyScanned.filter { $0.hasSuffix("/x.txt") }.count, 3, "只有扫的目录里有时照样留 3 份")
+    }
+
     func testCopiesUseLastUsedWhenNewer() {
         let hits = [hit("/Users/me/a/x.txt", daysAgo: 1), hit("/Users/me/b/x.txt", daysAgo: 2),
                     hit("/Users/me/c/x.txt", daysAgo: 3), hit("/Users/me/d/x.txt", daysAgo: 400, usedDaysAgo: 0.5)]

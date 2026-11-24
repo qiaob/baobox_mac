@@ -275,7 +275,9 @@ enum LauncherFileFilter {
         return a.hit.path < b.hit.path
     }
 
-    /// 同名（不分大小写）的只留最新的 `maxCopiesPerName` 份：一百多个 worktree 里同一个文件不会刷满一屏。
+    /// 同名（不分大小写）的只留 `maxCopiesPerName` 份：一百多个 worktree 里同一个文件不会刷满一屏。
+    /// 挑哪几份（PR 11 独立验证后定）：先按 `copyTier` 的三档（碰过的 → Spotlight 等 → 只来自扫的目录的），档内新的在前 ——
+    /// 不然扫的目录里 3 份更新的副本会把 Spotlight 的副本全挤掉。带不带前缀都这样。
     static func keepingNewestCopies(_ results: [LauncherFileResult]) -> [LauncherFileResult] {
         var groups: [String: [LauncherFileResult]] = [:]
         var order: [String] = []
@@ -287,10 +289,7 @@ enum LauncherFileFilter {
         return order.flatMap { key -> [LauncherFileResult] in
             let copies = groups[key] ?? []
             guard copies.count > maxCopiesPerName else { return copies }
-            return Array(copies.sorted { a, b in
-                if a.hit.recency != b.hit.recency { return a.hit.recency > b.hit.recency }
-                return a.hit.path < b.hit.path
-            }.prefix(maxCopiesPerName))
+            return Array(copies.sorted(by: pinnedOrder).prefix(maxCopiesPerName))
         }
     }
 
