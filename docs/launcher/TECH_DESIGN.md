@@ -35,16 +35,17 @@ mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些�
 
 mac/Sources/Modules/Launcher/
   LauncherTool.swift                       模块壳：菜单一行、快捷键、设置 Tab、aiFeatures
-  LauncherController.swift                 呼出 / 收起、上下文快照、会话状态
+  LauncherController.swift                 呼出 / 收起、上下文快照、会话状态、按键、执行
   LauncherPanel.swift                      窗口外壳（见 §4）
-  LauncherViews.swift                      输入框、结果列表、预览卡片、回答区、⌘K 菜单
-  LauncherEngine.swift                     汇总各来源、去重、排序
+  LauncherViews.swift                      面板状态（LauncherPanelModel）、输入框、结果列表、预览卡片、回答区、⌘K 菜单
+  LauncherEngine.swift                     装进各来源的条目、拆前缀、排序、换成行（LauncherItem / LauncherRow）
+  LauncherUsagePersistence.swift           使用记录落盘（LauncherUsageStore，§5.3）
   LauncherAI.swift                         意图解析、问答、算式翻译的调用与提示词
   LauncherSettingsView.swift               设置页
   LauncherSpotlightHotkey.swift            ⌘Space 是否空出来的检测与自动绑定
   Providers/
-    AppProvider.swift                      App 索引（后台建、目录变化时刷新）
-    CommandProvider.swift                  命令表 → 结果
+    AppProvider.swift                      LauncherAppProvider：App 索引（后台建、目录变化时刷新）、图标、打开
+    CommandProvider.swift                  LauncherCommandProvider：从 ToolRegistry 收命令 → 条目
     SystemProvider.swift                   系统设置页、系统命令
     CalculatorProvider.swift               计算结果行
     TextFormatProvider.swift               文本识别（调剪贴板的识别器）
@@ -55,6 +56,8 @@ mac/Sources/Modules/Launcher/
     LauncherMatch.swift                    匹配打分、拼音
     LauncherRanking.swift                  使用频率与最终排序
     LauncherQuery.swift                    前缀解析（`a `、`c `…）
+    LauncherCommandCatalog.swift           命令表的合并规则、命令的搜索文字、搜索键缓存（§3.1）
+    LauncherAppNames.swift                 App 的几个名字去重（§6.1）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -95,6 +98,14 @@ struct LauncherCommand {
 
 1. **白送的部分**：`ToolRegistry.allHotkeys()` 里的每个 `HotkeyDefinition` 自动成为一条无参数命令（`id`、`title`、`action` 都现成；`stateTitle` 有值时用它当标题，这样「防休眠」那一行会显示成「关闭防休眠」）。目前各工具声明的快捷键动作有几十个，窗口管理的全部布局都在里面。
 2. **声明的部分**：模块在 `launcherCommands()` 里补带参数的命令和没有快捷键的动作。id 和某个快捷键 id 相同时，声明的覆盖白送的。
+
+实现（PR 4）：收集在 `Providers/CommandProvider.swift`（`LauncherCommandProvider`，注册表由 `AppDelegate` 传给 `LauncherTool(registry:)`，同设置窗口拿注册表的方式），每次呼出现建；合并规则是 `Logic/LauncherCommandCatalog.swift` 里的纯函数 `LauncherCommandCatalog.merge`，有单元测试：
+
+- 不收：快速入口自己的 `launcher.toggle`；带 `onRelease` 的快捷键（按住说话靠「按下 + 松开」，单次执行没意义）；id 为空的；一期面板只执行无参数命令，`parameters` 非空的先不收（`includesParameterized` 以后打开）。
+- **先过滤再合并**：同一组里 id 重复只留第一条；自动的保持注册顺序，声明的同 id 时在原位替换，其余声明的接在后面。被过滤掉的声明（带参数）不会顶掉同 id 的自动那条 —— 快捷键动作本来就能无参数执行。
+- 每条命令的搜索文字：标题（第一个，排序同分时看它的长度）、关键词、「工具名 标题」拼成的一段。工具名不单独做一个键：单独的话输入工具名时这个工具的每条命令都「完全相等」，会压过真正叫这个名字的那一行；拼起来以后是开头匹配、按标题长短排，`截图 区域` 这样连着写也能中。
+- 搜索键缓存（`LauncherCommandKeyCache`）：按命令 id 记「搜索文字 → 搜索键」，文字没变就复用，变了（「开关防休眠」↔「关闭防休眠」）才重建，这次没出现的 id 从缓存删掉。打字路径上不建键。
+- 行：右侧来源写工具名，图标用工具的 `symbolName`；⏎ 调 `run([:])`。
 
 一期需要各模块补的带参数命令（都调模块已有的方法，不新增能力）：
 
@@ -156,13 +167,19 @@ protocol LauncherSearchable {
 
 和 `QuickSwitchPanelHost` 的差别：它是固定 640×420、内容由调用方给；快速入口要高度跟内容变（只有输入框 → 长出列表 → 展开回答区）。做法：
 
-- 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`，键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听。
-- 宽 680 固定。高度由 SwiftUI 内容的 `fittingSize` 驱动，窗口顶边固定（向下长），变化时不做动画（跟手优先）。
-- 每次呼出新建窗口、收起时销毁（现有两个面板都这么做）。呼出延迟目标：按键到窗口可见 ≤ 60 ms，待验证；超了再改成常驻一个实例。
-- 输入框用 `NSTextField` 包一层而不是 SwiftUI `TextField`：需要拿到「输入法正在组字」（`hasMarkedText()`）来区分 ⏎ 是上屏还是执行，还要拦 Tab、↑ ↓、⌘K、⌘1–9。
-- 盖在全屏 App 上：这类浮层是「有意叠在全屏 App 上」的窗口，不走 `DesktopSpaceWindow`（那是给设置这类普通窗口用的）。
+- 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`，键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听（点外面认左键和右键）。
+- 宽 680 固定。窗口顶边固定（向下长），变化时不做动画（跟手优先）。高度不靠 `fittingSize`（里面有 `ScrollView`，量不准），由内容算：`LauncherLayout.height(for:)` = 搜索栏 56 + 分隔线 1 + 内容（提示 / 「没有结果」一行 40；结果每行 40，最多 8.5 行，没超时上下各留 6、超了只留上面的 6）。`NSHostingView.sizingOptions = []`（同会议控制条、字幕条），SwiftUI 不反过来改窗口大小；根视图贴顶对齐，窗口和内容在同一次刷新里更新（`setFrame(display: false)`），改完下一轮重算阴影。
+- 位置：鼠标所在屏幕可见区域水平居中，顶边在从上往下 1/5 处；结果长到最多时底边也要在屏幕里，矮屏往上挪。不能拖动（`isMovableByWindowBackground = false`，顶边要固定）。
+- 每次呼出新建窗口、收起时销毁（现有两个面板都这么做）。呼出延迟目标：按键到窗口可见 ≤ 60 ms，待验证；超了再改成常驻一个实例。控制器用 `os.Logger`（subsystem `com.baobox.app`，category `launcher`）记从 `toggle()` 到 `orderFront` 返回的毫秒数（`panel shown in … ms`）和超过 5 ms 的查询（`slow query`），没用 `os_signpost`。
+- 输入框用 `NSTextField` 包一层而不是 SwiftUI `TextField`：需要拿到「输入法正在组字」（`hasMarkedText()`）来区分 ⏎ 是上屏还是执行，还要拦 Tab、↑ ↓、⌘K、⌘1–9。实现：
+  - 面板的本地键盘监听先问字段编辑器 `hasMarkedText()`，组字中所有键都放给输入法。
+  - 查询只用上屏的文字：`controlTextDidChange` 里从字段编辑器的文字去掉标记的那段（读编辑器、不读 `stringValue`，后者会先提交编辑）。探针实测：`setMarkedText("wei'xin")` 时不回调、`isComposing == true`；`insertText("微信")` 后回调一次完整文字。
+  - `control(_:textView:doCommandBy:)` 兜底吞掉 Tab / ⏎ / Esc / ↑ ↓，免得焦点被 Tab 移走、⏎ 结束编辑。
+  - 焦点：`LauncherPanel.show` 在 `makeKeyAndOrderFront` 之前 `layoutSubtreeIfNeeded()`（探针实测：排版前输入框还没建，排版后已建），控制器紧接着同步 `makeFirstResponder`，呼出后立刻打的字不丢。NSTextField 成为第一响应者时全选里面的文字，所以 60 秒内保留的上次输入直接打字就覆盖。
+- 盖在全屏 App 上：这类浮层是「有意叠在全屏 App 上」的窗口，不走 `DesktopSpaceWindow`（那是给设置这类普通窗口用的）。`collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`（同听写的收集面板、宠物）。
+- 鼠标：单击一行 = 执行；悬停只在鼠标真的动过之后才改选中行 —— 记一个「上次的鼠标位置」，面板出现、换一批结果、键盘选行时都更新它，悬停事件里鼠标位置没变就不算。
 
-面板里的按钮、菜单自己画（`.borderless` 非当前 App 的窗口里，系统控件会按「非活动窗口」发灰，划词助手 #95 踩过，沿用 `SelectionButtons.swift` 的做法或把它下沉到 Core）。
+面板里的按钮、菜单自己画（`.borderless` 非当前 App 的窗口里，系统控件会按「非活动窗口」发灰，划词助手 #95 踩过，沿用 `SelectionButtons.swift` 的做法或把它下沉到 Core）。PR 4 的选中高亮（强调色底、白字）、命令图标底都由 SwiftUI 自己画。
 
 ## 5. 查询管线
 
@@ -172,6 +189,12 @@ protocol LauncherSearchable {
 ```
 
 三个文件都在 `Logic/`，只依赖 Foundation，输入输出全是 `Sendable` 的纯值（不碰带 `@MainActor` 闭包的 `LauncherEntry` / `LauncherCommand`），整条管线随时能挪到后台队列。
+
+App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`（排序用的 `LauncherCandidate` + 显示用的 `LauncherRow` + ⏎ 的闭包），引擎按条目键去重后装进来，收起时放掉；每次输入变化在主线程同步跑一次上面的管线。
+
+- 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只有这一期已有来源（`apps`、`commands`）的前缀生效；`f `、`c ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜文件」得到一片空。
+- 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空但一个没中：显示「没有结果」。
+- 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它），收起面板，下一个 runloop 再执行（很多命令作用于前台 App / 当前窗口，要等面板让开）。
 
 ### 5.1 匹配打分（`Logic/LauncherMatch.swift`）
 
@@ -248,14 +271,17 @@ protocol LauncherSearchable {
 - 「清除使用记录」清空次数和「输入 → 选了谁」，别名和隐藏的行保留（设置页里另有一张表能删，需求 §3.10 第 6、7 条）。
 - 解码全程容错：缺字段、整段类型不对、单个条目坏了（次数 < 1、时间不是数字……）都只跳过那一处，永不抛错；顶层不是对象时得到空记录；版本号比当前新也照读认得的字段，写出去总是当前版本。
 
+落盘（PR 4，`LauncherUsagePersistence.swift` 的 `LauncherUsageStore`，`@MainActor`）：`activate()` 时在后台串行队列读，读完 `prune()` 一次再回主线程换上；读完之前的改动先记在内存、读完按顺序补到读出来的记录上（不会被盘上的盖掉，也不会用空记录盖盘）。改动后防抖 2 秒，在同一个后台队列编码（`.sortedKeys`）、原子写；`willTerminate` 时取消防抖、在该队列上同步写掉（等前面那次写完）。文件不存在 → 空记录；不是合法 JSON → 改名成 `usage.json.bad` 留底、当空记录（同听写历史）；编码或写盘失败调 `StorageWriteFailure.report(L("storage.what.launcherUsage"), …)`，下次改动再写。
+
 ## 6. 各来源
 
 ### 6.1 App（`AppProvider`）
 
-- 扫 `/Applications`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications`、`/System/Library/CoreServices/Applications`，各两层深，只认 `.app`。
-- 名字取三个：`FileManager.displayName(atPath:)`（跟系统语言的本地化名）、`CFBundleName`、文件名。三个都进索引，所以「微信」「WeChat」「wx」都能中。
-- `activate()` 后在后台队列建索引，建完回主线程换上（约定 1）。之后用 `DispatchSource` 监视这几个目录，变化后 2 秒重扫。
-- 图标用 `NSWorkspace.shared.icon(forFile:)`，只在行可见时取，按路径缓存（`NSCache`）。
+- 扫 `/Applications`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications`、`/System/Library/CoreServices/Applications`，各两层深，只认 `.app`（不进 `.app` 包里面）。**不能用 `.skipsHiddenFiles`**：`/Applications/Safari.app` 是指向系统 Cryptex 的软链，带「隐藏」标记（`ls -lO` 可见），用它就搜不到 Safari（2026-11-23 macOS 27 实测）；改成只跳过点开头的名字。同一个 App 经不同路径出现（软链、`/System/Applications` 两层深时已经扫到 `Utilities`）按解析软链后的路径只算一次。
+- 名字取四个：`FileManager.displayName(atPath:)`（跟系统语言的本地化名，列表里显示它）、`CFBundleDisplayName`、`CFBundleName`、文件名，去掉 `.app`、不分大小写去重后都进索引，所以「微信」「WeChat」「wx」都能中（`Logic/LauncherAppNames.swift`）。Info.plist 用 `NSDictionary(contentsOf:)` 读，读不出来也照样收（用显示名和文件名）。条目 id 是 .app 的路径（软链就用软链的路径，跨系统版本稳定）。Baobox 自己（bundle id 等于本进程的）不进索引。
+- 实测（2026-11-23，M3，macOS 27，本机 137 个 App、227 个搜索键，其中 82 个有中文名）：建索引含搜索键第一次 73–112 ms（含 LaunchServices 和拼音转换的冷启动），之后 23–25 ms；在后台队列跑，不占主线程。
+- `activate()` 后在后台队列建索引，建完回主线程换上（约定 1）。之后用 `DispatchSource` 监视这几个目录，变化后 2 秒重扫（防抖）。只监视这五个目录本身：装进 / 删掉一层深的 App 能察觉，`/Applications/某文件夹/` 里面的变化察觉不到（等下次别的变化或重启）。每扫完一次重建监视，目录被删了又建（`~/Applications`）也能接上。
+- 图标用 `NSWorkspace.shared.icon(forFile:)`，只在行可见时取，按路径缓存（`NSCache`）。取软链指向的那个路径，否则 Safari 的图标带替身的小箭头。
 - ⏎：`NSWorkspace.shared.openApplication(at:configuration:)`；已在运行的由系统切过去。
 - 不在这些目录里的 App（装在别处的）一期搜不到；二期文件搜索上线后，用同一个 `NSMetadataQuery` 补全。
 
@@ -443,7 +469,7 @@ protocol LauncherSearchable {
 
 | # | 要确认的 | 怎么验 | 不通过时 |
 |---|---|---|---|
-| 1 | 面板呼出延迟（按键到可见）≤ 60 ms；在全屏 App 上能盖住；中文输入法组字时 ⏎ 不误执行 | 探针里用 `QuickSwitchWindow` + `NSTextField`，全屏终端里实测，`os_signpost` 计时 | 窗口改常驻；输入框换实现 |
+| 1 | 面板呼出延迟（按键到可见）≤ 60 ms；在全屏 App 上能盖住；中文输入法组字时 ⏎ 不误执行 | 探针里用 `QuickSwitchWindow` + `NSTextField`，全屏终端里实测；PR 4 的面板用 `os.Logger`（category `launcher`）记呼出耗时（`/usr/bin/log show --predicate 'subsystem == "com.baobox.app" AND category == "launcher"'`） | 窗口改常驻；输入框换实现 |
 | 2 | 本机模型理解命令的准确率 | 80 句样例（中英各半，含 15 句不该选任何命令的），跑 Qwen3-1.7B、Qwen3-4B、一个云端模型；指标：选对命令且参数对的比例、**选错命令**的比例 | 标准：选对 ≥ 90%、选错 ≤ 3%。1.7B 不达标就把建议模型改成 4B；本机都不达标就在设置里建议云端，并保留功能 |
 | 3 | llama-server 的 JSON 约束输出和前缀缓存在包内这一版上可用；热着时意图解析的耗时 | 直接对包内的 `llama-server` 发请求计时 | 不支持约束就只靠提示词 + 校验；没有缓存就把命令表粗筛到 30 条 |
 | 4 | 流式输出在本机、Claude、OpenAI 兼容三种后端上都通，取消请求后连接确实断开 | 探针里各打一次，中途取消 | 哪个后端不通，那个后端先退回整段返回 |
@@ -460,7 +486,7 @@ UserDefaults 前缀 `launcher.`：
 | 键 | 含义 | 默认 |
 |---|---|---|
 | `sources.<来源 id>` | 这个来源开不开 | 开 |
-| `prefix.<来源 id>` | 只搜一类的前缀 | `a` `c` `f` `s` `m` `w` |
+| `prefix.<来源 id>` | 只搜一类的前缀 | `a` `c` `f` `s` `m` `w`；命令 `>` |
 | `ai.attachContext` | 提问时带上选中的文字和剪贴板 | 开 |
 | `ai.prewarm` | 呼出时预热本机模型 | 关 |
 | `rates.enabled` | 汇率联网取数 | 看需求文档 §7 第 5 条 |
@@ -486,7 +512,7 @@ UserDefaults 前缀 `launcher.`：
 | 6 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
 | 7 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
 
-> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里带 `os_signpost` 计时；验证 6、7 要在系统设置里点，放到 PR 6、7，和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
+> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 6、7，和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
 
 二期开工前先做探针 2、3、4、5、8，按结果定「理解一句话命令」的建议模型，再拆 PR：AI 服务层（流式、多轮、JSON）→ 问 AI → 意图解析与预览卡片 → 一次性提醒 → 语音 → 其余来源 → 汇率。
 

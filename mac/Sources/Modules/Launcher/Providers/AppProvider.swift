@@ -68,10 +68,11 @@ final class LauncherAppProvider {
         cancelWatchers()
     }
 
-    /// App 的图标：只在行要显示时取，按路径缓存。
+    /// App 的图标：只在行要显示时取，按路径缓存。取软链指向的那个（`/Applications/Safari.app` 是软链，
+    /// 直接取会带上替身的小箭头）。
     func icon(forPath path: String) -> NSImage {
         if let cached = icons.object(forKey: path as NSString) { return cached }
-        let image = NSWorkspace.shared.icon(forFile: path)
+        let image = NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
         icons.setObject(image, forKey: path as NSString)
         return image
     }
@@ -146,15 +147,17 @@ final class LauncherAppProvider {
         return records.sorted { $0.path < $1.path }
     }
 
-    /// 目录里的 .app：`depth` = 往下几层（1 = 只看这一层）。不进 .app 包里面，跳过隐藏文件；目录不存在、读不了都当没有。
+    /// 目录里的 .app：`depth` = 往下几层（1 = 只看这一层）。不进 .app 包里面，跳过点开头的文件；目录不存在、读不了都当没有。
+    /// 不用 `.skipsHiddenFiles`：`/Applications/Safari.app` 是指向系统 Cryptex 的软链，带着「隐藏」标记（`ls -lO` 可见），
+    /// 用它就搜不到 Safari（2026-11-23 macOS 27 实测）。
     nonisolated private static func appURLs(in directory: URL, depth: Int, fileManager: FileManager) -> [URL] {
         guard depth > 0,
               let children = try? fileManager.contentsOfDirectory(at: directory,
                                                                   includingPropertiesForKeys: [.isDirectoryKey],
-                                                                  options: [.skipsHiddenFiles])
+                                                                  options: [])
         else { return [] }
         var result: [URL] = []
-        for child in children {
+        for child in children where !child.lastPathComponent.hasPrefix(".") {
             if LauncherAppNames.isAppBundleName(child.lastPathComponent) {
                 result.append(child)
             } else if depth > 1, (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
