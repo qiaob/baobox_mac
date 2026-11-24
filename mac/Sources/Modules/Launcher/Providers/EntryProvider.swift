@@ -78,10 +78,14 @@ final class LauncherEntryProvider {
                 guard let keys = cache.keys(for: spec) else { continue }
                 let candidate = LauncherCandidate(sourceID: source.sourceID, entryID: entry.id, searchKeys: keys,
                                                   date: entry.date)
-                items.append(LauncherItem(candidate: candidate,
-                                          row: LauncherRow(id: candidate.key, title: entry.title,
-                                                           source: source.sourceName, icon: .symbol(entry.symbolName)),
-                                          run: entry.primary))
+                // 图片条目（§5.5）：行首是缩略图（行要显示时才在后台取），副标题是相对时间 —— 标题都差不多（「图片 · 微信」），
+                // 靠它分得清是哪一张。文字条目照旧不写副标题。
+                let icon: LauncherRowIcon = entry.image == nil ? .symbol(entry.symbolName)
+                    : .thumbnail(placeholderSymbol: entry.symbolName)
+                let row = LauncherRow(id: candidate.key, title: entry.title, source: source.sourceName, icon: icon,
+                                      subtitle: entry.image == nil ? nil : entry.subtitle)
+                items.append(LauncherItem(candidate: candidate, row: row, run: entry.primary,
+                                          image: entry.image, onlyWithPrefix: entry.onlyWithPrefix))
             }
         }
         return items

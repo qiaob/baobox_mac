@@ -12,6 +12,7 @@ import os
 // 图片（§5.5）：⌘V 时先看剪贴板里是什么（`LauncherPasteClassifier`）—— 图片挂成输入里的附件（输入框左边一个小标签），
 // 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
 // 访达里复制的文件 → 输入框换成它的路径（走路径行；图片文件的路径行后面接图片动作）。拖到面板上放下的同样处理。
+// 剪贴板历史里的图片条目（`c ` 前缀下）：行首缩略图在后台取（`LauncherThumbnailProvider`），⏎ 粘贴，Tab 挂成附件。
 
 @MainActor
 final class LauncherController {
@@ -31,6 +32,7 @@ final class LauncherController {
     private let apps = LauncherAppProvider()
     private let paths = LauncherPathProvider()
     private let files = LauncherFileProvider()
+    private let thumbnails = LauncherThumbnailProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
     private let usage = LauncherUsageStore()
@@ -57,6 +59,8 @@ final class LauncherController {
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
         model.onRun = { [weak self] index in self?.run(at: index) }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
+        model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
+        thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
         entries.onKeysAdded = { [weak self] in self?.entryKeysAdded() }
     }
 
@@ -258,7 +262,7 @@ final class LauncherController {
             // ⌫：输入框为空时去掉挂着的图片（输入框里有字时照常删字）。
             removeAttachment(clearingText: false)
             return true
-        case 0x30: // Tab：路径行上 = 补全成这一行的完整路径；其余时候先吃掉，以后是「问 AI」
+        case 0x30: // Tab：路径行上 = 补全成这一行的完整路径；图片条目上 = 挂成附件；其余时候先吃掉，以后是「问 AI」
             if flags.isDisjoint(with: [.command, .control, .option]) { complete(at: model.selectedIndex) }
             return true
         default:
@@ -414,6 +418,30 @@ final class LauncherController {
         loadThumbnail(for: recognition)
     }
 
+    /// 把来源交来的一张图（剪贴板历史里的图片条目）挂成附件：字节在后台取（来源要解密读盘），取到时面板还开着才挂。
+    private func attach(entryImage: LauncherEntryImage) {
+        let load = entryImage.loadData
+        DispatchQueue.global(qos: .userInitiated).async {
+            let data = load()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard self.panel.isVisible else { return }
+                    guard let data, !data.isEmpty else {
+                        Self.toast(L("launcher.toast.imageUnreadable"))
+                        return
+                    }
+                    self.attach(.data(data))
+                }
+            }
+        }
+    }
+
+    /// 图片条目行首的缩略图（缓存里没有就去后台取，先返回 nil）。
+    private func thumbnail(forRow id: String) -> NSImage? {
+        guard let image = engine.item(forKey: id)?.image else { return nil }
+        return thumbnails.thumbnail(for: image)
+    }
+
     /// 去掉挂着的图片。`clearingText`：连输入框里的筛选词一起清掉（Esc）。
     private func removeAttachment(clearingText: Bool) {
         guard attachment != nil else { return }
@@ -491,10 +519,15 @@ final class LauncherController {
         }
     }
 
-    /// Tab：选中的是路径行时，把输入框换成它的完整路径（文件夹末尾带 `/`，于是立刻列出它里面的内容）。
+    /// Tab：选中的是路径行时，把输入框换成它的完整路径（文件夹末尾带 `/`，于是立刻列出它里面的内容）；
+    /// 选中的是图片条目（剪贴板历史里的图片）时，把这张图挂成附件 —— 于是出取字、贴图这些建议（§5.5）。
     private func complete(at index: Int) {
-        guard model.rows.indices.contains(index),
-              let completion = engine.item(forKey: model.rows[index].id)?.completion else { return }
+        guard model.rows.indices.contains(index), let item = engine.item(forKey: model.rows[index].id) else { return }
+        if let image = item.image {
+            attach(entryImage: image)
+            return
+        }
+        guard let completion = item.completion else { return }
         model.field.replaceText(completion)
         // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
         textChanged(completion)
