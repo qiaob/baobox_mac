@@ -7,6 +7,7 @@ import os
 // 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
+// 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
 
 @MainActor
 final class LauncherController {
@@ -23,6 +24,7 @@ final class LauncherController {
 
     private let apps = LauncherAppProvider()
     private let paths = LauncherPathProvider()
+    private let files = LauncherFileProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
     private let usage = LauncherUsageStore()
@@ -71,6 +73,7 @@ final class LauncherController {
         usage.flush()
         apps.stop()
         paths.cancel()
+        files.cancel()
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -119,6 +122,7 @@ final class LauncherController {
         panel.hide()
         hiddenAt = Date()
         paths.cancel()
+        files.cancel()
         engine.clear()
         baseItems = []
         entries.endSession()
@@ -126,7 +130,7 @@ final class LauncherController {
 
     private func loadEngine(entryItems: [LauncherItem]) {
         engine.load(baseItems + entryItems,
-                    sourceIDs: Set([LauncherAppProvider.sourceID, LauncherCommandProvider.sourceID])
+                    sourceIDs: Set([LauncherAppProvider.sourceID, LauncherCommandProvider.sourceID, LauncherFileProvider.sourceID])
                         .union(entries.sessionSourceIDs))
     }
 
@@ -158,15 +162,33 @@ final class LauncherController {
         requestBackgroundResults(outcome)
     }
 
-    /// 引擎要的后台结果：输入是一个还没查过的路径 → 后台查（同一个路径正在查就不再发）；不再是路径 → 不要还没回来的。
+    /// 引擎要的后台结果：输入是一个还没查过的路径 → 后台查；要搜的文件还没搜过 → 去搜（同一个正在查 / 搜就不再发）。
+    /// 不需要了（不再是路径、不再搜文件、手上的结果已经是这次的）→ 不要还没回来的。
     private func requestBackgroundResults(_ outcome: LauncherSearchOutcome) {
         if let path = outcome.pendingPath {
             if paths.inFlight != path {
                 paths.resolve(path) { [weak self] input, items in self?.pathResolved(items, for: input) }
             }
-        } else if !outcome.isPathMode {
+        } else {
             paths.cancel()
         }
+        if let request = outcome.pendingFiles {
+            if files.inFlight != request {
+                files.search(request) { [weak self] request, pinned, ranked in
+                    self?.filesFound(pinned: pinned, ranked: ranked, for: request)
+                }
+            }
+        } else {
+            files.cancel()
+        }
+    }
+
+    /// 文件搜好了：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
+    private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest) {
+        guard panel.isVisible else { return }
+        engine.setFileResult(pinned: pinned, ranked: ranked, for: request)
+        refresh(keepSelection: true)
+        panel.setHeight(model.panelHeight)
     }
 
     /// 后台查好了一个路径：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。

@@ -28,6 +28,27 @@ struct LauncherFileSearchRequest: Equatable, Sendable {
     }
 }
 
+/// 文件搜索的后端：给一个请求，异步交回原始命中（不过滤、不排序），可以取消。
+/// 这一版是 Spotlight（`Providers/SpotlightFileSearch.swift`）；以后换成自己的内存索引（让 Spotlight 当爬虫、
+/// 启动后在后台把全部文件名读进内存，用自己的匹配引擎搜）只换这一层，过滤和排序（`LauncherFileFilter`）、引擎、界面都不动。
+protocol LauncherFileSearching: AnyObject, Sendable {
+    /// 开始搜。`completion` 在任意线程回调一次；被 `cancel()` 或下一次 `search` 顶掉的不回调。同一时刻只跑一个。
+    func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void)
+    /// 停掉还没回来的那次。
+    func cancel()
+}
+
+/// 后端一次交回的东西。
+struct LauncherFileSearchBatch: Sendable {
+    let hits: [LauncherFileHit]
+    /// 后端一共找到多少条（可能比 `hits` 多：只读了前面一部分）。
+    let totalCount: Int
+    /// 从开始搜到结果收齐的时间（秒）。
+    let elapsed: TimeInterval
+    /// 超时了：交回的是到那时为止收到的。
+    let timedOut: Bool
+}
+
 /// 后端交回的一条原始命中。
 struct LauncherFileHit: Equatable, Sendable {
     let path: String

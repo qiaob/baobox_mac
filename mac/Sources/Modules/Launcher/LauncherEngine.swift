@@ -5,6 +5,9 @@ import Foundation
 // 同步、只读内存，打字路径上不建搜索键、不碰磁盘。
 // 输入是路径时（§6.5）只出路径的行：要读磁盘，由控制器在后台查、查完交回来（`setPathResult`）；
 // 还没回来时先显示上一个路径的行（没有就显示「正在查找」），免得每打一个字列表收起又长出来。
+// 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`）：交回的行和内存里的候选一起排序
+// （没打前缀时最多 5 行，权重最低，排在 App、命令之后），带 `/` 的片段的确切命中固定在最前；
+// 新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
 
 /// 行左边的图标。
 enum LauncherRowIcon: Equatable {
@@ -64,13 +67,15 @@ struct LauncherSearchOutcome {
     let candidateCount: Int
     /// 查询耗时（秒）。
     let duration: TimeInterval
-    /// 输入是路径（这时只出路径的行）。
-    var isPathMode = false
     /// 输入是这个路径、它的结果还没查过或过期了：控制器在后台查（`LauncherPathProvider`），查完 `setPathResult`。
     var pendingPath: LauncherPathInput? = nil
+    /// 这次输入要搜的文件；不搜为 nil（控制器停掉还没回来的那次）。
+    var fileRequest: LauncherFileSearchRequest? = nil
+    /// 要搜的文件结果还没搜过或过期了：控制器去搜（`LauncherFileProvider`），搜完 `setFileResult`。
+    var pendingFiles: LauncherFileSearchRequest? = nil
 
     /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
-    var isPending: Bool { pendingPath != nil }
+    var isPending: Bool { pendingPath != nil || pendingFiles != nil }
 }
 
 @MainActor
@@ -78,7 +83,8 @@ final class LauncherEngine {
     /// 输入为空时最多显示几行「最常用的」。
     static let emptyQueryLimit = 8
     /// 没打前缀时这些来源最多出几行：剪贴板几千条，不限的话一个常见词就把 App 和命令挤下去（`c ` 前缀下不限）。
-    static let unscopedSourceLimits = ["clipboard": 5]
+    /// 文件同理：没打前缀时最多 5 行（`f ` 前缀下最多 `LauncherFileFilter.maxResults` 行）。
+    static let unscopedSourceLimits = ["clipboard": 5, LauncherFileProvider.sourceID: 5]
 
     private var allCandidates: [LauncherCandidate] = []
     private var candidatesBySource: [String: [LauncherCandidate]] = [:]
@@ -92,7 +98,9 @@ final class LauncherEngine {
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
     private var pathResult: (input: LauncherPathInput, items: [LauncherItem])?
-    /// 这次显示的后台来的行（路径），按行 id：执行、Tab 补全时按 id 找回来。
+    /// 最近一次搜好的文件：片段的确切命中（固定在最前）和交给排序的。
+    private var fileResult: (request: LauncherFileSearchRequest, pinned: [LauncherItem], ranked: [LauncherItem])?
+    /// 这次显示的后台来的行（路径、文件），按行 id：执行、Tab 补全时按 id 找回来。
     private var asyncItemsByKey: [String: LauncherItem] = [:]
 
     init(home: String = NSHomeDirectory()) {
@@ -126,6 +134,7 @@ final class LauncherEngine {
         itemsByKey = [:]
         instantsByKey = [:]
         pathResult = nil
+        fileResult = nil
         asyncItemsByKey = [:]
     }
 
@@ -138,13 +147,18 @@ final class LauncherEngine {
         pathResult = (input, items)
     }
 
+    /// 后台搜好了文件（`LauncherFileProvider`）。输入要搜的还是这个时，下一次 `search` 就用它们。
+    func setFileResult(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest) {
+        fileResult = (request, pinned, ranked)
+    }
+
     /// 计算结果、识别结果的行（不是这类行为 nil）。
     func instant(forKey key: String) -> LauncherInstant? {
         instantsByKey[key]
     }
 
-    /// 查一次。没打前缀时先放计算结果、识别结果（固定在最前）；查询词为空时只给用过的（使用分 > 0）最多 8 行；
-    /// 否则按排序取前 50 行（没打前缀时剪贴板最多 5 行）。
+    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果、识别结果（固定在最前），再放片段的确切命中；
+    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
         let query = LauncherQuery.parse(input, prefixBySource: prefixBySource)
@@ -152,12 +166,12 @@ final class LauncherEngine {
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
         if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
             instantsByKey = [:]
+            fileResult = nil
             let items = pathResult?.items ?? []
             asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
             return LauncherSearchOutcome(queryText: query.text, rows: items.map(\.row), candidateCount: items.count,
-                                         duration: duration, isPathMode: true,
-                                         pendingPath: pathResult?.input == path ? nil : path)
+                                         duration: duration, pendingPath: pathResult?.input == path ? nil : path)
         }
         pathResult = nil
         asyncItemsByKey = [:]
@@ -172,11 +186,19 @@ final class LauncherEngine {
         }
         instantsByKey = Dictionary(instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-        let pool: [LauncherCandidate]
+        let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID)
+        let files = currentFiles(for: fileRequest)
+        asyncItemsByKey = Dictionary((files.pinned + files.ranked).map { ($0.row.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+
+        var pool: [LauncherCandidate]
         if let sourceIDs = query.sourceIDs {
             pool = sourceIDs.flatMap { candidatesBySource[$0] ?? [] }
         } else {
             pool = allCandidates
+        }
+        if query.sourceIDs?.contains(LauncherFileProvider.sourceID) ?? true {
+            pool += files.ranked.map(\.candidate)
         }
         let ranked: [LauncherRankedItem]
         if query.text.isEmpty {
@@ -186,8 +208,23 @@ final class LauncherEngine {
             ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
                                           sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:]).items
         }
-        let rows = instants.map(\.row) + ranked.compactMap { itemsByKey[$0.key]?.row }
+        let rows = instants.map(\.row) + files.pinned.map(\.row) + ranked.compactMap { item(forKey: $0.key)?.row }
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
-        return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration)
+        return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
+                                     fileRequest: fileRequest, pendingFiles: files.isFresh ? nil : fileRequest)
+    }
+
+    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它；还没回来 → 上一次「名字包含」的结果里仍匹配的先顶着
+    /// （片段的确切命中不顶）；不搜文件 → 没有，并放掉上一次的。
+    private func currentFiles(for request: LauncherFileSearchRequest?)
+        -> (pinned: [LauncherItem], ranked: [LauncherItem], isFresh: Bool) {
+        guard let request else {
+            fileResult = nil
+            return ([], [], true)
+        }
+        guard let fileResult else { return ([], [], false) }
+        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked, true) }
+        let stale = fileResult.ranked.filter { LauncherFileFilter.stillMatches(name: $0.row.title, request: request) }
+        return ([], stale, false)
     }
 }
