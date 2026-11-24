@@ -63,8 +63,10 @@ final class LauncherFileNameQueryTests: XCTestCase {
             hit("/private/tmp/claude-501/p/s/scratchpad/add-approval-hook.py", origins: [.scanned]),
             hit("/Users/me/b/ADD-APPROVAL-HOOK.PY", daysAgo: 2),
         ], request: request, home: home)
-        XCTAssertEqual(results.map(\.hit.path), ["/private/tmp/claude-501/p/s/scratchpad/add-approval-hook.py",
-                                                  "/Users/me/b/ADD-APPROVAL-HOOK.PY", "/Users/me/a/old-add-approval-hook.py.bak"])
+        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/b/ADD-APPROVAL-HOOK.PY",
+                                                  "/private/tmp/claude-501/p/s/scratchpad/add-approval-hook.py",
+                                                  "/Users/me/a/old-add-approval-hook.py.bak"],
+                       "Spotlight 的在前、只来自扫的目录的在后（哪怕它更新）")
         XCTAssertEqual(results.map(\.pinned), [true, true, false], "名字不分大小写地等于它的才固定")
         XCTAssertEqual(results.first?.tierScore, LauncherMatch.exactScore)
     }
@@ -131,6 +133,32 @@ final class LauncherFileNameQueryTests: XCTestCase {
         let results = LauncherFileFilter.process([hit("/Users/me/.claude/settings.json", origins: [.clipboard])],
                                                  request: request, home: home)
         XCTAssertEqual(results.map(\.pinned), [true])
+    }
+
+    func testPinnedTiersKeepProjectFilesAheadOfScannedCopies() {
+        // 验证者实测的 `main.swift`：扫的目录里各会话探针的副本更新，原来 3 行全是它们，项目里的找不到了。
+        let request = LauncherFileSearchRequest.nameContains(["main.swift"], pinnedName: "main.swift")
+        let pinned = LauncherFileFilter.process([
+            hit("/private/tmp/claude-501/a/probe/main.swift", daysAgo: 0, origins: [.scanned]),
+            hit("/private/tmp/claude-501/b/probe/main.swift", daysAgo: 0.1, origins: [.scanned]),
+            hit("/private/tmp/claude-501/c/probe/main.swift", daysAgo: 0.2, origins: [.scanned]),
+            hit("/Users/me/cmb/proj/Sources/main.swift", daysAgo: 30, origins: [.spotlight]),
+        ], request: request, home: home).filter(\.pinned).map(\.hit.path)
+        XCTAssertEqual(pinned, ["/Users/me/cmb/proj/Sources/main.swift", "/private/tmp/claude-501/a/probe/main.swift",
+                                "/private/tmp/claude-501/b/probe/main.swift"],
+                       "项目里的（Spotlight）在前，只来自扫的目录的副本在后，最多 3 行")
+        let onlyScanned = LauncherFileFilter.process([hit("/private/tmp/claude-501/x/scratchpad/hook.py", origins: [.scanned])],
+                                                     request: .nameContains(["hook.py"], pinnedName: "hook.py"), home: home)
+        XCTAssertEqual(onlyScanned.map(\.pinned), [true], "只有扫的目录里才有时照样排第一（用户最初那个例子）")
+    }
+
+    func testCopyTiers() {
+        XCTAssertEqual(LauncherFileFilter.copyTier([.known]), 0)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.clipboard, .scanned]), 0)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.spotlight]), 1)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.spotlight, .scanned]), 1, "同时来自 Spotlight 的不算只来自扫的目录")
+        XCTAssertEqual(LauncherFileFilter.copyTier([]), 1)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.scanned]), 2)
     }
 
     func testNoPinnedNameMeansNothingIsPinned() {

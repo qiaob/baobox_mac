@@ -256,12 +256,21 @@ enum LauncherFileFilter {
         return Array((pinned + results).prefix(max(0, limit)))
     }
 
-    /// 固定行的次序：Claude Code 这类模块写过的（已知文件）、剪贴板里出现过路径的在前 —— 它们更可能是用户此刻要的那一个；
-    /// 同等的新的在前（最近使用 / 最近修改），再按路径。
+    /// 同名的几份里哪一档在前（PR 11 独立验证后定，三档）：
+    /// 0 = 用户碰过的（已知文件 C、剪贴板路径 D）—— 他此刻更可能要的那一个；
+    /// 1 = 其余不是只来自扫的目录的（Spotlight，项目里真正的文件）；
+    /// 2 = 只来自扫的目录的（Claude Code 临时目录里各会话的副本、中间产物）。
+    /// 所以只有扫的目录里才有的文件（用户最初那个例子）照样排第一，而项目里有同名文件时项目里的在前。
+    static func copyTier(_ origins: LauncherFileOrigins) -> Int {
+        if !origins.isDisjoint(with: .preferred) { return 0 }
+        return origins == .scanned ? 2 : 1
+    }
+
+    /// 固定行的次序：按 `copyTier` 的三档，档内新的在前（最近使用 / 最近修改），再按路径。
     static func pinnedOrder(_ a: LauncherFileResult, _ b: LauncherFileResult) -> Bool {
-        let aPreferred = !a.hit.origins.isDisjoint(with: .preferred)
-        let bPreferred = !b.hit.origins.isDisjoint(with: .preferred)
-        if aPreferred != bPreferred { return aPreferred }
+        let aTier = copyTier(a.hit.origins)
+        let bTier = copyTier(b.hit.origins)
+        if aTier != bTier { return aTier < bTier }
         if a.hit.recency != b.hit.recency { return a.hit.recency > b.hit.recency }
         return a.hit.path < b.hit.path
     }
