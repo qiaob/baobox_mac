@@ -3,7 +3,7 @@ import Foundation
 // 快速入口的文件来源合并器（docs/launcher/TECH_DESIGN.md §6.4，PR 11）：同一个查询同时问几个来源 ——
 // Spotlight、自己扫的目录、各模块已知的文件、剪贴板里出现过的路径 —— 哪个先回来先交出去，后回来的并进去再交一次；
 // 按规范路径去重（`/tmp/x` 和 `/private/tmp/x` 是同一个），同一个文件几个来源都有时来源取并集。
-// 过滤和排序不在这里（`LauncherFileFilter` 对所有来源一视同仁）。只依赖 Foundation，进 BaoboxTests。
+// 过滤和排序不在这里（`LauncherFileFilter`：用户碰过的不看目录规则，同名副本、固定行按来源分三档）。只依赖 Foundation，进 BaoboxTests。
 
 /// 一条命中从哪几个来源来。
 struct LauncherFileOrigins: OptionSet, Hashable, Sendable {

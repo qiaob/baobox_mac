@@ -594,8 +594,8 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 来源 | 实现 | 数据什么时候准备 | 查询 | 解决什么 |
 |---|---|---|---|---|
 | A Spotlight | `LauncherSpotlightFileSearch`（没动） | 系统的索引 | `NSMetadataQuery`，主目录，收齐约 200 ms | 文稿、下载、项目目录里的文件 |
-| B 自己扫的目录 | `LauncherMemoryFileSearch`（不查存不存在）+ `LauncherFileScanner` | `activate()` 后 6 秒扫一次；之后每次呼出时距上次超过 30 秒就在后台重扫，扫完在主线程换表 | 内存里的表，0.1–0.4 ms | Spotlight 不建索引的地方：默认是 Claude Code 的临时目录（§3.4），用户可加（`launcher.files.extraRoots`） |
-| C 各模块已知的文件 | `LauncherMemoryFileSearch`（查存不存在） | 每次呼出取一次 `launcherKnownFiles()`（只读内存），没变就不重建，变了在后台建表 | 内存里的表 + 名字匹配上的那几条在后台 `stat` | Claude Code 会话写过的文件（「最近文件」），副标题带「Claude Code · 项目名」 |
+| B 自己扫的目录 | `LauncherMemoryFileSearch`（不查存不存在）+ `LauncherFileScanner` | `activate()` 后 6 秒扫一次；之后每次呼出时距上次超过 30 秒就在后台重扫，扫完在主线程换表（面板开着、正在搜文件时重搜一次） | 内存里的表，0.1–0.4 ms | Spotlight 不建索引的地方：默认是 Claude Code 的临时目录（§3.4），用户可加（`launcher.files.extraRoots`） |
+| C 各模块已知的文件 | `LauncherMemoryFileSearch`（查存不存在） | 每次呼出取一次 `launcherKnownFiles()`（只读内存；Claude Code 顺带触发最多 30 秒一次的后台刷新），没变就不重建，变了在后台建表 | 内存里的表 + 名字匹配上的那几条在后台 `stat` | Claude Code 会话写过的文件（「最近文件」），副标题带「Claude Code · 项目名」 |
 | D 剪贴板里出现过的路径 | `LauncherMemoryFileSearch`（查存不存在）+ `LauncherClipboardPaths` | 每次呼出拿剪贴板 / 片段条目的搜索全文（`LauncherEntryProvider.sessionTexts`），在后台抽路径（按条目键缓存，文字没变不重抽） | 同 C | 复制过一个文件的完整路径，之后只打文件名就能找到它（用户截图里第二行就是） |
 
 **合并器**（`Logic/LauncherFileMerger.swift`）：同一个请求发给四个来源 —— **内存里的三个（B、C、D）不等防抖，输入一变就查；Spotlight（A）等输入停下 80 ms（`Source.delay`，`LauncherFileSources.spotlightDelay`）、期间没有新的查询才查**（PR 11 审后定：B、C、D 查一次不到 1 ms，没理由陪 Spotlight 等 80 ms；目的是输入文件名后马上回车时第一行已经是那个文件）。发起在主线程（只是排进合并器的队列），查表、`stat` 都在后台队列，打字路径上没有磁盘 IO。结果在自己的串行队列上收：每个来源回来就把它的命中打上来源（`origins`），按**规范路径**并进已有的（`LauncherFileMerge.key`：去掉数据卷前缀 `/System/Volumes/Data`；`/tmp`、`/var`、`/etc` 换成 `/private/…` —— Spotlight、自己扫的目录、Claude Code 的最近文件、剪贴板里的写法可能不一样；末尾的 `/` 去掉），同一个文件几个来源都有时来源取并集、说明取先有的、时间取新的，路径写成规范路径；什么时候交：立刻查的三个都回来后交一次（它们几乎同时回来，凑齐了交，列表只刷新一次；但最多等 50 ms —— `firstBatchDeadline`，PR 11 独立验证后加：某个 `stat` 卡在断开的网络盘上时，到点先把已经回来的交出去，后到的照常并入再交）；之后有延迟的来源（Spotlight）带着新命中回来再交；最后一个来源回来时一定交（`isComplete`）。取消和发起排在同一个队列上（先发起的那次一定先被顶掉）；被顶掉的结果按序号丢掉，等防抖的 Spotlight 在等的时候有了新查询就不查了。实测内存里的三个来源 0.1–1 ms 就回来，Spotlight 190–270 ms（刚启动时 460 ms）：从输入到第一批文件行（固定行）约 1 ms（打字模拟：最后一个字之后 0.4–1.4 ms），全部到齐约 280–310 ms（80 ms 防抖 + Spotlight），和原来只问 Spotlight 时一样。
@@ -665,7 +665,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 **行**：真实文件图标（`NSWorkspace.icon(forFile:)`，只在行要显示时取、按路径缓存，和 App 共用一个缓存）、文件名、副标题（所在目录：主目录缩写 `~`，超过 60 个字符时先把 UUID、十六进制哈希这类长串缩成前 8 位 + 「…」（PR 11：`/private/tmp/claude-501/-Users-qiao-cmb/e0c00de7…/scratchpad`，原来截成 `/private/…/<整串 UUID>/scratchpad`，看不出是哪个项目），还长就中间截断成「开头几级/…/末尾两级」，开头留得越多越好，于是能看出是哪个 worktree；来源给了说明时写在目录前面：「Claude Code · 项目名 · 目录」，目录让出说明占的地方、最少留 30 个字符）、右侧小字「文件 / 文件夹」。⏎ 打开（`NSWorkspace.open`，文件夹在访达里打开；打不开给一句回执），⌘⏎ 在访达里显示（`activateFileViewerSelecting`）。
 
-**日志**（`os.Logger`，category `launcher`）：每次查询收齐后一条 `file search (…): spotlight N ms X found Y read; scanned …; known …; clipboard …; M merged, Z after filtering (P pinned); first rows F ms, all A ms` —— 各来源各自的耗时和条数、合并去重后多少、过滤后多少（固定行几行），F / A 是从防抖结束到第一批 / 全部行交给面板。扫描每次一条 `file roots: <根> scanned in N ms, X files + Y folders, Z folders pruned, U unreadable, I invalid names` 和一条合计；剪贴板路径有现抽的时一条 `clipboard paths: …`。用户看这组数决定要不要做自己的索引。
+**日志**（`os.Logger`，category `launcher`）：每次查询收齐后一条 `file search (…): spotlight N ms X found Y read; scanned …; known …; clipboard …; M merged, Z after filtering (P pinned); first rows F ms, all A ms` —— 各来源各自的耗时和条数、合并去重后多少、过滤后多少（固定行几行），F / A 是从发起这次搜索（输入一变就发起，PR 11 审后不再在这里防抖）到第一批 / 全部行交给面板；各来源的耗时也从发起算起，所以 Spotlight 那一项含 80 ms 防抖（独立验证后改正：原来写的「从防抖结束起算」已不成立）。扫描每次一条 `file roots: <根> scanned in N ms, X files + Y folders, Z folders pruned, U unreadable, I invalid names` 和一条合计（耗时原来永远记成 0 ms，已修）；剪贴板路径有现抽的时一条 `clipboard paths: …`。用户看这组数决定要不要做自己的索引。
 
 **实测**（2026-11-24，M3，探针里真跑 `NSMetadataQuery`，第二轮；第一轮刚启动时收齐要 400–500 ms）：
 
@@ -679,7 +679,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | `docs/launcher/TECH_DESIGN.md`（片段） | 65 ms | 72 ms | 1097 | 3 | 三个最新 worktree 里的那一份，固定在最前 |
 | `png-final/8-prefix-c-light.png`（片段） | 48 ms | 49 ms | 0 | 0 | 在 `/private/tmp`，不在索引里 |
 
-- 「包含」查询收齐要 180–260 ms，几乎和命中多少无关（4 条和 2785 条差不多）；「等于」约 50–70 ms。读结果 + 过滤排序 ≤ 30 ms。从输入停下到文件行出现（含 80 ms 防抖）约 300–340 ms；App、命令这些内存里的行照旧是立刻出。
+- 「包含」查询收齐要 180–260 ms，几乎和命中多少无关（4 条和 2785 条差不多）；「等于」约 50–70 ms。读结果 + 过滤排序 ≤ 30 ms。从输入停下到文件行出现（含 80 ms 防抖）约 300–340 ms；App、命令这些内存里的行照旧是立刻出。（这是 PR 6 只问 Spotlight 时的数；PR 11 起内存里的来源约 1 ms 就出，见下面「PR 11 实测」。）
 - `kMDItemLastUsedDate` 很少有（几千条里 0–2 条），「最新」实际上几乎就是修改时间；新建的 worktree 里所有文件的修改时间都是建的那一刻，所以最新的副本往往来自最新的 worktree。
 - 对照：`BEGINSWITH`（名字开头）查询收齐只要 47–76 ms。以后如果要更快、又暂不做自己的索引，可以先发一个「开头」查询先出开头匹配的、再用「包含」查询补齐（两段）—— 没做。
 
