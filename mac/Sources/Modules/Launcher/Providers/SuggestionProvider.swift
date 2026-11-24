@@ -125,6 +125,8 @@ enum LauncherSuggestionProvider {
             let row = LauncherRow(id: "suggest/wordcount", title: L("launcher.suggest.wordCount \(words) \(characters)"),
                                   source: L("launcher.suggest.source.wordCount"), icon: .symbol("number"))
             return [.instant(LauncherInstant(row: row, copyText: String(stats.words)))]
+        case .runInTerminal, .reminder:
+            return []
         }
     }
 

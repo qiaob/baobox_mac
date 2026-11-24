@@ -4,8 +4,8 @@ import Foundation
 // 输入先被归成一类（`LauncherTextKind`，规则在 `Modules/Launcher/Logic/LauncherInputClassifier.swift`），
 // 各模块声明的文字动作按自己适用哪几类决定出不出、排在哪。只依赖 Foundation，进 BaoboxTests。
 
-/// 输入的类别。按目前的规则一段输入只属于其中一类（优先级：网址 > 邮箱 > 颜色 > 英文单词 > 一大段文字 > 其余），
-/// 用集合表示是为了动作声明「适用哪几类」。
+/// 输入的类别。基本类别一段输入只属于其中一类（优先级：网址 > 邮箱 > 颜色 > 英文单词 > 一大段文字 > 其余）；
+/// 「像命令」「带时间的句子」是额外的标记，和普通文字 / 一大段文字同时成立（PR 10）。用集合表示，动作声明「适用哪几类」。
 enum LauncherTextKind: String, CaseIterable, Sendable {
     /// 网址、域名（`https://…`、`example.com/path`、`localhost:8080`、`192.168.1.1:3000`）。
     case url
@@ -19,6 +19,10 @@ enum LauncherTextKind: String, CaseIterable, Sendable {
     case longText
     /// 其余的文字。
     case plainText
+    /// 像一条终端命令（`git status`、`$ npm run build`）。和普通文字同时成立（像命令时不再算英文单词、一大段文字）。
+    case command
+    /// 带时间的句子（「20 分钟后提醒我取快递」「明天下午三点开会」）。和普通文字 / 一大段文字同时成立。
+    case reminder
 }
 
 /// 一条文字动作作为建议时的属性：对哪些输入适用、默认排在哪。不是文字动作的命令用不到它。

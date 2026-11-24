@@ -17,6 +17,10 @@ enum LauncherLeadingSuggestion: Equatable, Sendable {
     case color(LauncherColor)
     /// 一大段文字的字数，⏎ 复制字数。
     case wordCount(LauncherTextStats)
+    /// 像命令（PR 10）：「在终端里运行」，排在兜底建议第一条，要按两次 ⏎。值是要跑的命令（`$ ` 已去掉）。
+    case runInTerminal(String)
+    /// 带时间的句子（PR 10）：「14:35 提醒我：取快递」，排在最前（计算结果那个位置）。
+    case reminder(LauncherReminderDraft)
 }
 
 /// 这次输入出哪些建议。
@@ -26,8 +30,12 @@ struct LauncherSuggestionPlan: Equatable, Sendable {
     let leading: [LauncherLeadingSuggestion]
     /// 兜底建议按这些类别筛选、提前；nil = 不出兜底建议。
     let fallbackKinds: Set<LauncherTextKind>?
-    /// 排在兜底建议最前面的（在翻译前面）：有歧义的网址（`claude.ai`、`Safari.app`）的「打开」放这里，不排最前。
+    /// 排在兜底建议最前面的（在翻译前面）：「在终端里运行」、有歧义的网址（`claude.ai`、`Safari.app`）的「打开」放这里，不排最前。
     var fallbackLeading: [LauncherLeadingSuggestion] = []
+    /// 排在所有建议、固定的文件行之前的（计算结果那个位置；两者不会同时有）：带时间的句子的「到时提醒我」（PR 10）。
+    var top: [LauncherLeadingSuggestion] = []
+    /// 输入是「提醒」/「reminders」：列出还没到点的提醒（每条一行，⏎ 取消，PR 10）。
+    var showsReminders = false
 
     static let none = LauncherSuggestionPlan(text: "", leading: [], fallbackKinds: nil)
 
@@ -52,22 +60,36 @@ enum LauncherSuggestionPolicy {
     /// - `placed`：放进来的原文（⌘V、拖放、「选中的 / 刚复制的」），控制器已经核对过输入框里的文字还是它（空白归一后相等，
     ///   `LauncherPlacedText.matches`；一改动就不再交进来）。带换行的按原文分类、算字数、交给动作 —— 多行的原文算一大段文字；
     ///   单行的和输入框里的一样。这里只读它放进来时算好的 `suggestionText`，不再归一。
+    /// - 像命令（PR 10）：兜底建议第一条是「在终端里运行」（占一个名额）。带时间的句子：最前面一行「到时提醒我」。
+    ///   有计算结果时这两样都不出。输入是「提醒」/「reminders」时 `showsReminders`。分类读的同上：单行的放进来的文字就是输入框里的，
+    ///   照常认；带换行的原文不是一条命令。
+    /// - `clock`：认「带时间的句子」用的「现在」、日历、时区；nil = 不认。
     static func plan(for query: LauncherQuery, hasCalculation: Bool, hasRecognition: Bool,
-                     placed: LauncherPlacedText? = nil) -> LauncherSuggestionPlan {
+                     placed: LauncherPlacedText? = nil, clock: LauncherCalcContext? = nil) -> LauncherSuggestionPlan {
         guard query.isUnscoped, !query.text.isEmpty else { return .none }
         let source = placed?.suggestionText ?? query.text
-        let input = LauncherInputClassifier.classify(source)
+        let input = LauncherInputClassifier.classify(source, clock: hasCalculation ? nil : clock)
         guard !input.isPath, !input.kinds.isEmpty else { return .none }
         // 数到第 2 个字符就够了，几 MB 的粘贴也不用整段数。
         let allowsFallback = input.text.index(input.text.startIndex, offsetBy: minimumFallbackLength,
                                               limitedBy: input.text.endIndex) != nil
+        let showsReminders = LauncherReminderBook.isListQuery(input.text)
         if hasCalculation {
-            return LauncherSuggestionPlan(text: input.text, leading: [],
-                                          fallbackKinds: allowsFallback ? [.plainText] : nil)
+            var plan = LauncherSuggestionPlan(text: input.text, leading: [],
+                                              fallbackKinds: allowsFallback ? [.plainText] : nil)
+            plan.showsReminders = showsReminders
+            return plan
         }
         var leading: [LauncherLeadingSuggestion] = []
         var fallbackLeading: [LauncherLeadingSuggestion] = []
+        var top: [LauncherLeadingSuggestion] = []
         var kinds = input.kinds
+        if let command = input.command {
+            fallbackLeading.append(.runInTerminal(command))
+        }
+        if let reminder = input.reminder {
+            top.append(.reminder(reminder))
+        }
         if let url = input.url {
             if input.isAmbiguousURL {
                 fallbackLeading.append(.openURL(url))
@@ -86,7 +108,8 @@ enum LauncherSuggestionPolicy {
             }
         }
         return LauncherSuggestionPlan(text: input.text, leading: leading, fallbackKinds: allowsFallback ? kinds : nil,
-                                      fallbackLeading: allowsFallback ? fallbackLeading : [])
+                                      fallbackLeading: allowsFallback ? fallbackLeading : [], top: top,
+                                      showsReminders: showsReminders)
     }
 }
 
