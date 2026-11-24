@@ -52,6 +52,22 @@ final class LauncherClipboardPathsTests: XCTestCase {
         XCTAssertTrue(paths("见 /Users/me/报告里").contains("/Users/me/报告"), "只去掉末尾一个字的变体（名字本身是汉字）")
     }
 
+    func testPathsInsideChineseText() {
+        // 独立验证者复查：两个路径中间夹着汉字时前一个会丢，还会从每个「汉字 + /」处抽出垃圾候选占名额。
+        let two = paths("见/Users/qiao/文档/项目/报告/最终版.pdf和/Users/qiao/b.md。")
+        XCTAssertTrue(two.contains("/Users/qiao/文档/项目/报告/最终版.pdf"), "\(two)")
+        XCTAssertTrue(two.contains("/Users/qiao/b.md"), "\(two)")
+        XCTAssertFalse(two.contains { $0.hasPrefix("/项目") || $0.hasPrefix("/报告") || $0.hasPrefix("/最终版") },
+                       "「汉字 + /」后面不是已知的顶层目录名不算路径开头：\(two)")
+        let logs = paths("日志在/var/log/system.log和/tmp/a.txt里")
+        XCTAssertTrue(logs.contains("/var/log/system.log") && logs.contains("/tmp/a.txt"), "\(logs)")
+        XCTAssertEqual(paths("看/项目/报告.pdf"), [], "汉字后面的 / 跟的不是已知顶层目录：不算")
+        XCTAssertEqual(paths("（/Users/qiao/a.md）和【~/b.md】"), ["/Users/qiao/a.md", "/Users/me/b.md"], "全角括号里的照样认")
+        XCTAssertTrue(paths("配置在~/文档/bin/x.conf里").contains("/Users/me/文档/bin/x.conf"),
+                      "中文目录下正好有个 bin：不断开的那一段也留作候选")
+        XCTAssertEqual(paths(String(repeating: "=/", count: 100)), [], "第一级目录名里没有字母数字的不收")
+    }
+
     func testVariantsOfAToken() {
         XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/b.txt"), ["/a/b.txt"], "没有可变的")
         XCTAssertEqual(LauncherClipboardPaths.variants(of: "/a/foo,arg=/x;y"), ["/a/foo,arg=/x;y", "/a/foo", "/a/foo,arg"],
