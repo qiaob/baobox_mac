@@ -18,9 +18,11 @@ struct LauncherFileSearchRequest: Equatable, Sendable {
     }
 
     let kind: Kind
+    /// 输入像一个文件名（`add-approval-hook.py`，`LauncherFileNameQuery`）：名字完全等于它（不分大小写）的固定排在最前（PR 11）。
+    var pinnedName: String? = nil
 
-    static func nameContains(_ words: [String]) -> LauncherFileSearchRequest {
-        LauncherFileSearchRequest(kind: .nameContains(words))
+    static func nameContains(_ words: [String], pinnedName: String? = nil) -> LauncherFileSearchRequest {
+        LauncherFileSearchRequest(kind: .nameContains(words), pinnedName: pinnedName)
     }
 
     static func exactName(_ name: String, pathSuffix: String) -> LauncherFileSearchRequest {
@@ -29,10 +31,12 @@ struct LauncherFileSearchRequest: Equatable, Sendable {
 }
 
 /// 文件搜索的后端：给一个请求，异步交回原始命中（不过滤、不排序），可以取消。
-/// 这一版是 Spotlight（`Providers/SpotlightFileSearch.swift`）；以后换成自己的内存索引（让 Spotlight 当爬虫、
-/// 启动后在后台把全部文件名读进内存，用自己的匹配引擎搜）只换这一层，过滤和排序（`LauncherFileFilter`）、引擎、界面都不动。
+/// 实现有 Spotlight（`Providers/SpotlightFileSearch.swift`）、内存里的表（`LauncherMemoryFileSearch`：自己扫的目录、
+/// 各模块已知的文件、剪贴板里的路径），快速入口用的是把它们并起来的 `LauncherMergedFileSearch`（PR 11，§6.4）。
+/// 过滤和排序（`LauncherFileFilter`）、引擎、界面不管后面是哪一个。
 protocol LauncherFileSearching: AnyObject, Sendable {
-    /// 开始搜。`completion` 在任意线程回调一次；被 `cancel()` 或下一次 `search` 顶掉的不回调。同一时刻只跑一个。
+    /// 开始搜。`completion` 在任意线程回调：单个来源回调一次；合并器每有一个来源回来就交一次「到目前为止的全部」，
+    /// 最后一次 `isComplete == true`。被 `cancel()` 或下一次 `search` 顶掉的不再回调。同一时刻只跑一个。
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void)
     /// 停掉还没回来的那次。
     func cancel()
@@ -47,6 +51,10 @@ struct LauncherFileSearchBatch: Sendable {
     let elapsed: TimeInterval
     /// 超时了：交回的是到那时为止收到的。
     let timedOut: Bool
+    /// 这是最后一批（合并器：所有来源都回来了）。单个来源总是 true。
+    var isComplete = true
+    /// 合并器：已经回来的各来源各自的统计（日志分开记）。单个来源为空。
+    var sources: [LauncherFileSourceReport] = []
 }
 
 /// 后端交回的一条原始命中。
@@ -59,13 +67,20 @@ struct LauncherFileHit: Equatable, Sendable {
     let lastUsed: Date?
     /// 最近修改（`kMDItemFSContentChangeDate`），没有为 nil。
     let modified: Date?
+    /// 从哪几个来源来的（合并器打上；同一个文件几个来源都有时是它们的并集）。
+    var origins: LauncherFileOrigins = []
+    /// 来源给的一句说明（已知文件：「Claude Code · 项目名」），显示在副标题里；没有为 nil。
+    var note: String? = nil
 
-    init(path: String, isDirectory: Bool = false, lastUsed: Date? = nil, modified: Date? = nil) {
+    init(path: String, isDirectory: Bool = false, lastUsed: Date? = nil, modified: Date? = nil,
+         origins: LauncherFileOrigins = [], note: String? = nil) {
         self.path = path
         self.name = (path as NSString).lastPathComponent
         self.isDirectory = isDirectory
         self.lastUsed = lastUsed
         self.modified = modified
+        self.origins = origins
+        self.note = note
     }
 
     /// 「最近」：最近使用和最近修改里新的那个；都没有时是很久以前。
@@ -80,7 +95,7 @@ struct LauncherFileResult: Equatable, Sendable {
     /// 匹配的档（1000 完全相等 / 800 开头 / 600 词首 / 400 包含），交给排序当匹配分：
     /// 同一档里不再按长度扣分，于是排序同分时看使用记录、再看谁新。
     let tierScore: Int
-    /// 带 `/` 的片段的确切命中：固定排在最前。
+    /// 固定排在最前：带 `/` 的片段的确切命中，或输入像文件名时名字完全等于它的（PR 11）。
     let pinned: Bool
 }
 
@@ -96,6 +111,8 @@ enum LauncherFilePolicy {
     /// - 打了别的来源前缀、查询词有换行或太长时不搜。输入是路径的情况在引擎里先截走了（只出路径的行）。
     /// - 查询词里有 `/`：名字里不会有 `/`，只有像「目录/文件名」的片段才搜（按最后一段精确查名字），否则不搜。
     /// - 多个词用空格隔开时都要包含。
+    /// - 查询词像一个文件名（`add-approval-hook.py`，PR 11）：名字完全等于它的固定排在最前（`pinnedName`）；
+    ///   这样的词至少有 3 个字符（`a.b`），不带前缀的长度门槛自然满足。
     static func request(for query: LauncherQuery, hasCalculation: Bool) -> LauncherFileSearchRequest? {
         let text = query.text
         guard !text.isEmpty, text.count <= maxQueryLength, !text.contains(where: \.isNewline) else { return nil }
@@ -110,9 +127,10 @@ enum LauncherFilePolicy {
         if text.contains("/") {
             return fragment(text).map { .exactName($0.name, pathSuffix: $0.suffix) }
         }
-        if query.sourceID == nil, weightedLength(text) < unscopedMinimumLength { return nil }
+        let pinnedName = LauncherFileNameQuery.fileName(in: text)
+        if query.sourceID == nil, pinnedName == nil, weightedLength(text) < unscopedMinimumLength { return nil }
         let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
-        return words.isEmpty ? nil : .nameContains(words)
+        return words.isEmpty ? nil : .nameContains(words, pinnedName: pinnedName)
     }
 
     /// 长度：汉字算两个（两个汉字的词和四五个字母的词差不多具体），其余一个字算一个。
@@ -186,14 +204,20 @@ enum LauncherFileFilter {
 
     /// 原始命中 → 给界面的结果：去掉噪音 → 片段只留路径以整个片段结尾的 → 同名的只留最新的 3 份 →
     /// 按匹配的档排（高的在前），同档新的在前（最近使用 / 最近修改），再按路径 → 最多 `limit` 条。文件夹和文件同等对待。
+    /// 固定的行（片段的确切命中、输入像文件名时名字完全等于它的，PR 11）排在最前，最多 3 行，次序见 `pinnedOrder`。
     static func process(_ hits: [LauncherFileHit], request: LauncherFileSearchRequest, home: String,
                         limit: Int = maxResults) -> [LauncherFileResult] {
         var results: [LauncherFileResult] = []
+        var pinned: [LauncherFileResult] = []
         switch request.kind {
         case .nameContains(let words):
             let queries = words.map { LauncherMatchQuery(folded($0)) }
             let whole = words.count > 1 ? LauncherMatchQuery(folded(words.joined(separator: " "))) : nil
             for hit in hits where !isExcluded(path: hit.path, home: home) {
+                if let name = request.pinnedName, hit.name.caseInsensitiveCompare(name) == .orderedSame {
+                    pinned.append(LauncherFileResult(hit: hit, tierScore: LauncherMatch.exactScore, pinned: true))
+                    continue
+                }
                 results.append(LauncherFileResult(hit: hit, tierScore: tierScore(name: hit.name, queries: queries, whole: whole),
                                                   pinned: false))
             }
@@ -201,16 +225,27 @@ enum LauncherFileFilter {
             let suffix = "/" + pathSuffix.lowercased()
             for hit in hits where hit.name.caseInsensitiveCompare(name) == .orderedSame
                 && hit.path.lowercased().hasSuffix(suffix) && !isExcluded(path: hit.path, home: home) {
-                results.append(LauncherFileResult(hit: hit, tierScore: LauncherMatch.exactScore, pinned: true))
+                pinned.append(LauncherFileResult(hit: hit, tierScore: LauncherMatch.exactScore, pinned: true))
             }
         }
+        pinned = Array(pinned.sorted(by: pinnedOrder).prefix(maxCopiesPerName))
         results = keepingNewestCopies(results)
         results.sort { a, b in
             if a.tierScore != b.tierScore { return a.tierScore > b.tierScore }
             if a.hit.recency != b.hit.recency { return a.hit.recency > b.hit.recency }
             return a.hit.path < b.hit.path
         }
-        return Array(results.prefix(max(0, limit)))
+        return Array((pinned + results).prefix(max(0, limit)))
+    }
+
+    /// 固定行的次序：Claude Code 这类模块写过的（已知文件）、剪贴板里出现过路径的在前 —— 它们更可能是用户此刻要的那一个；
+    /// 同等的新的在前（最近使用 / 最近修改），再按路径。
+    static func pinnedOrder(_ a: LauncherFileResult, _ b: LauncherFileResult) -> Bool {
+        let aPreferred = !a.hit.origins.isDisjoint(with: .preferred)
+        let bPreferred = !b.hit.origins.isDisjoint(with: .preferred)
+        if aPreferred != bPreferred { return aPreferred }
+        if a.hit.recency != b.hit.recency { return a.hit.recency > b.hit.recency }
+        return a.hit.path < b.hit.path
     }
 
     /// 同名（不分大小写）的只留最新的 `maxCopiesPerName` 份：一百多个 worktree 里同一个文件不会刷满一屏。

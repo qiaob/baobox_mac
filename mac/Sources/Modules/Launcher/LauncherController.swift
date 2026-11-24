@@ -7,7 +7,8 @@ import os
 // 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
-// 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
+// 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、四个来源合并、过滤排序），每回来一批刷新一次；
+// 四个来源的数据（自己扫的目录、已知文件、剪贴板里的路径）由 `LauncherFileSources` 在呼出时 / 后台准备（PR 11）。
 // 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
 // 图片（§5.5）：⌘V 时先看剪贴板里是什么（`LauncherPasteClassifier`）—— 图片挂成输入里的附件（输入框左边一个小标签），
 // 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
@@ -31,7 +32,8 @@ final class LauncherController {
 
     private let apps = LauncherAppProvider()
     private let paths = LauncherPathProvider()
-    private let files = LauncherFileProvider()
+    private let fileSources: LauncherFileSources
+    private let files: LauncherFileProvider
     private let thumbnails = LauncherThumbnailProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
@@ -56,6 +58,8 @@ final class LauncherController {
     init(registry: ToolRegistry?) {
         commands = LauncherCommandProvider(registry: registry)
         entries = LauncherEntryProvider(registry: registry)
+        fileSources = LauncherFileSources(registry: registry)
+        files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
         model.onRun = { [weak self] index in self?.run(at: index) }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
@@ -68,6 +72,7 @@ final class LauncherController {
     func activate() {
         apps.start()
         usage.load()
+        fileSources.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstPrewarmDelay) { [weak self] in
             MainActor.assumeIsolated { self?.prewarm() }
         }
@@ -121,6 +126,8 @@ final class LauncherController {
         let report = entries.beginSession()
         let entryItems = entries.sessionItems()
         let entriesMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - entriesStart) / 1_000_000
+        // 文件来源（§6.4）：已知文件、剪贴板里的路径在后台建表；自己扫的目录距上次超过 30 秒就后台重扫。
+        fileSources.panelShown(clipboardTexts: entries.sessionTexts(sourceIDs: LauncherFileSources.clipboardSourceIDs))
         loadEngine(entryItems: entryItems)
         refresh()
         panel.show(LauncherPanelView(model: model), height: model.panelHeight,
@@ -205,20 +212,23 @@ final class LauncherController {
         }
         if let request = outcome.pendingFiles {
             if files.inFlight != request {
-                files.search(request) { [weak self] request, pinned, ranked in
-                    self?.filesFound(pinned: pinned, ranked: ranked, for: request)
+                files.search(request) { [weak self] request, pinned, ranked, complete in
+                    self?.filesFound(pinned: pinned, ranked: ranked, for: request, complete: complete)
                 }
             }
-        } else {
+        } else if files.inFlight != outcome.fileRequest {
+            // 还在搜的正是这次要的（只回来了一部分来源）就让它搜完。
             files.cancel()
         }
     }
 
-    /// 文件搜好了：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
-    private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest) {
+    /// 文件搜好了（或先回来了一部分来源）：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
+    /// 例外：来了固定行（输入像文件名、找到了名字正好是它的文件）、而选中的还是第一行 —— 选中跟着到新的第一行，⏎ 就是打开它。
+    private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
+                            complete: Bool) {
         guard panel.isVisible else { return }
-        engine.setFileResult(pinned: pinned, ranked: ranked, for: request)
-        refresh(keepSelection: true)
+        engine.setFileResult(pinned: pinned, ranked: ranked, for: request, complete: complete)
+        refresh(keepSelection: pinned.isEmpty || model.selectedIndex != 0)
         panel.setHeight(model.panelHeight)
     }
 

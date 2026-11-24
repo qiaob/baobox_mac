@@ -141,10 +141,14 @@ enum LauncherPathDisplay {
         directory.hasSuffix("/") ? directory + name : directory + "/" + name
     }
 
-    /// 所在目录的显示：主目录缩写成 `~`；太长时中间截断成「开头几级/…/末尾两级」，
+    /// 所在目录的显示：主目录缩写成 `~`；太长时先把 UUID、十六进制哈希这类长串缩成前 8 位 + 「…」（PR 11：
+    /// `/private/tmp/claude-501/-Users-qiao-cmb/e0c00de7-…/scratchpad` 原来截成 `/private/…/<整串 UUID>/scratchpad`，
+    /// 看不出是哪个项目），还长就中间截断成「开头几级/…/末尾两级」，
     /// 开头留得越多越好（`~/cmb/worktrees/某个副本/…/docs/launcher` 能看出是哪个副本），末尾两级总留着。
     static func directoryLabel(_ directory: String, home: String, maxLength: Int = maxDirectoryLabelLength) -> String {
-        let label = abbreviated(trimmingTrailingSlashes(directory), home: home)
+        var label = abbreviated(trimmingTrailingSlashes(directory), home: home)
+        guard label.count > maxLength else { return label }
+        label = shorteningIdentifiers(label)
         guard label.count > maxLength else { return label }
         let absolute = label.hasPrefix("/")
         let parts = label.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -158,6 +162,16 @@ enum LauncherPathDisplay {
         }
         if head.isEmpty { return "…/" + tail }
         return (absolute ? "/" : "") + head.joined(separator: "/") + "/…/" + tail
+    }
+
+    /// 路径里每一段像标识符的（20 个字符起、去掉连字符后是 16 位以上的十六进制、带数字：UUID、git 哈希）缩成前 8 位 + 「…」。
+    static func shorteningIdentifiers(_ label: String) -> String {
+        label.split(separator: "/", omittingEmptySubsequences: false).map { part -> String in
+            guard part.count >= 20 else { return String(part) }
+            let hex = part.filter { $0 != "-" }
+            guard hex.count >= 16, hex.allSatisfy(\.isHexDigit), hex.contains(where: \.isNumber) else { return String(part) }
+            return part.prefix(8) + "…"
+        }.joined(separator: "/")
     }
 
     /// Tab 补全换进输入框的文字：完整路径，文件夹末尾带 `/`（于是立刻列出它里面的内容）；
