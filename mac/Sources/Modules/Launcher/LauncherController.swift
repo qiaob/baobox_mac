@@ -5,6 +5,8 @@ import os
 // 按键、执行。呼出时现建命令表、取 App 索引的快照、取各模块交来的条目（剪贴板、片段）装进引擎；每次输入变化同步查一次（只读内存）；
 // 执行时先记使用、收起面板，下一个 runloop 再执行 —— 很多命令作用于前台 App / 当前窗口，要等面板让开。
 // 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
+// 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
+// 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
 
 @MainActor
 final class LauncherController {
@@ -20,6 +22,7 @@ final class LauncherController {
     static let firstPrewarmDelay: TimeInterval = 5
 
     private let apps = LauncherAppProvider()
+    private let paths = LauncherPathProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
     private let usage = LauncherUsageStore()
@@ -67,6 +70,7 @@ final class LauncherController {
     func willTerminate() {
         usage.flush()
         apps.stop()
+        paths.cancel()
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -114,6 +118,7 @@ final class LauncherController {
         guard panel.isVisible else { return }
         panel.hide()
         hiddenAt = Date()
+        paths.cancel()
         engine.clear()
         baseItems = []
         entries.endSession()
@@ -148,7 +153,28 @@ final class LauncherController {
         if outcome.duration > Self.slowQueryThreshold {
             Self.log.notice("slow query: \(outcome.duration * 1000, format: .fixed(precision: 2), privacy: .public) ms, \(outcome.candidateCount, privacy: .public) candidates")
         }
-        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, keepSelection: keepSelection)
+        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, keepSelection: keepSelection,
+                      searching: outcome.isPending)
+        requestBackgroundResults(outcome)
+    }
+
+    /// 引擎要的后台结果：输入是一个还没查过的路径 → 后台查（同一个路径正在查就不再发）；不再是路径 → 不要还没回来的。
+    private func requestBackgroundResults(_ outcome: LauncherSearchOutcome) {
+        if let path = outcome.pendingPath {
+            if paths.inFlight != path {
+                paths.resolve(path) { [weak self] input, items in self?.pathResolved(items, for: input) }
+            }
+        } else if !outcome.isPathMode {
+            paths.cancel()
+        }
+    }
+
+    /// 后台查好了一个路径：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
+    private func pathResolved(_ items: [LauncherItem], for input: LauncherPathInput) {
+        guard panel.isVisible else { return }
+        engine.setPathResult(items, for: input)
+        refresh(keepSelection: true)
+        panel.setHeight(model.panelHeight)
     }
 
     // MARK: - 按键
@@ -164,7 +190,7 @@ final class LauncherController {
         case 0x7D: // ↓
             model.moveSelection(by: 1)
             return true
-        case 0x24, 0x4C: // Return / 小键盘 Enter；⌘⏎ 在计算结果、识别结果上 = 插入前台 App，其余行同 ⏎
+        case 0x24, 0x4C: // Return / 小键盘 Enter；⌘⏎ 在计算结果、识别结果上 = 插入前台 App，文件 / 路径行上 = 在访达里显示，其余行同 ⏎
             if flags.contains(.command) {
                 insertOrRun(at: model.selectedIndex)
             } else {
@@ -175,7 +201,8 @@ final class LauncherController {
             hide()
             LauncherFocus.restore()
             return true
-        case 0x30: // Tab：先吃掉，以后是「问 AI」
+        case 0x30: // Tab：路径行上 = 补全成这一行的完整路径；其余时候先吃掉，以后是「问 AI」
+            if flags.isDisjoint(with: [.command, .control, .option]) { complete(at: model.selectedIndex) }
             return true
         default:
             // ⌘V / ⌘C / ⌘X / ⌘A / ⌘Z：面板是 key 但 Baobox 不是前台 App（nonactivating），主菜单「编辑」里的
@@ -221,22 +248,41 @@ final class LauncherController {
             return
         }
         guard let item = engine.item(forKey: id) else { return }
-        usage.recordUse(key: item.candidate.key, input: queryText, now: Date())
+        perform(item.run, for: item)
+    }
+
+    /// 执行一行的动作：先记使用（路径行不记），收起面板，下一个 runloop 再执行。
+    private func perform(_ action: @escaping @MainActor () -> Void, for item: LauncherItem) {
+        if item.recordsUsage {
+            usage.recordUse(key: item.candidate.key, input: queryText, now: Date())
+        }
         hide()
         // 先把焦点还给原来的 App，再执行：粘贴、窗口管理这类动作都作用于它。
         LauncherFocus.restore()
-        let action = item.run
         DispatchQueue.main.async {
             MainActor.assumeIsolated { action() }
         }
     }
 
+    /// Tab：选中的是路径行时，把输入框换成它的完整路径（文件夹末尾带 `/`，于是立刻列出它里面的内容）。
+    private func complete(at index: Int) {
+        guard model.rows.indices.contains(index),
+              let completion = engine.item(forKey: model.rows[index].id)?.completion else { return }
+        model.field.replaceText(completion)
+        // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
+        textChanged(completion)
+    }
+
     /// ⌘⏎：计算结果、识别结果插入前台 App（和听写、划词助手同一条路：能直接写进输入框就写，不行借剪贴板粘贴，
-    /// 都不行就复制并提示）；其余行同 ⏎。
+    /// 都不行就复制并提示）；文件、路径行在访达里显示；其余行同 ⏎。
     private func insertOrRun(at index: Int) {
         guard model.rows.indices.contains(index) else { return }
         guard let instant = engine.instant(forKey: model.rows[index].id) else {
-            run(at: index)
+            if let item = engine.item(forKey: model.rows[index].id), let alternate = item.alternate {
+                perform(alternate, for: item)
+            } else {
+                run(at: index)
+            }
             return
         }
         guard let text = instant.copyText else { return }
@@ -261,7 +307,7 @@ final class LauncherController {
     }
 
     /// 回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。
-    private static func toast(_ text: String) {
+    static func toast(_ text: String) {
         NotifyCenter.shared.post(Notice(source: "launcher", level: .ambient, title: text,
                                         icon: "doc.on.doc", isUserFeedback: true))
     }
