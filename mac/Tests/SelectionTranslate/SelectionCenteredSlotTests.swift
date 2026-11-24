@@ -51,6 +51,18 @@ final class SelectionCenteredSlotTests: XCTestCase {
         XCTAssertTrue(SelectionCenteredSlot.wasMoved(placed: CGPoint(x: 556, y: 655), actual: CGPoint(x: 556, y: 640)))
     }
 
+    func testDraggedBeforeSwitchingActionsStaysWhereItWas() {
+        let placed = CGPoint(x: 556, y: 655)
+        XCTAssertTrue(SelectionCenteredSlot.userMoved(placed: placed, actual: CGPoint(x: 700, y: 500), alreadyMoved: false),
+                      "拖完马上切换动作：位置变了就算拖过，不再拉回居中")
+        XCTAssertFalse(SelectionCenteredSlot.userMoved(placed: placed, actual: CGPoint(x: 556, y: 654.5), alreadyMoved: false),
+                       "取整差半点不算")
+        XCTAssertTrue(SelectionCenteredSlot.userMoved(placed: nil, actual: CGPoint(x: 556, y: 655), alreadyMoved: true),
+                      "之前认定拖过的一直算")
+        XCTAssertFalse(SelectionCenteredSlot.userMoved(placed: nil, actual: CGPoint(x: 1, y: 1), alreadyMoved: false),
+                       "我们还没摆过：不算")
+    }
+
     func testZeroSizeReportIsNotMeasured() {
         XCTAssertFalse(SelectionCenteredSlot.isMeasured(.zero), "SwiftUI 第一次排版前报的 0 × 0")
         XCTAssertFalse(SelectionCenteredSlot.isMeasured(CGSize(width: 400, height: 0)))

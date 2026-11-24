@@ -96,6 +96,11 @@ final class SelectionTranslatePanelController {
     /// 形态变了（动作条 → 结果面板）：之前没被拖过就按新形态重新摆放。
     func phaseDidChange() {
         idleSince = Date()
+        // 交来的文字（居中那一格）：清掉摆放位置之前先看有没有被拖过 —— 拖完马上切换动作时还没改过尺寸、没来得及认定，
+        // 不先看的话会被拉回居中。贴选区那条路照旧。
+        if centeredSlot != nil, let panel {
+            userMoved = SelectionCenteredSlot.userMoved(placed: placedOrigin, actual: panel.frame.origin, alreadyMoved: userMoved)
+        }
         if !userMoved { placedOrigin = nil }
     }
 

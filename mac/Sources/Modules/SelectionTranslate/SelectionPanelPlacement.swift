@@ -39,4 +39,12 @@ struct SelectionCenteredSlot: Equatable {
     static func wasMoved(placed: CGPoint, actual: CGPoint) -> Bool {
         abs(placed.x - actual.x) > 1 || abs(placed.y - actual.y) > 1
     }
+
+    /// 用户拖过面板没有：之前已经认定拖过，或者此刻的位置和我们上次摆的差超过 1 点；我们还没摆过（`placed` 为 nil）时不算。
+    /// 切换动作前先问它 —— 拖过就别再拉回居中。
+    static func userMoved(placed: CGPoint?, actual: CGPoint, alreadyMoved: Bool) -> Bool {
+        if alreadyMoved { return true }
+        guard let placed else { return false }
+        return wasMoved(placed: placed, actual: actual)
+    }
 }
