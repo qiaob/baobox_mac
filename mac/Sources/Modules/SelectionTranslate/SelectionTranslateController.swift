@@ -175,6 +175,28 @@ final class SelectionTranslateController {
         }
     }
 
+    // MARK: - 别的工具交来的文字（快速入口）
+
+    /// 快速入口对一段文字直接跑一个动作（docs/launcher/TECH_DESIGN.md §5.4）：跳过动作条，出这个动作的结果面板。
+    /// 和「选中后弹动作条」「快捷键直达」两条路不同的只有取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限：
+    /// - 没有选区锚点：浮层放在鼠标所在屏幕的水平中间、顶边在从上往下 1/5 处（快速入口面板刚才的位置）；
+    /// - 不是从哪个输入框选来的（`editTarget` 为 nil）：改写类结果的主按钮是「复制」，不给「替换」。
+    func run(actionID: String, onText text: String) {
+        present(SelectionTextResult(text: text, anchorRect: Self.providedTextAnchor(), route: .provided),
+                phase: .result(actionID), keyboardMode: false)
+    }
+
+    /// 交来的文字的浮层锚点：鼠标所在屏幕可见区域的水平中线、从上往下 1/5 处的一个点（同快速入口面板的顶边）。
+    /// 结果面板贴在锚点下方，所以它的顶边就在快速入口面板刚才的顶边附近。拿不到屏幕时为 nil（退回鼠标位置）。
+    private static func providedTextAnchor() -> CGRect? {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else {
+            return nil
+        }
+        let visible = screen.visibleFrame
+        return CGRect(x: visible.midX, y: visible.maxY - visible.height * 0.2, width: 0, height: 0)
+    }
+
     // MARK: - 手动触发：框选 OCR
 
     func translateRegion() {

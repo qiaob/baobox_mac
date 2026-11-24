@@ -22,6 +22,26 @@ final class ClipboardTool: ToolModule {
         launcherSourceList
     }
 
+    /// 快速入口的文字动作（docs/launcher/TECH_DESIGN.md §5.4）：对输入框里的任意文字「存为片段 / 钉成贴卡 / 生成二维码」。
+    /// 都在档位 50（兜底建议的后半截）；输入是网址时二维码提到最前（「刚拿到个链接，要给手机」）。
+    func launcherCommands() -> [LauncherCommand] {
+        let store = store
+        return [
+            .textAction(id: "clipboard.text.saveSnippet", title: L("clipboard.launcher.saveSnippet"),
+                        symbolName: "text.badge.star", suggestion: LauncherSuggestionTraits(priority: 50)) { text in
+                Self.saveSnippet(text, store: store)
+            },
+            .textAction(id: "clipboard.text.pinCard", title: L("clipboard.launcher.pinCard"),
+                        symbolName: "pin", suggestion: LauncherSuggestionTraits(priority: 50)) { text in
+                PinnedTextCard.pin(text)
+            },
+            .textAction(id: "clipboard.text.qrCode", title: L("clipboard.launcher.qrCode"), symbolName: "qrcode",
+                        suggestion: LauncherSuggestionTraits(priority: 50, boostedKinds: [.url])) { text in
+                Self.showQRCode(text)
+            },
+        ]
+    }
+
     func willTerminate() {
         store.flushPendingSave()
     }
@@ -94,6 +114,30 @@ final class ClipboardTool: ToolModule {
             .max(by: { $0.createdAt < $1.createdAt }),
               let text = latest.text, !text.isEmpty else { return }
         ClipboardQRCode.pin(text)
+    }
+
+    /// 快速入口「存为片段」：标题用首行（最多 40 个字符），存成一条收藏的文字条目（= 片段），回执一句。
+    private static func saveSnippet(_ text: String, store: ClipboardStore) {
+        let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return }
+        let firstLine = content.split(whereSeparator: \.isNewline).first.map(String.init) ?? content
+        let title = firstLine.count > 40 ? String(firstLine.prefix(39)) + "…" : firstLine
+        store.addSnippet(title: title, content: content)
+        toast(L("clipboard.launcher.savedSnippet \(title)"), icon: "text.badge.star")
+    }
+
+    /// 快速入口「生成二维码」：同 `clipboard.qrcodeLast`，钉在鼠标所在屏幕中间；超过二维码容量时说一句。
+    private static func showQRCode(_ text: String) {
+        guard Data(text.utf8).count <= QRCodeGenerator.maxBytes else {
+            toast(L("clipboard.tools.qrcode.tooLong"), icon: "qrcode")
+            return
+        }
+        ClipboardQRCode.pin(text)
+    }
+
+    /// 回执（宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。
+    private static func toast(_ text: String, icon: String) {
+        NotifyCenter.shared.post(Notice(source: "clipboard", level: .ambient, title: text, icon: icon, isUserFeedback: true))
     }
 
     private func confirmClear() {

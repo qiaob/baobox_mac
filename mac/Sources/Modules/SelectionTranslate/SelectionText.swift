@@ -28,6 +28,8 @@ struct SelectionTextResult {
         /// App 自己在选中时就拷进了剪贴板（终端的「选中即复制」、TUI 用 OSC 52 自己复制）。
         case appCopied
         case ocr
+        /// 别的工具直接交来的一段文字（快速入口对输入框里的文字跑动作）：不是哪个 App 的选区，没有锚点、不可写。
+        case provided
     }
 }
 
