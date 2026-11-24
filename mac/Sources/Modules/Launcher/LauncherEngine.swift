@@ -85,13 +85,12 @@ struct LauncherSearchOutcome {
     var pendingPath: LauncherPathInput? = nil
     /// 这次输入要搜的文件；不搜为 nil（控制器停掉还没回来的那次）。
     var fileRequest: LauncherFileSearchRequest? = nil
-    /// 要搜的文件结果还没搜过或过期了：控制器去搜（`LauncherFileProvider`），搜完 `setFileResult`。
+    /// 要搜的文件结果还没搜过、过期了、或者只回来了一部分来源（`LauncherFileResultState.pending`）：
+    /// 控制器去搜（`LauncherFileProvider`；正在跑的就是它时不重发），搜完 `setFileResult`。
     var pendingFiles: LauncherFileSearchRequest? = nil
-    /// 这次的文件结果只回来了一部分来源（还在等别的）：不用再发，但一行都没有时还是显示「正在查找」。
-    var filesGathering = false
 
     /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
-    var isPending: Bool { pendingPath != nil || pendingFiles != nil || filesGathering }
+    var isPending: Bool { pendingPath != nil || pendingFiles != nil }
 }
 
 @MainActor
@@ -293,25 +292,26 @@ final class LauncherEngine {
         rows += ranked.compactMap { item(forKey: $0.key)?.row }
         rows += suggestions.trailing.map(\.row)
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        // 结果不完整（只回来了一部分来源）也算还要搜：改错字（R → R' → R）时 R 的搜索已经被顶掉了，不重发 Spotlight 就再也不来。
+        let state = fileResult.map { LauncherFileResultState(request: $0.request, complete: $0.complete) }
         return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
-                                     fileRequest: fileRequest, pendingFiles: files.isFresh ? nil : fileRequest,
-                                     filesGathering: files.isFresh && !files.isComplete)
+                                     fileRequest: fileRequest,
+                                     pendingFiles: LauncherFileResultState.pending(for: fileRequest, have: state))
     }
 
-    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它（`isComplete` = 所有来源都回来了）；还没回来 → 上一次「名字包含」的结果里
+    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它（不完整也先用）；还没回来 → 上一次「名字包含」的结果里
     /// 仍匹配的先顶着（固定行只在名字仍正好是现在的输入时顶着，片段的确切命中不顶）；不搜文件 → 没有，并放掉上一次的。
-    private func currentFiles(for request: LauncherFileSearchRequest?)
-        -> (pinned: [LauncherItem], ranked: [LauncherItem], isFresh: Bool, isComplete: Bool) {
+    private func currentFiles(for request: LauncherFileSearchRequest?) -> (pinned: [LauncherItem], ranked: [LauncherItem]) {
         guard let request else {
             fileResult = nil
-            return ([], [], true, true)
+            return ([], [])
         }
-        guard let fileResult else { return ([], [], false, false) }
-        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked, true, fileResult.complete) }
+        guard let fileResult else { return ([], []) }
+        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked) }
         let pinned = request.pinnedName.map { name in
             fileResult.pinned.filter { $0.row.title.caseInsensitiveCompare(name) == .orderedSame }
         } ?? []
         let stale = fileResult.ranked.filter { LauncherFileFilter.stillMatches(name: $0.row.title, request: request) }
-        return (pinned, stale, false, false)
+        return (pinned, stale)
     }
 }

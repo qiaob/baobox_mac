@@ -211,13 +211,13 @@ final class LauncherController {
             paths.cancel()
         }
         if let request = outcome.pendingFiles {
-            if files.inFlight != request {
+            // 正在跑的就是它（只回来了一部分来源）时不重发，等它回齐（`LauncherFileResultState.shouldStart`）。
+            if LauncherFileResultState.shouldStart(pending: request, inFlight: files.inFlight) {
                 files.search(request) { [weak self] request, pinned, ranked, complete in
                     self?.filesFound(pinned: pinned, ranked: ranked, for: request, complete: complete)
                 }
             }
-        } else if files.inFlight != outcome.fileRequest {
-            // 还在搜的正是这次要的（只回来了一部分来源）就让它搜完。
+        } else {
             files.cancel()
         }
     }
