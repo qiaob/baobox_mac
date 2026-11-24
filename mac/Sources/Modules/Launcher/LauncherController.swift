@@ -8,6 +8,7 @@ import os
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
 // 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
+// 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
 
 @MainActor
 final class LauncherController {
@@ -98,6 +99,7 @@ final class LauncherController {
             text = ""
         }
         baseItems = commands.items() + apps.items
+        engine.textActions = commands.textActions()
         // 剪贴板、片段：取一次条目（只读内存），缺的搜索键最新的 200 条现在建，其余后台建、建完刷新一次列表。
         let entriesStart = DispatchTime.now().uptimeNanoseconds
         let report = entries.beginSession()
@@ -269,6 +271,10 @@ final class LauncherController {
             copy(instant)
             return
         }
+        if let suggestion = engine.suggestion(forKey: id) {
+            runSuggestion(suggestion)
+            return
+        }
         guard let item = engine.item(forKey: id) else { return }
         perform(item.run, for: item)
     }
@@ -293,6 +299,26 @@ final class LauncherController {
         model.field.replaceText(completion)
         // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
         textChanged(completion)
+    }
+
+    /// 建议行（§5.4）：兜底建议记一次使用（`textaction/<id>`；不记「这个输入选了谁」，那是给排序里的普通行用的）。
+    /// 改输入的（搜文件名 → `f <文字>`）面板不收；其余同命令：收起面板、把焦点还给原来的 App、下一个 runloop 再执行。
+    private func runSuggestion(_ suggestion: LauncherSuggestion) {
+        if let key = suggestion.usageKey {
+            usage.recordUse(key: key, input: "", now: Date())
+        }
+        switch suggestion.action {
+        case .replaceInput(let newText):
+            model.field.replaceText(newText)
+            // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
+            textChanged(newText)
+        case .run(let action):
+            hide()
+            LauncherFocus.restore()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { action() }
+            }
+        }
     }
 
     /// ⌘⏎：计算结果、识别结果插入前台 App（和听写、划词助手同一条路：能直接写进输入框就写，不行借剪贴板粘贴，
