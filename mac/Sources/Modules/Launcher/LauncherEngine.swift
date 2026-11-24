@@ -190,11 +190,11 @@ final class LauncherEngine {
     }
 
     /// 文件来源的表换了（扫完了、已知文件 / 剪贴板路径重建了）：最近一次输入正在搜文件时，手上的结果当成不完整
-    /// （先照旧显示，`LauncherFileResultState.expired`），下次 `search` 会要求重搜。没在搜文件返回 false。
-    func expireFileResults() -> Bool {
-        guard lastFileRequest != nil else { return false }
+    /// （先照旧显示，`LauncherFileResultState.expired`），返回这次要搜的请求；没在搜文件返回 nil。
+    func expireFileResults() -> LauncherFileSearchRequest? {
+        guard let lastFileRequest else { return nil }
         fileResult?.complete = false
-        return true
+        return lastFileRequest
     }
 
     /// 计算结果、识别结果的行（不是这类行为 nil）。

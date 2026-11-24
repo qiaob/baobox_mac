@@ -235,10 +235,13 @@ final class LauncherController {
         panel.setHeight(model.panelHeight)
     }
 
-    /// 文件来源的表换上了（扫完了、已知文件 / 剪贴板路径重建了）：面板开着、这次输入正在搜文件，就重搜一次 ——
-    /// 结果先照旧显示；还在跑的那次用的是旧表，停掉重发。刚呼出就贴文件名、冷扫描还没完时，不用再按一个键才出来。
+    /// 文件来源的表换上了（扫完了、已知文件 / 剪贴板路径重建了）：面板开着、这次输入正在搜文件，就重查（结果先照旧显示）——
+    /// 刚呼出就贴文件名、冷扫描还没完时，不用再按一个键才出来。同一个请求只重查内存来源（PR 11 复查后定）：Spotlight 已经交回的
+    /// 那一批留着、还在路上的让它继续，列表里不会出现 Spotlight 的行消失又回来，也不多查一次 Spotlight。
+    /// 最近一次查询不是这个请求（或已经停了）时才整个重搜。
     private func fileTablesChanged() {
-        guard panel.isVisible, engine.expireFileResults() else { return }
+        guard panel.isVisible, let request = engine.expireFileResults() else { return }
+        guard !files.requeryLocalSources(for: request) else { return }
         files.cancel()
         refresh(background: true)
         panel.setHeight(model.panelHeight)

@@ -86,8 +86,8 @@ final class LauncherFileResultStateTests: XCTestCase {
 
     @MainActor
     func testTableSwapRequeriesTheCurrentInput() {
-        // 刚呼出就输入文件名、自己扫的目录还没扫完：表换上之后不用再按一个键就出来。
-        let spotlight = ControllableSpotlight(files: [], latency: 0.05)
+        // 刚呼出就输入文件名、自己扫的目录还没扫完：表换上之后不用再按一个键就出来；只重查内存来源，不另外发起、不重查 Spotlight。
+        let spotlight = ControllableSpotlight(files: [LauncherFileHit(path: "/Users/me/proj/hook.py.md")], latency: 0.05)
         let memory = LauncherMemoryFileSearch(label: "test.swap", verifiesExistence: false)
         let merger = LauncherMergedFileSearch(sources: [
             .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.08),
@@ -97,14 +97,18 @@ final class LauncherFileResultStateTests: XCTestCase {
         launcher.type("hook.py")
         pump(0.3)
         XCTAssertEqual(launcher.have?.complete, true)
-        XCTAssertTrue(launcher.results.isEmpty, "扫描还没完：没有")
+        XCTAssertEqual(launcher.results.map(\.hit.path), ["/Users/me/proj/hook.py.md"], "扫描还没完：只有 Spotlight 的")
         memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/scratchpad/hook.py", modified: Date())]))
         launcher.tablesChanged()
         pump(0.02)
-        XCTAssertEqual(launcher.results.first?.hit.path, "/private/tmp/c/scratchpad/hook.py", "换表后重搜，内存来源立刻出")
+        XCTAssertEqual(launcher.results.first?.hit.path, "/private/tmp/c/scratchpad/hook.py", "换表后内存来源立刻出")
         XCTAssertEqual(launcher.results.first?.pinned, true)
+        XCTAssertTrue(launcher.results.contains { $0.hit.path == "/Users/me/proj/hook.py.md" }, "Spotlight 的行一直在")
+        XCTAssertTrue(launcher.everyDeliveryHad("/Users/me/proj/hook.py.md"), "没有哪一次交出的结果里少了 Spotlight 的行")
         pump(0.3)
-        XCTAssertEqual(launcher.starts.count, 2, "只重发了一次")
+        XCTAssertEqual(launcher.starts.count, 1, "没有另外发起")
+        XCTAssertEqual(spotlight.searchCount, 1, "Spotlight 不多查")
+        XCTAssertEqual(launcher.have?.complete, true)
     }
 
     @MainActor
@@ -136,6 +140,9 @@ private final class MiniLauncher {
     private(set) var starts: [LauncherFileSearchRequest] = []
     private(set) var isSearching = false
     private var sequence = 0
+    private var currentRequest: LauncherFileSearchRequest?
+    private var swapped = false
+    private var deliveriesAfterSwap: [[String]] = []
 
     init(backend: LauncherMergedFileSearch) {
         self.backend = backend
@@ -159,18 +166,31 @@ private final class MiniLauncher {
         }
     }
 
-    /// 控制器的 `fileTablesChanged`：正在搜文件就把结果当成不完整、停掉还在跑的、再查一次。
+    /// 控制器的 `fileTablesChanged`：正在搜文件就把结果当成不完整；最近一次查询就是它 → 只重查内存来源（同
+    /// `LauncherFileProvider.requeryLocalSources`），否则停掉重搜。
     func tablesChanged() {
-        guard LauncherFilePolicy.request(for: LauncherQuery.parse(text), hasCalculation: false) != nil else { return }
+        guard let wanted = LauncherFilePolicy.request(for: LauncherQuery.parse(text), hasCalculation: false) else { return }
         have = have?.expired
+        swapped = true
+        if currentRequest == wanted {
+            inFlight = wanted
+            backend.requeryImmediateSources()
+            return
+        }
         cancel()
         refresh()
+    }
+
+    /// 换表之后交出的每一批里都有这个路径。
+    func everyDeliveryHad(_ path: String) -> Bool {
+        deliveriesAfterSwap.allSatisfy { $0.contains(path) }
     }
 
     private func start(_ request: LauncherFileSearchRequest) {
         cancel()
         sequence += 1
         inFlight = request
+        currentRequest = request
         starts.append(request)
         let ticket = sequence
         backend.search(request) { batch in
@@ -181,6 +201,7 @@ private final class MiniLauncher {
                     if batch.isComplete { self.inFlight = nil }
                     self.have = LauncherFileResultState(request: request, complete: batch.isComplete)
                     self.results = processed
+                    if self.swapped { self.deliveriesAfterSwap.append(processed.map(\.hit.path)) }
                     self.refresh()
                 }
             }
@@ -191,6 +212,7 @@ private final class MiniLauncher {
         guard inFlight != nil else { return }
         sequence += 1
         inFlight = nil
+        currentRequest = nil
         backend.cancel()
     }
 }

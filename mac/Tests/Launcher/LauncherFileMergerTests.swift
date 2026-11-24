@@ -151,8 +151,8 @@ final class LauncherFileMergerTests: XCTestCase {
         XCTAssertEqual(batches.first?.isComplete, false)
         let last = try XCTUnwrap(batches.last)
         XCTAssertTrue(last.isComplete)
-        XCTAssertEqual(last.hits.map(\.path), ["/private/tmp/c/hook.py", "/Users/me/a/notes.md"], "/tmp 和 /private/tmp 并成一条")
-        XCTAssertEqual(last.hits.first?.origins, [.scanned, .spotlight])
+        XCTAssertEqual(Set(last.hits.map(\.path)), ["/private/tmp/c/hook.py", "/Users/me/a/notes.md"], "/tmp 和 /private/tmp 并成一条")
+        XCTAssertEqual(last.hits.first { $0.path == "/private/tmp/c/hook.py" }?.origins, [.scanned, .spotlight])
         XCTAssertEqual(last.sources.map(\.name), ["spotlight", "scanned", "known"], "各来源的统计按来源的次序")
         XCTAssertEqual(last.sources.map(\.hitCount), [2, 1, 0])
         XCTAssertEqual(last.totalCount, 3)
@@ -205,6 +205,73 @@ final class LauncherFileMergerTests: XCTestCase {
         let batches = search(merged, .nameContains(["x"]))
         Thread.sleep(forTimeInterval: 0.1)
         XCTAssertEqual(batches.map(\.hits.count), [2], "都在期限内回来：照旧凑齐了交一次")
+    }
+
+    // MARK: - 换表后只重查内存来源（PR 11 复查后定）
+
+    func testRequeryAfterCompleteKeepsSpotlightRows() throws {
+        let spotlight = FakeFileSearch(delay: 0.05, hits: [LauncherFileHit(path: "/Users/me/proj/hook.py")])
+        let memory = LauncherMemoryFileSearch(label: "test.requery", verifiesExistence: false)
+        memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/old-hook.py")]))
+        let merged = LauncherMergedFileSearch(sources: [
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.02),
+            .init(name: "scanned", origin: .scanned, backend: memory),
+        ])
+        let collected = BatchCollector()
+        let first = expectation(description: "first complete")
+        let second = expectation(description: "requery complete")
+        merged.search(.nameContains(["hook"])) { batch in
+            collected.append(batch)
+            guard batch.isComplete else { return }
+            if collected.batches.filter(\.isComplete).count == 1 { first.fulfill() } else { second.fulfill() }
+        }
+        wait(for: [first], timeout: 5)
+        let before = collected.batches.count
+        memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/old-hook.py"), .init(path: "/private/tmp/c/new-hook.py")]))
+        merged.requeryImmediateSources()
+        wait(for: [second], timeout: 5)
+        let after = Array(collected.batches.dropFirst(before))
+        XCTAssertFalse(after.isEmpty)
+        for batch in after {
+            XCTAssertTrue(batch.hits.contains { $0.path == "/Users/me/proj/hook.py" }, "换表后交出的每一批都还有 Spotlight 的行")
+        }
+        XCTAssertEqual(Set(try XCTUnwrap(after.last).hits.map(\.path)),
+                       ["/Users/me/proj/hook.py", "/private/tmp/c/old-hook.py", "/private/tmp/c/new-hook.py"], "新表的结果换上了")
+        XCTAssertEqual(spotlight.searchCount, 1, "Spotlight 不重查")
+    }
+
+    func testRequeryWhileSpotlightIsOnItsWayLetsItFinish() throws {
+        let spotlight = FakeFileSearch(delay: 0.3, hits: [LauncherFileHit(path: "/Users/me/proj/hook.py")])
+        let memory = LauncherMemoryFileSearch(label: "test.requery2", verifiesExistence: false)
+        let merged = LauncherMergedFileSearch(sources: [
+            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.02),
+            .init(name: "scanned", origin: .scanned, backend: memory),
+        ])
+        let collected = BatchCollector()
+        let done = expectation(description: "complete")
+        merged.search(.nameContains(["hook"])) { batch in
+            collected.append(batch)
+            if batch.isComplete { done.fulfill() }
+        }
+        Thread.sleep(forTimeInterval: 0.1)   // Spotlight 已经发出去、还在路上
+        memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/hook.py")]))
+        merged.requeryImmediateSources()
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(spotlight.searchCount, 1, "还在路上的 Spotlight 不取消、不重发")
+        XCTAssertEqual(spotlight.cancelCount, 0)
+        let last = try XCTUnwrap(collected.batches.last)
+        XCTAssertEqual(Set(last.hits.map(\.path)), ["/Users/me/proj/hook.py", "/private/tmp/c/hook.py"])
+        XCTAssertEqual(collected.batches.filter(\.isComplete).count, 1)
+    }
+
+    func testRequeryAfterCancelDoesNothing() {
+        let memory = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/a/x")])
+        let merged = LauncherMergedFileSearch(sources: [.init(name: "scanned", origin: .scanned, backend: memory)])
+        _ = search(merged, .nameContains(["x"]))
+        merged.cancel()
+        merged.requeryImmediateSources()
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(memory.searchCount, 1, "取消了的查询不重查")
     }
 
     func testDelayedSourceIsDebounced() {

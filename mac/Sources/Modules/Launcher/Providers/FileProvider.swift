@@ -16,8 +16,10 @@ final class LauncherFileProvider {
     private let backend: LauncherFileSearching
     private let home: String
     private var sequence = 0
-    /// 正在搜（含只回来了一部分来源的）那个请求：同一个请求别重复发。
+    /// 正在搜（含只回来了一部分来源的、换表后正在重查内存来源的）那个请求：同一个请求别重复发。
     private(set) var inFlight: LauncherFileSearchRequest?
+    /// 最近一次发起、后端那边还算数（没被取消、没被新的顶掉）的请求：换表后可以只重查内存来源（`requeryLocalSources`）。
+    private var currentRequest: LauncherFileSearchRequest?
     /// 这次查询第一批行交给控制器用了多久（记日志）。
     private var firstRowsMilliseconds: Double?
 
@@ -34,7 +36,18 @@ final class LauncherFileProvider {
         cancel()
         sequence += 1
         inFlight = request
+        currentRequest = request
         start(request, ticket: sequence, completion: completion)
+    }
+
+    /// 来源的表换了（PR 11 复查后定）：最近一次查询就是 `request`、后端那边还算数 → 只重查内存来源，结果经原来那次的回调交回
+    /// （Spotlight 已经交回的那一批留着，还在路上的照常回来；不取消、不重发 Spotlight），返回 true。重查期间算正在搜这个请求，
+    /// 控制器不会另外发起。不是这个请求（或已经取消了）→ false，调用方停掉重搜。
+    func requeryLocalSources(for request: LauncherFileSearchRequest) -> Bool {
+        guard currentRequest == request else { return false }
+        inFlight = request
+        backend.requeryImmediateSources()
+        return true
     }
 
     /// 不要还没回来的结果了（输入变了、不搜文件了、面板收起）。
@@ -42,6 +55,7 @@ final class LauncherFileProvider {
         guard inFlight != nil else { return }
         sequence += 1
         inFlight = nil
+        currentRequest = nil
         backend.cancel()
     }
 
