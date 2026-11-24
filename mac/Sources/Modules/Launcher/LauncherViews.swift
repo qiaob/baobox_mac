@@ -76,6 +76,8 @@ final class LauncherPanelModel: ObservableObject {
     @Published private(set) var rows: [LauncherRow] = []
     @Published private(set) var content: LauncherPanelContent = .hint
     @Published private(set) var selectedIndex = 0
+    /// 选中哪一行、这次输入以来用户手动选过没有（规则见 `LauncherSelectionState`）。
+    private var selection = LauncherSelectionState()
     /// 每换一批结果 +1：列表回到顶上。
     @Published private(set) var resultsVersion = 0
 
@@ -104,39 +106,38 @@ final class LauncherPanelModel: ObservableObject {
 
     var panelHeight: CGFloat { LauncherLayout.height(for: content) }
 
-    /// 换一批结果，选中第一行。`emptyInput`：查询词为空（没结果时显示提示，而不是「没有结果」）。
-    /// `keepSelection`：同一个输入、只是多了些行（后台建好了剪贴板的搜索键、查好了路径）—— 选中的那一行还在就留在它上面、列表不回顶。
+    /// 换一批结果。`emptyInput`：查询词为空（没结果时显示提示，而不是「没有结果」）。
+    /// `newInput`：输入变了 → 选中第一行，「手动选过」清零；false = 同一个输入、后台结果回来（文件、路径、搜索键、识别结果）——
+    /// 没手动选过选中第一行，手动选过留在他选的那一行（`LauncherSelectionState.rowsChanged`，PR 11 复查后定）。
     /// `searching`：后台的结果还没回来，一行都没有时显示「正在查找」而不是「没有结果」。
-    func setRows(_ rows: [LauncherRow], emptyInput: Bool, keepSelection: Bool = false, searching: Bool = false) {
-        let selectedID = keepSelection && self.rows.indices.contains(selectedIndex) ? self.rows[selectedIndex].id : nil
+    func setRows(_ rows: [LauncherRow], emptyInput: Bool, newInput: Bool = true, searching: Bool = false) {
+        let scrollsToTop = selection.rowsChanged(from: self.rows.map(\.id), to: rows.map(\.id), newInput: newInput)
         self.rows = rows
         if rows.isEmpty {
             content = searching ? .searching : (emptyInput ? .hint : .noResults)
         } else {
             content = .results(rows.map(LauncherLayout.rowHeight(for:)))
         }
-        if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
-            selectedIndex = index
-        } else {
-            selectedIndex = 0
-            resultsVersion += 1
-        }
+        selectedIndex = selection.index
+        if scrollsToTop { resultsVersion += 1 }
         resetHoverBaseline()
     }
 
-    /// ↑ ↓：到头不循环。
+    /// ↑ ↓：到头不循环。算手动选过。
     func moveSelection(by delta: Int) {
         guard !rows.isEmpty else { return }
-        selectedIndex = min(max(0, selectedIndex + delta), rows.count - 1)
+        selection.move(by: delta, rowCount: rows.count)
+        selectedIndex = selection.index
         resetHoverBaseline()
     }
 
-    /// 鼠标悬停在第 N 行上。
+    /// 鼠标悬停在第 N 行上（鼠标真的动过才算；换了一行算手动选过）。
     func hover(_ index: Int) {
         let location = NSEvent.mouseLocation
         guard location != hoverBaseline else { return }
         hoverBaseline = location
-        if rows.indices.contains(index) { selectedIndex = index }
+        selection.hover(index, rowCount: rows.count)
+        selectedIndex = selection.index
     }
 
     func resetHoverBaseline() {

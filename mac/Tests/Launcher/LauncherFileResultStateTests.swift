@@ -30,18 +30,6 @@ final class LauncherFileResultStateTests: XCTestCase {
         XCTAssertFalse(LauncherFileResultState.shouldStart(pending: r, inFlight: r), "正在跑的就是它：不重发，等它回齐")
     }
 
-    // MARK: - 选中的行
-
-    func testSelectionFollowsTheNewPinnedRowOnlyFromANonFileFirstRow() {
-        typealias Policy = LauncherFileSelectionPolicy
-        XCTAssertFalse(Policy.keepsSelection(newPinnedCount: 1, selectedIndex: 0, selectedIsPinnedFile: false),
-                       "第一行是剪贴板 / 建议：跟到新的第一行（文件），⏎ 就是打开它")
-        XCTAssertTrue(Policy.keepsSelection(newPinnedCount: 2, selectedIndex: 0, selectedIsPinnedFile: true),
-                      "选中的本来就是固定文件行：留在它上面，同名、更新的排到前面也不跳")
-        XCTAssertTrue(Policy.keepsSelection(newPinnedCount: 1, selectedIndex: 2, selectedIsPinnedFile: false), "用户挪开了：不动")
-        XCTAssertTrue(Policy.keepsSelection(newPinnedCount: 0, selectedIndex: 0, selectedIsPinnedFile: false), "没有固定行：照旧留")
-    }
-
     // MARK: - 整条路
 
     @MainActor

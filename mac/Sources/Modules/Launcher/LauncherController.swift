@@ -168,11 +168,11 @@ final class LauncherController {
                         .union(entries.sessionSourceIDs))
     }
 
-    /// 后台建好了一批条目的搜索键、面板还开着：重新装一次，同一个输入再查一次（选中的行还在就留在它上面）。
+    /// 后台建好了一批条目的搜索键、面板还开着：重新装一次，同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。
     private func entryKeysAdded() {
         guard panel.isVisible else { return }
         loadEngine(entryItems: entries.sessionItems())
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
@@ -188,7 +188,9 @@ final class LauncherController {
         panel.setHeight(model.panelHeight)
     }
 
-    private func refresh(keepSelection: Bool = false) {
+    /// 查一次、换上新的行。`background`：同一个输入、后台结果回来了（文件、路径、搜索键、识别结果）—— 选中规则见
+    /// `LauncherSelectionState`（没手动选过 → 第一行；手动选过 → 留在他选的那一行）；false = 输入变了，选中第一行。
+    private func refresh(background: Bool = false) {
         engine.pastedText = pastedText
         engine.attachment = attachment
         let outcome = engine.search(text, records: usage.records, now: Date())
@@ -196,7 +198,7 @@ final class LauncherController {
         if outcome.duration > Self.slowQueryThreshold {
             Self.log.notice("slow query: \(outcome.duration * 1000, format: .fixed(precision: 2), privacy: .public) ms, \(outcome.candidateCount, privacy: .public) candidates")
         }
-        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, keepSelection: keepSelection,
+        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, newInput: !background,
                       searching: outcome.isPending)
         requestBackgroundResults(outcome)
     }
@@ -223,18 +225,13 @@ final class LauncherController {
         }
     }
 
-    /// 文件搜好了（或先回来了一部分来源）：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
-    /// 例外：来了固定行、而选中的还是第一行、又不是固定的文件行（剪贴板、建议）—— 选中跟着到新的第一行，⏎ 就是打开它；
-    /// 选中的本来就是固定文件行时留在它上面（同名、更新的排到前面也不跳）。见 `LauncherFileSelectionPolicy`。
+    /// 文件搜好了（或先回来了一部分来源）：交给引擎，同一个输入再查一次（后台刷新：没手动选过选中第一行 ——
+    /// 输入文件名后 ⏎ 打开的就是当下排第一的文件；手动选过留在他选的那一行。`LauncherSelectionState`）。
     private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
                             complete: Bool) {
         guard panel.isVisible else { return }
-        let selectedID = model.rows.indices.contains(model.selectedIndex) ? model.rows[model.selectedIndex].id : nil
-        let selectedIsPinnedFile = selectedID.map { engine.pinnedFileRowIDs.contains($0) } ?? false
         engine.setFileResult(pinned: pinned, ranked: ranked, for: request, complete: complete)
-        refresh(keepSelection: LauncherFileSelectionPolicy.keepsSelection(newPinnedCount: pinned.count,
-                                                                         selectedIndex: model.selectedIndex,
-                                                                         selectedIsPinnedFile: selectedIsPinnedFile))
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
@@ -243,15 +240,15 @@ final class LauncherController {
     private func fileTablesChanged() {
         guard panel.isVisible, engine.expireFileResults() else { return }
         files.cancel()
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
-    /// 后台查好了一个路径：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
+    /// 后台查好了一个路径：交给引擎，同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。
     private func pathResolved(_ items: [LauncherItem], for input: LauncherPathInput) {
         guard panel.isVisible else { return }
         engine.setPathResult(items, for: input)
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
@@ -507,10 +504,10 @@ final class LauncherController {
         }
     }
 
-    /// 挂着的这张图取完字了：同一个输入再查一次（选中的行还在就留在它上面）。不是当前附件的（换了、去了）不管。
+    /// 挂着的这张图取完字了：同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。不是当前附件的（换了、去了）不管。
     private func recognitionFinished(_ recognition: LauncherRecognition) {
         guard panel.isVisible, attachment?.recognition === recognition else { return }
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
