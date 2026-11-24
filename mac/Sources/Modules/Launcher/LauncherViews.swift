@@ -198,6 +198,12 @@ final class LauncherFieldHandle {
         guard let field, let window = field.window else { return }
         window.makeFirstResponder(field)
     }
+
+    /// 输入框不在编辑时才给焦点（已经在编辑就不动：再给一次会全选，接着打的字会把刚放进去的路径覆盖掉）。
+    func focusIfNeeded() {
+        guard field?.currentEditor() == nil else { return }
+        focus()
+    }
 }
 
 /// 输入框本体。进了窗口还没拿到焦点就自己要一次（兜底：控制器在显示后已经同步给过焦点）。

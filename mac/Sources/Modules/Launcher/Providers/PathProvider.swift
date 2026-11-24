@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import os
 
 // 快速入口「输入是路径」的行（docs/launcher/TECH_DESIGN.md §6.5）：不靠任何索引，直接读文件系统。
@@ -6,6 +8,7 @@ import os
 // 带序号，过期的结果丢掉；查完回主线程换成行，控制器照「后台建完搜索键再刷新」那条路刷新列表。
 // 查的是全局并发队列：某个路径卡住（断开的网络盘）也不挡后面的输入。
 // 怎么排、补全挑哪些、显示和补全文字是纯逻辑（`Logic/LauncherPathListing.swift`、`LauncherPathInput.swift`）。
+// 路径指向一个图片文件时（§5.5），那一行带上 `imageFile`，引擎在它后面接图片动作（取字、贴图……）。
 
 @MainActor
 final class LauncherPathProvider {
@@ -118,6 +121,7 @@ final class LauncherPathProvider {
     // MARK: - 主线程：换成行
 
     /// 结论 → 面板条目。行不记使用记录；⏎ 打开，⌘⏎ 在访达里显示，Tab 把输入框换成这一行的完整路径。
+    /// 路径就是一个图片文件时那一行带上 `imageFile`（后面接图片动作）。
     static func items(for resolution: LauncherPathResolution, input: LauncherPathInput, home: String) -> [LauncherItem] {
         func item(path: String, entry: LauncherPathEntry, subtitle: String?) -> LauncherItem {
             let candidate = LauncherCandidate(sourceID: sourceID, entryID: path, searchKeys: [])
@@ -129,8 +133,12 @@ final class LauncherPathProvider {
         }
         switch resolution {
         case .item(let path, let entry):
-            return [item(path: path, entry: entry,
-                         subtitle: LauncherPathDisplay.directoryLabel(LauncherPathDisplay.split(path).parent, home: home))]
+            var single = item(path: path, entry: entry,
+                              subtitle: LauncherPathDisplay.directoryLabel(LauncherPathDisplay.split(path).parent, home: home))
+            if !entry.isDirectory, isReadableImageFile(path) {
+                single.imageFile = URL(fileURLWithPath: path)
+            }
+            return [single]
         case .directory(let path, let entry, let children):
             let parent = path == "/" ? nil : LauncherPathDisplay.directoryLabel(LauncherPathDisplay.split(path).parent, home: home)
             // 里面的项不写副标题：都在同一个文件夹里，第一行已经写着是哪个。
@@ -142,6 +150,19 @@ final class LauncherPathProvider {
             return []
         }
     }
+
+    /// 能交给图片动作的图片文件：扩展名对应的类型是图片，而且 ImageIO 读得了（SVG 这类矢量图不算）。只看扩展名，不读文件。
+    static func isReadableImageFile(_ path: String) -> Bool {
+        let ext = (path as NSString).pathExtension
+        guard !ext.isEmpty, let type = UTType(filenameExtension: ext), type.conforms(to: .image) else { return false }
+        return readableImageTypes.contains(where: { type.conforms(to: $0) })
+    }
+
+    /// ImageIO 能读的类型（第一次用时取一次）。
+    private static let readableImageTypes: [UTType] = {
+        let identifiers = CGImageSourceCopyTypeIdentifiers() as? [String] ?? []
+        return identifiers.compactMap { UTType($0) }
+    }()
 }
 
 /// 文件、文件夹行共用的样子和动作（路径行、文件搜索的行）。

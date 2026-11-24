@@ -11,6 +11,7 @@ import os
 // 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
 // 图片（§5.5）：⌘V 时先看剪贴板里是什么（`LauncherPasteClassifier`）—— 图片挂成输入里的附件（输入框左边一个小标签），
 // 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
+// 访达里复制的文件 → 输入框换成它的路径（走路径行；图片文件的路径行后面接图片动作）。拖到面板上放下的同样处理。
 
 @MainActor
 final class LauncherController {
@@ -120,7 +121,8 @@ final class LauncherController {
         refresh()
         panel.show(LauncherPanelView(model: model), height: model.panelHeight,
                    onKey: { [weak self] event in self?.handleKey(event) ?? false },
-                   onClickOutside: { [weak self] in self?.hide() })
+                   onClickOutside: { [weak self] in self?.hide() },
+                   onDrop: { [weak self] pasteboard in self?.handleDrop(pasteboard) ?? false })
         // 保留的上次输入：放回输入框，给焦点时全选，直接打字即覆盖。
         model.field.setText(text)
         model.field.focus()
@@ -298,7 +300,8 @@ final class LauncherController {
     }
 
     /// ⌘V：先看剪贴板里是什么（只在按 ⌘V 这一下读，不在打字路径上），各走各的（§5.5）：
-    /// 图片 → 挂成附件（不往输入框里粘）；文字 → 记下带换行的原文，交还给输入框照常粘贴。返回 nil = 交给输入框粘贴文字。
+    /// 文件 → 输入框换成它的路径；图片 → 挂成附件（不往输入框里粘）；文字 → 记下带换行的原文，交还给输入框照常粘贴。
+    /// 返回 nil = 交给输入框粘贴文字。
     private func pasteSpecial(from pasteboard: NSPasteboard) -> Bool? {
         let snapshot = LauncherPasteboardReader.snapshot(pasteboard)
         let kind = LauncherPasteClassifier.classify(snapshot)
@@ -311,10 +314,70 @@ final class LauncherController {
             }
             notePaste(snapshot.string)
             return nil
-        case .file, .text, .nothing:
+        case .file(let url):
+            if insertFile(url) { return true }
+            notePaste(snapshot.string)
+            return nil
+        case .text, .nothing:
             notePaste(snapshot.string)
             return nil
         }
+    }
+
+    /// 贴进 / 拖进一个文件：输入框换成它的路径（主目录下写 `~/…`、文件夹末尾带 `/`），于是走路径行（⏎ 打开、⌘⏎ 在访达里显示、
+    /// Tab 补全；图片文件后面接图片动作）。挂着的图片去掉。不是本地文件为 false。
+    private func insertFile(_ url: URL) -> Bool {
+        guard let path = LauncherPastedFile.fieldText(for: url, home: NSHomeDirectory()) else { return false }
+        attachment = nil
+        model.attachment = nil
+        pastedText = nil
+        replaceInput(with: path)
+        return true
+    }
+
+    /// 输入框整个换成 `newText` 并查一次（挂着的图片已由调用方处理）。编辑器换文字时会回调一次文字变化；
+    /// 输入框不在编辑、或文字和原来一样时不回调，所以这里自己记下文字、再查一次。
+    private func replaceInput(with newText: String) {
+        model.field.replaceText(newText)
+        text = newText
+        refresh()
+        panel.setHeight(model.panelHeight)
+    }
+
+    /// 有东西拖到面板上放下（§5.5）：和 ⌘V 同一套归类 —— 文件换成路径、图片挂成附件、文字放进输入框（带换行的记下原文）。
+    /// 接了就让面板重新拿键盘焦点（按下鼠标的那个 App 的窗口成了 key），输入框拿焦点，接着就能用键盘选。
+    private func handleDrop(_ pasteboard: NSPasteboard) -> Bool {
+        guard panel.isVisible else { return false }
+        let snapshot = LauncherPasteboardReader.snapshot(pasteboard)
+        let kind = LauncherPasteClassifier.classify(snapshot)
+        Self.log.notice("drop: \(Self.label(kind), privacy: .public) (\(snapshot.types.count, privacy: .public) types)")
+        let handled: Bool
+        switch kind {
+        case .file(let url):
+            handled = insertFile(url)
+        case .image:
+            if let data = LauncherPasteboardReader.imageData(pasteboard) {
+                attach(.data(data))
+                handled = true
+            } else {
+                handled = false
+            }
+        case .text:
+            guard let string = snapshot.string else { return false }
+            attachment = nil
+            model.attachment = nil
+            // 输入框只有一行：换行换成空格放进去，带换行的原文记下（同 ⌘V）。
+            notePaste(string)
+            replaceInput(with: string.components(separatedBy: .newlines).joined(separator: " "))
+            handled = true
+        case .nothing:
+            handled = false
+        }
+        if handled {
+            panel.makeKey()
+            model.field.focusIfNeeded()
+        }
+        return handled
     }
 
     /// 日志里的类别名（不带路径、内容）。
