@@ -85,6 +85,52 @@ final class ScreenshotTool: ToolModule {
         }
     }
 
+    /// 快速入口的图片动作（docs/launcher/TECH_DESIGN.md §5.5）：输入里挂着图片（贴进来、拖进来、剪贴板历史里的图片），
+    /// 或输入是一个图片文件的路径时出。都调现成的能力、不改它们的行为：取字走取字结果窗（照「识别后直接复制」设置）、
+    /// 钉在屏幕上同贴图、预览开预览窗（不记截图历史、不自动存盘）、保存成文件照截图的保存位置和文件名模板。
+    /// 档位：取字 10、钉在屏幕上 20、预览 30、保存成文件 40。没有单独的「标注」：标注只在截图选区里，没有能对任意图片用的入口。
+    func launcherCommands() -> [LauncherCommand] {
+        [
+            .imageAction(id: "screenshot.image.ocr", title: L("screenshot.launcher.ocr"), symbolName: "text.viewfinder",
+                         keywords: ["OCR"], suggestion: LauncherSuggestionTraits(priority: 10)) { image in
+                Self.decodeForLauncher(image) { OCRResultWindow.present(image: $0) }
+            },
+            .imageAction(id: "screenshot.image.pin", title: L("screenshot.launcher.pin"), symbolName: "pin",
+                         suggestion: LauncherSuggestionTraits(priority: 20)) { image in
+                Self.decodeForLauncher(image) { Self.pinCentered($0) }
+            },
+            .imageAction(id: "screenshot.image.preview", title: L("screenshot.launcher.preview"), symbolName: "eye",
+                         suggestion: LauncherSuggestionTraits(priority: 30)) { image in
+                Self.decodeForLauncher(image) {
+                    ScreenshotResultHandler.presentPreviewOnly(image: $0, title: L("screenshot.launcher.previewTitle"))
+                }
+            },
+            .imageAction(id: "screenshot.image.save", title: L("screenshot.launcher.save"), symbolName: "square.and.arrow.down",
+                         suggestion: LauncherSuggestionTraits(priority: 40)) { image in
+                ScreenshotResultHandler.saveFromLauncher(image)
+            },
+        ]
+    }
+
+    /// 快速入口交来的图在后台解码（太大的缩到 4000 万像素以内，`LauncherImageLoader`），回主线程再交给 `body`；
+    /// 读不出来（文件刚被删了、格式不认识）回执一句。
+    private static func decodeForLauncher(_ image: LauncherImage, then body: @escaping @MainActor (CGImage) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let decoded = LauncherImageLoader.cgImage(image)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let decoded else {
+                        NotifyCenter.shared.post(Notice(source: "screenshot", level: .ambient,
+                                                        title: L("screenshot.launcher.unreadable"),
+                                                        icon: "photo", isUserFeedback: true))
+                        return
+                    }
+                    body(decoded)
+                }
+            }
+        }
+    }
+
     func settingsTab() -> AnyView {
         AnyView(ScreenshotSettingsView())
     }

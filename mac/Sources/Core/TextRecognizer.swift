@@ -28,6 +28,13 @@ enum TextRecognizer {
 
         var id: String { rawValue }
 
+        /// 用户选的取字语言（截图设置里的「识别语言」），存在截图的键下；默认中英混合。
+        /// 放在 Core：快速入口对挂进来的图片取字时也照这个设置（docs/launcher/TECH_DESIGN.md §5.5）。
+        static let defaultsKey = "screenshot.ocrLanguage"
+        static var preferred: LanguageOption {
+            LanguageOption(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .chineseEnglish
+        }
+
         /// Vision 语言码，顺序即优先级。
         var visionLanguages: [String] {
             switch self {
