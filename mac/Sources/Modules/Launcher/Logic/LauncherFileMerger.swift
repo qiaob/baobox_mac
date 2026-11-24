@@ -83,6 +83,8 @@ enum LauncherFileMerge {
 ///   内存里的来源不用陪着等）。
 /// - 交出：立刻查的那几个都回来后交一次（它们都不到 1 ms，凑齐了交，列表只刷新一次），之后每有一个来源带着新命中回来就再交一次；
 ///   最后一个来源回来时一定交（`isComplete == true`）。交的总是「到目前为止的全部」。只在自己的串行队列上改状态。
+/// - 第一批不无限等（PR 11 独立验证后加）：立刻查的来源过了 `firstBatchDeadline`（50 ms）还有没回来的（某个 `stat` 卡在断开的
+///   网络盘上），就先把已经回来的交出去，后到的照常并入再交。
 final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable {
     struct Source {
         let name: String
@@ -92,7 +94,11 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
         var delay: TimeInterval = 0
     }
 
+    /// 立刻查的来源最多等它们凑齐这么久（秒），到点先交已经回来的。
+    static let defaultFirstBatchDeadline: TimeInterval = 0.05
+
     let sources: [Source]
+    let firstBatchDeadline: TimeInterval
     private let queue = DispatchQueue(label: "com.baobox.app.launcher.filemerge", qos: .userInitiated)
 
     // 以下只在 `queue` 上读写。
@@ -106,9 +112,12 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
     private var timedOut = false
     /// 上次交出之后又并进了新命中、还没交。
     private var pendingChange = false
+    /// 立刻查的来源等够了 `firstBatchDeadline`：之后回来一个交一个。
+    private var deadlinePassed = false
 
-    init(sources: [Source]) {
+    init(sources: [Source], firstBatchDeadline: TimeInterval = LauncherMergedFileSearch.defaultFirstBatchDeadline) {
         self.sources = sources
+        self.firstBatchDeadline = firstBatchDeadline
     }
 
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void) {
@@ -122,6 +131,7 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
             totalCount = 0
             timedOut = false
             pendingChange = false
+            deadlinePassed = false
             guard !sources.isEmpty else {
                 completion(LauncherFileSearchBatch(hits: [], totalCount: 0, elapsed: 0, timedOut: false))
                 return
@@ -135,6 +145,14 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
                     }
                 } else {
                     start(source, index: index, request: request, ticket: ticket, completion: completion)
+                }
+            }
+            if sources.contains(where: { $0.delay <= 0 }) {
+                queue.asyncAfter(deadline: .now() + firstBatchDeadline) { [weak self] in
+                    guard let self, ticket == self.generation else { return }
+                    deadlinePassed = true
+                    // 到点还有没回来的：先把已经回来的交出去。
+                    if pendingChange, reports.count < sources.count { emit(isComplete: false, completion: completion) }
                 }
             }
         }
@@ -161,7 +179,7 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
                          completion: @Sendable (LauncherFileSearchBatch) -> Void) {
         guard ticket == generation, reports[index] == nil else { return }
         let source = sources[index]
-        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000_000
+        let elapsed = elapsedSinceStart
         reports[index] = LauncherFileSourceReport(name: source.name, elapsed: elapsed, totalCount: batch.totalCount,
                                                   hitCount: batch.hits.count, timedOut: batch.timedOut)
         LauncherFileMerge.merge(batch.hits, origin: source.origin, into: &merged, order: &order)
@@ -169,12 +187,21 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
         timedOut = timedOut || batch.timedOut
         if !batch.hits.isEmpty { pendingChange = true }
         let isComplete = reports.count == sources.count
-        let immediateDone = sources.indices.allSatisfy { sources[$0].delay > 0 || reports[$0] != nil }
-        // 立刻查的还没凑齐时先不交（它们几乎同时回来，凑齐了只刷新一次列表）；有延迟的来源（Spotlight）回来就交。
+        let immediateDone = deadlinePassed || sources.indices.allSatisfy { sources[$0].delay > 0 || reports[$0] != nil }
+        // 立刻查的还没凑齐、也没到期限时先不交（它们几乎同时回来，凑齐了只刷新一次列表）；有延迟的来源（Spotlight）回来就交。
         guard isComplete || (pendingChange && (immediateDone || source.delay > 0)) else { return }
+        emit(isComplete: isComplete, completion: completion)
+    }
+
+    private var elapsedSinceStart: TimeInterval {
+        Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000_000
+    }
+
+    /// 交出到目前为止的全部。
+    private func emit(isComplete: Bool, completion: @Sendable (LauncherFileSearchBatch) -> Void) {
         pendingChange = false
         completion(LauncherFileSearchBatch(
-            hits: order.compactMap { merged[$0] }, totalCount: totalCount, elapsed: elapsed, timedOut: timedOut,
+            hits: order.compactMap { merged[$0] }, totalCount: totalCount, elapsed: elapsedSinceStart, timedOut: timedOut,
             isComplete: isComplete, sources: sources.indices.compactMap { reports[$0] }))
     }
 }

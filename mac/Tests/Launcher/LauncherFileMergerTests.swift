@@ -160,16 +160,51 @@ final class LauncherFileMergerTests: XCTestCase {
 
     func testImmediateSourcesAreDeliveredTogether() throws {
         let a = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/a/x.txt")])
-        let b = FakeFileSearch(delay: 0.05, hits: [LauncherFileHit(path: "/b/x.txt")])
+        let b = FakeFileSearch(delay: 0.01, hits: [LauncherFileHit(path: "/b/x.txt")])
         let spotlight = FakeFileSearch(delay: 0, hits: [])
         let merged = LauncherMergedFileSearch(sources: [
             .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.2),
             .init(name: "a", origin: .scanned, backend: a),
             .init(name: "b", origin: .clipboard, backend: b),
-        ])
+        ], firstBatchDeadline: 0.5)   // 期限放宽，只看「凑齐了交一次」，不受机器忙不忙影响
         let batches = search(merged, .nameContains(["x"]))
         XCTAssertEqual(batches.map(\.hits.count), [2, 2], "立刻查的两个都回来才交第一次（不是一个一次）；Spotlight 空着回来时补一次完成")
         XCTAssertEqual(batches.map(\.isComplete), [false, true])
+    }
+
+    func testFirstBatchDoesNotWaitForAStuckSource() throws {
+        // 某个 stat 卡在断开的网络盘上：已经回来的到期限就先交。
+        let fast = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/a/hook.py")])
+        let stuck = FakeFileSearch(delay: 0.6, hits: [LauncherFileHit(path: "/Volumes/nas/hook.py")])
+        let merged = LauncherMergedFileSearch(sources: [
+            .init(name: "scanned", origin: .scanned, backend: fast),
+            .init(name: "clipboard", origin: .clipboard, backend: stuck),
+        ], firstBatchDeadline: 0.05)
+        let collected = TimedBatchCollector()
+        let done = expectation(description: "complete")
+        merged.search(.nameContains(["hook"])) { batch in
+            collected.append(batch)
+            if batch.isComplete { done.fulfill() }
+        }
+        wait(for: [done], timeout: 5)
+        let batches = collected.batches
+        XCTAssertEqual(batches.count, 2)
+        let first = try XCTUnwrap(batches.first)
+        XCTAssertFalse(first.batch.isComplete)
+        XCTAssertEqual(first.batch.hits.map(\.path), ["/a/hook.py"], "到期限先交已经回来的")
+        XCTAssertLessThan(first.after, 0.3, "不等卡住的那个（它 0.6 秒才回来）")
+        XCTAssertEqual(batches.last?.batch.hits.count, 2, "后到的照常并入")
+    }
+
+    func testNoEarlyBatchWhenEverythingIsQuick() {
+        let a = FakeFileSearch(delay: 0, hits: [LauncherFileHit(path: "/a/x")])
+        let b = FakeFileSearch(delay: 0.01, hits: [LauncherFileHit(path: "/b/x")])
+        let merged = LauncherMergedFileSearch(sources: [.init(name: "a", origin: .scanned, backend: a),
+                                                        .init(name: "b", origin: .clipboard, backend: b)],
+                                              firstBatchDeadline: 0.5)
+        let batches = search(merged, .nameContains(["x"]))
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(batches.map(\.hits.count), [2], "都在期限内回来：照旧凑齐了交一次")
     }
 
     func testDelayedSourceIsDebounced() {
@@ -232,6 +267,25 @@ private final class BatchCollector: @unchecked Sendable {
     }
 
     var batches: [LauncherFileSearchBatch] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
+/// 收集回调和它到的时间（从建这个收集器起算，秒）。
+private final class TimedBatchCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let start = DispatchTime.now().uptimeNanoseconds
+    private var storage: [(batch: LauncherFileSearchBatch, after: TimeInterval)] = []
+
+    func append(_ batch: LauncherFileSearchBatch) {
+        lock.lock()
+        storage.append((batch, Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000))
+        lock.unlock()
+    }
+
+    var batches: [(batch: LauncherFileSearchBatch, after: TimeInterval)] {
         lock.lock()
         defer { lock.unlock() }
         return storage
