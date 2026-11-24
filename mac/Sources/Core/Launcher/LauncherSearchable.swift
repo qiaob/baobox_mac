@@ -39,6 +39,46 @@ struct LauncherEntry {
 protocol LauncherSearchable {
     /// 来源 id，如 "clipboard"、"snippets"、"meetings"；也是设置里来源开关与前缀的键名后缀。
     var launcherSourceID: String { get }
+    /// 来源的名字（已本地化），列表每一行右侧的小字：「剪贴板」「片段」。
+    var launcherSourceName: String { get }
     /// 此刻的全部条目。只读内存、零磁盘 IO；面板呼出时调一次并缓存到收起，不是每次按键都调。
     func launcherEntries() -> [LauncherEntry]
+}
+
+/// 来源把一段长文字整理成条目的标题和搜索全文（剪贴板、片段都用）。
+enum LauncherEntryText {
+    /// 标题最多这么多个字符（一行只放得下四五十个字，再长也看不到，只会多占建键时间）。
+    static let maxTitleLength = 80
+    /// 搜索全文最多这么多个字符（§3.2「已截断」）。
+    static let maxSearchLength = 200
+
+    /// 标题和搜索全文：
+    /// - 搜索全文 = 去掉开头的空白后的前 `maxSearchLength` 个字符，再去掉末尾的空白；
+    /// - 标题 = 搜索全文的第一行（行尾空白去掉），超长截断（不加省略号：列表一行放不下时界面自己加）。
+    /// 所以标题总是搜索全文的开头（快速入口据此只建一个键）。全是空白时两个都是空串。
+    /// 只看开头那一小段，不整段去空白 —— 剪贴板里可能有几 MB 的一条，整段复制一遍不划算。
+    static func parts(_ text: String, maxTitleLength: Int = maxTitleLength,
+                      maxSearchLength: Int = maxSearchLength) -> (title: String, searchText: String) {
+        let head = text.drop(while: \.isWhitespace).prefix(max(0, maxSearchLength))
+        let searchText = String(head).trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = searchText.prefix { !$0.isNewline }
+        let title = String(firstLine).trimmingCharacters(in: .whitespaces)
+        return (String(title.prefix(max(0, maxTitleLength))), searchText)
+    }
+
+    /// 相对时间的粒度（秒）：给「3 分钟前」这类文字分桶，同一个桶只格式化一次 ——
+    /// 几千条剪贴板每条都调一次 `RelativeDateTimeFormatter` 会拖慢呼出。
+    /// 一分钟内 → 0（「现在」）；一小时内按分钟、一天内按小时、30 天内按天、再往前按 30 天往下取整。
+    static func relativeBucket(age: TimeInterval) -> TimeInterval {
+        let age = max(0, age)
+        let unit: TimeInterval
+        switch age {
+        case ..<60: return 0
+        case ..<3_600: unit = 60
+        case ..<86_400: unit = 3_600
+        case ..<(30 * 86_400): unit = 86_400
+        default: unit = 30 * 86_400
+        }
+        return (age / unit).rounded(.down) * unit
+    }
 }

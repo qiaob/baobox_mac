@@ -16,7 +16,7 @@ struct LauncherRow: Identifiable, Equatable {
     /// 条目键 = 「来源 id/条目 id」。
     let id: String
     let title: String
-    /// 右侧小字：「App」/ 所属工具名。
+    /// 右侧小字：「App」/ 所属工具名 /「剪贴板」「片段」。
     let source: String
     let icon: LauncherRowIcon
 }
@@ -43,6 +43,8 @@ struct LauncherSearchOutcome {
 final class LauncherEngine {
     /// 输入为空时最多显示几行「最常用的」。
     static let emptyQueryLimit = 8
+    /// 没打前缀时这些来源最多出几行：剪贴板几千条，不限的话一个常见词就把 App 和命令挤下去（`c ` 前缀下不限）。
+    static let unscopedSourceLimits = ["clipboard": 5]
 
     private var allCandidates: [LauncherCandidate] = []
     private var candidatesBySource: [String: [LauncherCandidate]] = [:]
@@ -79,17 +81,24 @@ final class LauncherEngine {
         itemsByKey[key]
     }
 
-    /// 查一次。查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行。
+    /// 查一次。查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板最多 5 行）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
         let query = LauncherQuery.parse(input, prefixBySource: prefixBySource)
-        let pool = query.sourceID.map { candidatesBySource[$0] ?? [] } ?? allCandidates
+
+        let pool: [LauncherCandidate]
+        if let sourceIDs = query.sourceIDs {
+            pool = sourceIDs.flatMap { candidatesBySource[$0] ?? [] }
+        } else {
+            pool = allCandidates
+        }
         let ranked: [LauncherRankedItem]
         if query.text.isEmpty {
             ranked = LauncherRanking.rank(pool, query: "", records: records, now: now, limit: Self.emptyQueryLimit)
                 .items.filter { $0.usageScore > 0 }
         } else {
-            ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now).items
+            ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
+                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:]).items
         }
         let rows = ranked.compactMap { itemsByKey[$0.key]?.row }
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000

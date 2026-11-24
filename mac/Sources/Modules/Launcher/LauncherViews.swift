@@ -74,11 +74,17 @@ final class LauncherPanelModel: ObservableObject {
     var panelHeight: CGFloat { LauncherLayout.height(for: content) }
 
     /// 换一批结果，选中第一行。`emptyInput`：查询词为空（没结果时显示提示，而不是「没有结果」）。
-    func setRows(_ rows: [LauncherRow], emptyInput: Bool) {
+    /// `keepSelection`：同一个输入、只是多了些行（后台建好了剪贴板的搜索键）—— 选中的那一行还在就留在它上面、列表不回顶。
+    func setRows(_ rows: [LauncherRow], emptyInput: Bool, keepSelection: Bool = false) {
+        let selectedID = keepSelection && self.rows.indices.contains(selectedIndex) ? self.rows[selectedIndex].id : nil
         self.rows = rows
         content = rows.isEmpty ? (emptyInput ? .hint : .noResults) : .results(rows.count)
-        selectedIndex = 0
-        resultsVersion += 1
+        if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
+            selectedIndex = index
+        } else {
+            selectedIndex = 0
+            resultsVersion += 1
+        }
         resetHoverBaseline()
     }
 

@@ -5,10 +5,21 @@ import Foundation
 
 /// 一次输入拆成的「只搜哪一类 + 查询词」。
 struct LauncherQuery: Equatable, Sendable {
-    /// 只搜这个来源（来源 id）；nil = 没有前缀，搜全部。
+    /// 打的是哪个来源的前缀（来源 id）；nil = 没有前缀，搜全部。
     let sourceID: String?
+    /// 这次只搜这几个来源：前缀所属的来源 + 跟着它的（`c ` = 剪贴板 + 片段，见 `defaultSourceGroups`）；nil = 搜全部。
+    let sourceIDs: Set<String>?
     /// 查询词：去掉前缀和首尾空白。
     let text: String
+
+    /// 没打前缀（计算结果、文本识别只在这时出）。
+    var isUnscoped: Bool { sourceID == nil }
+
+    init(sourceID: String?, text: String, sourceGroups: [String: Set<String>] = LauncherQuery.defaultSourceGroups) {
+        self.sourceID = sourceID
+        self.sourceIDs = sourceID.map { (sourceGroups[$0] ?? []).union([$0]) }
+        self.text = text
+    }
 
     /// 出厂前缀：键是来源 id、值是前缀（与设置键 `launcher.prefix.<来源 id>` 同一方向，TECH_DESIGN.md §11）。
     /// 命令用 `>`（同编辑器的命令面板），和字母前缀一样要跟一个空格。
@@ -22,20 +33,28 @@ struct LauncherQuery: Equatable, Sendable {
         "windows": "w",
     ]
 
+    /// 一个前缀管几个来源：键是前缀所属的来源，值是打了它的前缀时一起搜的来源（自己总是算在内）。
+    /// 片段没有自己的前缀，跟着剪贴板的 `c `（需求 §3.2：`c ` 搜剪贴板，片段本来就是收藏的剪贴板条目）。
+    static let defaultSourceGroups: [String: Set<String>] = [
+        "clipboard": ["clipboard", "snippets"],
+    ]
+
     /// 拆前缀。规则：
     /// - 输入**开头**是某个前缀（不分大小写），后面紧跟一个空白字符（空格；全角空格也算）才算。
     ///   只有前缀没有空格（"a"）、前缀后面紧跟别的字（"app"）、前缀前面先有空白（" a x"）都不算，整段当查询词。
     /// - 前缀为空（设置里关掉了这个来源的前缀）不参与。
     /// - 两个来源的前缀相同（不分大小写）时按来源 id 排序取第一个，结果稳定、不随字典顺序变。
     /// - 查询词去掉首尾空白；"a " 得到「只搜 App、查询词为空」。
+    /// - 搜哪些来源按 `sourceGroups` 展开（"c " = 剪贴板 + 片段）。
     static func parse(_ input: String,
-                      prefixBySource: [String: String] = defaultPrefixBySource) -> LauncherQuery {
+                      prefixBySource: [String: String] = defaultPrefixBySource,
+                      sourceGroups: [String: Set<String>] = defaultSourceGroups) -> LauncherQuery {
         for (sourceID, rawPrefix) in prefixBySource.sorted(by: { $0.key < $1.key }) {
             let prefix = rawPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !prefix.isEmpty, let rest = remainder(of: input, afterPrefix: prefix) else { continue }
-            return LauncherQuery(sourceID: sourceID, text: trimmed(rest))
+            return LauncherQuery(sourceID: sourceID, text: trimmed(rest), sourceGroups: sourceGroups)
         }
-        return LauncherQuery(sourceID: nil, text: trimmed(input))
+        return LauncherQuery(sourceID: nil, text: trimmed(input), sourceGroups: sourceGroups)
     }
 
     /// `input` 以「`prefix`（不分大小写）+ 一个空白字符」开头时，返回那个空白之后的部分；否则 nil。
