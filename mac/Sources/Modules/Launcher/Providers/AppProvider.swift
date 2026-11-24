@@ -68,8 +68,8 @@ final class LauncherAppProvider {
         cancelWatchers()
     }
 
-    /// App 的图标：只在行要显示时取，按路径缓存。取软链指向的那个（`/Applications/Safari.app` 是软链，
-    /// 直接取会带上替身的小箭头）。
+    /// App 的图标（文件、文件夹行也用这一份缓存）：只在行要显示时取，按路径缓存。取软链指向的那个
+    /// （`/Applications/Safari.app` 是软链，直接取会带上替身的小箭头）。
     func icon(forPath path: String) -> NSImage {
         if let cached = icons.object(forKey: path as NSString) { return cached }
         let image = NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: path).resolvingSymlinksInPath().path)

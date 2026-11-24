@@ -85,7 +85,7 @@ final class LauncherPanelModel: ObservableObject {
     var onTextChange: (String) -> Void = { _ in }
     /// 执行第 N 行（单击）。
     var onRun: (Int) -> Void = { _ in }
-    /// 文件图标（App 行）。
+    /// 文件图标（App、文件、文件夹行）。
     var iconForFile: (String) -> NSImage? = { _ in nil }
 
     /// 鼠标上次的位置：悬停只有在鼠标真的动过之后才改选中行 —— 面板出现在鼠标下面、
