@@ -83,6 +83,7 @@ final class LauncherFileScannerTests: XCTestCase {
         XCTAssertEqual(report.prunedDirectories, 6, ".cache、node_modules、build、out.noindex、Tool.app 没进去，Tool.xcodeproj 记下没进去")
         XCTAssertFalse(report.stoppedEarly)
         XCTAssertFalse(report.missing)
+        XCTAssertGreaterThan(report.elapsed, 0, "耗时记下来了（原来 defer 在 return 拷走之后才填，永远是 0）")
 
         let hook = try XCTUnwrap(catalog.entries.indices.first { catalog.entries[$0].name == "add-approval-hook.py" })
         XCTAssertFalse(catalog.entries[hook].isDirectory)

@@ -101,11 +101,18 @@ enum LauncherFileScanner {
         return String(validatingUTF8: resolved)
     }
 
+    /// 扫一个根，记下用了多久。（原来用 `defer` 填耗时：`return report` 拷走之后才执行，日志里永远是 0 ms，PR 11 独立验证发现。）
     private static func scanRoot(_ root: String, home: String, limits: LauncherFileScanLimits,
                                  into catalog: inout LauncherFileCatalog) -> LauncherFileScanReport {
         let start = DispatchTime.now().uptimeNanoseconds
+        var report = walk(root, home: home, limits: limits, start: start, into: &catalog)
+        report.elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        return report
+    }
+
+    private static func walk(_ root: String, home: String, limits: LauncherFileScanLimits, start: UInt64,
+                             into catalog: inout LauncherFileCatalog) -> LauncherFileScanReport {
         var report = LauncherFileScanReport(root: root)
-        defer { report.elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000 }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root, isDirectory: &isDirectory), isDirectory.boolValue,
               let rootCString = strdup(root)
