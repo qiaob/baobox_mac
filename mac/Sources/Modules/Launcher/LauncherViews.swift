@@ -12,6 +12,8 @@ enum LauncherLayout {
     static let cornerRadius: CGFloat = 14
     static let searchBarHeight: CGFloat = 56
     static let rowHeight: CGFloat = 40
+    /// 计算结果那一行：大一号的结果 + 一行「理解成了什么」。
+    static let calculationRowHeight: CGFloat = 58
     /// 列表上下的留白。
     static let listPadding: CGFloat = 6
     /// 最多显示几行，超出滚动；半行露在外面提示还能往下滚。
@@ -19,22 +21,38 @@ enum LauncherLayout {
     /// 「没有结果」/ 提示文字那一行。
     static let messageHeight: CGFloat = 40
 
+    /// 一行的高度。
+    static func rowHeight(for row: LauncherRow) -> CGFloat {
+        switch row.style {
+        case .standard: return rowHeight
+        case .calculation: return calculationRowHeight
+        }
+    }
+
+    /// 列表最多显示多高：8.5 行，超出滚动。前几行里有比普通行高的（计算结果）就多给它高出来的那一截，
+    /// 底下照样露出半行，看得出还能往下滚。
+    static func maxListHeight(rowHeights: [CGFloat]) -> CGFloat {
+        let extra = rowHeights.prefix(Int(maxVisibleRows.rounded(.up))).reduce(CGFloat(0)) { $0 + max(0, $1 - rowHeight) }
+        return maxVisibleRows * rowHeight + extra
+    }
+
     /// 面板在这种内容下的高度（窗口顶边固定、向下长）。
     static func height(for content: LauncherPanelContent) -> CGFloat {
         switch content {
         case .hint, .noResults:
             return searchBarHeight + 1 + messageHeight
-        case .results(let count):
-            let visible = min(CGFloat(count), maxVisibleRows)
-            // 行数没超时上下都留白；超了底下那半行就是边，不再加留白。
-            let padding = CGFloat(count) > maxVisibleRows ? listPadding : listPadding * 2
-            return searchBarHeight + 1 + visible * rowHeight + padding
+        case .results(let rowHeights):
+            let total = rowHeights.reduce(CGFloat(0), +)
+            let cap = maxListHeight(rowHeights: rowHeights)
+            // 没超时上下都留白；超了底下露出的半行就是边，不再加留白。
+            let padding = total > cap ? listPadding : listPadding * 2
+            return searchBarHeight + 1 + min(total, cap) + padding
         }
     }
 
-    /// 结果最多时的高度（定位时保证这么高也放得下）。
+    /// 结果最多时的高度（定位时保证这么高也放得下）：第一行是计算结果、后面一长串。
     static var maxHeight: CGFloat {
-        height(for: .results(Int(maxVisibleRows) + 1))
+        height(for: .results([calculationRowHeight] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
     }
 }
 
@@ -44,7 +62,8 @@ enum LauncherPanelContent: Equatable {
     case hint
     /// 输入了，但一个都没中。
     case noResults
-    case results(Int)
+    /// 有结果：值是每一行的高度（计算结果那一行比普通行高）。
+    case results([CGFloat])
 }
 
 // MARK: - 状态
@@ -78,7 +97,7 @@ final class LauncherPanelModel: ObservableObject {
     func setRows(_ rows: [LauncherRow], emptyInput: Bool, keepSelection: Bool = false) {
         let selectedID = keepSelection && self.rows.indices.contains(selectedIndex) ? self.rows[selectedIndex].id : nil
         self.rows = rows
-        content = rows.isEmpty ? (emptyInput ? .hint : .noResults) : .results(rows.count)
+        content = rows.isEmpty ? (emptyInput ? .hint : .noResults) : .results(rows.map(LauncherLayout.rowHeight(for:)))
         if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
             selectedIndex = index
         } else {
@@ -330,6 +349,7 @@ struct LauncherPanelView: View {
 }
 
 /// 结果行：图标 + 标题 + 右侧来源小字 + ⌘N；选中时强调色底、白字（自己画，不看窗口是否活动）。
+/// 计算结果那一行更醒目：结果用大一号的字，下面一行小字写它是怎么理解的。
 struct LauncherResultRow: View {
     let row: LauncherRow
     /// 前 9 行显示 ⌘1…⌘9。
@@ -341,14 +361,12 @@ struct LauncherResultRow: View {
     var body: some View {
         HStack(spacing: 10) {
             icon
-            Text(verbatim: row.title)
-                .font(.system(size: 14))
-                .lineLimit(1)
-                .foregroundStyle(selected ? Color.white : Color.primary)
+            titleBlock
             Spacer(minLength: 12)
             Text(verbatim: row.source)
                 .font(.system(size: 11.5))
                 .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
             if let shortcutNumber {
                 Text(verbatim: "⌘\(shortcutNumber)")
@@ -360,9 +378,34 @@ struct LauncherResultRow: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: LauncherLayout.rowHeight)
+        .frame(height: LauncherLayout.rowHeight(for: row))
         .background(selected ? Color.accentColor : Color.clear,
                     in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var titleBlock: some View {
+        switch row.style {
+        case .standard:
+            Text(verbatim: row.title)
+                .font(.system(size: 14))
+                .lineLimit(1)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+        case .calculation(let interpretation, let failed):
+            VStack(alignment: .leading, spacing: 2) {
+                // 出错时这里是一句说明（「不能除以零」），不是结果：字小一号、用次要色，别让人当成答案。
+                Text(verbatim: row.title)
+                    .font(failed ? .system(size: 16, weight: .medium) : .system(size: 20, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? Color.white.opacity(failed ? 0.85 : 1) : (failed ? Color.secondary : Color.primary))
+                if !interpretation.isEmpty {
+                    Text(verbatim: interpretation)
+                        .font(.system(size: 11.5))
+                        .lineLimit(1)
+                        .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
+                }
+            }
+        }
     }
 
     @ViewBuilder

@@ -4,6 +4,7 @@ import os
 // 快速入口的控制器（docs/launcher/TECH_DESIGN.md §1、§4、§5）：呼出 / 收起、一次面板会话的状态（输入、结果、选中行）、
 // 按键、执行。呼出时现建命令表、取 App 索引的快照、取各模块交来的条目（剪贴板、片段）装进引擎；每次输入变化同步查一次（只读内存）；
 // 执行时先记使用、收起面板，下一个 runloop 再执行 —— 很多命令作用于前台 App / 当前窗口，要等面板让开。
+// 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
 
 @MainActor
 final class LauncherController {
@@ -15,7 +16,7 @@ final class LauncherController {
     /// ⌘1…⌘9 的 keyCode（5 和 6 是反直觉的 0x17 / 0x16，同剪贴板面板）。
     private static let digitKeyCodes: [UInt16] = [0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19]
 
-    /// `activate()` 后多久第一次预热（剪贴板的搜索键）：别和启动时各模块抢主线程。
+    /// `activate()` 后多久第一次预热（剪贴板的搜索键、计算引擎和识别器的静态表）：别和启动时各模块抢主线程。
     static let firstPrewarmDelay: TimeInterval = 5
 
     private let apps = LauncherAppProvider()
@@ -52,8 +53,13 @@ final class LauncherController {
         }
     }
 
-    /// 预热：各来源的条目先在后台建好搜索键。
+    /// 预热：各来源的条目先在后台建好搜索键；计算引擎和识别器先跑一次（建它们的静态表）。
     private func prewarm() {
+        let start = DispatchTime.now().uptimeNanoseconds
+        LauncherCalculatorProvider.warmUp(locale: L10n.locale)
+        LauncherTextFormatProvider.warmUp()
+        let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        Self.log.notice("calculator and recognizers warmed up in \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms")
         entries.prewarm()
     }
 
@@ -155,8 +161,12 @@ final class LauncherController {
         case 0x7D: // ↓
             model.moveSelection(by: 1)
             return true
-        case 0x24, 0x4C: // Return / 小键盘 Enter
-            run(at: model.selectedIndex)
+        case 0x24, 0x4C: // Return / 小键盘 Enter；⌘⏎ 在计算结果、识别结果上 = 插入前台 App，其余行同 ⏎
+            if flags.contains(.command) {
+                insertOrRun(at: model.selectedIndex)
+            } else {
+                run(at: model.selectedIndex)
+            }
             return true
         case 0x35: // Esc
             hide()
@@ -200,12 +210,51 @@ final class LauncherController {
     // MARK: - 执行
 
     private func run(at index: Int) {
-        guard model.rows.indices.contains(index), let item = engine.item(forKey: model.rows[index].id) else { return }
+        guard model.rows.indices.contains(index) else { return }
+        let id = model.rows[index].id
+        if let instant = engine.instant(forKey: id) {
+            copy(instant)
+            return
+        }
+        guard let item = engine.item(forKey: id) else { return }
         usage.recordUse(key: item.candidate.key, input: queryText, now: Date())
         hide()
         let action = item.run
         DispatchQueue.main.async {
             MainActor.assumeIsolated { action() }
         }
+    }
+
+    /// ⌘⏎：计算结果、识别结果插入前台 App（和听写、划词助手同一条路：能直接写进输入框就写，不行借剪贴板粘贴，
+    /// 都不行就复制并提示）；其余行同 ⏎。
+    private func insertOrRun(at index: Int) {
+        guard model.rows.indices.contains(index) else { return }
+        guard let instant = engine.instant(forKey: model.rows[index].id) else {
+            run(at: index)
+            return
+        }
+        guard let text = instant.copyText else { return }
+        hide()
+        // 下一个 runloop 再插：等面板让开、焦点回到原来的输入框。
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                let result = await TextInserter.insert(text)
+                if !result.inserted { Self.toast(L("launcher.toast.insertCopied")) }
+            }
+        }
+    }
+
+    /// ⏎：复制结果并收起（普通复制，进剪贴板历史：这是用户要的一份新内容），给一句回执。出错的结果不做事。
+    private func copy(_ instant: LauncherInstant) {
+        guard let text = instant.copyText else { return }
+        TextInserter.copyToClipboard(text)
+        hide()
+        Self.toast(L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))"))
+    }
+
+    /// 回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。
+    private static func toast(_ text: String) {
+        NotifyCenter.shared.post(Notice(source: "launcher", level: .ambient, title: text,
+                                        icon: "doc.on.doc", isUserFeedback: true))
     }
 }
