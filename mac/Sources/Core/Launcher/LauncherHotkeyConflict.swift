@@ -17,18 +17,25 @@ enum LauncherHotkeyConflict {
         keyCode == spaceKeyCode && carbonModifiers == commandModifier
     }
 
-    /// 默认也用 ⌘Space 的启动器：bundle id → 名字。nil = 不在表里。
+    /// 默认也用 ⌘Space 的已知启动器：bundle id 前缀 + 显示名。
     /// - Raycast：`com.raycast.macos`。
-    /// - Alfred：4 起是 `com.runningwithcrayons.Alfred`（官方说以后的版本都用它）；2、3 带版本号后缀（`Alfred-2`、`Alfred-3`）。
-    ///   它的偏好设置是另一个 App（`Alfred-Preferences`、`Alfred-Preferences-3`），不算。
+    /// - Alfred：4 起是 `com.runningwithcrayons.Alfred`（官方说以后的版本都用它），2、3 带版本号后缀（`Alfred-2`、`Alfred-3`）。
+    static let knownLaunchers: [(bundleIDPrefix: String, name: String)] = [
+        ("com.raycast.macos", "Raycast"),
+        ("com.runningwithcrayons.Alfred", "Alfred"),
+    ]
+
+    /// bundle id 是不是表里的启动器 → 显示名；nil = 不是。按前缀匹配：等于前缀，或前缀后面是「-版本号」。
+    /// 同一家的别的 App 不算 —— Alfred 的偏好设置是另一个 App（`Alfred-Preferences`、`Alfred-Preferences-3`），
+    /// 它开着不说明 Alfred 在响应 ⌘Space。
     static func knownLauncherName(bundleID: String?) -> String? {
         guard let bundleID else { return nil }
-        if bundleID == "com.raycast.macos" { return "Raycast" }
-        let alfred = "com.runningwithcrayons.Alfred"
-        if bundleID == alfred { return "Alfred" }
-        if bundleID.hasPrefix(alfred + "-") {
-            let suffix = bundleID.dropFirst(alfred.count + 1)
-            if !suffix.isEmpty, suffix.allSatisfy(\.isNumber) { return "Alfred" }
+        for launcher in knownLaunchers {
+            let prefix = launcher.bundleIDPrefix
+            if bundleID == prefix { return launcher.name }
+            guard bundleID.hasPrefix(prefix + "-") else { continue }
+            let suffix = bundleID.dropFirst(prefix.count + 1)
+            if !suffix.isEmpty, suffix.allSatisfy(\.isNumber) { return launcher.name }
         }
         return nil
     }

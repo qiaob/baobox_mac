@@ -901,7 +901,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
   3. 50.543 回车 → 面板 `orderOut`，50.547 `ReleaseKeyFocusWithID`：键盘还给了「上一个」= Raycast，不是终端。
   4. 50.607 回车的 key-up、50.690 合成的 ⌘V 的目的地都是 Raycast；对终端的 `activate()` 在 WindowServer 里没有动作（它一直是前台）。
   5. 51.531 才清掉（用户点了一下，`PostFilteredEventTapData`），键盘回到终端。三次试都一样。
-  不改 Raycast 的话，每次按 ⌘Space 两个都响应，从快速入口粘贴都会送进 Raycast。我们的做法：不为这种状态绕路（不强切前台），粘贴前读得出键盘在第三个 App 那里就不发 ⌘V、回执点明冲突（§4「焦点」）；再提前提示 —— 快速入口的快捷键是 ⌘Space、且已知启动器（`LauncherHotkeyConflict`：Raycast `com.raycast.macos`；Alfred 4 起 `com.runningwithcrayons.Alfred`，2、3 带 `-2` / `-3` 后缀，它的偏好设置 App `Alfred-Preferences` 不算）正在运行（`NSWorkspace.runningApplications`，只读内存）时：设置页快捷键那一行下面一条醒目的提示（「<名字> 正在运行，它默认也用 ⌘Space。两个同时响应时，从快速入口粘贴会送到 <名字> 那里。请在 <名字> 的设置里换一个快捷键，或者在这里另录一个。」，每秒重看一次），面板列表最下面一行不可选的小字（同一句的短版，呼出时定）。它实际绑的是什么读不到，所以说「默认也用」。换了快捷键或退出那个 App 后自然消失；不弹窗、不发通知。出厂快捷键仍是 ⌘Space（用户定）。
+  用户处理掉 Raycast 的 ⌘Space 之后，同一个版本粘贴就恢复正常了（2026-11-24 用户确认），根因坐实。不改 Raycast 的话，每次按 ⌘Space 两个都响应，从快速入口粘贴都会送进 Raycast。我们的对策是**检测并提示、不绕路**：不为这种状态强切前台（探针证明换一次前台能清掉借焦点，但两个 App 抢一个快捷键本身是坏状态，也不要菜单栏闪一下），粘贴前读得出键盘在第三个 App 那里就不发 ⌘V、回执点明冲突（§4「焦点」）；再提前提示 —— 快速入口的快捷键是 ⌘Space、且已知启动器（`LauncherHotkeyConflict`：Raycast `com.raycast.macos`；Alfred 4 起 `com.runningwithcrayons.Alfred`，2、3 带 `-2` / `-3` 后缀，它的偏好设置 App `Alfred-Preferences` 不算）正在运行（`NSWorkspace.runningApplications`，只读内存）时：设置页快捷键那一行下面一条醒目的提示（「<名字> 正在运行，它默认也用 ⌘Space。两个同时响应时，从快速入口粘贴会送到 <名字> 那里。请在 <名字> 的设置里换一个快捷键，或者在这里另录一个。」，每秒重看一次），面板列表最下面一行不可选的小字（同一句的短版，呼出时定）。它实际绑的是什么读不到，所以说「默认也用」。换了快捷键或退出那个 App 后自然消失；不弹窗、不发通知。出厂快捷键仍是 ⌘Space（用户定）。
 - 面板里的键（↑ ↓ ⏎ Tab Esc ⌘K ⌘1–9）由面板的本地键盘监听处理，不注册全局快捷键。
 - 语音输入的「按住右 ⌥」（二期）：面板是 key window 时用本地 `flagsChanged` 监听，不需要全局监听。
 
