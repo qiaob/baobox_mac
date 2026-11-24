@@ -21,8 +21,9 @@ enum LauncherClipboardPaths {
     static let maxPathBytes = 1024
 
     /// 从一段文字里抽绝对路径：
-    /// - 整段（去首尾空白、单行）就是一个路径（同输入框认路径的规则：引号、`file://`、反斜杠转义、`~`、末尾的 `:行号`）→ 先收它；
-    ///   整段没有空白就只有它。有空白时分不清是「带空格的路径」还是「路径 + 一句话」，两种都收，存不存在由来源去查。
+    /// - 整段（去首尾空白、单行）就是一个路径（同输入框认路径的规则：引号、`file://`、反斜杠转义、`~/`、末尾的 `:行号`）→ 先收它；
+    ///   整段没有空白就只有它。有空白时分不清是「带空格的路径」还是「路径 + 一句话」，两种都收，存不存在由来源去查；
+    ///   但空白后面又是一个路径的开头（`/a/x.txt then /b/y.txt`）就不当整段收。只有一个 `~`（主目录本身）不收。
     /// - 再找文字里以 `/`、`~/`、`file://` 开头的一段：前面是开头、空白、引号、括号、`=`、`:`、`,`、汉字或全角标点，
     ///   到空白、引号、括号、全角标点或行尾为止；末尾的 `.,;:!?` 去掉，`:行号` 去掉；`//` 开头的（网址的一部分）不要。
     /// 去重，最多 `maxPerText` 个。主目录用来展开 `~`。
@@ -30,12 +31,13 @@ enum LauncherClipboardPaths {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         var result: [String] = []
-        if !trimmed.contains(where: \.isNewline), let whole = LauncherPathInput.parse(trimmed, home: home),
+        let characters = Array(trimmed)
+        if trimmed != "~", !trimmed.contains(where: \.isNewline), !hasPathAfterWhitespace(characters),
+           let whole = LauncherPathInput.parse(trimmed, home: home),
            let path = cleaned(whole.pathWithoutLineSuffix ?? whole.path) {
             result.append(path)
             if !trimmed.contains(where: \.isWhitespace) { return result }
         }
-        let characters = Array(trimmed)
         var index = 0
         while index < characters.count, result.count < maxPerText {
             let startsHere = characters[index] == "/"
@@ -46,7 +48,11 @@ enum LauncherClipboardPaths {
                 continue
             }
             var end = index
-            while end < characters.count, !isTerminator(characters[end]) { end += 1 }
+            while end < characters.count, !isTerminator(characters[end]) {
+                // 反斜杠转义的空格、括号（终端里拖进来的路径 `My\ File.txt`）算路径的一部分。
+                end += characters[end] == "\\" && end + 1 < characters.count ? 2 : 1
+            }
+            end = min(end, characters.count)
             let token = String(characters[index..<end])
             index = max(end, index + 1)
             guard !token.hasPrefix("//"),
@@ -64,6 +70,16 @@ enum LauncherClipboardPaths {
         let trimmed = LauncherPathDisplay.trimmingTrailingSlashes(path)
         guard trimmed.hasPrefix("/"), trimmed != "/", !trimmed.hasPrefix("//"), trimmed.utf8.count <= maxPathBytes else { return nil }
         return trimmed
+    }
+
+    /// 空白后面紧跟着一个路径的开头（`/`、`~/`）：这段文字里不止一个路径，不能当整段收。
+    private static func hasPathAfterWhitespace(_ characters: [Character]) -> Bool {
+        for index in characters.indices.dropLast() where characters[index].isWhitespace {
+            let next = characters[index + 1]
+            if next == "/" { return true }
+            if next == "~", index + 2 < characters.count, characters[index + 2] == "/" { return true }
+        }
+        return false
     }
 
     private static func startsWithFileURL(_ characters: [Character], at index: Int) -> Bool {
@@ -109,7 +125,7 @@ struct LauncherClipboardPathIndex {
         var next: [String: (text: String, paths: [String])] = [:]
         next.reserveCapacity(snapshots.count)
         var extracted = 0
-        var found: [(path: String, date: Date?)] = []
+        var found: [(path: String, date: Date?, order: Int)] = []
         for snapshot in snapshots {
             let paths: [String]
             if let cached = cache[snapshot.key], cached.text == snapshot.text {
@@ -119,10 +135,14 @@ struct LauncherClipboardPathIndex {
                 extracted += 1
             }
             next[snapshot.key] = (snapshot.text, paths)
-            found += paths.map { ($0, snapshot.date) }
+            for path in paths { found.append((path, snapshot.date, found.count)) }
         }
         cache = next
-        found.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+        found.sort { a, b in
+            let aDate = a.date ?? .distantPast
+            let bDate = b.date ?? .distantPast
+            return aDate != bDate ? aDate > bDate : a.order < b.order
+        }
         var seen = Set<String>()
         var files: [LauncherFileCatalog.File] = []
         for item in found where files.count < Self.maxPaths {
