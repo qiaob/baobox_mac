@@ -111,7 +111,8 @@ enum LauncherURLDetector {
     /// 是网址就给出打开用的地址和它有没有歧义，否则 nil。输入已去首尾空白。
     /// - `scheme://…`（scheme 是字母开头的字母数字 `+-.`）：原样（`http` / `https` 要有主机部分），没有歧义。
     /// - 不带 scheme：`主机[:端口][/路径][?查询][#片段]`，主机是 `localhost`、IPv4 或「几段 + 常见顶级域名」的域名。
-    ///   顶级域名在 `ambiguousTopLevelDomains` 里、又不带 `www.`、端口、路径、查询、片段的（`Safari.app`、`claude.ai`）算有歧义。
+    ///   顶级域名在 `ambiguousTopLevelDomains` 里、又不带 `www.`、端口、路径、查询、片段的（`Safari.app`、`claude.ai`）算有歧义；
+    ///   光秃秃的 IPv4（`1.2.3.4`，可能是四段的版本号）同样算有歧义，带端口或路径的（`192.168.1.1:3000`）不算。
     static func detect(_ text: String) -> (url: URL, isAmbiguous: Bool)? {
         guard !text.isEmpty, text.utf8.count <= maxURLLength, !text.contains(where: \.isWhitespace) else { return nil }
         if let separator = text.range(of: "://") {
@@ -162,7 +163,7 @@ enum LauncherURLDetector {
         let bare = !hasPort && hostEnd == text.endIndex
         let lower = host.lowercased()
         if lower == "localhost" { return ("http", false) }
-        if isIPv4(lower) { return ("http", false) }
+        if isIPv4(lower) { return ("http", bare) }
         guard isKnownDomain(lower), let tld = lower.split(separator: ".").last else { return nil }
         let ambiguous = bare && !lower.hasPrefix("www.") && ambiguousTopLevelDomains.contains(String(tld))
         return ("https", ambiguous)

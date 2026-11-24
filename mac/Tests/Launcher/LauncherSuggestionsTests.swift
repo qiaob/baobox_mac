@@ -33,14 +33,16 @@ final class LauncherSuggestionsTests: XCTestCase {
 
     func testAmbiguousLinkOpensFromTheTopOfTheFallbackGroup() throws {
         for (input, address) in [("Safari.app", "https://Safari.app"), ("logo.ai", "https://logo.ai"),
-                                 ("main.cc", "https://main.cc"), ("claude.ai", "https://claude.ai")] {
+                                 ("main.cc", "https://main.cc"), ("claude.ai", "https://claude.ai"),
+                                 ("1.2.3.4", "http://1.2.3.4")] {
             let result = plan(input)
             XCTAssertEqual(result.leading, [], "不排最前：\(input)")
             XCTAssertEqual(result.fallbackLeading, [.openURL(try XCTUnwrap(URL(string: address)))], input)
             XCTAssertEqual(result.fallbackKinds, [.plainText], input)
             XCTAssertEqual(result.rankedFallbackLimit, LauncherSuggestionRanking.maxRows - 1, "占掉兜底建议的一个名额")
         }
-        for (input, address) in [("https://claude.ai", "https://claude.ai"), ("claude.ai/chat", "https://claude.ai/chat")] {
+        for (input, address) in [("https://claude.ai", "https://claude.ai"), ("claude.ai/chat", "https://claude.ai/chat"),
+                                 ("192.168.1.1:3000", "http://192.168.1.1:3000")] {
             let result = plan(input)
             XCTAssertEqual(result.leading, [.openURL(try XCTUnwrap(URL(string: address)))], input)
             XCTAssertEqual(result.fallbackLeading, [], input)

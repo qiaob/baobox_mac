@@ -131,6 +131,21 @@ final class LauncherInputClassifierTests: XCTestCase {
         }
     }
 
+    func testBareIPIsAmbiguousButWithPortOrPathIsNot() {
+        for (text, expected) in [("1.2.3.4", "http://1.2.3.4"), ("192.168.1.1", "http://192.168.1.1")] {
+            let result = LauncherInputClassifier.classify(text)
+            XCTAssertTrue(result.isAmbiguousURL, "也可能是四段的版本号：\(text)")
+            XCTAssertEqual(result.kinds, [.plainText], text)
+            XCTAssertEqual(result.url?.absoluteString, expected, text)
+        }
+        for text in ["192.168.1.1:3000", "10.0.0.1/admin", "127.0.0.1:8000?debug=1", "http://1.2.3.4"] {
+            let result = LauncherInputClassifier.classify(text)
+            XCTAssertFalse(result.isAmbiguousURL, text)
+            XCTAssertEqual(result.kinds, [.url], text)
+        }
+        XCTAssertFalse(LauncherInputClassifier.classify("localhost").isAmbiguousURL, "localhost 本身不会是文件名")
+    }
+
     func testOtherTopLevelDomainsAreNotAmbiguous() {
         for text in ["example.com", "baobox.dev", "socket.io", "x.com", "notion.so"] {
             XCTAssertFalse(LauncherInputClassifier.classify(text).isAmbiguousURL, text)
@@ -142,7 +157,6 @@ final class LauncherInputClassifierTests: XCTestCase {
             ("localhost", "http://localhost"),
             ("localhost:8080", "http://localhost:8080"),
             ("LOCALHOST:3000/api", "http://LOCALHOST:3000/api"),
-            ("192.168.1.1", "http://192.168.1.1"),
             ("192.168.1.1:3000", "http://192.168.1.1:3000"),
             ("10.0.0.1/admin", "http://10.0.0.1/admin"),
             ("127.0.0.1:8000?debug=1", "http://127.0.0.1:8000?debug=1"),
