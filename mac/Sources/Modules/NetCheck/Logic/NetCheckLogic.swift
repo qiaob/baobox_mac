@@ -16,6 +16,8 @@ struct NetCheckIPInfo: Equatable {
     var company: String = ""
     var city: String = ""
     var country: String = ""
+    /// 回包给的两位国家代码（带 key 的 ipapi.is 才有）；没有是空串
+    var countryCode: String = ""
     /// IANA 时区名
     var timezone: String = ""
     /// 以下四个判定带 key 的回包才有；没有就是 nil
@@ -44,6 +46,8 @@ struct NetCheckResolver: Equatable {
     var network: String = ""
     var city: String = ""
     var country: String = ""
+    /// bash.ws 给的两位国家代码（小写，如 `us`）；没有是空串
+    var countryCode: String = ""
 }
 
 /// bash.ws 的 DNS 检测结果。
@@ -56,6 +60,8 @@ struct NetCheckDNSResult: Equatable {
 /// 归属后面的灰色小标签：只是信息，不参加比较。
 enum NetCheckExitFlag: Equatable {
     case hosting, vpn, proxy, tor
+    /// 公共 DNS（`NetCheckLogic.publicDNS`）：它的国家不参加比较
+    case publicDNS
 }
 
 /// 表里的五行，顺序即展示顺序。
@@ -121,6 +127,24 @@ enum NetCheckLogic {
         }
     }
 
+    /// 全球任播的公共 DNS 的运营方（ASN → 名字）。它们的服务器在地址库里登记的是运营方的国家，不是服务器真实所在，
+    /// 直连、没有任何代理时也会被标成别的国家，所以这些 DNS 服务器的国家不参加比较（docs/netcheck/COMPARE.md §2）。
+    /// 标准：只收全球任播的公共 DNS；运营商自己的 DNS、云厂商的 DNS 不收（「DNS 由国内运营商在答」正是要标出来的）。
+    /// ASN 2026-11-25 经 Team Cymru 核过：AS 名字，以及各家解析地址（8.8.8.8、1.1.1.1、9.9.9.9、208.67.222.222、
+    /// 45.90.28.0、94.140.14.14、76.76.2.0）的起源 ASN。
+    static func publicDNS(_ asn: Int) -> String? {
+        switch asn {
+        case 15169: return "Google Public DNS"
+        case 13335: return "Cloudflare"
+        case 19281: return "Quad9"
+        case 36692: return "OpenDNS / Cisco"
+        case 34939: return "NextDNS"
+        case 212772: return "AdGuard DNS"
+        case 398962: return "Control D"
+        default: return nil
+        }
+    }
+
     // MARK: JSON 小工具
 
     private static func object(_ text: String) -> Any? {
@@ -182,12 +206,14 @@ enum NetCheckLogic {
         let place = root["location"] as? [String: Any] ?? root
         info.city = string(place["city"])
         info.country = string(place["country"])
+        info.countryCode = string(place["country_code"])
         info.timezone = string(place["timezone"])
         return info
     }
 
     /// 解析 `https://bash.ws/dnsleak/test/<id>?json=2`：一个数组，每条带 `type`。只收 `dns`（服务器）与 `error`；
-    /// `ip`（bash.ws 看到的客户端）和 `conclusion`（它自己的结论）不用。
+    /// `ip`（bash.ws 看到的客户端）和 `conclusion`（它自己的结论）不用。每条有 `country`（小写两位代码）与
+    /// `country_name`（`USA` 这种写法，2026-11-25 实测）。
     static func parseBashWS(_ text: String) -> NetCheckDNSResult? {
         guard let records = object(text) as? [Any] else { return nil }
         var result = NetCheckDNSResult()
@@ -199,7 +225,8 @@ enum NetCheckLogic {
                 result.resolvers.append(NetCheckResolver(ip: string(record["ip"]), asn: asn,
                                                          network: org.isEmpty ? fromASN : org,
                                                          city: string(record["city_name"]),
-                                                         country: string(record["country_name"])))
+                                                         country: string(record["country_name"]),
+                                                         countryCode: string(record["country"])))
             case "error":
                 let words = string(record["text"])
                 result.error = words.isEmpty ? "bash.ws error" : words

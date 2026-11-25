@@ -13,9 +13,10 @@ final class NetCheckCompareTests: XCTestCase {
         NetCheckIPInfo(ip: ip, asn: asn, network: network, city: city, country: country, timezone: timezone)
     }
 
-    private func resolver(_ ip: String, country: String = "Singapore", asn: Int? = 15169,
+    /// 默认是 Google（公共 DNS，国家不参加比较）；要参加比较的用运营商的 ASN。
+    private func resolver(_ ip: String, country: String = "Singapore", code: String = "", asn: Int? = 15169,
                           network: String = "Google LLC") -> NetCheckResolver {
-        NetCheckResolver(ip: ip, asn: asn, network: network, city: "", country: country)
+        NetCheckResolver(ip: ip, asn: asn, network: network, city: "", country: country, countryCode: code)
     }
 
     private func srflx(_ address: String) -> String {
@@ -57,12 +58,12 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertFalse(table.rows.contains(where: \.hasMismatch))
         let ipv4 = row(table, .ipv4)?.lines.first
         XCTAssertEqual(ipv4?.address.value, .text(v4))
-        XCTAssertEqual(ipv4?.country.value, .text("Singapore · Singapore"))
+        XCTAssertEqual(ipv4?.country.value, .place(code: "SG", country: "Singapore", city: "Singapore"))
         XCTAssertEqual(ipv4?.owner.value, .text("\(alibaba) · AS45102"))
         XCTAssertEqual(row(table, .ipv6)?.lines.first?.address.value, .noIPv6)
         // 网页拿到的就是 IPv4：国家、归属直接用那一行的
         let webrtc = row(table, .webrtc)?.lines.first
-        XCTAssertEqual(webrtc?.country.value, .text("Singapore · Singapore"))
+        XCTAssertEqual(webrtc?.country.value, .place(code: "SG", country: "Singapore", city: "Singapore"))
         XCTAssertEqual(webrtc?.owner.value, .text("\(alibaba) · AS45102"))
         let zone = row(table, .timezone)?.lines.first
         XCTAssertEqual(zone?.address.value, .systemZone("Asia/Singapore"))
@@ -111,7 +112,9 @@ final class NetCheckCompareTests: XCTestCase {
         var o = clean()
         o.webrtc = nil
         o.ipv6 = .success(info(v6))
-        o.dns = .success(NetCheckDNSResult(resolvers: (1...5).map { resolver("192.0.2.\($0)", country: "United States") }))
+        o.dns = .success(NetCheckDNSResult(resolvers: (1...5).map {
+            resolver("192.0.2.\($0)", country: "United States", asn: 7922, network: "Comcast")
+        }))
         let table = NetCheckCompare.table(o)
         XCTAssertEqual(row(table, .dns)?.lines.count, 1)
         XCTAssertEqual(row(table, .dns)?.lines.first?.country.mismatch, true)
@@ -314,7 +317,12 @@ final class NetCheckCompareTests: XCTestCase {
         let dns = row(NetCheckCompare.table(o), .dns)
         XCTAssertEqual(dns?.serverCount, 6)
         XCTAssertEqual(dns?.lines.map(\.address.value), [.servers(3), .servers(2), .servers(1)])
-        XCTAssertEqual(dns?.lines.map(\.country.value), [.text("Singapore"), .text("Singapore"), .text("United States")])
+        XCTAssertEqual(dns?.lines.map(\.country.value), [.place(code: "SG", country: "Singapore", city: ""),
+                                                       .place(code: "SG", country: "Singapore", city: ""),
+                                                       .place(code: "US", country: "United States", city: "")])
+        // 这三组都是公共 DNS（Google、Cloudflare）：国家灰色、带小标签
+        XCTAssertEqual(dns?.lines.map(\.country.muted), [true, true, true])
+        XCTAssertEqual(dns?.lines.map(\.flags), [[.publicDNS], [.publicDNS], [.publicDNS]])
         XCTAssertEqual(dns?.lines.map(\.owner.value), [.text("Google LLC · AS15169"), .text("Cloudflare, Inc. · AS13335"),
                                                      .text("Google LLC · AS15169")])
     }
@@ -371,8 +379,11 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertEqual(NetCheckCompare.owner(name: "", asn: 4657), .text("AS4657"))
         XCTAssertEqual(NetCheckCompare.owner(name: " ", asn: nil), .notFound)
         XCTAssertEqual(NetCheckCompare.owner(name: "Big", asn: 1_234_567), .text("Big · AS1234567"))
-        XCTAssertEqual(NetCheckCompare.place(city: "Singapore", country: "Singapore"), .text("Singapore · Singapore"))
-        XCTAssertEqual(NetCheckCompare.place(city: "", country: "France"), .text("France"))
+        XCTAssertEqual(NetCheckCompare.place(city: "Singapore", country: "Singapore"),
+                       .place(code: "SG", country: "Singapore", city: "Singapore"))
+        XCTAssertEqual(NetCheckCompare.place(city: "", country: "France"), .place(code: "FR", country: "France", city: ""))
+        XCTAssertEqual(NetCheckCompare.place(city: "", country: "Atlantis"), .place(code: nil, country: "Atlantis", city: ""))
+        XCTAssertEqual(NetCheckCompare.place(city: "", country: "USA", code: "us"), .place(code: "US", country: "USA", city: ""))
         XCTAssertEqual(NetCheckCompare.place(city: "", country: ""), .notFound)
     }
 
@@ -396,6 +407,8 @@ final class NetCheckCompareTests: XCTestCase {
             value: { value in
                 switch value {
                 case .text(let text): return text
+                case .place(let code, let country, let city):
+                    return [code ?? country, city].filter { !$0.isEmpty }.joined(separator: " · ")
                 case .noIPv6: return "none"
                 case .notFound: return "?"
                 case .noPublicAddress: return "no public"
@@ -422,12 +435,12 @@ final class NetCheckCompareTests: XCTestCase {
         o.ipv6 = .failure(NetCheckFailure("down"))
         let lines = NetCheckCompare.reportLines(NetCheckCompare.table(o), words: words)
         XCTAssertEqual(lines, [
-            "ipv4: 8.219.158.59 · Singapore · Singapore · \(alibaba) · AS45102 [DC]",
+            "ipv4: 8.219.158.59 · SG · Singapore · \(alibaba) · AS45102 [DC]",
             "ipv6: failed: down",
-            "DNS(3): 1x · Singapore · DNS 0 · AS64500",
-            "DNS(3): 1x · Singapore · DNS 1 · AS64501",
-            "DNS(3): 1x · United States(≠) · DNS 2 · AS64502",
-            "webrtc: 8.219.158.59 · Singapore · Singapore · \(alibaba) · AS45102 [DC]",
+            "DNS(3): 1x · SG · DNS 0 · AS64500",
+            "DNS(3): 1x · SG · DNS 1 · AS64501",
+            "DNS(3): 1x · US(≠) · DNS 2 · AS64502",
+            "webrtc: 8.219.158.59 · SG · Singapore · \(alibaba) · AS45102 [DC]",
             "timezone: sys Asia/Singapore · ip Asia/Singapore",
         ])
     }
@@ -441,7 +454,111 @@ final class NetCheckCompareTests: XCTestCase {
         o.webrtc = nil
         o.ipv6 = .success(info(v6, asn: 4657, network: "StarHub Ltd"))
         let lines = NetCheckCompare.reportLines(NetCheckCompare.table(o), words: words)
-        XCTAssertEqual(lines.first, "ipv4: 8.219.158.59 · Singapore · Singapore · \(alibaba) · AS45102(≠) [DC]")
-        XCTAssertEqual(lines[1], "ipv6: 2406:da18::7 · Singapore · Singapore · StarHub Ltd · AS4657(≠)")
+        XCTAssertEqual(lines.first, "ipv4: 8.219.158.59 · SG · Singapore · \(alibaba) · AS45102(≠) [DC]")
+        XCTAssertEqual(lines[1], "ipv6: 2406:da18::7 · SG · Singapore · StarHub Ltd · AS4657(≠)")
+    }
+
+    // MARK: - 国家按代码比、公共 DNS 不参加（COMPARE.md §2）
+
+    func testCountryCodes() {
+        let us = NetCheckCountry.key(code: nil, name: "USA")
+        XCTAssertEqual(us, "US")
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "United States"), us)
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "US"), us)
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "us"), us)
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: " united  states of america "), us)
+        XCTAssertEqual(NetCheckCountry.key(code: "us", name: "USA"), us, "bash.ws 给的小写代码")
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "Singapore"), "SG")
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "SG"), "SG")
+        XCTAssertEqual(NetCheckCountry.key(code: "SG", name: ""), "SG")
+        for (name, code) in [("UK", "GB"), ("Great Britain", "GB"), ("United Kingdom", "GB"), ("Russia", "RU"),
+                             ("South Korea", "KR"), ("Korea", "KR"), ("Vietnam", "VN"), ("Hong Kong", "HK"),
+                             ("Hong Kong SAR", "HK"), ("Taiwan", "TW"), ("Macau", "MO"), ("Czechia", "CZ"),
+                             ("UAE", "AE"), ("Germany", "DE"), ("Japan", "JP"), ("China", "CN")] {
+            XCTAssertEqual(NetCheckCountry.code(nil, name: name), code, name)
+        }
+        // 查不到代码的按名字比：两个不同的名字算不同，同一个名字（大小写、空白不同）算相同
+        let atlantis = NetCheckCountry.key(code: nil, name: "Atlantis")
+        XCTAssertNotNil(atlantis)
+        XCTAssertNotEqual(atlantis, NetCheckCountry.key(code: nil, name: "Lemuria"))
+        XCTAssertEqual(atlantis, NetCheckCountry.key(code: nil, name: "  ATLANTIS "))
+        XCTAssertNotEqual(atlantis, NetCheckCountry.key(code: nil, name: "AT"), "查不到的名字不会撞上真的代码")
+        // 给的代码不认得：退回名字
+        XCTAssertEqual(NetCheckCountry.key(code: "zz", name: "Japan"), "JP")
+        XCTAssertNil(NetCheckCountry.key(code: "", name: " "))
+    }
+
+    func testUSAAndUnitedStatesAreTheSameCountry() {
+        // ipapi.is 写 United States，bash.ws 写 USA（运营商 DNS，参加比较）：一致
+        var o = clean()
+        o.ipv4 = .success(info(v4, country: "United States", city: "Ashburn", timezone: "America/New_York"))
+        o.systemTimezone = "America/New_York"
+        o.dns = .success(NetCheckDNSResult(resolvers: [
+            resolver("192.0.2.1", country: "USA", code: "us", asn: 7922, network: "Comcast"),
+        ]))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(table.conclusion, .consistent)
+        XCTAssertEqual(row(table, .dns)?.lines.first?.country.value, .place(code: "US", country: "USA", city: ""))
+    }
+
+    func testDirectWithGoogleDNSInTwoCountriesIsConsistent() {
+        // 直连：IPv4 在新加坡；两组 Google 的 DNS，一组登记在美国、一组在新加坡（任播）→ 公共 DNS 不参加国家比较
+        var o = clean()
+        o.ipv4 = .success(info(v4, asn: 9506, network: "Singtel Fibre Broadband"))
+        o.webrtc = .success([srflx(v4)])
+        o.dns = .success(NetCheckDNSResult(resolvers: [
+            resolver("172.253.0.1", country: "USA", code: "us"),
+            resolver("172.253.0.2", country: "USA", code: "us"),
+            resolver("172.253.1.1", country: "Singapore", code: "sg"),
+        ]))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(table.conclusion, .consistent)
+        let dns = row(table, .dns)
+        XCTAssertEqual(dns?.lines.count, 2)
+        XCTAssertEqual(dns?.lines.map(\.country.mismatch), [false, false])
+        XCTAssertEqual(dns?.lines.map(\.country.muted), [true, true])
+        XCTAssertEqual(dns?.lines.map(\.flags), [[.publicDNS], [.publicDNS]])
+    }
+
+    func testCarrierDNSInAnotherCountryIsInconsistent() {
+        // 出口在新加坡，DNS 却是一组中国运营商的：不一致，那一组的国家红
+        var o = clean()
+        o.dns = .success(NetCheckDNSResult(resolvers: [
+            resolver("202.96.128.86", country: "China", code: "cn", asn: 4134, network: "China Telecom"),
+            resolver("202.96.128.166", country: "China", code: "cn", asn: 4134, network: "China Telecom"),
+        ]))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(table.conclusion, .inconsistent([.country]))
+        let line = row(table, .dns)?.lines.first
+        XCTAssertEqual(line?.country.mismatch, true)
+        XCTAssertEqual(line?.country.muted, false)
+        XCTAssertEqual(line?.flags, [])
+        XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, false, "IPv4 和 WebRTC 两票对一票")
+    }
+
+    func testOnlyCarrierDNSIsComparedWhenMixedWithPublicDNS() {
+        // 公共 DNS（Cloudflare，登记在美国）和运营商 DNS（一组新加坡、一组中国）混着：只有运营商的两组参加
+        var o = clean()
+        o.dns = .success(NetCheckDNSResult(resolvers: [
+            resolver("162.158.1.1", country: "USA", code: "us", asn: 13335, network: "Cloudflare, Inc."),
+            resolver("203.116.1.78", country: "Singapore", code: "sg", asn: 4657, network: "StarHub Ltd"),
+            resolver("202.96.128.86", country: "China", code: "cn", asn: 4134, network: "China Telecom"),
+        ]))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(table.conclusion, .inconsistent([.country]))
+        let dns = row(table, .dns)
+        XCTAssertEqual(dns?.lines.map(\.country.mismatch), [false, false, true])
+        XCTAssertEqual(dns?.lines.map(\.country.muted), [true, false, false])
+        XCTAssertEqual(dns?.lines.map(\.flags), [[.publicDNS], [], []])
+    }
+
+    func testPublicDNSTable() {
+        for asn in [15169, 13335, 19281, 36692, 34939, 212772, 398962] {
+            XCTAssertNotNil(NetCheckLogic.publicDNS(asn), "AS\(asn)")
+        }
+        // 云厂商、运营商不算
+        for asn in [16509, 45102, 4134, 9506, 396982] {
+            XCTAssertNil(NetCheckLogic.publicDNS(asn), "AS\(asn)")
+        }
     }
 }

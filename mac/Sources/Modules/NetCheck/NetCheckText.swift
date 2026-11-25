@@ -55,6 +55,7 @@ enum NetCheckText {
     static func value(_ value: NetCheckValue) -> String {
         switch value {
         case .text(let text): return text
+        case .place(let code, let country, let city): return place(code: code, country: country, city: city)
         case .noIPv6: return L("netcheck.value.noIPv6")
         case .notFound: return L("netcheck.value.notFound")
         case .noPublicAddress: return L("netcheck.value.noPublicAddress")
@@ -63,6 +64,15 @@ enum NetCheckText {
         case .ipZone(let zone): return L("netcheck.value.ipZone \(zone ?? L("netcheck.value.notFound"))")
         case .empty: return ""
         }
+    }
+
+    /// 「新加坡 · Singapore」：认得出代码时国家用 App 语言的地区名，后面跟城市（和国家名一样时不重复）；认不出用原文。
+    static func place(code: String?, country: String, city: String) -> String {
+        let name = code.flatMap { L10n.locale.localizedString(forRegionCode: $0) } ?? country
+        var parts: [String] = []
+        if !name.isEmpty { parts.append(name) }
+        if !city.isEmpty, city.caseInsensitiveCompare(name) != .orderedSame { parts.append(city) }
+        return parts.isEmpty ? L("netcheck.value.notFound") : parts.joined(separator: " · ")
     }
 
     /// 「没测出来：<原因>」。
@@ -83,6 +93,7 @@ enum NetCheckText {
         case .vpn: return L("netcheck.flag.vpn")
         case .proxy: return L("netcheck.flag.proxy")
         case .tor: return L("netcheck.flag.tor")
+        case .publicDNS: return L("netcheck.flag.publicDNS")
         }
     }
 

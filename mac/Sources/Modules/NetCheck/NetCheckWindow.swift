@@ -279,19 +279,21 @@ struct NetCheckIPView: View {
         .frame(width: Self.labelWidth, alignment: .leading)
     }
 
-    /// 一格：标红的字是红色；「没有」「没查到」这类说明是灰色。地址用等宽字体，都可以选中复制。
+    /// 一格：标红的字是红色；「没有」「没查到」这类说明和不参加比较的是灰色。地址用等宽字体，都可以选中复制。
     private func cell(_ cell: NetCheckCell, monospaced: Bool = false) -> some View {
         let isData: Bool
         var isAddress = false
         switch cell.value {
         case .text: isData = true; isAddress = monospaced
-        case .servers, .systemZone, .ipZone: isData = true
+        case .place, .servers, .systemZone, .ipZone: isData = true
         default: isData = false
         }
         let base: Font = .callout
+        // 不参加比较的（公共 DNS 的国家）是灰色、不会红
+        let plain = isData && !cell.muted ? Color.primary : Color.secondary
         return Text(verbatim: NetCheckText.value(cell.value))
             .font(isAddress ? base.monospaced() : base)
-            .foregroundStyle(cell.mismatch ? Color.red : (isData ? Color.primary : Color.secondary))
+            .foregroundStyle(cell.mismatch ? Color.red : plain)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }

@@ -13,8 +13,10 @@ enum NetCheckAspect: CaseIterable, Equatable {
 
 /// 一格里的值（文案层据此出字）。
 enum NetCheckValue: Equatable {
-    /// 原样显示：地址、「城市 · 国家」、「运营方 · AS123」
+    /// 原样显示：地址、「运营方 · AS123」
     case text(String)
+    /// 国家（认得出代码就有代码，文案层用 App 语言的地区名；认不出只有原文）和城市
+    case place(code: String?, country: String, city: String)
     /// 「没有」（没有 IPv6）
     case noIPv6
     /// 「没查到」
@@ -34,10 +36,13 @@ struct NetCheckCell: Equatable {
     var value: NetCheckValue
     /// 对不上，标红
     var mismatch = false
+    /// 不参加比较（公共 DNS 的国家）：灰色显示，不会红
+    var muted = false
 
-    init(_ value: NetCheckValue, mismatch: Bool = false) {
+    init(_ value: NetCheckValue, mismatch: Bool = false, muted: Bool = false) {
         self.value = value
         self.mismatch = mismatch
+        self.muted = muted
     }
 }
 
@@ -126,10 +131,13 @@ enum NetCheckCompare {
 
     // MARK: 格子里的字
 
-    /// 「城市 · 国家」；两样都没有时「没查到」。
-    static func place(city: String, country: String) -> NetCheckValue {
-        let parts = [city, country].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        return parts.isEmpty ? .notFound : .text(parts.joined(separator: " · "))
+    /// 国家和城市；国家认得出就带上两位代码。两样都没有时「没查到」。
+    static func place(city: String, country: String, code: String = "") -> NetCheckValue {
+        let city = city.trimmingCharacters(in: .whitespaces)
+        let country = country.trimmingCharacters(in: .whitespaces)
+        let code = NetCheckCountry.code(code, name: country)
+        guard code != nil || !country.isEmpty || !city.isEmpty else { return .notFound }
+        return .place(code: code, country: country, city: city)
     }
 
     /// 「运营方 · AS45102」。ASN 当字符串拼，不带千位分隔符（真机上出现过 `AS45,102`）。两样都没有时「没查到」。
@@ -147,9 +155,9 @@ enum NetCheckCompare {
 
     // MARK: 比的键
 
-    private static func countryKey(_ country: String) -> String? {
-        let key = country.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return key.isEmpty ? nil : key
+    /// 国家按 ISO 两位代码比，认不出代码的按名字比（`NetCheckCountry.key`）。
+    private static func countryKey(_ country: String, code: String) -> String? {
+        NetCheckCountry.key(code: code, name: country)
     }
 
     /// 同一个 ASN，或同一家云厂商的不同 ASN，键相同。
@@ -196,10 +204,10 @@ enum NetCheckCompare {
         /// IPv4 / IPv6 那一行，以及 WebRTC 里借用的那一条：地址、国家、归属三格都参加比较。
         func infoLine(_ info: NetCheckIPInfo, line: Int) -> NetCheckLine {
             if let address = addressKey(info.ip) { vote(.address, group: address.group, address.key, line: line, .address) }
-            vote(.country, countryKey(info.country), line: line, .country)
+            vote(.country, countryKey(info.country, code: info.countryCode), line: line, .country)
             vote(.owner, ownerKey(info.asn), line: line, .owner)
             return NetCheckLine(address: NetCheckCell(.text(info.ip)),
-                                country: NetCheckCell(place(city: info.city, country: info.country)),
+                                country: NetCheckCell(place(city: info.city, country: info.country, code: info.countryCode)),
                                 owner: NetCheckCell(owner(name: ownerName(info), asn: info.asn)),
                                 flags: info.flags)
         }
@@ -226,7 +234,7 @@ enum NetCheckCompare {
             rows.append(NetCheckRow(item: .ipv6, lines: [line]))
         }
 
-        // DNS：按「国家 + 归属」分组，每组一条，一组算一个值；归属只列出来，不参加比较
+        // DNS：按「国家 + 归属」分组，每组一条，一组算一个值；归属只列出来，不参加比较；公共 DNS 的国家也不参加
         let dns = dnsRow(o.dns, vote: { key, line in vote(.country, key, line: line, .country) })
         rows.append(dns)
 
@@ -319,6 +327,7 @@ enum NetCheckCompare {
     }
 
     /// DNS 那一行：按「国家 + 归属」分组（按第一次出现的顺序），每组一条：台数、国家、归属。
+    /// 公共 DNS（`NetCheckLogic.publicDNS`）的组：国家照样列出来但不参加比较（灰色），归属后面加「公共 DNS」小标签。
     private static func dnsRow(_ dns: Result<NetCheckDNSResult, NetCheckFailure>,
                                vote: (String?, Int) -> Void) -> NetCheckRow {
         let result: NetCheckDNSResult
@@ -337,7 +346,7 @@ enum NetCheckCompare {
         var groups: [Group] = []
         for resolver in result.resolvers {
             let ownerPart = resolver.asn.map { "AS" + String($0) } ?? resolver.network.lowercased()
-            let key = (countryKey(resolver.country) ?? "") + "|" + ownerPart
+            let key = (countryKey(resolver.country, code: resolver.countryCode) ?? "") + "|" + ownerPart
             if let index = groups.firstIndex(where: { $0.key == key }) {
                 groups[index].count += 1
             } else {
@@ -346,10 +355,14 @@ enum NetCheckCompare {
         }
         var lines: [NetCheckLine] = []
         for (index, group) in groups.enumerated() {
-            vote(countryKey(group.first.country), index)
+            let resolver = group.first
+            let isPublic = resolver.asn.flatMap(NetCheckLogic.publicDNS) != nil
+            if !isPublic { vote(countryKey(resolver.country, code: resolver.countryCode), index) }
             lines.append(NetCheckLine(address: NetCheckCell(.servers(group.count)),
-                                      country: NetCheckCell(place(city: "", country: group.first.country)),
-                                      owner: NetCheckCell(owner(name: group.first.network, asn: group.first.asn))))
+                                      country: NetCheckCell(place(city: "", country: resolver.country,
+                                                                  code: resolver.countryCode), muted: isPublic),
+                                      owner: NetCheckCell(owner(name: resolver.network, asn: resolver.asn)),
+                                      flags: isPublic ? [.publicDNS] : []))
         }
         return NetCheckRow(item: .dns, lines: lines, serverCount: result.resolvers.count)
     }
