@@ -143,6 +143,7 @@ final class LauncherController {
         baseItems = commands.items() + apps.items
         engine.textActions = commands.textActions()
         engine.imageActions = commands.imageActions()
+        engine.fileActions = commands.fileActions()
         // 剪贴板、片段：取一次条目（只读内存），缺的搜索键最新的 200 条现在建，其余后台建、建完刷新一次列表。
         let entriesStart = DispatchTime.now().uptimeNanoseconds
         let report = entries.beginSession()

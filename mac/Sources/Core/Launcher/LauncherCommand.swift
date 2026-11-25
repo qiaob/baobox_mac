@@ -18,6 +18,8 @@ struct LauncherParameter {
         case clipboardRef
         /// 一张图片（输入里挂着的附件、贴进来的图片文件），值见 `LauncherImage`（docs/launcher/TECH_DESIGN.md §5.5）。
         case image
+        /// 一个文件（输入是一个存在的文件的路径），值见 `LauncherArgument.file`（docs/launcher/TECH_DESIGN.md §6.5「路径行的动作」，PR 10）。
+        case file
     }
 
     /// 模型输出里的键，也是 `run` 收到的字典里的键，如 "duration"。
@@ -40,6 +42,8 @@ enum LauncherArgument: Equatable, Sendable {
     case clipboardRef
     /// 一张图片：内存里的编码字节或磁盘上的图片文件（`LauncherImage`）。
     case image(LauncherImage)
+    /// 一个存在的文件（`file://` 网址）。
+    case file(URL)
 }
 
 /// 一条命令。`run` 只调模块已有的方法，不新增能力（§3.1）。

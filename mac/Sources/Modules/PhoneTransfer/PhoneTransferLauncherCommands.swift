@@ -2,8 +2,8 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// 手机互传给快速入口的动作「发到手机」（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：文字动作（输入框里的文字）、
-/// 图片动作（挂着的图片）。
+/// 手机互传给快速入口的动作「发到手机」（docs/launcher/TECH_DESIGN.md §5.4、§6.5，PR 10）：文字动作（输入框里的文字）、
+/// 图片动作（挂着的图片）、文件动作（输入是一个存在的文件的路径，接在路径行后面）。
 /// - 有手机连着（`PhoneTransferSession.canSend`：窗口开着、局域网有设备 / 公网已连上）：直接发，回执一句。
 /// - 没有：打开手机互传的窗口（会话随窗口开），回执「连上手机后再发一次」—— 现有代码没有「连上后自动发」。
 /// - 档位 50，和「存为片段」并列（图片动作里排在「保存成文件」40 之后）。
@@ -17,10 +17,17 @@ extension PhoneTransferTool {
                         hint: "发到手机的文字") { text in
                 PhoneTransferLauncherActions.send(text: text)
             },
+            // 图片文件的路径行后面不出（`skipsImageFiles`）：那里已经有下面这条文件动作「发到手机」。
             .imageAction(id: "phonetransfer.image.send", title: L("phonetransfer.launcher.sendImage"),
-                         symbolName: "iphone.and.arrow.forward", suggestion: LauncherSuggestionTraits(priority: 50),
+                         symbolName: "iphone.and.arrow.forward",
+                         suggestion: LauncherSuggestionTraits(priority: 50, skipsImageFiles: true),
                          hint: "发到手机的图片") { image in
                 PhoneTransferLauncherActions.send(image: image)
+            },
+            .fileAction(id: "phonetransfer.file.send", title: L("phonetransfer.launcher.send"),
+                        symbolName: "iphone.and.arrow.forward", suggestion: LauncherSuggestionTraits(priority: 50),
+                        hint: "发到手机的文件") { url in
+                PhoneTransferLauncherActions.send(file: url)
             },
         ]
     }

@@ -131,6 +131,10 @@ final class LauncherPathProvider {
                                             isDirectory: entry.isDirectory, isPackage: entry.isPackage,
                                             completion: completion, recordsUsage: false)
         }
+        // 完整存在的路径（文件，或文件夹本身那一行）带上 `pathTarget`：引擎在它后面接复制路径、在终端里打开这些动作（PR 10）。
+        func target(path: String, entry: LauncherPathEntry) -> LauncherPathTarget {
+            LauncherPathTarget(path: path, isDirectory: entry.isDirectory, isPackage: entry.isPackage)
+        }
         switch resolution {
         case .item(let path, let entry):
             var single = item(path: path, entry: entry,
@@ -138,11 +142,14 @@ final class LauncherPathProvider {
             if !entry.isDirectory, isReadableImageFile(path) {
                 single.imageFile = URL(fileURLWithPath: path)
             }
+            single.pathTarget = target(path: path, entry: entry)
             return [single]
         case .directory(let path, let entry, let children):
             let parent = path == "/" ? nil : LauncherPathDisplay.directoryLabel(LauncherPathDisplay.split(path).parent, home: home)
+            var folder = item(path: path, entry: entry, subtitle: parent)
+            folder.pathTarget = target(path: path, entry: entry)
             // 里面的项不写副标题：都在同一个文件夹里，第一行已经写着是哪个。
-            return [item(path: path, entry: entry, subtitle: parent)]
+            return [folder]
                 + children.map { item(path: LauncherPathDisplay.join(path, $0.name), entry: $0, subtitle: nil) }
         case .completions(let parent, let matches):
             return matches.map { item(path: LauncherPathDisplay.join(parent, $0.name), entry: $0, subtitle: nil) }

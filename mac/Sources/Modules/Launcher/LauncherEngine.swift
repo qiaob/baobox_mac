@@ -62,6 +62,8 @@ struct LauncherItem {
     var image: LauncherEntryImage? = nil
     /// 路径行指向一个图片文件（§6.5）：后面接图片动作（取字、贴图……，图片从这个文件读）。
     var imageFile: URL? = nil
+    /// 路径行是一个完整存在的路径（文件，或文件夹本身那一行；不是补全出来的）：后面接复制路径、在终端里打开、发到手机这些动作（§6.5，PR 10）。
+    var pathTarget: LauncherPathTarget? = nil
     /// 只在打了来源前缀时出现（图片条目，§3.2）。
     var onlyWithPrefix = false
     /// 要按两次 ⏎（模块声明的 destructive 命令，PR 10）：第一次只换标题；nil = 按一次就执行。
@@ -125,6 +127,8 @@ final class LauncherEngine {
     var imageActions: [LauncherCatalogCommand] = []
     /// 输入里挂着的图片（控制器每次查询前设）；nil = 没挂。
     var attachment: LauncherAttachment?
+    /// 各模块声明的文件动作（§6.5，PR 10）：呼出时装进来，只接在完整存在的文件的路径行后面。
+    var fileActions: [LauncherCatalogCommand] = []
     /// 主目录：认路径时展开 `~`。
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
@@ -184,6 +188,7 @@ final class LauncherEngine {
         emptyState = LauncherEmptyState()
         shownContext = [:]
         shownSituational = [:]
+        fileActions = []
     }
 
     func item(forKey key: String) -> LauncherItem? {
@@ -262,14 +267,25 @@ final class LauncherEngine {
             let items = pathResult.map { $0.input == path || path.continues($0.input) ? $0.items : [] } ?? []
             asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             var rows = items.map(\.row)
-            // 指向一个图片文件（§5.5）：路径行后面接图片动作（不先取字；「图里的文字」回车时才取）。
+            var actions: [LauncherSuggestion] = []
+            // 完整存在的路径（PR 10，§6.5）：路径行（文件夹是它本身那一行）后面、文件夹内容之前接最多 3 行动作。
+            if let target = items.first?.pathTarget {
+                let pathActions = LauncherPathActionProvider.rows(for: target, fileActions: fileActions)
+                rows.insert(contentsOf: pathActions.rows, at: min(1, rows.count))
+                instantsByKey = Dictionary(pathActions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                actions += pathActions.actions
+            }
+            // 指向一个图片文件（§5.5）：再接图片动作（不先取字；「图里的文字」回车时才取）。上面已经有同一件事的文件动作的
+            // 图片动作（`skipsImageFiles`：「把图片发到手机」）不出。
             if items.count == 1, let file = items.first?.imageFile {
                 let suggestions = LauncherImageSuggestionProvider.suggestions(
-                    image: .file(file), recognition: nil, filter: "", imageActions: imageActions, textActions: textActions,
+                    image: .file(file), recognition: nil, filter: "",
+                    imageActions: imageActions.filter { !$0.command.suggestion.skipsImageFiles }, textActions: textActions,
                     records: records, now: now)
-                suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                actions += suggestions.actions
                 rows += suggestions.rows
             }
+            suggestionsByKey = Dictionary(actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
             return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: items.count,
                                          duration: duration, pendingPath: pathResult?.input == path ? nil : path)

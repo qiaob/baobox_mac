@@ -48,16 +48,20 @@ struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 文字动作：适用时不进兜底建议，排在最前的对应建议后面（网址的「打开」后面紧接着），不看使用记录、只按档位排 ——
     /// 只给很确定的输入用（「是会议链接」→「入会并开始会议记录」，配合 `LauncherCommand.appliesTo`）。PR 10。
     var leading = false
+    /// 图片动作：只用在挂着的图片上，图片文件的路径行后面不出 —— 那里已经有做同一件事的文件动作
+    /// （「把图片发到手机」↔ 路径行的「发到手机」，docs/launcher/TECH_DESIGN.md §6.5）。PR 10。
+    var skipsImageFiles = false
 
     init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,
          boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil, recordsUsage: Bool = true,
-         leading: Bool = false) {
+         leading: Bool = false, skipsImageFiles: Bool = false) {
         self.kinds = kinds
         self.priority = priority
         self.boostedKinds = boostedKinds
         self.imageTextPriority = imageTextPriority
         self.recordsUsage = recordsUsage
         self.leading = leading
+        self.skipsImageFiles = skipsImageFiles
     }
 }
 
