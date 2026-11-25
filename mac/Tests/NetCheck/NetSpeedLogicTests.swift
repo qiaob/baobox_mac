@@ -220,16 +220,27 @@ final class NetSpeedLogicTests: XCTestCase {
         let afterWarmup = meter.baseline
         XCTAssertNotNil(afterWarmup)
         XCTAssertEqual(afterWarmup?.time ?? 0, 1.5, accuracy: 0.001)
-        // 之后每 0.25 秒 2 MB = 8 MB/s
-        while t < 8 {
+        // 之后每 0.25 秒 2 MB = 8 MB/s，到 6 秒（后 4.5 秒）
+        while t < 6 {
             t += 0.25
+            XCTAssertFalse(meter.isFinished(at: t - 0.01))
             meter.add(2_000_000)
             meter.tick(at: t)
         }
         XCTAssertTrue(meter.isFinished(at: t))
+        XCTAssertEqual(NetSpeedPlan.phaseDuration - NetSpeedPlan.warmup, 4.5)
         XCTAssertEqual(meter.result(at: t) ?? 0, 8_000_000, accuracy: 1)
         XCTAssertEqual(meter.currentRate(at: t) ?? 0, 8_000_000, accuracy: 1)
         XCTAssertEqual(meter.progress(at: t), 1)
+    }
+
+    func testPlanCaps() {
+        XCTAssertEqual(NetSpeedPlan.downloadCap, 500 * 1024 * 1024)
+        XCTAssertEqual(NetSpeedPlan.uploadCap, 300 * 1024 * 1024)
+        // 上限先到就停：下载 500 MB 到了，时间还没到也算完
+        var meter = NetSpeedMeter(start: 0, cap: NetSpeedPlan.downloadCap)
+        meter.add(NetSpeedPlan.downloadCap)
+        XCTAssertTrue(meter.isFinished(at: 2))
     }
 
     func testMeterCapReachedFirst() {
@@ -285,7 +296,7 @@ final class NetSpeedLogicTests: XCTestCase {
             meter.tick(at: t)
         }
         XCTAssertEqual(meter.currentRate(at: t) ?? 0, 4_000_000, accuracy: 1)
-        XCTAssertEqual(meter.progress(at: 4), 0.5)
+        XCTAssertEqual(meter.progress(at: 3), 0.5)
     }
 
     // MARK: - 延迟

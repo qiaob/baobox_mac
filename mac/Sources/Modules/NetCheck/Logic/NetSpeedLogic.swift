@@ -134,12 +134,12 @@ enum NetSpeedPlan {
     static let latencyDeadline: TimeInterval = 10
     /// 下载、上传各 4 条并行的流。
     static let streams = 4
-    /// 每段 8 秒，前 1.5 秒算起速不计。
-    static let phaseDuration: TimeInterval = 8
+    /// 每段 6 秒，前 1.5 秒算起速不计、后 4.5 秒计（2026-11-25 从 8 秒减下来：一次 300–600 MB 偏多）。
+    static let phaseDuration: TimeInterval = 6
     static let warmup: TimeInterval = 1.5
     /// 每段的流量上限，先到先停。
-    static let downloadCap: Int64 = 1 << 30
-    static let uploadCap: Int64 = 500 << 20
+    static let downloadCap: Int64 = 500 << 20
+    static let uploadCap: Int64 = 300 << 20
     /// 单条下载请求的字节数：服务端上限是 99,999,999（2026-11-25 实测，100,000,000 起返回 403），留一半余量；不够就续下一条。
     static let downloadChunk = 50_000_000
     /// 上传的请求体：一块 1 MB 随机字节（不要全零：代理可能压缩）重复 25 次；发完续下一条。
@@ -149,7 +149,7 @@ enum NetSpeedPlan {
     static let tick: TimeInterval = 0.25
     /// 「这一刻的速度」看最近多长时间。
     static let liveWindow: TimeInterval = 1
-    /// 起速段之后至少要有这么长的数据，才用「后 6.5 秒」的算法；不到（流量上限先到）就用全程平均。
+    /// 起速段之后至少要有这么长的数据，才用「后 4.5 秒」的算法；不到（流量上限先到）就用全程平均。
     static let minimumWindow: TimeInterval = 0.5
 }
 
