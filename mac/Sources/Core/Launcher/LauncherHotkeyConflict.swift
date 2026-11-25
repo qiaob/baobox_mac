@@ -19,6 +19,12 @@ enum LauncherHotkeyConflict {
         keyCode == spaceKeyCode && carbonModifiers == commandModifier
     }
 
+    /// 快速入口的快捷键此刻算不算注册上了：有键位、没在 `HotkeyCenter` 里标冲突、也不在系统保留表里
+    /// （Spotlight 占着的组合 `RegisterEventHotKey` 照样「成功」，却永远收不到）。没注册上就谈不上和别人抢。
+    static func isRegistered(hasCombo: Bool, markedConflicted: Bool, systemReserved: Bool) -> Bool {
+        hasCombo && !markedConflicted && !systemReserved
+    }
+
     // MARK: - 已知启动器（回执里说是谁占着键盘）
 
     /// 已知启动器：bundle id 前缀 + 显示名。

@@ -46,6 +46,19 @@ final class LauncherHotkeyConflictTests: XCTestCase {
         XCTAssertEqual(LauncherHotkeyConflict.parseRaycastHotkey("command-49")?.isCommandSpace, true, "大小写不论")
     }
 
+    func testOnlyCommandAloneWithSpaceIsCommandSpace() {
+        XCTAssertEqual(LauncherHotkeyConflict.parseRaycastHotkey("Control-49"),
+                       LauncherHotkeyConflict.ForeignHotkey(keyCode: 49, control: true))
+        XCTAssertFalse(LauncherHotkeyConflict.parseRaycastHotkey("Control-49")?.isCommandSpace == true, "⌃Space")
+        XCTAssertFalse(LauncherHotkeyConflict.parseRaycastHotkey("Option-Command-49")?.isCommandSpace == true,
+                       "⌥⌘Space（修饰键顺序不论，多了 ⌥ 就不算）")
+        XCTAssertFalse(LauncherHotkeyConflict.parseRaycastHotkey("Command-Control-49")?.isCommandSpace == true)
+        XCTAssertFalse(LauncherHotkeyConflict.parseRaycastHotkey("49")?.isCommandSpace == true, "没有修饰键的 Space")
+        XCTAssertEqual(LauncherHotkeyConflict.parseRaycastHotkey(" Command-49 ")?.isCommandSpace, true, "首尾空白不论")
+        XCTAssertEqual(LauncherHotkeyConflict.parseRaycastHotkey("Command-49")?.keyCode, LauncherHotkeyConflict.spaceKeyCode,
+                       "键码是十进制：49 = 0x31 = Space")
+    }
+
     func testUnreadableRaycastHotkeyIsNoConflict() {
         XCTAssertNil(LauncherHotkeyConflict.parseRaycastHotkey(nil), "没有这个键")
         XCTAssertNil(LauncherHotkeyConflict.parseRaycastHotkey(""))
@@ -75,6 +88,26 @@ final class LauncherHotkeyConflictTests: XCTestCase {
         XCTAssertNil(confirmed(ourModifiers: option), "快速入口换了快捷键")
         XCTAssertNil(confirmed(ourModifiers: nil), "快速入口没绑快捷键")
         XCTAssertNil(confirmed(ourRegistered: false), "快速入口的 ⌘Space 自己没注册上（被 Spotlight 占着）：不说别人撞了")
+        XCTAssertNil(LauncherHotkeyConflict.confirmedConflict(ourKeyCode: 0x28, ourModifiers: cmd, ourRegistered: true,
+                                                              raycastRunning: true, raycastHotkey: "Command-49"),
+                     "快速入口换成了 ⌘K：Raycast 的 ⌘Space 和它不相干")
+    }
+
+    func testRegisteredMeansBoundAndNotConflictedAndNotReservedBySpotlight() {
+        XCTAssertTrue(LauncherHotkeyConflict.isRegistered(hasCombo: true, markedConflicted: false, systemReserved: false))
+        XCTAssertFalse(LauncherHotkeyConflict.isRegistered(hasCombo: false, markedConflicted: false, systemReserved: false),
+                       "没绑快捷键")
+        XCTAssertFalse(LauncherHotkeyConflict.isRegistered(hasCombo: true, markedConflicted: true, systemReserved: false),
+                       "快捷键页标着冲突（注册失败 / App 里重复）")
+        XCTAssertFalse(LauncherHotkeyConflict.isRegistered(hasCombo: true, markedConflicted: false, systemReserved: true),
+                       "Spotlight 还占着 ⌘Space：注册「成功」却永远收不到")
+    }
+
+    func testNoHintWhileSpotlightHoldsCommandSpace() {
+        // 设置页、面板提示的条件串起来：Spotlight 占着时快速入口根本收不到 ⌘Space，Raycast 绑着 ⌘Space 也不提示。
+        let registered = LauncherHotkeyConflict.isRegistered(hasCombo: true, markedConflicted: true, systemReserved: true)
+        XCTAssertNil(LauncherHotkeyConflict.confirmedConflict(ourKeyCode: space, ourModifiers: cmd, ourRegistered: registered,
+                                                              raycastRunning: true, raycastHotkey: "Command-49"))
     }
 
     // MARK: - 回执

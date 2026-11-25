@@ -4,8 +4,8 @@ import SwiftUI
 
 /// 快速入口设置页（这一期的最小版）：一句话说明 + 呼出快捷键（同快捷键页的录制控件，出厂 ⌘Space）。
 /// 快捷键是 ⌘Space、正在运行的 Raycast 的快捷键也确实是 ⌘Space 时，快捷键那一行下面一条醒目的提示（§9）。
-/// 不用计时器：有 App 启动 / 退出、这里的快捷键变了、Baobox 重新回到前台（用户多半刚去 Raycast 里改完）时重算一次；
-/// 换了快捷键、退出那个 App 就消失。
+/// 不用计时器：有 App 启动 / 退出、这里的快捷键变了、快捷键中心的冲突标记变了、Baobox 重新回到前台（用户多半刚去 Raycast 里改完）时
+/// 重算一次；换了快捷键、退出那个 App 就消失。
 /// 完整的设置页（来源开关、前缀、⌘Space 引导、别名、清除使用记录）在后面的 PR（docs/launcher/TECH_DESIGN.md §12）。
 struct LauncherSettingsView: View {
     @State private var conflictName: String?
@@ -40,9 +40,14 @@ struct LauncherSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { conflictName = LauncherHotkeyConflictCheck.confirmedConflictName() }
-        .onReceive(refresh) { _ in
-            let name = LauncherHotkeyConflictCheck.confirmedConflictName()
-            if name != conflictName { conflictName = name }
-        }
+        .onReceive(refresh) { _ in refreshConflict() }
+        // 录制结束后 `resumeAll` 重新注册、冲突标记跟着变，不一定伴随这里的键位变化。`@Published` 在赋值之前发出，
+        // 下一拍再读才是新值。
+        .onReceive(HotkeyCenter.shared.$conflictedIDs.receive(on: DispatchQueue.main)) { _ in refreshConflict() }
+    }
+
+    private func refreshConflict() {
+        let name = LauncherHotkeyConflictCheck.confirmedConflictName()
+        if name != conflictName { conflictName = name }
     }
 }
