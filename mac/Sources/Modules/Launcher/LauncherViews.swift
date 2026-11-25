@@ -39,7 +39,7 @@ enum LauncherLayout {
     /// 面板在这种内容下的高度（窗口顶边固定、向下长）。
     static func height(for content: LauncherPanelContent) -> CGFloat {
         switch content {
-        case .hint, .noResults:
+        case .hint, .noResults, .searching:
             return searchBarHeight + 1 + messageHeight
         case .results(let rowHeights):
             let total = rowHeights.reduce(CGFloat(0), +)
@@ -62,6 +62,8 @@ enum LauncherPanelContent: Equatable {
     case hint
     /// 输入了，但一个都没中。
     case noResults
+    /// 一行都还没有、后台的结果（路径、文件）还没回来。
+    case searching
     /// 有结果：值是每一行的高度（计算结果那一行比普通行高）。
     case results([CGFloat])
 }
@@ -83,7 +85,7 @@ final class LauncherPanelModel: ObservableObject {
     var onTextChange: (String) -> Void = { _ in }
     /// 执行第 N 行（单击）。
     var onRun: (Int) -> Void = { _ in }
-    /// 文件图标（App 行）。
+    /// 文件图标（App、文件、文件夹行）。
     var iconForFile: (String) -> NSImage? = { _ in nil }
 
     /// 鼠标上次的位置：悬停只有在鼠标真的动过之后才改选中行 —— 面板出现在鼠标下面、
@@ -93,11 +95,16 @@ final class LauncherPanelModel: ObservableObject {
     var panelHeight: CGFloat { LauncherLayout.height(for: content) }
 
     /// 换一批结果，选中第一行。`emptyInput`：查询词为空（没结果时显示提示，而不是「没有结果」）。
-    /// `keepSelection`：同一个输入、只是多了些行（后台建好了剪贴板的搜索键）—— 选中的那一行还在就留在它上面、列表不回顶。
-    func setRows(_ rows: [LauncherRow], emptyInput: Bool, keepSelection: Bool = false) {
+    /// `keepSelection`：同一个输入、只是多了些行（后台建好了剪贴板的搜索键、查好了路径）—— 选中的那一行还在就留在它上面、列表不回顶。
+    /// `searching`：后台的结果还没回来，一行都没有时显示「正在查找」而不是「没有结果」。
+    func setRows(_ rows: [LauncherRow], emptyInput: Bool, keepSelection: Bool = false, searching: Bool = false) {
         let selectedID = keepSelection && self.rows.indices.contains(selectedIndex) ? self.rows[selectedIndex].id : nil
         self.rows = rows
-        content = rows.isEmpty ? (emptyInput ? .hint : .noResults) : .results(rows.map(LauncherLayout.rowHeight(for:)))
+        if rows.isEmpty {
+            content = searching ? .searching : (emptyInput ? .hint : .noResults)
+        } else {
+            content = .results(rows.map(LauncherLayout.rowHeight(for:)))
+        }
         if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
             selectedIndex = index
         } else {
@@ -141,6 +148,17 @@ final class LauncherFieldHandle {
 
     func setText(_ text: String) {
         field?.stringValue = text
+    }
+
+    /// 把输入框的内容整个换成 `text`、光标放到末尾（Tab 补全路径）。走编辑器的 `insertText`，
+    /// 和打字一样会回调文字变化，也能 ⌘Z 撤销；输入框不在编辑时直接设文字（这时不会回调，调用方自己刷新）。
+    func replaceText(_ text: String) {
+        guard let field else { return }
+        guard let editor = field.currentEditor() as? NSTextView else {
+            field.stringValue = text
+            return
+        }
+        editor.insertText(text, replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
     }
 
     /// 标准编辑动作（粘贴、拷贝、剪切、全选、撤销、重做）。
@@ -277,6 +295,8 @@ struct LauncherPanelView: View {
                 message("launcher.hint.empty")
             case .noResults:
                 message("launcher.noResults")
+            case .searching:
+                message("launcher.searching")
             case .results:
                 resultList
             }
@@ -348,14 +368,14 @@ struct LauncherPanelView: View {
     }
 }
 
-/// 结果行：图标 + 标题 + 右侧来源小字 + ⌘N；选中时强调色底、白字（自己画，不看窗口是否活动）。
+/// 结果行：图标 + 标题（+ 灰色副标题）+ 右侧来源小字 + ⌘N；选中时强调色底、白字（自己画，不看窗口是否活动）。
 /// 计算结果那一行更醒目：结果用大一号的字，下面一行小字写它是怎么理解的。
 struct LauncherResultRow: View {
     let row: LauncherRow
     /// 前 9 行显示 ⌘1…⌘9。
     let shortcutNumber: Int?
     let selected: Bool
-    /// App 的真实图标；命令为 nil（用 SF Symbol）。
+    /// App、文件的真实图标；命令为 nil（用 SF Symbol）。
     let fileIcon: NSImage?
 
     var body: some View {
@@ -387,10 +407,21 @@ struct LauncherResultRow: View {
     private var titleBlock: some View {
         switch row.style {
         case .standard:
-            Text(verbatim: row.title)
-                .font(.system(size: 14))
-                .lineLimit(1)
-                .foregroundStyle(selected ? Color.white : Color.primary)
+            // 副标题（文件所在目录）跟在标题后面、同一行：行高不变。标题先占够，副标题放不下时中间截断。
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(verbatim: row.title)
+                    .font(.system(size: 14))
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? Color.white : Color.primary)
+                    .layoutPriority(1)
+                if let subtitle = row.subtitle, !subtitle.isEmpty {
+                    Text(verbatim: subtitle)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
+                }
+            }
         case .calculation(let interpretation, let failed):
             VStack(alignment: .leading, spacing: 2) {
                 // 出错时这里是一句说明（「不能除以零」），不是结果：字小一号、用次要色，别让人当成答案。

@@ -12,14 +12,19 @@ struct LauncherCandidate: Equatable, Sendable {
     let sourceID: String
     /// 参与匹配的文本，取最高分。第一个是标题：同分时按它的长度排。
     let searchKeys: [LauncherSearchKey]
-    /// 条目的时间（剪贴板的复制时间、片段的创建时间）：同分时新的在前。App、命令没有（nil）。
+    /// 条目的时间（剪贴板的复制时间、片段的创建时间、文件的最近使用 / 修改时间）：同分时新的在前。App、命令没有（nil）。
     let date: Date?
+    /// 来源已经算好的匹配分（文件：后端已按每个词筛过，分数是匹配的档，见 `LauncherFileFilter.tierScore`）：
+    /// 有它时排序不再拿搜索键去匹配，直接用它（查询为空时照样是 0）。nil = 照常匹配。
+    let presetMatchScore: Int?
 
-    init(sourceID: String, entryID: String, searchKeys: [LauncherSearchKey], date: Date? = nil) {
+    init(sourceID: String, entryID: String, searchKeys: [LauncherSearchKey], date: Date? = nil,
+         presetMatchScore: Int? = nil) {
         self.key = Self.key(sourceID: sourceID, entryID: entryID)
         self.sourceID = sourceID
         self.searchKeys = searchKeys
         self.date = date
+        self.presetMatchScore = presetMatchScore
     }
 
     static func key(sourceID: String, entryID: String) -> String {
@@ -34,9 +39,10 @@ struct LauncherSourceWeights: Equatable, Sendable {
     /// 表里没有的来源。
     var other: Double
 
-    /// 出厂：命令和 App 1.0、片段 0.9、剪贴板 0.7，其余 0.8。
+    /// 出厂：命令和 App 1.0、片段 0.9、剪贴板 0.7、文件 0.6，其余 0.8。
+    /// 文件最低：没打前缀时文件排在 App、命令之后（文件的匹配分是档，开头匹配的文件 480 仍高过只是「包含」的 App）。
     static let standard = LauncherSourceWeights(
-        bySource: ["commands": 1.0, "apps": 1.0, "snippets": 0.9, "clipboard": 0.7],
+        bySource: ["commands": 1.0, "apps": 1.0, "snippets": 0.9, "clipboard": 0.7, "files": 0.6],
         other: 0.8
     )
 
@@ -111,6 +117,8 @@ enum LauncherRanking {
             let isAliasMatch = candidate.key == aliasKey
             if isAliasMatch {
                 match = LauncherMatch.exactScore
+            } else if let preset = candidate.presetMatchScore {
+                match = matchQuery.isEmpty ? LauncherMatch.emptyQueryScore : preset
             } else if let score = LauncherMatch.score(matchQuery, in: candidate.searchKeys) {
                 match = score
             } else {
