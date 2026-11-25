@@ -125,8 +125,11 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
         if let rate = NetTrafficSampler.shared.latest {
             items.append(NSMenuItem(title: L("netcheck.live.now \(NetSpeedFormat.rate(rate.down)) \(NetSpeedFormat.rate(rate.up))"),
                                     action: nil, keyEquivalent: ""))
-            items.append(NSMenuItem(title: L("netcheck.live.total \(NetSpeedFormat.amount(Double(rate.totalDown))) \(NetSpeedFormat.amount(Double(rate.totalUp)))"),
-                                    action: nil, keyEquivalent: ""))
+            // 只有 32 位计数时累计不可信（每 4 GiB 回绕），这一行不显示
+            if let down = rate.totalDown, let up = rate.totalUp {
+                items.append(NSMenuItem(title: L("netcheck.live.total \(NetSpeedFormat.amount(Double(down))) \(NetSpeedFormat.amount(Double(up)))"),
+                                        action: nil, keyEquivalent: ""))
+            }
         } else {
             items.append(NSMenuItem(title: L("netcheck.live.waiting"), action: nil, keyEquivalent: ""))
         }

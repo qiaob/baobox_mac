@@ -187,6 +187,29 @@ final class NetSpeedLogicTests: XCTestCase {
         XCTAssertEqual(NetTrafficMath.delta(from: max32 + 10, to: 5, is32Bit: true), 0)
     }
 
+    func testMixedWidthReadingsAreDropped() {
+        // 一次 32 位（退路）、一次 64 位（IFMIB）：差值会是高 32 位，一秒 20 GB —— 这一次丢掉
+        let narrow = snapshot(0, ["en0": (5_000, 100)], is32Bit: true)
+        let wide = snapshot(1, ["en0": ((20 << 30) + 5_000, 100)])
+        XCTAssertNil(NetTrafficMath.rate(from: narrow, to: wide))
+        XCTAssertNil(NetTrafficMath.rate(from: wide, to: narrow))
+        // 同为 64 位照常
+        XCTAssertEqual(NetTrafficMath.rate(from: wide, to: snapshot(2, ["en0": ((20 << 30) + 6_024, 100)]))?.down, 1_024)
+    }
+
+    func testTotalsOnlyFrom64BitCounters() {
+        // 32 位计数每 4 GiB 回绕，「开机以来」不可信：不给
+        let a32 = snapshot(0, ["en0": (1_000, 10)], is32Bit: true)
+        let b32 = snapshot(1, ["en0": (2_000, 20)], is32Bit: true)
+        XCTAssertNil(NetTrafficMath.rate(from: a32, to: b32)?.totalDown)
+        XCTAssertNil(NetTrafficMath.rate(from: a32, to: b32)?.totalUp)
+        XCTAssertEqual(NetTrafficMath.rate(from: a32, to: b32)?.down, 1_000)
+        let a64 = snapshot(0, ["en0": (50 << 30, 7 << 30)])
+        let b64 = snapshot(1, ["en0": ((50 << 30) + 1_024, 7 << 30)])
+        XCTAssertEqual(NetTrafficMath.rate(from: a64, to: b64)?.totalDown, (50 << 30) + 1_024)
+        XCTAssertEqual(NetTrafficMath.rate(from: a64, to: b64)?.totalUp, 7 << 30)
+    }
+
     func testGapTooLongOrBackwards() {
         let a = snapshot(100, ["en0": (0, 0)])
         XCTAssertNil(NetTrafficMath.rate(from: a, to: snapshot(103.5, ["en0": (9_999_999, 0)])), "刚从睡眠醒来那一次丢掉")

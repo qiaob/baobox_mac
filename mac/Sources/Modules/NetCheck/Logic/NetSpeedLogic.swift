@@ -389,7 +389,7 @@ struct NetTrafficCounter: Equatable {
 struct NetTrafficSnapshot: Equatable {
     var time: TimeInterval
     var counters: [String: NetTrafficCounter]
-    /// getifaddrs 退路给的是 32 位计数，变小按回绕算；NET_RT_IFLIST2 的 64 位计数变小 = 网卡重置
+    /// 退路给的 32 位计数：变小按回绕算，累计不可信；IFMIB 的 64 位计数变小 = 网卡重置
     var is32Bit: Bool = false
 
     var totalReceived: UInt64 { counters.values.reduce(0) { $0 &+ $1.received } }
@@ -401,8 +401,9 @@ struct NetTrafficRate: Equatable {
     /// 字节 / 秒
     var down: Double
     var up: Double
-    var totalDown: UInt64
-    var totalUp: UInt64
+    /// 开机以来的累计；32 位计数（每 4 GiB 回绕）时 nil，不显示
+    var totalDown: UInt64?
+    var totalUp: UInt64?
 }
 
 enum NetTrafficMath {
@@ -428,10 +429,11 @@ enum NetTrafficMath {
         return (UInt64(UInt32.max) - old) + new + 1
     }
 
-    /// 两次读数之间的速度。间隔不是正数、或超过 3 秒时 nil（丢掉这一次）。两次都有的网卡才算（新出现的网卡这一秒不算）。
+    /// 两次读数之间的速度。间隔不是正数、或超过 3 秒时 nil（丢掉这一次）；两次的位宽不一样（一次 32 位、一次 64 位）时也丢掉
+    /// （不然差值就是高 32 位，一秒几十 GB）。两次都有的网卡才算（新出现的网卡这一秒不算）。
     static func rate(from old: NetTrafficSnapshot, to new: NetTrafficSnapshot) -> NetTrafficRate? {
         let interval = new.time - old.time
-        guard interval > 0, interval <= maxGap else { return nil }
+        guard interval > 0, interval <= maxGap, old.is32Bit == new.is32Bit else { return nil }
         var received: UInt64 = 0
         var sent: UInt64 = 0
         for (name, counter) in new.counters {
@@ -440,6 +442,7 @@ enum NetTrafficMath {
             sent &+= delta(from: previous.sent, to: counter.sent, is32Bit: new.is32Bit)
         }
         return NetTrafficRate(down: Double(received) / interval, up: Double(sent) / interval,
-                              totalDown: new.totalReceived, totalUp: new.totalSent)
+                              totalDown: new.is32Bit ? nil : new.totalReceived,
+                              totalUp: new.is32Bit ? nil : new.totalSent)
     }
 }

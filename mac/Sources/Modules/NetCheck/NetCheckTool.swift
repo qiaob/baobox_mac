@@ -87,8 +87,11 @@ final class NetCheckTool: ToolModule {
 
     func activate() {
         // 不自动测：每次检测 / 测速都会把出口 IP 告诉第三方服务，只在用户点了才发。
-        // 菜单栏网速开着就把状态项摆出来（只读本机网卡计数，不联网）。
-        NetSpeedStatusItem.shared.apply()
+        // 菜单栏网速开着就把状态项摆出来（只读本机网卡计数，不联网）。推到下一轮主循环：模块的 activate() 早于
+        // Baobox 主图标的创建，这时建的状态项拿不到主图标的位置、摆不到它旁边。
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { NetSpeedStatusItem.shared.apply() }
+        }
     }
 
     func willTerminate() {

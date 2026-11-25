@@ -19,8 +19,6 @@ final class NetTrafficSampler {
 
     private init() {}
 
-    var isRunning: Bool { timer != nil }
-
     func start() {
         guard timer == nil else { return }
         let state = state
@@ -67,12 +65,19 @@ final class NetTrafficSamplerState: @unchecked Sendable {
     }
 }
 
-/// 读系统的网卡统计。优先 `sysctl` 的 `NET_RT_IFLIST2`（64 位计数），不行再退到 `getifaddrs` 的 `if_data`（32 位，按回绕处理）。
+/// 读系统的网卡统计（docs/netcheck/SPEED.md §2.1）。
+///
+/// - 网卡名单与启用状态：`sysctl` 的 `NET_RT_IFLIST2`（读不到退到 `getifaddrs`）。
+/// - 字节计数：对计入的那几块各调一次 `sysctl {CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, <ifindex>, IFDATA_GENERAL}`，
+///   取 `ifmibdata.ifmd_data`，完整 64 位、不要权限。`NET_RT_IFLIST2` 的 `if_data64` 虽然字段是 64 位的，给普通进程时
+///   高 32 位全是 0（2026-11-25 实测：同一块 en0 和 `netstat -ibn` 对照，高位只有 IFMIB 对得上），`getifaddrs` 的 `if_data`
+///   本来就是 32 位。这条路拿不到时退回名单里的计数，当 32 位、变小按回绕算，「开机以来」不显示。
 /// 只留 `NetTrafficMath.counts` 认的物理网卡。
 enum NetTrafficReader {
-    /// 一块网卡的原始读数（筛选之前）。
+    /// 一块网卡（筛选之前）：名单里的读数，计数只有低 32 位可信。
     struct Interface: Equatable {
         let name: String
+        let index: UInt32
         let isUp: Bool
         let received: UInt64
         let sent: UInt64
@@ -80,21 +85,37 @@ enum NetTrafficReader {
 
     static func read() -> NetTrafficSnapshot? {
         let time = monotonicSeconds()
-        if let interfaces = routeTableInterfaces() {
-            return snapshot(interfaces, time: time, is32Bit: false)
+        guard let interfaces = routeTableInterfaces() ?? ifaddrsInterfaces() else { return nil }
+        let counted = interfaces.filter { NetTrafficMath.counts(name: $0.name, isUp: $0.isUp) }
+        // 64 位计数：计入的每一块都要拿到，缺一块就整次退回 32 位（同一次读数里不混用位宽）
+        var wide: [String: NetTrafficCounter] = [:]
+        for interface in counted {
+            guard let counter = fullCounter(index: interface.index) else {
+                wide = [:]
+                break
+            }
+            wide[interface.name] = counter
         }
-        if let interfaces = ifaddrsInterfaces() {
-            return snapshot(interfaces, time: time, is32Bit: true)
+        if wide.count == counted.count {
+            return NetTrafficSnapshot(time: time, counters: wide, is32Bit: false)
         }
-        return nil
+        var narrow: [String: NetTrafficCounter] = [:]
+        for interface in counted {
+            narrow[interface.name] = NetTrafficCounter(received: interface.received & 0xFFFF_FFFF,
+                                                       sent: interface.sent & 0xFFFF_FFFF)
+        }
+        return NetTrafficSnapshot(time: time, counters: narrow, is32Bit: true)
     }
 
-    private static func snapshot(_ interfaces: [Interface], time: TimeInterval, is32Bit: Bool) -> NetTrafficSnapshot {
-        var counters: [String: NetTrafficCounter] = [:]
-        for interface in interfaces where NetTrafficMath.counts(name: interface.name, isUp: interface.isUp) {
-            counters[interface.name] = NetTrafficCounter(received: interface.received, sent: interface.sent)
-        }
-        return NetTrafficSnapshot(time: time, counters: counters, is32Bit: is32Bit)
+    /// 一块网卡的完整 64 位计数（IFMIB）。拿不到 nil。
+    static func fullCounter(index: UInt32) -> NetTrafficCounter? {
+        guard index > 0, index <= UInt32(Int32.max) else { return nil }
+        var mib: [Int32] = [CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, Int32(index), IFDATA_GENERAL]
+        var data = ifmibdata()
+        var length = MemoryLayout<ifmibdata>.size
+        guard sysctl(&mib, UInt32(mib.count), &data, &length, nil, 0) == 0,
+              length == MemoryLayout<ifmibdata>.size else { return nil }
+        return NetTrafficCounter(received: data.ifmd_data.ifi_ibytes, sent: data.ifmd_data.ifi_obytes)
     }
 
     /// 含睡眠时间的单调时钟（秒）：睡眠醒来后两次读数的间隔才看得出变长。
@@ -124,7 +145,8 @@ enum NetTrafficReader {
                 if Int32(header.ifm_type) == RTM_IFINFO2, messageLength >= message2Size {
                     let message = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
                     if let name = linkName(raw, from: offset + message2Size, to: offset + messageLength) {
-                        interfaces.append(Interface(name: name, isUp: message.ifm_flags & IFF_UP != 0,
+                        interfaces.append(Interface(name: name, index: UInt32(message.ifm_index),
+                                                    isUp: message.ifm_flags & IFF_UP != 0,
                                                     received: message.ifm_data.ifi_ibytes,
                                                     sent: message.ifm_data.ifi_obytes))
                     }
@@ -135,14 +157,18 @@ enum NetTrafficReader {
         return interfaces
     }
 
-    /// 紧跟在 `if_msghdr2` 后面的 `sockaddr_dl` 里的网卡名（`sdl_nlen` 个字节，从 `sdl_data` 开始）。越界、不是 AF_LINK 时 nil。
+    /// 紧跟在 `if_msghdr2` 后面的 `sockaddr_dl` 里的网卡名（`sdl_nlen` 个字节，从 `sdl_data` 开始）。
+    /// 按 `sdl_len` 和这条消息剩下的长度两头查边界；越界、不是 AF_LINK 时 nil。
     private static func linkName(_ raw: UnsafeRawBufferPointer, from start: Int, to end: Int) -> String? {
         let dataOffset = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
-        guard start + dataOffset <= end else { return nil }
-        let address = raw.loadUnaligned(fromByteOffset: start, as: sockaddr_dl.self)
-        guard Int32(address.sdl_family) == AF_LINK else { return nil }
-        let nameLength = Int(address.sdl_nlen)
-        guard nameLength > 0, start + dataOffset + nameLength <= end else { return nil }
+        // 先确认头几个字节（sdl_len … sdl_slen）都在这条消息里，才去读它们
+        guard start >= 0, start + dataOffset <= end, end <= raw.count else { return nil }
+        let addressLength = Int(raw[start])
+        let family = Int32(raw[start + 1])
+        let nameLength = Int(raw[start + 5])
+        guard family == AF_LINK, nameLength > 0,
+              dataOffset + nameLength <= addressLength,
+              start + addressLength <= end else { return nil }
         let bytes = raw[(start + dataOffset)..<(start + dataOffset + nameLength)]
         return String(decoding: bytes, as: UTF8.self)
     }
@@ -160,7 +186,9 @@ enum NetTrafficReader {
             guard let address = item.ifa_addr, Int32(address.pointee.sa_family) == AF_LINK,
                   let data = item.ifa_data else { continue }
             let stats = data.assumingMemoryBound(to: if_data.self).pointee
-            interfaces.append(Interface(name: String(cString: item.ifa_name), isUp: Int32(item.ifa_flags) & IFF_UP != 0,
+            let name = String(cString: item.ifa_name)
+            interfaces.append(Interface(name: name, index: if_nametoindex(name),
+                                        isUp: Int32(item.ifa_flags) & IFF_UP != 0,
                                         received: UInt64(stats.ifi_ibytes), sent: UInt64(stats.ifi_obytes)))
         }
         return interfaces
