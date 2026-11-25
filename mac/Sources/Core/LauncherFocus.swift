@@ -16,8 +16,10 @@ import os
 ///   `NSWorkspace.frontmostApplication` 始终是原来的 App。
 /// - 对本来就在前台的 App 调 `activate()`：返回 true，WindowServer 什么都不做，清不掉别人留下的借焦点。
 /// - macOS 14 起的协作式激活：不是前台的 App 去激活别的 App，系统可以不理（文档如此，没在真机上测：会切走用户的前台）。
-///   对我们的影响：目标一直在前台，只要等面板让出 key；Baobox 自己在前台（从设置窗口里呼出、或执行前被激活了）时
-///   先 `yieldActivation(to:)` 再让目标 `activate()`。部署目标是 macOS 14，这两个 API 不用 `#available`。
+///   对我们的影响：目标一直在前台，只要等面板让出 key；呼出时前台是别的 App、到执行时 Baobox 自己却成了前台
+///   （面板开着的这段时间里 Baobox 被激活了）时，先 `yieldActivation(to:)` 再让目标 `activate()`。
+///   从 Baobox 自己的窗口（设置窗口）里呼出时 `capture()` 记的是 nil，`restore(then:)` 立即执行，走不到这一步。
+///   部署目标是 macOS 14，这两个 API 不用 `#available`。
 /// - 公开 API 里只有辅助功能的 `AXFocusedApplication` 可能看得出「键盘在第三个 App 那里」（`NSRunningApplication.isActive`、
 ///   `menuBarOwningApplication` 都只看前台）。它跟不跟着借焦点走没测成（探针没有辅助功能权限）：每次都把它和前台 App 记进日志。
 ///
@@ -155,7 +157,7 @@ enum LauncherFocus {
         actionScope.run(context) { body() }
     }
 
-    /// 请求把前台还给 `app`：Baobox 自己在前台时先让出（协作式激活），它不在前台时请它激活。
+    /// 请求把前台还给 `app`：Baobox 自己在前台时（呼出后被激活了）先让出（协作式激活），它不在前台时请它激活。
     private static func requestActivation(of app: NSRunningApplication) {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if front == ProcessInfo.processInfo.processIdentifier {
