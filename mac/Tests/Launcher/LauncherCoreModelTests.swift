@@ -31,6 +31,47 @@ final class LauncherCoreModelTests: XCTestCase {
         XCTAssertEqual(received, ["duration": .duration(7200)])
     }
 
+    // MARK: - 文字动作
+
+    func testCommandsAreNotTextActionsByDefault() {
+        let command = LauncherCommand(id: "caffeinate.stop", title: "关闭防休眠", symbolName: "cup.and.saucer") { _ in }
+        XCTAssertFalse(command.isTextAction)
+        XCTAssertNil(command.textParameterName)
+        XCTAssertEqual(command.suggestion, LauncherSuggestionTraits(), "不声明就是默认值：任何文字、优先级 50、不提前")
+        XCTAssertEqual(command.suggestion.kinds, Set(LauncherTextKind.allCases))
+        XCTAssertEqual(command.suggestion.priority, 50)
+        XCTAssertTrue(command.suggestion.boostedKinds.isEmpty)
+    }
+
+    func testTextActionFactoryHandsTheTextOver() {
+        var received: [String] = []
+        let traits = LauncherSuggestionTraits(kinds: [.word], priority: 10, boostedKinds: [.word])
+        let command = LauncherCommand.textAction(id: "selectiontranslate.text.learn", title: "学习", symbolName: "book",
+                                                 suggestion: traits) { received.append($0) }
+        XCTAssertTrue(command.isTextAction)
+        XCTAssertEqual(command.textParameterName, "text")
+        XCTAssertEqual(command.parameters.first?.kind, .text)
+        XCTAssertEqual(command.parameters.first?.required, true)
+        XCTAssertEqual(command.suggestion, traits)
+        command.run(["text": .text("serendipity")])
+        command.run([:])
+        command.run(["text": .number(3)])
+        XCTAssertEqual(received, ["serendipity"], "没给文字、给错类型都不执行")
+    }
+
+    func testOnlyOneRequiredTextParameterMakesATextAction() {
+        func command(_ parameters: [LauncherParameter]) -> LauncherCommand {
+            LauncherCommand(id: "x", title: "x", symbolName: "x", parameters: parameters) { _ in }
+        }
+        let text = LauncherParameter(name: "body", kind: .text, required: true, hint: "")
+        XCTAssertTrue(command([text]).isTextAction)
+        XCTAssertEqual(command([text]).textParameterName, "body")
+        XCTAssertFalse(command([LauncherParameter(name: "body", kind: .text, required: false, hint: "")]).isTextAction)
+        XCTAssertFalse(command([text, text]).isTextAction)
+        XCTAssertFalse(command([LauncherParameter(name: "d", kind: .duration, required: true, hint: "")]).isTextAction)
+        XCTAssertFalse(command([LauncherParameter(name: "c", kind: .clipboardRef, required: true, hint: "")]).isTextAction)
+    }
+
     func testParameterKindsAndArgumentsCompare() {
         XCTAssertEqual(LauncherParameter.Kind.choice(["en", "zh"]), .choice(["en", "zh"]))
         XCTAssertNotEqual(LauncherParameter.Kind.choice(["en", "zh"]), .choice(["en"]))

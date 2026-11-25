@@ -8,6 +8,8 @@ import Foundation
 // 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`）：交回的行和内存里的候选一起排序
 // （没打前缀时最多 5 行，权重最低，排在 App、命令之后），带 `/` 的片段的确切命中固定在最前；
 // 新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
+// 建议（§5.4，没打前缀、输入不是路径时）：对应建议（打开网址、写邮件、颜色、字数）插在计算结果之后、识别结果之前，
+// 兜底建议（文字动作、上网搜、搜文件）接在最后 —— 输入不为空时列表里总有事可做，「没有结果」只在连兜底建议都没有时出现。
 
 /// 行左边的图标。
 enum LauncherRowIcon: Equatable {
@@ -15,6 +17,8 @@ enum LauncherRowIcon: Equatable {
     case file(String)
     /// SF Symbol（命令用所属工具的图标）。
     case symbol(String)
+    /// 这个颜色的色块（颜色值的建议行，§5.4）。
+    case swatch(LauncherColor)
 }
 
 /// 行的样子。
@@ -94,6 +98,12 @@ final class LauncherEngine {
     private var instantsByKey: [String: LauncherInstant] = [:]
     /// 计算结果的语言（界面语言），呼出时取一次。
     private var calcLocale = Locale(identifier: "en")
+    /// 各模块声明的文字动作（§5.4）：呼出时装进来，只作为「对当前输入的建议」出现。
+    var textActions: [LauncherCatalogCommand] = []
+    /// 这次输入的建议行（动作类），按行 id。每次查询换一批。
+    private var suggestionsByKey: [String: LauncherSuggestion] = [:]
+    /// 按 ⌘V 时记下的带换行的原文（控制器每次查询前设）：输入框里的文字还是它时，建议行用它（§5.4）。
+    var pastedText: String?
     /// 主目录：认路径时展开 `~`。
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
@@ -136,6 +146,9 @@ final class LauncherEngine {
         pathResult = nil
         fileResult = nil
         asyncItemsByKey = [:]
+        textActions = []
+        suggestionsByKey = [:]
+        pastedText = nil
     }
 
     func item(forKey key: String) -> LauncherItem? {
@@ -157,8 +170,14 @@ final class LauncherEngine {
         instantsByKey[key]
     }
 
-    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果、识别结果（固定在最前），再放片段的确切命中；
-    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）。
+    /// 建议行里的动作行（打开网址、写邮件、兜底建议；不是这类行为 nil）。
+    func suggestion(forKey key: String) -> LauncherSuggestion? {
+        suggestionsByKey[key]
+    }
+
+    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果、对应建议、识别结果（固定在最前），再放片段的确切命中；
+    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）；
+    /// 最后接兜底建议（§5.4）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
         let query = LauncherQuery.parse(input, prefixBySource: prefixBySource)
@@ -166,6 +185,7 @@ final class LauncherEngine {
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
         if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
             instantsByKey = [:]
+            suggestionsByKey = [:]
             fileResult = nil
             // 还在同一处打字时先顶着上一次的行；换到别处的路径就先空着（显示「正在查找」）。
             let items = pathResult.map { $0.input == path || path.continues($0.input) ? $0.items : [] } ?? []
@@ -182,10 +202,17 @@ final class LauncherEngine {
            let calculation = LauncherCalculatorProvider.instant(for: query.text, now: now, locale: calcLocale) {
             instants.append(calculation)
         }
+        let calculationCount = instants.count
         if LauncherInstantPolicy.runsTextRecognition(query, hasCalculation: !instants.isEmpty) {
             instants.append(contentsOf: LauncherTextFormatProvider.instants(for: query.text))
         }
-        instantsByKey = Dictionary(instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // 建议（§5.4）：对应建议排在计算结果之后、识别结果之前，兜底建议排在最后。
+        let suggestions = LauncherSuggestionProvider.suggestions(
+            for: query, textActions: textActions, hasCalculation: calculationCount > 0,
+            hasRecognition: instants.count > calculationCount, pasted: pastedText, records: records, now: now)
+        instantsByKey = Dictionary((instants + suggestions.instants).map { ($0.row.id, $0) },
+                                   uniquingKeysWith: { first, _ in first })
+        suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID)
         let files = currentFiles(for: fileRequest)
@@ -209,7 +236,12 @@ final class LauncherEngine {
             ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
                                           sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:]).items
         }
-        let rows = instants.map(\.row) + files.pinned.map(\.row) + ranked.compactMap { item(forKey: $0.key)?.row }
+        var rows: [LauncherRow] = instants.prefix(calculationCount).map(\.row)
+        rows += suggestions.leadingRows
+        rows += instants.dropFirst(calculationCount).map(\.row)
+        rows += files.pinned.map(\.row)
+        rows += ranked.compactMap { item(forKey: $0.key)?.row }
+        rows += suggestions.trailing.map(\.row)
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
         return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
                                      fileRequest: fileRequest, pendingFiles: files.isFresh ? nil : fileRequest)

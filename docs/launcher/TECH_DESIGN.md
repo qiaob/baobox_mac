@@ -32,17 +32,24 @@
 mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些协议
   LauncherCommand.swift                    命令与参数的模型（纯 Foundation）
   LauncherSearchable.swift                 「我有可搜索的条目」协议 + 条目模型 + 来源整理标题 / 搜索全文的 LauncherEntryText（纯 Foundation）
+  LauncherTextAction.swift                 输入的类别 LauncherTextKind、文字动作的建议属性 LauncherSuggestionTraits、`textAction(…)`（纯 Foundation，§5.4）
 
 mac/Sources/Core/TextTools/                文本格式识别器（PR 5 从剪贴板模块下沉，剪贴板预览区与快速入口共用，§6.3）
 
 mac/Sources/Modules/Clipboard/
   ClipboardLauncherSource.swift            剪贴板历史、文本片段两个来源（§3.2）
+  ClipboardTool.swift                      launcherCommands()：文字动作「存为片段 / 钉成贴卡 / 生成二维码」（§5.4）
+
+mac/Sources/Modules/SelectionTranslate/
+  SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4）
+  SelectionTranslateController.swift       run(actionID:onText:)：对交来的文字直接出结果面板（§5.4）
 
 mac/Sources/Modules/Launcher/
   LauncherTool.swift                       模块壳：菜单一行、快捷键、设置 Tab、aiFeatures
   LauncherController.swift                 呼出 / 收起、上下文快照、会话状态、按键、执行
   LauncherPanel.swift                      窗口外壳（见 §4）
   LauncherViews.swift                      面板状态（LauncherPanelModel）、输入框、结果列表、预览卡片、回答区、⌘K 菜单
+  LauncherSuggestionViews.swift            建议行的色块（§5.4）
   LauncherEngine.swift                     装进各来源的条目、拆前缀、排序、换成行（LauncherItem / LauncherRow）
   LauncherUsagePersistence.swift           使用记录落盘（LauncherUsageStore，§5.3）
   LauncherAI.swift                         意图解析、问答、算式翻译的调用与提示词
@@ -59,8 +66,9 @@ mac/Sources/Modules/Launcher/
                                            LauncherFileActions：文件 / 文件夹行共用的样子和动作（打开、在访达里显示）（§6.5）
     FileProvider.swift                     LauncherFileProvider：文件搜索的防抖、序号、后台过滤排序、日志、换成行（§6.4）
     SpotlightFileSearch.swift              LauncherSpotlightFileSearch：文件搜索后端的 Spotlight 实现（NSMetadataQuery，§6.4）
+    SuggestionProvider.swift               LauncherSuggestionProvider：建议行 —— 对应建议、兜底建议（§5.4）
     WindowProvider.swift                   窗口列表（二期）
-    WebSearchProvider.swift                兜底行（二期）
+    WebSearchProvider.swift                搜索引擎列表的设置（二期；「上网搜（Google）」PR 7 起是兜底建议的一行，在 SuggestionProvider 里）
   Logic/                                   纯 Foundation，全部进 BaoboxTests
     LauncherMatch.swift                    匹配打分、拼音
     LauncherRanking.swift                  使用频率与最终排序
@@ -73,6 +81,10 @@ mac/Sources/Modules/Launcher/
     LauncherPathListing.swift              文件夹内容怎么排、路径补全挑哪些（§6.5）
     LauncherFileSearch.swift               文件搜索：什么时候搜（LauncherFilePolicy）、后端协议 LauncherFileSearching、
                                            过滤噪音 / 同名副本 / 排序（LauncherFileFilter）（§6.4）
+    LauncherInputClassifier.swift          输入分类：网址 / 邮箱 / 颜色 / 英文单词 / 一大段文字 / 其余（§5.4）
+    LauncherColor.swift                    颜色值的解析与 HEX / RGB / HSL 三种写法（§5.4）
+    LauncherSuggestions.swift              建议的规则：出哪些、兜底建议怎么排、字数、标题里的引用、搜索引擎表（§5.4）
+    LauncherPastedText.swift               粘贴时记下的带换行的原文：值不值得记、输入框里的文字还是不是它（§5.4）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -117,6 +129,7 @@ struct LauncherCommand {
 实现（PR 4）：收集在 `Providers/CommandProvider.swift`（`LauncherCommandProvider`，注册表由 `AppDelegate` 传给 `LauncherTool(registry:)`，同设置窗口拿注册表的方式），每次呼出现建；合并规则是 `Logic/LauncherCommandCatalog.swift` 里的纯函数 `LauncherCommandCatalog.merge`，有单元测试：
 
 - 不收：快速入口自己的 `launcher.toggle`；带 `onRelease` 的快捷键（按住说话靠「按下 + 松开」，单次执行没意义）；id 为空的；一期面板只执行无参数命令，`parameters` 非空的先不收（`includesParameterized` 以后打开）。
+- **文字动作**（PR 7，2026-11-24）：`parameters` 恰好是一个必填 `.text` 参数的命令（`LauncherCommand.isTextAction`）。它们**永远不进** `merge` 出的普通命令表（`includesParameterized` 打开了也不进：没有文字可给时执行不了），由 `LauncherCommandCatalog.textActions(declared:)` 另收一张表，只作为「对当前输入的建议」排在列表最后；`LauncherCommand.suggestion` 写它适用哪几类输入、默认档位、哪几类时提前。详见 §5.4。
 - **先过滤再合并**：同一组里 id 重复只留第一条；自动的保持注册顺序，声明的同 id 时在原位替换，其余声明的接在后面。被过滤掉的声明（带参数）不会顶掉同 id 的自动那条 —— 快捷键动作本来就能无参数执行。
 - 每条命令的搜索文字：标题（第一个，排序同分时看它的长度）、关键词、「工具名 标题」拼成的一段。工具名不单独做一个键：单独的话输入工具名时这个工具的每条命令都「完全相等」，会压过真正叫这个名字的那一行；拼起来以后是开头匹配、按标题长短排，`截图 区域` 这样连着写也能中。
 - 搜索键缓存（`LauncherCommandKeyCache`）：按命令 id 记「搜索文字 → 搜索键」，文字没变就复用，变了（「开关防休眠」↔「关闭防休眠」）才重建，这次没出现的 id 从缓存删掉。打字路径上不建键。
@@ -224,8 +237,8 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 文件（PR 6，§6.4）：引擎按 `LauncherFilePolicy` 定这次要不要搜、搜什么（`fileRequest`），手上的结果不是这个请求的就给出 `pendingFiles`，控制器交给 `LauncherFileProvider`（80 ms 防抖、Spotlight、后台过滤排序），搜完 `setFileResult` 再查一次。文件行和内存里的候选一起排序（`presetMatchScore` = 匹配的档，权重 0.6）；`目录/文件名` 片段的确切命中固定排在计算结果、识别结果之后、排序结果之前。新结果回来之前，上一次「名字包含」的结果里名字仍包含现在每个词的先顶着（`LauncherFileFilter.stillMatches`），列表不会每打一个字就收起再长出来。一个前缀可以管几个来源（`LauncherQuery.defaultSourceGroups`）：`c ` = 剪贴板 + 片段（片段没有自己的前缀）。
 - 计算结果、文本识别（PR 5）：没打来源前缀时，引擎先算（§7）、再识别（§6.3），结果固定排在最前（计算结果第一），不经过排序，后面接排好序的普通行。它们不记使用；⏎ 复制，⌘⏎ 插入前台 App（§7）。
 - 剪贴板最多 5 行（PR 5）：没打前缀时剪贴板最多出 5 行（`LauncherEngine.unscopedSourceLimits`，排序的 `sourceLimits` 参数：超出的跳过、由后面的行补上），免得一个常见词把 App 和命令挤下去；`c ` 前缀下不限。片段不限。文件同理（PR 6）：没打前缀时最多 5 行，`f ` 前缀下最多 30 行（`LauncherFileFilter.maxResults`）。
-- 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空但一个没中：显示「没有结果」。
-- 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它；路径行不记，`LauncherItem.recordsUsage`），收起面板，下一个 runloop 再执行（很多命令作用于前台 App / 当前窗口，要等面板让开）。⌘⏎ 在文件、路径行上是在访达里显示（`LauncherItem.alternate`），Tab 在路径行上是补全（`LauncherItem.completion`，§6.5），其余行照旧。
+- 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空：没打前缀、输入也不是路径时列表里总有建议（§5.4，PR 7）；「没有结果」只在连兜底建议都没有时出现 —— 不足 2 个字符、或者打了来源前缀而那一类一个没中。
+- 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它；路径行不记，`LauncherItem.recordsUsage`），收起面板，下一个 runloop 再执行（很多命令作用于前台 App / 当前窗口，要等面板让开）。⌘⏎ 在文件、路径行上是在访达里显示（`LauncherItem.alternate`），Tab 在路径行上是补全（`LauncherItem.completion`，§6.5），其余行照旧。 建议行的执行见 §5.4。
 
 ### 5.1 匹配打分（`Logic/LauncherMatch.swift`）
 
@@ -285,6 +298,79 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 - 查询本身离预算很远。宽查询和空查询的时间主要花在「给全部命中项查使用分 + 全量排序」上（空查询的匹配只要 0.01 ms）；真要省可以改成只挑前 N 个。单元测试里的上限按 Debug 放宽到 50 ms，只防退化。
 - **建搜索键才是成本**：剪贴板转拼音每次要七八百毫秒，还会让 `jie` 这类查询多中一千条剪贴板噪音（命中 2159 条，不转为 1157 条）。所以剪贴板条目建键时关拼音（中文内容直接打中文搜），而且搜索键要在打字路径之外建好并缓存（按条目 id + 文本缓存，来源数据变了只补新的），不能每次呼出面板全量重建。
+
+### 5.4 建议：放进任何东西都有事可做（PR 7，2026-11-24）
+
+需求 §3.11：输入不为空时列表里总有「可以拿这段东西做什么」。全是规则：打字时只做内存里的计算（分类、排序、拼标题），**不调模型、不联网、不读盘**；选了一行回车才执行。
+
+**文字动作（框架机制）**。快速入口不认识划词助手、剪贴板（§1 约束 3），所以用参数化命令：
+
+- 模块在 `launcherCommands()` 里用 `LauncherCommand.textAction(id:title:symbolName:suggestion:run:)` 声明，它造一条只有一个必填 `.text` 参数（键 `text`）的命令，`run` 直接收到那段文字。命令表规则见 §3.1：文字动作不进普通搜索，另收一张表；呼出时 `LauncherCommandProvider.textActions()` 收一次交给引擎。
+- `LauncherSuggestionTraits`（`Core/Launcher/LauncherTextAction.swift`，纯 Foundation，有默认值，不影响别的命令）：`kinds`（适用哪几类输入，默认全部）、`priority`（档位，小的在前，默认 50）、`boostedKinds`（输入属于这几类时提到所有档位前面）。
+- 现在声明的：
+
+| 模块 | id | 标题 | 适用 | 档位 | 提前 | 执行 |
+|---|---|---|---|---|---|---|
+| 剪贴板 | `clipboard.text.saveSnippet` | 存为片段 | 全部 | 50 | — | `ClipboardStore.addSnippet`，标题 = 首行（最多 40 个字符），回执一句 |
+| 剪贴板 | `clipboard.text.pinCard` | 钉成贴卡 | 全部 | 50 | — | `PinnedTextCard.pin` |
+| 剪贴板 | `clipboard.text.qrCode` | 生成二维码 | 全部 | 50 | 网址 | `ClipboardQRCode.pin`（同「最近一条出二维码」快捷键，钉在鼠标所在屏中间）；超过容量回执一句 |
+| 划词助手 | `selectiontranslate.text.translate` | 翻译 | 全部 | 10 | — | `SelectionTranslateController.run(actionID:onText:)` |
+| 划词助手 | `selectiontranslate.text.learn` | 学习 | 英文单词 / 短语 | 10 | 单词 | 同上 |
+| 划词助手 | `selectiontranslate.text.explain` | 解释 | 全部 | 20 | — | 同上 |
+| 划词助手 | `selectiontranslate.text.summarize` | 总结 | 普通文字、一大段文字 | 20 | 一大段文字 | 同上 |
+| 划词助手 | `selectiontranslate.text.polish` | 润色 | 普通文字、一大段文字 | 60 | 一大段文字 | 同上 |
+| 快速入口 | `launcher.webSearch` | 上网搜 | 全部 | 30 | — | 默认浏览器打开 Google 搜索（`LauncherWebSearch`，引擎是一张表，以后设置里增删） |
+| 快速入口 | `launcher.findFiles` | 搜文件名含「…」的文件 | 全部 | 40 | — | 把输入框换成 `f <文字>`，面板不收，接着就是只搜文件（§6.4） |
+
+  划词助手只声明动作条上打开的动作（翻译永远在），和动作条一致。id 用 `….text.<动作>`，不和快捷键 id（`selectiontranslate.translateSelection` 等）重名 —— 重名的话照 §3.1 的规则也不会顶掉快捷键那条，但分开更清楚。
+- **划词助手的新入口** `run(actionID:onText:)`：只换掉取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限，`SelectionTextResult.route = .provided`；之后照常 `present(…, phase: .result(id))`，会话、浮层、结果缓存、⏎ 复制都是原来那一套。没有选区锚点：锚点取鼠标所在屏幕可见区域的水平中线、从上往下 1/5 处的一个点（同快速入口面板的顶边），结果面板贴在它下方。`editTarget` 为 nil，所以改写类结果的主按钮是「复制」，没有「替换」。「选中后弹动作条」「直达快捷键」两条路径没动。
+
+**输入分类**（`Logic/LauncherInputClassifier.swift`，纯函数，单元测试一百多条正反例）。输入去首尾空白后归成一类，优先级：
+
+1. 以 `/` 或 `~` 开头 → **路径**，不出任何建议（路径行的事，§6.5；引擎认出路径时在算建议之前就返回了，这一条是分类自己的保险）。
+2. **网址**：`scheme://…`（scheme 字母开头、至少两个字符；`javascript` / `data` / `vbscript` 不认；`http(s)` 要有主机部分）原样打开；不带 scheme 的认 `主机[:端口][/路径][?查询][#片段]`，主机是 `localhost`、四段 0–255 的 IPv4（补 `http://`）或域名（补 `https://`）。域名至少两段、每段字母数字连字符、**顶级域名在一张常见表里**（com、net、org、io、dev、app、ai、co、me、cc、cn、hk、sg、jp、uk、de…，约 80 个）；和常见文件扩展名撞车的国家域名（md、sh、py、rs、pl、mo、ar、in…）不收，所以 `TECH_DESIGN.md`、`file.txt`、`main.py`、`v2.0`、`1.5`、`a.b`、`3.14.15` 都不是网址。整段不能有空白。
+   **有歧义的网址**（2026-11-24 审后加）：顶级域名是 `app`、`ai`、`cc`（`ambiguousTopLevelDomains`，和 App 包、Illustrator 文件、C++ 源文件撞名，但 `claude.ai`、`linear.app` 又确实是常见网址），而且不带 scheme、不带 `www.`、没有端口、路径、查询、片段的（`Safari.app`、`logo.ai`、`main.cc`、`claude.ai`）：照样给出地址，但类别按**普通文字**算、标上 `isAmbiguousURL`，「打开」不排最前、改成兜底建议的第一条。`https://claude.ai`、`www.claude.ai`、`claude.ai/chat`、`linear.app:8443` 照旧是网址、排最前。光秃秃的 IPv4（`1.2.3.4`，不带 scheme、端口、路径，可能是四段的版本号）同样按有歧义处理；带端口或路径的（`192.168.1.1:3000`、`10.0.0.1/admin`）照旧排最前。
+3. **邮箱**：可带 `mailto:`；本地部分字母数字和 `._%+-`、不以点开头结尾、不连两个点；域名至少两段、顶级域名两个以上字母（不查表）。
+4. **颜色**（`Logic/LauncherColor.swift`）：`#RGB`、`#RRGGBB`、`#RRGGBBAA`；`rgb()` / `rgba()`、`hsl()` / `hsla()` 的逗号写法和空格 + `/ 透明度` 写法；分量 0–255 或百分比，色相可带 `deg`、可负、折回 0..<360，透明度 0–1 或百分比。超出范围、个数不对、多出别的字、`1e3` / `inf` 这类写法都不认。写回三种：`#17A398`（大写）、`rgb(23, 163, 152)`、`hsl(175, 75%, 36%)`；有透明度时 `#17A39880`、`rgba(…, 0.5)`、`hsla(…, 0.5)`。
+5. **英文单词 / 短语**：1–3 个词、最多 40 个字符，每个词英文字母开头、只含英文字母、连字符、撇号（同划词助手「学习」出词典卡的门槛 `LearnText.isWordLike`）。
+6. **一大段文字**：80 个字符起。输入框是单行的 `NSTextField`，粘进来的换行会被换成空格（探针实测：`"a\nb\r\nc"` 粘进去得到 `"a b  c"`），所以输入框里的文字只能按长度认；带换行的原文（见下面「粘贴的原文」）也算。数到第 80 个字符就停，几 MB 的粘贴不用整段数。
+7. 其余 → **普通文字**。
+
+**粘贴的原文**（2026-11-24 审后加，`Logic/LauncherPastedText.swift`）：输入框把换行压成空格，交给翻译、总结、存为片段时段落就没了。所以 `LauncherController.performEditShortcut` 在 ⌘V（`LauncherFieldHandle.perform(.paste)`）之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（`pastedText`，和输入一起保留 60 秒）。每次用之前核对：输入框里的文字和原文**把空白归一后相等**（连续的空格、制表符、换行都换成一个空格、去首尾空白；单行输入框把 `\n` 换成一个空格、`\r\n` 换成两个，归一后都一样）才用原文 —— 分类、字数、交给动作都用它，多行的原文算一大段文字；不相等（改了一个字、粘在已有文字后面）就作废，控制器在文字变化时清掉它。读剪贴板只在按 ⌘V 那一下，不在打字路径上；右键菜单里的「粘贴」不记（少见，退回框里那一行）。
+
+**出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 8 行里的一个名额，其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。
+
+**对应建议**（固定排在最前，计算结果之后、识别结果之前）：
+
+| 类别 | 行 | 右侧 | ⏎ |
+|---|---|---|---|
+| 网址 | 打开 <输入，最多 60 个字符> | 网址 | `NSWorkspace.open`（收起面板后下一个 runloop） |
+| 邮箱 | 给 <地址> 写邮件 | 邮箱 | 打开 `mailto:` |
+| 颜色 | 三行：HEX、RGB、HSL，行首是这个颜色的色块（`LauncherRowIcon.swatch`，带透明度时垫棋盘格） | 颜色 · HEX / RGB / HSL | 复制这一种写法（同计算结果：⌘⏎ 插入前台 App） |
+| 一大段文字 | 「116 字 · 125 个字符」（字 = 每个汉字 / 假名 / 韩文算一个、连着的字母数字算一个，同文字处理软件的「字数」） | 字数统计 | 复制字数 |
+
+颜色、字数两种是「复制行」，走 `LauncherInstant`（和计算结果、识别结果同一张表，不记使用）；网址、邮箱是动作行（`LauncherSuggestion`，不记使用）。
+
+**兜底建议**（排在普通结果之后，最多 8 行，`LauncherSuggestionRanking.order`）：
+
+- 适用：`traits.kinds` 和这次输入的类别有交集。
+- 排序键 = 档位（输入属于 `boostedKinds` 时当成 0）− min(30, 使用分 ÷ 10)，小的在前；同分看原来的档位，再看声明顺序（模块注册顺序、模块里写的顺序）。使用分是 §5.3 那一套（键 `textaction/<id>`，用 1 次 100、7 次以上 300，两周减半），所以用过一两次的只在同一档里往前，用得很多的能往前挪三档；单词时一直用翻译不用学习，翻译会排到学习前面。
+- 8 行的由来：普通文字时正好放下用户认可的那张清单（翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码），没有别的结果时面板不用滚动（最多 8.5 行）。默认次序（没有使用记录时）：
+
+| 输入 | 兜底建议 |
+|---|---|
+| 普通文字 / 有计算结果 | 翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码（润色第 9，不出） |
+| 英文单词 | 学习、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 |
+| 一大段文字 | 总结、润色、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡（二维码第 9） |
+| 网址 | 二维码、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡 |
+| 邮箱 / 颜色 | 翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 |
+
+- 行：标题 =「命令名「引用」」（`launcher.suggest.action %@ %@`；引用压成一行、最多 24 个字符，超出末尾加省略号），右侧是所属工具名（划词助手 / 剪贴板）或「网页」「文件」，图标是命令自己的 SF Symbol；行 id = `textaction/<id>`。
+- 执行（`LauncherController.runSuggestion`）：先记一次使用（`recordUse(key: "textaction/<id>", input: "")`，不记「这个输入选了谁」—— 那是给排序里的普通行用的）；改输入的（搜文件）调输入框的 `replaceText`（走编辑器 `insertText`，能撤销）、面板不收；其余同命令：收起面板、`LauncherFocus.restore()` 把焦点还给原来的 App、下一个 runloop 再执行，交给动作的是输入框里上屏的文字（去首尾空白）。⌘⏎ 同 ⏎。颜色、字数这类复制行走 `LauncherInstant` 的现成路径（复制 / 插入同样先还焦点）。
+
+**接进引擎**（`LauncherEngine.search`，只加接入点）：行的次序 = 计算结果 → 对应建议 → 识别结果 → 文件片段的确切命中（§6.4 的 `files.pinned`）→ 排好序的普通行（含文件）→ 兜底建议；输入是路径时提前返回，不出任何建议。`LauncherSuggestionProvider`（App 侧，带 `L()` 文案和执行闭包）每次输入算一次；复制行并进 `instantsByKey`，动作行进 `suggestionsByKey`（`engine.suggestion(forKey:)`）。「让 AI 来办」提前的旧规则（`shouldPromoteAIRow`）现在没有界面用它，二期把「让 AI 来办」加进兜底建议时再接。
+
+**实测**（2026-11-24，M3，`swiftc -O` 探针，137 个 App + 400 条剪贴板 + 假的命令表）：带建议的一次查询中位数 0.1–0.5 ms（最慢的一次 2.4 ms）；建议这一块对 125 个字的一段话 0.15 ms。粘进 18.75 万字时整次查询 18.7 ms，其中建议约 2.5 ms（字数统计要整段数一遍），其余是原来的匹配（和建议无关，PR 4 起就是这样）。
 
 ### 5.3 使用记录（`Logic/LauncherUsageStore.swift` 的 `LauncherUsageRecords`）
 
@@ -639,7 +725,7 @@ UserDefaults 前缀 `launcher.`：
 
 ## 12. 分 PR
 
-一期 8 个，前后依赖按顺序；每个都能单独合并、单独验证。
+一期 9 个（2026-11-24 插进「路径与文件」「放进任何东西都有建议」两个），前后依赖按顺序；每个都能单独合并、单独验证。
 
 | PR | 内容 | 验证 |
 |---|---|---|
@@ -649,10 +735,11 @@ UserDefaults 前缀 `launcher.`：
 | 4 | 模块壳、面板、引擎、命令来源（快捷键动作自动成命令）、App 来源、使用记录落盘 | 真机：呼出、搜 App、执行命令、全屏、输入法 |
 | 5 | 文本识别器下沉到 Core；剪贴板 / 片段来源；计算与文本识别接进面板（⌘K 不在这个 PR，挪到后面） | 真机：粘贴、转换、算式 |
 | 6 | 路径与文件（2026-11-24 加，用户试用时贴路径只得到「没有结果」）：输入是路径时直接读磁盘列出来、Tab 补全（§6.5）；按名字搜文件，Spotlight 查 + 自己过滤排序，后端放在 `LauncherFileSearching` 协议后面（§6.4） | 真机：贴路径、补全、`f ` 搜文件、日志里的查询耗时 |
-| 7 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
-| 8 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
+| 7 | 放进任何东西都有建议（2026-11-24 加，用户试用时说「我预期的是我放入任何东西，都能给我一些建议」）：输入分类；文字动作（`LauncherCommand.suggestion`，划词助手、剪贴板声明，划词助手加 `run(actionID:onText:)`）；对应建议（网址、邮箱、颜色、字数）与兜底建议（§5.4） | 真机：网址、邮箱、颜色、单词、长文本、随便什么字、算式各试一次；划词助手结果面板的位置、只给复制 |
+| 8 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
+| 9 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
 
-> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 7、8（原来的 6、7，2026-11-24 插进了「路径与文件」后顺延），和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
+> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 8、9（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」后顺延），和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
 
 二期开工前先做探针 2、3、4、5、8，按结果定「理解一句话命令」的建议模型，再拆 PR：AI 服务层（流式、多轮、JSON）→ 问 AI → 意图解析与预览卡片 → 一次性提醒 → 语音 → 其余来源 → 汇率。
 

@@ -8,6 +8,7 @@ import os
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
 // 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
+// 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
 
 @MainActor
 final class LauncherController {
@@ -36,6 +37,9 @@ final class LauncherController {
     private var text = ""
     /// 拆掉前缀后的查询词：执行时记「这个输入选了谁」用（和排序时查的是同一个）。
     private var queryText = ""
+    /// 按 ⌘V 时剪贴板里带换行的原文（输入框只有一行，换行被换成了空格）：输入框里的文字还是它时，
+    /// 建议行用它（交给翻译、总结、存为片段，算字数，§5.4）；一改动就作废。和输入一起保留 60 秒。
+    private var pastedText: String?
     private var hiddenAt: Date?
     /// 这次呼出的命令和 App 条目（后台建好剪贴板的搜索键后，和条目一起重新装进引擎）。
     private var baseItems: [LauncherItem] = []
@@ -96,8 +100,10 @@ final class LauncherController {
         LauncherFocus.capture()
         if let hiddenAt, Date().timeIntervalSince(hiddenAt) >= Self.keepInputInterval {
             text = ""
+            pastedText = nil
         }
         baseItems = commands.items() + apps.items
+        engine.textActions = commands.textActions()
         // 剪贴板、片段：取一次条目（只读内存），缺的搜索键最新的 200 条现在建，其余后台建、建完刷新一次列表。
         let entriesStart = DispatchTime.now().uptimeNanoseconds
         let report = entries.beginSession()
@@ -147,11 +153,15 @@ final class LauncherController {
     private func textChanged(_ newText: String) {
         guard panel.isVisible, newText != text else { return }
         text = newText
+        if let pastedText, LauncherPastedText.original(pastedText, matching: newText) == nil {
+            self.pastedText = nil
+        }
         refresh()
         panel.setHeight(model.panelHeight)
     }
 
     private func refresh(keepSelection: Bool = false) {
+        engine.pastedText = pastedText
         let outcome = engine.search(text, records: usage.records, now: Date())
         queryText = outcome.queryText
         if outcome.duration > Self.slowQueryThreshold {
@@ -255,9 +265,17 @@ final class LauncherController {
         case ("z", true): edit = .redo
         default: return nil
         }
+        if edit == .paste { notePaste() }
         let handled = model.field.perform(edit)
         Self.log.notice("edit shortcut \(key, privacy: .public) handled: \(handled, privacy: .public)")
         return handled
+    }
+
+    /// ⌘V：粘贴之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（输入框会把换行压成空格）。
+    /// 只在用户按 ⌘V 这一下读，不在打字路径上。没有文字或只有一行时清掉上一次记的。
+    private func notePaste() {
+        let pasted = NSPasteboard.general.string(forType: .string)
+        pastedText = pasted.flatMap { LauncherPastedText.isWorthKeeping($0) ? $0 : nil }
     }
 
     // MARK: - 执行
@@ -267,6 +285,10 @@ final class LauncherController {
         let id = model.rows[index].id
         if let instant = engine.instant(forKey: id) {
             copy(instant)
+            return
+        }
+        if let suggestion = engine.suggestion(forKey: id) {
+            runSuggestion(suggestion)
             return
         }
         guard let item = engine.item(forKey: id) else { return }
@@ -293,6 +315,26 @@ final class LauncherController {
         model.field.replaceText(completion)
         // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
         textChanged(completion)
+    }
+
+    /// 建议行（§5.4）：兜底建议记一次使用（`textaction/<id>`；不记「这个输入选了谁」，那是给排序里的普通行用的）。
+    /// 改输入的（搜文件名 → `f <文字>`）面板不收；其余同命令：收起面板、把焦点还给原来的 App、下一个 runloop 再执行。
+    private func runSuggestion(_ suggestion: LauncherSuggestion) {
+        if let key = suggestion.usageKey {
+            usage.recordUse(key: key, input: "", now: Date())
+        }
+        switch suggestion.action {
+        case .replaceInput(let newText):
+            model.field.replaceText(newText)
+            // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
+            textChanged(newText)
+        case .run(let action):
+            hide()
+            LauncherFocus.restore()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { action() }
+            }
+        }
     }
 
     /// ⌘⏎：计算结果、识别结果插入前台 App（和听写、划词助手同一条路：能直接写进输入框就写，不行借剪贴板粘贴，

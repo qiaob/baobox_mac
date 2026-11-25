@@ -15,9 +15,10 @@ struct LauncherCatalogCommand {
 
 enum LauncherCommandCatalog {
 
-    /// 合并两组命令。规则：
-    /// 1. 先过滤：id 为空、id 在 `excludedIDs` 里的不要；`includesParameterized` 为 false 时带参数的
-    ///    （`parameters` 非空）不要 —— 一期面板只能执行无参数命令。
+    /// 合并两组命令（普通的搜索结果用）。规则：
+    /// 1. 先过滤：id 为空、id 在 `excludedIDs` 里的不要；文字动作（恰好一个必填文字参数，`LauncherCommand.isTextAction`）
+    ///    一律不要 —— 它们只作为「对当前输入的建议」出现（`textActions`），没有文字可给时执行不了；
+    ///    `includesParameterized` 为 false 时其余带参数的（`parameters` 非空）也不要 —— 一期面板只能执行无参数命令。
     /// 2. 同一组里 id 重复的只留第一条。
     /// 3. 自动的在前、保持传入顺序；声明的和某条自动的 id 相同时，在那条的位置上替换它；
     ///    声明的里其余的接在后面、保持传入顺序。
@@ -27,7 +28,7 @@ enum LauncherCommandCatalog {
                       excludedIDs: Set<String> = [], includesParameterized: Bool = false) -> [LauncherCatalogCommand] {
         func keeps(_ entry: LauncherCatalogCommand) -> Bool {
             let id = entry.command.id
-            guard !id.isEmpty, !excludedIDs.contains(id) else { return false }
+            guard !id.isEmpty, !excludedIDs.contains(id), !entry.command.isTextAction else { return false }
             return includesParameterized || entry.command.parameters.isEmpty
         }
         let automatic = firstOfEachID(automatic.filter(keeps))
@@ -46,6 +47,15 @@ enum LauncherCommandCatalog {
             merged.append(entry)
         }
         return merged
+    }
+
+    /// 文字动作（docs/launcher/TECH_DESIGN.md §5.4）：模块声明的命令里恰好一个必填文字参数的那些，
+    /// 作为「对当前输入的建议」排在列表最后。id 为空、在 `excludedIDs` 里的不要；id 重复只留第一条；保持传入顺序
+    /// （同一档里没用过的按这个顺序排）。快捷键自动生成的命令都没有参数，不会是文字动作，所以只看声明的。
+    static func textActions(declared: [LauncherCatalogCommand], excludedIDs: Set<String> = []) -> [LauncherCatalogCommand] {
+        firstOfEachID(declared.filter { entry in
+            !entry.command.id.isEmpty && !excludedIDs.contains(entry.command.id) && entry.command.isTextAction
+        })
     }
 
     /// 参与匹配的文字：标题（第一个，排序同分时按它的长度）、关键词、「工具名 标题」。

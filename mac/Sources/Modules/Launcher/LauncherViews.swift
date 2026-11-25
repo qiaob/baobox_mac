@@ -446,6 +446,8 @@ struct LauncherResultRow: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 26, height: 26)
+        } else if case .swatch(let color) = row.icon {
+            LauncherColorSwatch(color: color, selected: selected)
         } else if case .symbol(let name) = row.icon {
             Image(systemName: name)
                 .font(.system(size: 12))
