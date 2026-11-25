@@ -132,7 +132,11 @@ enum LauncherSuggestionProvider {
             return LauncherSuggestion(
                 row: row, usageKey: nil,
                 action: .run {
-                    guard LauncherReminderCenter.shared.cancel(id: id) else { return }
+                    // 列表是呼出时的样子：那一条可能已经响过了（第 10 步验证后定：说一声，别什么都没有）。
+                    guard LauncherReminderCenter.shared.cancel(id: id) else {
+                        LauncherController.toast(L("launcher.reminder.toast.alreadyFired"))
+                        return
+                    }
                     LauncherController.toast(L("launcher.reminder.toast.cancelled \(LauncherSuggestionText.quote(text, maxLength: 40))"))
                 },
                 confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.cancelReminder"),
