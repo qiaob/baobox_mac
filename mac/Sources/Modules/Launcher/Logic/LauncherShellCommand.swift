@@ -130,24 +130,26 @@ enum LauncherShellCommand {
         ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar)
     }
 
-    /// 认成命令的文字里允许出现的字符（第 10 步复查后定，取代原来的拒绝名单）：确认时看到的必须就是要跑的，所以只收
-    /// 「看得见、一个字形占一格或两格、不会重排」的字符 —— ASCII 可打印字符、预组合的带变音符拉丁字母（去掉 × ÷）、CJK 标点
-    /// （不含全角空格）、假名、汉字、韩文音节、全角 ASCII。组合符号、emoji、控制符、格式符（双向、零宽、软连字符、变体选择符、
-    /// 标签字符）、别的空格（NBSP、全角空格）、别的文字系统（希伯来 / 阿拉伯字母会双向重排，﷽ 一个字形十来列宽）一律不收。
-    /// 按 Unicode 标量逐个看，不按字素簇（组合符号会藏在簇里）。
-    /// 前提：表里的字符在等宽字体下的实际宽度都不超过 `LauncherConfirmText.width` 估的数（ASCII 1、其余 2）—— 完整显示的换行靠它。
+    /// 认成命令的文字里允许出现的字符（第 10 步复查后定，第三轮收窄）：确认时看到的必须就是要跑的，所以只收「看得见、
+    /// 独立成字、一个字形占一格或两格、不会重排、不冒充 shell 符号」的字符 —— ASCII 可打印字符、预组合的带变音符拉丁字母
+    /// （去掉 × ÷）、几个 CJK 标点（、。〈〉《》「」『』【】〔〕〖〗）、假名、汉字、韩文音节、全角数字和字母，以及 ！（）, : ; ?
+    /// 七个全角标点。组合符号（含 CJK 声调符号 U+302A–302F）、emoji、控制符、格式符、别的空格、别的文字系统、
+    /// 看着像引号 / 注释 / 转义的全角和 CJK 符号（＂＇｀＼＃〝〞 —— 在 shell 里只是普通字符）一律不收。按 Unicode 标量逐个看。
+    /// 前提：表里每个标量都独立成字（单元测试逐个查类别），在等宽字体下的实际宽度都不超过 `LauncherConfirmText.width` 估的数
+    /// （ASCII 1、其余 2）—— 完整显示的换行靠它。往表里加范围前先想清楚这两点。
+    static let allowedRanges: [ClosedRange<UInt32>] = [
+        0x20...0x7E,
+        0xC0...0xD6, 0xD8...0xF6, 0xF8...0x24F,
+        0x3001...0x3002, 0x3008...0x3011, 0x3014...0x3017,
+        0x3041...0x3096, 0x30A1...0x30FA, 0x30FC...0x30FC,
+        0x3400...0x4DBF, 0x4E00...0x9FFF,
+        0xAC00...0xD7A3,
+        0xFF01...0xFF01, 0xFF08...0xFF09, 0xFF0C...0xFF0C, 0xFF10...0xFF19, 0xFF1A...0xFF1B, 0xFF1F...0xFF1F,
+        0xFF21...0xFF3A, 0xFF41...0xFF5A,
+    ]
+
     static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x20...0x7E: return true
-        case 0xD7, 0xF7: return false
-        case 0xC0...0x24F: return true
-        case 0x3001...0x303F: return true
-        case 0x3041...0x3096, 0x30A1...0x30FA, 0x30FC: return true
-        case 0x3400...0x4DBF, 0x4E00...0x9FFF: return true
-        case 0xAC00...0xD7A3: return true
-        case 0xFF01...0xFF5E: return true
-        default: return false
-        }
+        allowedRanges.contains { $0.contains(scalar.value) }
     }
 
     /// 每个 Unicode 标量都在允许名单里。

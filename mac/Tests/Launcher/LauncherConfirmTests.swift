@@ -97,9 +97,13 @@ final class LauncherConfirmTests: XCTestCase {
     }
 
     func testWideCharactersCountDouble() {
-        XCTAssertEqual(LauncherConfirmText.width("a"), 1)
-        XCTAssertEqual(LauncherConfirmText.width("取"), 2)
-        XCTAssertEqual(LauncherConfirmText.width("："), 2)
+        XCTAssertEqual(LauncherConfirmText.width(Character("a")), 1)
+        XCTAssertEqual(LauncherConfirmText.width(Character("取")), 2)
+        XCTAssertEqual(LauncherConfirmText.width(Character("：")), 2)
+        // 按标量累加（第三轮复查定）：组合符号挂在一个字上不能只算 2 列。
+        let stacked = Character("a" + String(repeating: "\u{302E}", count: 60))
+        XCTAssertEqual(LauncherConfirmText.width(stacked), 1 + 60 * 2)
+        XCTAssertEqual(LauncherConfirmText.width(Unicode.Scalar(0x302E) ?? "x"), 2)
         let chinese = String(repeating: "取快递", count: 20)
         let shown = LauncherConfirmText.object(chinese, maxWidth: 20)
         XCTAssertLessThanOrEqual(shown.map(LauncherConfirmText.width).reduce(0, +), 20, shown)
@@ -211,6 +215,21 @@ final class LauncherConfirmTests: XCTestCase {
         let lines = try XCTUnwrap(LauncherConfirmText.commandLines("rm -rf ~ /Library/Caches"))
         XCTAssertEqual(lines, [LauncherCommandLine(text: "rm -rf ~ /Library/Caches")])
         XCTAssertEqual(lines[0].middle, "rm -rf ~ /Library/Caches")
+    }
+
+    /// 按标量估宽、按标量切：组合符号再多也不会挤在「一个字」里只算 2 列（就算有人绕过「像命令」直接调）。
+    func testWidthAndWrappingCountScalars() throws {
+        let tail = ";rm -rf ~"
+        let command = "ls -la /tmp/a" + String(repeating: "\u{302E}", count: 60) + tail
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines(command, maxLines: 10))
+        XCTAssertEqual(lines.count, 3, "13 + 120 + 9 = 142 列，按 62 列要 3 行")
+        XCTAssertEqual(lines.map(\.text).joined().unicodeScalars.count, command.unicodeScalars.count)
+        XCTAssertTrue(lines.last?.text.hasSuffix(tail) ?? false, "尾巴在最后一行，看得见")
+        for line in lines {
+            XCTAssertLessThanOrEqual(line.text.unicodeScalars.map(LauncherConfirmText.width).reduce(0, +),
+                                     LauncherConfirmText.contentColumns)
+        }
+        XCTAssertNil(LauncherConfirmText.commandLines(String(repeating: "\u{302E}", count: 200)), "按标量算放不下 6 行")
     }
 
     /// 只有一个字符、两头都是折断处的空格：只标一次（不会画成两个 ␣）。

@@ -79,12 +79,12 @@ struct LauncherCommandLine: Equatable, Sendable {
     /// 这一行的最后一个字符是折断处的空格：画成 `␣`。
     var marksTrailingSpace = false
 
-    /// 去掉要画成 `␣` 的首尾空格后的中间那段（视图把记号画在两边）。
+    /// 去掉要画成 `␣` 的首尾空格后的中间那段（视图把记号画在两边）。按标量去，和折行一致。
     var middle: String {
-        var characters = Substring(text)
-        if marksLeadingSpace, !characters.isEmpty { characters = characters.dropFirst() }
-        if marksTrailingSpace, !characters.isEmpty { characters = characters.dropLast() }
-        return String(characters)
+        var scalars = text.unicodeScalars[...]
+        if marksLeadingSpace, !scalars.isEmpty { scalars = scalars.dropFirst() }
+        if marksTrailingSpace, !scalars.isEmpty { scalars = scalars.dropLast() }
+        return String(Substring(scalars))
     }
 }
 
@@ -100,7 +100,8 @@ enum LauncherConfirmText {
     static let maxCommandLines = 6
 
     /// 完整显示时的行：按 `columns` 宽硬换行（不按词断开、一个字符都不省，空格也照原样留着 —— 看到的就是要跑的），
-    /// 超过 `maxLines` 行为 nil。空文字为 nil。宽度算法同 `width`。调用方保证文字里只有允许名单里的字符（「像命令」的规则）。
+    /// 超过 `maxLines` 行为 nil。空文字为 nil。按 Unicode 标量估宽、按标量切（第 10 步第三轮复查定：按字素簇估，组合符号
+    /// 挂在一个字上就只算 2 列）。调用方保证文字里只有允许名单里的字符（「像命令」的规则：每个标量都独立成字）。
     /// 折断处标出来：不是最后一行的 `continues`；折断处两侧的空格（上一行最后一个、下一行第一个字符）`marks…Space`。
     static func commandLines(_ text: String, columns: Int = contentColumns,
                              maxLines: Int = maxCommandLines) -> [LauncherCommandLine]? {
@@ -108,9 +109,11 @@ enum LauncherConfirmText {
         return raw.enumerated().map { index, line in
             var result = LauncherCommandLine(text: line)
             result.continues = index < raw.count - 1
-            result.marksLeadingSpace = index > 0 && line.first == " "
+            let scalars = line.unicodeScalars
+            result.marksLeadingSpace = index > 0 && scalars.first == " "
             // 只有一个字符的一行两头是同一个空格：只标一次。
-            result.marksTrailingSpace = result.continues && line.last == " " && !(result.marksLeadingSpace && line.count == 1)
+            result.marksTrailingSpace = result.continues && scalars.last == " "
+                && !(result.marksLeadingSpace && scalars.count == 1)
             return result
         }
     }
@@ -119,20 +122,20 @@ enum LauncherConfirmText {
     private static func wrappedLines(_ text: String, columns: Int, maxLines: Int) -> [String]? {
         guard !text.isEmpty, columns >= 2, maxLines >= 1 else { return nil }
         var lines: [String] = []
-        var line = ""
+        var line = String.UnicodeScalarView()
         var lineWidth = 0
-        for character in text {
-            let w = width(character)
+        for scalar in text.unicodeScalars {
+            let w = width(scalar)
             if lineWidth + w > columns {
-                lines.append(line)
+                lines.append(String(line))
                 guard lines.count < maxLines else { return nil }
-                line = ""
+                line = String.UnicodeScalarView()
                 lineWidth = 0
             }
-            line.append(character)
+            line.append(scalar)
             lineWidth += w
         }
-        lines.append(line)
+        lines.append(String(line))
         return lines
     }
 
@@ -167,8 +170,14 @@ enum LauncherConfirmText {
         return start + "…" + end
     }
 
-    /// 一个字符占多宽：ASCII 算 1，其余（汉字、全角标点、emoji）算 2。
+    /// 一个 Unicode 标量占多宽：ASCII 算 1，其余（汉字、全角标点、emoji）算 2。
+    static func width(_ scalar: Unicode.Scalar) -> Int {
+        scalar.isASCII ? 1 : 2
+    }
+
+    /// 一个字符（字素簇）占多宽：按它的标量累加（第 10 步第三轮复查定 —— 组合符号挂在一个字上不能只算 2 列）。
+    /// 标题里的对象按字符截断（不把一个字拆开），宽度也按这个算，对 emoji 序列只会估多、截得早一点。
     static func width(_ character: Character) -> Int {
-        character.isASCII ? 1 : 2
+        character.unicodeScalars.reduce(0) { $0 + width($1) }
     }
 }

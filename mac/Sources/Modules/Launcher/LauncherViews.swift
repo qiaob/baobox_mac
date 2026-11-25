@@ -26,6 +26,8 @@ enum LauncherLayout {
     static let confirmCommandLineHeight: CGFloat = 16
     /// 完整显示的命令用的字号：和 `LauncherConfirmText.commandColumns`（每行最多几个 ASCII 字符宽）一起定，改一个要看另一个。
     static let confirmCommandFontSize: CGFloat = 12
+    /// 完整显示的一行放不下时最多缩到这么小（估宽是上限，正常用不到；只为估错时不出省略号）。
+    static let confirmCommandMinimumScale: CGFloat = 0.2
 
     /// 上膛后完整显示 `lines` 行命令的那一行有多高：上下留白 + 标题 + 每行命令。1 行 54、3 行 86、6 行 134。
     static func confirmCommandRowHeight(lines: Int) -> CGFloat {
@@ -606,12 +608,16 @@ struct LauncherResultRow: View {
                     .foregroundStyle(selected ? Color.white : Color.primary)
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        // 每行的宽度是按「ASCII 1、其余 2」估的；万一估错（字体不同），缩小字号挤进去 ——
-                        // 不裁、不换行（行高是按行数算的），也不撑出面板。
+                        // 每行的宽度是按标量「ASCII 1、其余 2」估的，是实际宽度的上限（允许名单的前提）；万一估错
+                        // （字体不同），缩小字号挤进去 —— 不换行（行高是按行数算的）、不撑出面板，也不出省略号：
+                        // 最小缩到 0.2 倍，容得下 5 倍的误差。
                         commandLineText(line)
                             .font(.system(size: LauncherLayout.confirmCommandFontSize, design: .monospaced))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.5)
+                            .minimumScaleFactor(LauncherLayout.confirmCommandMinimumScale)
+                            // 中文界面下系统会在汉字和 ASCII 之间自动加空隙（「文档 / 项目资料」像多了空格）；按英文排版就没有，
+                            // 汉字照常显示。确认区要的是「一字不差」的观感（第 10 步第三轮复查）。
+                            .typesettingLanguage(Locale.Language(identifier: "en"))
                             .frame(maxWidth: .infinity, minHeight: LauncherLayout.confirmCommandLineHeight,
                                    maxHeight: LauncherLayout.confirmCommandLineHeight, alignment: .leading)
                             .foregroundStyle(selected ? Color.white : Color.primary)

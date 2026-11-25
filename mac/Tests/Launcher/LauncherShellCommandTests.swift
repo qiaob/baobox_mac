@@ -107,6 +107,16 @@ final class LauncherShellCommandTests: XCTestCase {
             "echo 3\u{00D7}4 -n", "echo 8\u{00F7}2 -n",                                // × ÷ 不收
             "cat \u{201C}a.txt\u{201D}",                                               // 弯引号
             "$ ls\u{200B} -la",                                                        // `$ ` 开头的也查
+            // 第三轮：CJK 声调符号（组合符号）挂在一个字上；全角 / CJK 符号冒充 shell 的引号、注释、转义。
+            "ls -la /tmp/a" + String(repeating: "\u{302E}", count: 60) + ";rm -rf ~",
+            "ls -la \u{FF02}; rm -rf ~/ \u{FF02}",                                     // ＂
+            "ls -la \u{FF07}; rm -rf ~/ \u{FF07}",                                     // ＇
+            "ls -la \u{FF03} ; rm -rf ~/",                                             // ＃
+            "ls -la \u{FF3C}; rm -rf ~/",                                              // ＼
+            "ls -la \u{FF40}rm -rf ~/\u{FF40}",                                        // ｀
+            "ls -la \u{301D}; rm -rf ~/\u{301E}",                                      // 〝〞
+            "ls -la ./a \u{FF5C} sh", "ls -la ./a \u{FF06}", "echo \u{FF04}HOME ./a",   // ｜ ＆ ＄
+            "cat \u{3003}a.txt", "cat \u{3012}a.txt", "cat \u{3007}a.txt",              // 〃 〒 〇
         ]
         for text in cases {
             XCTAssertNil(LauncherShellCommand.detect(text), text.unicodeScalars.map { String(format: "%04X", $0.value) }.joined(separator: " "))
@@ -116,7 +126,9 @@ final class LauncherShellCommandTests: XCTestCase {
     /// 中文路径、日文文件名、韩文、带变音符的拉丁字母（预组合）、全角字符：照算。
     func testAllowedScriptsStillMakeCommands() {
         for text in ["cd ~/文档/项目", "cat ~/書類/メモ.txt", "cat café.txt", "cat ~/문서/a.txt", "cd 中文目录/子目录",
-                     "git commit -m \"修复登录：完成。\"", "cat ./ｆｉｌｅ.txt", "mv naïve.txt naive.txt", "$ cat 「说明」.md"] {
+                     "git commit -m \"修复登录：完成。\"", "cat ./ｆｉｌｅ.txt", "mv naïve.txt naive.txt", "$ cat 「说明」.md",
+                     "git commit -m \"修复：登录（第２版），完成！对吗？是；\"", "cat ~/文档/《报告》【终版】.txt",
+                     "cat ./ＲＥＰＯＲＴ１２.txt", "cd ~/项目〔旧〕", "mv a.txt 『b』〖c〗〈d〉.txt", "cat ~/资料、备份。txt"] {
             let expected = text.hasPrefix("$ ") ? String(text.dropFirst(2)) : text
             XCTAssertEqual(LauncherShellCommand.detect(text), expected, text)
         }
@@ -124,15 +136,40 @@ final class LauncherShellCommandTests: XCTestCase {
 
     func testAllowlistRanges() {
         func allowed(_ value: UInt32) -> Bool { Unicode.Scalar(value).map(LauncherShellCommand.isAllowed) ?? false }
-        for value: UInt32 in [0x20, 0x7E, 0xC0, 0xE9, 0x24F, 0x3001, 0x303F, 0x3041, 0x3096, 0x30A1, 0x30FA, 0x30FC,
-                              0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xAC00, 0xD7A3, 0xFF01, 0xFF5E] {
+        for value: UInt32 in [0x20, 0x7E, 0xC0, 0xD6, 0xD8, 0xE9, 0xF6, 0xF8, 0x24F, 0x3001, 0x3002, 0x3008, 0x3011, 0x3014,
+                              0x3017, 0x3041, 0x3096, 0x30A1, 0x30FA, 0x30FC, 0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xAC00, 0xD7A3,
+                              0xFF01, 0xFF08, 0xFF09, 0xFF0C, 0xFF10, 0xFF19, 0xFF1A, 0xFF1B, 0xFF1F, 0xFF21, 0xFF3A, 0xFF41,
+                              0xFF5A] {
             XCTAssertTrue(allowed(value), String(format: "U+%04X", value))
         }
         for value: UInt32 in [0x09, 0x0A, 0x1F, 0x7F, 0x85, 0xA0, 0xAD, 0xBF, 0xD7, 0xF7, 0x250, 0x0301, 0x05D0, 0x0627,
-                              0x200B, 0x200F, 0x202E, 0x2066, 0x3000, 0x3040, 0x3097, 0x30FB, 0x30FD, 0xFDFD, 0xFE0F,
-                              0xFEFF, 0xFF00, 0xFF5F, 0x1F389, 0xE0041] {
+                              0x200B, 0x200F, 0x202E, 0x2066, 0x3000, 0x3003, 0x3007, 0x3012, 0x3013, 0x3018, 0x301D, 0x301E,
+                              0x302A, 0x302E, 0x302F, 0x303F, 0x3040, 0x3097, 0x30FB, 0x30FD, 0xFDFD, 0xFE0F, 0xFEFF, 0xFF00,
+                              0xFF02, 0xFF03, 0xFF04, 0xFF06, 0xFF07, 0xFF0D, 0xFF0E, 0xFF0F, 0xFF20, 0xFF3C, 0xFF40, 0xFF5C,
+                              0xFF5E, 0xFF5F, 0x1F389, 0xE0041] {
             XCTAssertFalse(allowed(value), String(format: "U+%04X", value))
         }
+    }
+
+    /// 整张允许名单逐个标量过一遍：每个都独立成字、看得见 —— 以后有人往表里加范围，这个测试会拦住组合符号、格式符这类。
+    func testEveryAllowedScalarStandsAlone() {
+        let forbidden: Set<Unicode.GeneralCategory> = [.nonspacingMark, .spacingMark, .enclosingMark, .format, .control,
+                                                       .spaceSeparator, .unassigned, .privateUse, .surrogate]
+        var count = 0
+        for range in LauncherShellCommand.allowedRanges {
+            for value in range {
+                guard let scalar = Unicode.Scalar(value) else {
+                    XCTFail(String(format: "U+%04X 不是合法的标量", value))
+                    continue
+                }
+                count += 1
+                XCTAssertTrue(LauncherShellCommand.isAllowed(scalar))
+                if value == 0x20 { continue }
+                let category = scalar.properties.generalCategory
+                XCTAssertFalse(forbidden.contains(category), String(format: "U+%04X 的类别是 \(category)", value))
+            }
+        }
+        XCTAssertEqual(count, 39_511, "改了表就要改这个数（汉字占大头）—— 改之前先想清楚新加的字符是不是都独立成字、不比估的宽")
     }
 
     // MARK: - 第 10 步验证后定
