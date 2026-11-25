@@ -148,7 +148,17 @@ enum LauncherSuggestionProvider {
             let row = LauncherRow(id: "suggest/wordcount", title: L("launcher.suggest.wordCount \(words) \(characters)"),
                                   source: L("launcher.suggest.source.wordCount"), icon: .symbol("number"))
             return [.instant(LauncherInstant(row: row, copyText: String(stats.words)))]
-        case .runInTerminal, .reminder:
+        case .runInTerminal(let command):
+            // 像命令（PR 10）：在偏好终端里跑这一行（`$ ` 已去掉）。要按两次 ⏎，第二次之前标题写着完整的命令。
+            let row = LauncherRow(id: "suggest/terminal",
+                                  title: L("launcher.suggest.runInTerminal \(LauncherSuggestionText.quote(command))"),
+                                  source: L("launcher.suggest.source.terminal"), icon: .symbol("terminal"))
+            let suggestion = LauncherSuggestion(
+                row: row, usageKey: nil,
+                action: .run { TerminalLauncher.run(command: LauncherShellHandoff.runLine(command), in: nil) },
+                confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.run"), object: command))
+            return [.action(suggestion)]
+        case .reminder:
             return []
         }
     }
