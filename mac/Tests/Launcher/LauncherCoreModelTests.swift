@@ -230,4 +230,17 @@ final class LauncherCoreModelTests: XCTestCase {
         let buckets = Set((0..<5000).map { LauncherEntryText.relativeBucket(age: Double($0) * 17) })
         XCTAssertLessThan(buckets.count, 90)
     }
+
+    // MARK: - 刷新节流（PR 11：Claude Code 交已知文件时顺带刷新最近文件）
+
+    func testRefreshThrottleRunsAtMostOncePerInterval() {
+        var throttle = LauncherRefreshThrottle(interval: 30)
+        let start = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(throttle.shouldRun(now: start), "第一次")
+        XCTAssertFalse(throttle.shouldRun(now: start.addingTimeInterval(5)))
+        XCTAssertFalse(throttle.shouldRun(now: start.addingTimeInterval(29.9)))
+        XCTAssertTrue(throttle.shouldRun(now: start.addingTimeInterval(30)), "到了间隔")
+        XCTAssertFalse(throttle.shouldRun(now: start.addingTimeInterval(40)), "从上次做的时候重新算")
+        XCTAssertEqual(throttle.lastRun, start.addingTimeInterval(30))
+    }
 }

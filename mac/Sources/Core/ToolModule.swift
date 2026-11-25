@@ -58,6 +58,12 @@ protocol ToolModule: AnyObject {
     func launcherCommands() -> [LauncherCommand]
     /// 交给快速入口搜索的数据来源，默认没有（剪贴板历史、文本片段、会议、会话）。见 docs/launcher/TECH_DESIGN.md §3.2。
     func launcherSources() -> [any LauncherSearchable]
+    /// 快速入口要自己扫的目录（Spotlight 不建索引的地方，绝对路径），默认没有。快速入口在后台遍历、只记文件名和路径在内存里；
+    /// 不存在的目录由它在后台跳过，这里不用先查（零磁盘 IO）。见 docs/launcher/TECH_DESIGN.md §6.4「来源 B」。
+    func launcherFileRoots() -> [String]
+    /// 交给快速入口按名字搜的已知文件，默认没有（Claude Code 会话写过的文件）。只读内存；面板呼出时取一次。
+    /// 见 docs/launcher/TECH_DESIGN.md §6.4「来源 C」。
+    func launcherKnownFiles() -> [LauncherKnownFile]
 }
 
 extension ToolModule {
@@ -67,5 +73,7 @@ extension ToolModule {
     func presentationRoles() -> PresentationRoles { PresentationRoles() }
     func launcherCommands() -> [LauncherCommand] { [] }
     func launcherSources() -> [any LauncherSearchable] { [] }
+    func launcherFileRoots() -> [String] { [] }
+    func launcherKnownFiles() -> [LauncherKnownFile] { [] }
     var settingsAction: (@MainActor () -> Void)? { nil }
 }

@@ -91,6 +91,19 @@ final class LauncherEntryProvider {
         return items
     }
 
+    /// 这次会话里这几个来源的文字条目（条目键、搜索全文、时间）：文件搜索从里面抽剪贴板里出现过的路径（§6.4，PR 11）。图片条目不算。
+    func sessionTexts(sourceIDs: Set<String>) -> [LauncherTextSnapshot] {
+        guard let session else { return [] }
+        return session.filter { sourceIDs.contains($0.sourceID) }.flatMap { source in
+            source.entries.compactMap { entry in
+                entry.image == nil
+                    ? LauncherTextSnapshot(key: LauncherCandidate.key(sourceID: source.sourceID, entryID: entry.id),
+                                           text: entry.searchText, date: entry.date)
+                    : nil
+            }
+        }
+    }
+
     /// 面板收起：放掉这次的条目，空闲时再补一次键（会话中新复制的、来源里新加的）。
     func endSession() {
         session = nil

@@ -5,9 +5,9 @@ import Foundation
 // 同步、只读内存，打字路径上不建搜索键、不碰磁盘。
 // 输入是路径时（§6.5）只出路径的行：要读磁盘，由控制器在后台查、查完交回来（`setPathResult`）；
 // 还没回来时，还在同一处打字就先显示上一个路径的行（否则显示「正在查找」），免得每打一个字列表收起又长出来。
-// 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`）：交回的行和内存里的候选一起排序
-// （没打前缀时最多 5 行，权重最低，排在 App、命令之后），带 `/` 的片段的确切命中固定在最前；
-// 新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
+// 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`，几个来源先回来的先交，可能交几次）：交回的行和内存里的候选一起排序
+// （没打前缀时最多 5 行，权重最低，排在 App、命令之后）；固定的行 —— 带 `/` 的片段的确切命中、输入像文件名时名字正好是它的
+// （PR 11）—— 排在计算结果之后、所有建议和普通行之前；新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
 // 建议（§5.4，没打前缀、输入不是路径时）：对应建议（打开网址、写邮件、颜色、字数）插在计算结果之后、识别结果之前，
 // 兜底建议（文字动作、上网搜、搜文件）接在最后 —— 输入不为空时列表里总有事可做，「没有结果」只在连兜底建议都没有时出现。
 // 输入里挂着图片时（§5.5）只出这张图的建议（识别结果 + 图片动作），输入框里的字是筛选词；
@@ -85,7 +85,8 @@ struct LauncherSearchOutcome {
     var pendingPath: LauncherPathInput? = nil
     /// 这次输入要搜的文件；不搜为 nil（控制器停掉还没回来的那次）。
     var fileRequest: LauncherFileSearchRequest? = nil
-    /// 要搜的文件结果还没搜过或过期了：控制器去搜（`LauncherFileProvider`），搜完 `setFileResult`。
+    /// 要搜的文件结果还没搜过、过期了、或者只回来了一部分来源（`LauncherFileResultState.pending`）：
+    /// 控制器去搜（`LauncherFileProvider`；正在跑的就是它时不重发），搜完 `setFileResult`。
     var pendingFiles: LauncherFileSearchRequest? = nil
 
     /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
@@ -99,6 +100,8 @@ final class LauncherEngine {
     /// 没打前缀时这些来源最多出几行：剪贴板几千条，不限的话一个常见词就把 App 和命令挤下去（`c ` 前缀下不限）。
     /// 文件同理：没打前缀时最多 5 行（`f ` 前缀下最多 `LauncherFileFilter.maxResults` 行）。
     static let unscopedSourceLimits = ["clipboard": 5, LauncherFileProvider.sourceID: 5]
+    /// 没打前缀时只来自自己扫的目录的文件最多 2 行（还占文件的 5 行），同档排在别的文件后面（PR 11，§6.4）。
+    static let unscopedGroupLimits = [LauncherFileFilter.scannedOnlyGroup: LauncherFileFilter.unscopedScannedOnlyLimit]
 
     private var allCandidates: [LauncherCandidate] = []
     private var candidatesBySource: [String: [LauncherCandidate]] = [:]
@@ -122,10 +125,12 @@ final class LauncherEngine {
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
     private var pathResult: (input: LauncherPathInput, items: [LauncherItem])?
-    /// 最近一次搜好的文件：片段的确切命中（固定在最前）和交给排序的。
-    private var fileResult: (request: LauncherFileSearchRequest, pinned: [LauncherItem], ranked: [LauncherItem])?
+    /// 最近一次搜好的文件：固定在最前的（片段的确切命中、名字正好是输入的）和交给排序的；`complete` = 所有来源都回来了。
+    private var fileResult: (request: LauncherFileSearchRequest, pinned: [LauncherItem], ranked: [LauncherItem], complete: Bool)?
     /// 这次显示的后台来的行（路径、文件），按行 id：执行、Tab 补全时按 id 找回来。
     private var asyncItemsByKey: [String: LauncherItem] = [:]
+    /// 最近一次查询要搜的文件（不搜为 nil）。
+    private var lastFileRequest: LauncherFileSearchRequest?
 
     init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -161,6 +166,7 @@ final class LauncherEngine {
         pathResult = nil
         fileResult = nil
         asyncItemsByKey = [:]
+        lastFileRequest = nil
         textActions = []
         suggestionsByKey = [:]
         pastedText = nil
@@ -177,9 +183,18 @@ final class LauncherEngine {
         pathResult = (input, items)
     }
 
-    /// 后台搜好了文件（`LauncherFileProvider`）。输入要搜的还是这个时，下一次 `search` 就用它们。
-    func setFileResult(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest) {
-        fileResult = (request, pinned, ranked)
+    /// 后台搜好了文件（`LauncherFileProvider`；`complete == false` = 只回来了一部分来源）。输入要搜的还是这个时，下一次 `search` 就用它们。
+    func setFileResult(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
+                       complete: Bool = true) {
+        fileResult = (request, pinned, ranked, complete)
+    }
+
+    /// 文件来源的表换了（扫完了、已知文件 / 剪贴板路径重建了）：最近一次输入正在搜文件时，手上的结果当成不完整
+    /// （先照旧显示，`LauncherFileResultState.expired`），返回这次要搜的请求；没在搜文件返回 nil。
+    func expireFileResults() -> LauncherFileSearchRequest? {
+        guard let lastFileRequest else { return nil }
+        fileResult?.complete = false
+        return lastFileRequest
     }
 
     /// 计算结果、识别结果的行（不是这类行为 nil）。
@@ -192,11 +207,13 @@ final class LauncherEngine {
         suggestionsByKey[key]
     }
 
-    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果、对应建议、识别结果（固定在最前），再放片段的确切命中；
+    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果，再放固定的文件行（片段的确切命中、名字正好是输入的），
+    /// 再放对应建议、识别结果；
     /// 查询词为空时只给用过的（使用分 > 0）最多 8 行；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）；
     /// 最后接兜底建议（§5.4）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
+        lastFileRequest = nil
 
         // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
         if let attachment {
@@ -257,6 +274,7 @@ final class LauncherEngine {
         suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID)
+        lastFileRequest = fileRequest
         let files = currentFiles(for: fileRequest)
         asyncItemsByKey = Dictionary((files.pinned + files.ranked).map { ($0.row.id, $0) },
                                      uniquingKeysWith: { first, _ in first })
@@ -276,30 +294,37 @@ final class LauncherEngine {
                 .items.filter { $0.usageScore > 0 }
         } else {
             ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
-                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:]).items
+                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:],
+                                          groupLimits: query.isUnscoped ? Self.unscopedGroupLimits : [:]).items
         }
         var rows: [LauncherRow] = instants.prefix(calculationCount).map(\.row)
+        // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。
+        rows += files.pinned.map(\.row)
         rows += suggestions.leadingRows
         rows += instants.dropFirst(calculationCount).map(\.row)
-        rows += files.pinned.map(\.row)
         rows += ranked.compactMap { item(forKey: $0.key)?.row }
         rows += suggestions.trailing.map(\.row)
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        // 结果不完整（只回来了一部分来源）也算还要搜：改错字（R → R' → R）时 R 的搜索已经被顶掉了，不重发 Spotlight 就再也不来。
+        let state = fileResult.map { LauncherFileResultState(request: $0.request, complete: $0.complete) }
         return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
-                                     fileRequest: fileRequest, pendingFiles: files.isFresh ? nil : fileRequest)
+                                     fileRequest: fileRequest,
+                                     pendingFiles: LauncherFileResultState.pending(for: fileRequest, have: state))
     }
 
-    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它；还没回来 → 上一次「名字包含」的结果里仍匹配的先顶着
-    /// （片段的确切命中不顶）；不搜文件 → 没有，并放掉上一次的。
-    private func currentFiles(for request: LauncherFileSearchRequest?)
-        -> (pinned: [LauncherItem], ranked: [LauncherItem], isFresh: Bool) {
+    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它（不完整也先用）；还没回来 → 上一次「名字包含」的结果里
+    /// 仍匹配的先顶着（固定行只在名字仍正好是现在的输入时顶着，片段的确切命中不顶）；不搜文件 → 没有，并放掉上一次的。
+    private func currentFiles(for request: LauncherFileSearchRequest?) -> (pinned: [LauncherItem], ranked: [LauncherItem]) {
         guard let request else {
             fileResult = nil
-            return ([], [], true)
+            return ([], [])
         }
-        guard let fileResult else { return ([], [], false) }
-        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked, true) }
+        guard let fileResult else { return ([], []) }
+        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked) }
+        let pinned = request.pinnedName.map { name in
+            fileResult.pinned.filter { $0.row.title.caseInsensitiveCompare(name) == .orderedSame }
+        } ?? []
         let stale = fileResult.ranked.filter { LauncherFileFilter.stillMatches(name: $0.row.title, request: request) }
-        return ([], stale, false)
+        return (pinned, stale)
     }
 }

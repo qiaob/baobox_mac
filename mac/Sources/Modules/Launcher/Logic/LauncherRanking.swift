@@ -17,6 +17,9 @@ struct LauncherCandidate: Equatable, Sendable {
     /// 来源已经算好的匹配分（文件：后端已按每个词筛过，分数是匹配的档，见 `LauncherFileFilter.tierScore`）：
     /// 有它时排序不再拿搜索键去匹配，直接用它（查询为空时照样是 0）。nil = 照常匹配。
     let presetMatchScore: Int?
+    /// 限额组（PR 11）：排序时传了这个组的 `groupLimits`，组里的候选最多出那么多行，同分时排在不在受限组里的候选后面。
+    /// 文件：只来自快速入口自己扫的目录的是 `LauncherFileFilter.scannedOnlyGroup`（Claude Code 临时目录里多是会话的中间产物）。
+    var limitGroup: String? = nil
 
     init(sourceID: String, entryID: String, searchKeys: [LauncherSearchKey], date: Date? = nil,
          presetMatchScore: Int? = nil) {
@@ -101,10 +104,13 @@ enum LauncherRanking {
     ///     超出的跳过、由后面的行补上，`limit` 仍是总行数。
     ///   - minimumMatchScores: 某些来源的最低匹配分，低于它的候选不出、也不算进最高匹配分（出厂：剪贴板不认跳字）。
     ///     别名命中、「这个输入上次选了它」不受门槛限制；查询为空时不看门槛。
+    ///   - groupLimits: 限额组（`LauncherCandidate.limitGroup`）最多出几行（同时照样占来源的行数）；在这里有限额的组，
+    ///     同分时排在别的候选后面（PR 11：没打前缀时只来自自己扫的目录的文件最多 2 行、同一档里排在别的文件后面）。
     static func rank(_ candidates: [LauncherCandidate], query: String, records: LauncherUsageRecords, now: Date,
                      weights: LauncherSourceWeights = .standard, limit: Int = LauncherRanking.defaultLimit,
                      sourceLimits: [String: Int] = [:],
-                     minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores) -> LauncherRankingResult {
+                     minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores,
+                     groupLimits: [String: Int] = [:]) -> LauncherRankingResult {
         let matchQuery = LauncherMatchQuery(query)
         let aliasKey = records.key(forAlias: query)
         let rememberedKey = records.rememberedKey(forInput: query)
@@ -140,30 +146,35 @@ enum LauncherRanking {
                 isAliasMatch: isAliasMatch,
                 isRemembered: isRemembered
             )
+            let limitedGroup = candidate.limitGroup.flatMap { groupLimits[$0] == nil ? nil : $0 }
             scored.append(Scored(item: item, titleLength: candidate.searchKeys.first?.length ?? 0,
-                                 date: candidate.date ?? .distantFuture))
+                                 date: candidate.date ?? .distantFuture, limitedGroup: limitedGroup))
             best = max(best ?? match, match)
         }
 
         scored.sort(by: precedes)
-        return LauncherRankingResult(items: top(scored, limit: limit, sourceLimits: sourceLimits), bestMatchScore: best)
+        return LauncherRankingResult(items: top(scored, limit: limit, sourceLimits: sourceLimits, groupLimits: groupLimits),
+                                     bestMatchScore: best)
     }
 
-    /// 排好序的前 `limit` 行，每个来源不超过 `sourceLimits` 里给的行数。
-    private static func top(_ scored: [Scored], limit: Int, sourceLimits: [String: Int]) -> [LauncherRankedItem] {
+    /// 排好序的前 `limit` 行，每个来源不超过 `sourceLimits` 里给的行数，每个限额组不超过 `groupLimits` 里给的行数
+    /// （两样都要满足；被跳过的不占行数）。
+    private static func top(_ scored: [Scored], limit: Int, sourceLimits: [String: Int],
+                            groupLimits: [String: Int]) -> [LauncherRankedItem] {
         let limit = max(0, limit)
-        guard !sourceLimits.isEmpty else { return scored.prefix(limit).map(\.item) }
+        guard !sourceLimits.isEmpty || !groupLimits.isEmpty else { return scored.prefix(limit).map(\.item) }
         var items: [LauncherRankedItem] = []
         items.reserveCapacity(min(limit, scored.count))
         var used: [String: Int] = [:]
+        var usedByGroup: [String: Int] = [:]
         for entry in scored {
             guard items.count < limit else { break }
             let sourceID = entry.item.sourceID
-            if let sourceLimit = sourceLimits[sourceID] {
-                let count = used[sourceID, default: 0]
-                guard count < sourceLimit else { continue }
-                used[sourceID] = count + 1
-            }
+            if let sourceLimit = sourceLimits[sourceID], used[sourceID, default: 0] >= sourceLimit { continue }
+            if let group = entry.limitedGroup, let groupLimit = groupLimits[group],
+               usedByGroup[group, default: 0] >= groupLimit { continue }
+            if sourceLimits[sourceID] != nil { used[sourceID, default: 0] += 1 }
+            if let group = entry.limitedGroup { usedByGroup[group, default: 0] += 1 }
             items.append(entry.item)
         }
         return items
@@ -188,12 +199,16 @@ enum LauncherRanking {
         let titleLength: Int
         /// 没有时间的记成 distantFuture：同分时排在有时间的前面（一个全序，排序结果确定）。
         let date: Date
+        /// 在这次排序里有限额的组（`groupLimits` 里有它）；nil = 不受组的限额。
+        let limitedGroup: String?
     }
 
     private static func precedes(_ a: Scored, _ b: Scored) -> Bool {
         if a.item.isAliasMatch != b.item.isAliasMatch { return a.item.isAliasMatch }
         if a.item.isRemembered != b.item.isRemembered { return a.item.isRemembered }
         if a.item.score != b.item.score { return a.item.score > b.item.score }
+        // 同分：受限额组的排后面（只来自自己扫的目录的文件排在同一档的别的文件后面）。
+        if (a.limitedGroup == nil) != (b.limitedGroup == nil) { return a.limitedGroup == nil }
         if a.item.usageScore != b.item.usageScore { return a.item.usageScore > b.item.usageScore }
         if a.date != b.date { return a.date > b.date }
         if a.titleLength != b.titleLength { return a.titleLength < b.titleLength }

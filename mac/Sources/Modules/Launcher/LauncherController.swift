@@ -7,7 +7,8 @@ import os
 // 计算结果、识别结果的行不记使用：⏎ 复制，⌘⏎ 插入前台 App。
 // 输入是路径时（§6.5）引擎只出路径的行，路径在后台查（`LauncherPathProvider`），查完再刷新一次；
 // 路径行 ⌘⏎ 在访达里显示、Tab 把输入框换成选中行的完整路径。
-// 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、Spotlight、过滤排序），搜完再刷新一次。
+// 文件按名字搜（§6.4）：引擎说要搜什么，控制器交给 `LauncherFileProvider`（防抖、四个来源合并、过滤排序），每回来一批刷新一次；
+// 四个来源的数据（自己扫的目录、已知文件、剪贴板里的路径）由 `LauncherFileSources` 在呼出时 / 后台准备（PR 11）。
 // 建议行（§5.4）：呼出时收一次各模块的文字动作交给引擎；颜色、字数这类复制行同计算结果，其余建议行 ⏎ / ⌘⏎ 都是执行。
 // 图片（§5.5）：⌘V 时先看剪贴板里是什么（`LauncherPasteClassifier`）—— 图片挂成输入里的附件（输入框左边一个小标签），
 // 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
@@ -31,7 +32,8 @@ final class LauncherController {
 
     private let apps = LauncherAppProvider()
     private let paths = LauncherPathProvider()
-    private let files = LauncherFileProvider()
+    private let fileSources: LauncherFileSources
+    private let files: LauncherFileProvider
     private let thumbnails = LauncherThumbnailProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
@@ -56,18 +58,22 @@ final class LauncherController {
     init(registry: ToolRegistry?) {
         commands = LauncherCommandProvider(registry: registry)
         entries = LauncherEntryProvider(registry: registry)
+        fileSources = LauncherFileSources(registry: registry)
+        files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
         model.onRun = { [weak self] index in self?.run(at: index) }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
         model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
         thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
         entries.onKeysAdded = { [weak self] in self?.entryKeysAdded() }
+        fileSources.onTablesChanged = { [weak self] in self?.fileTablesChanged() }
     }
 
     /// 模块 activate：后台建 App 索引、读使用记录；几秒后预热一次。
     func activate() {
         apps.start()
         usage.load()
+        fileSources.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstPrewarmDelay) { [weak self] in
             MainActor.assumeIsolated { self?.prewarm() }
         }
@@ -121,6 +127,8 @@ final class LauncherController {
         let report = entries.beginSession()
         let entryItems = entries.sessionItems()
         let entriesMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - entriesStart) / 1_000_000
+        // 文件来源（§6.4）：已知文件、剪贴板里的路径在后台建表；自己扫的目录距上次超过 30 秒就后台重扫。
+        fileSources.panelShown(clipboardTexts: entries.sessionTexts(sourceIDs: LauncherFileSources.clipboardSourceIDs))
         loadEngine(entryItems: entryItems)
         refresh()
         panel.show(LauncherPanelView(model: model), height: model.panelHeight,
@@ -160,11 +168,11 @@ final class LauncherController {
                         .union(entries.sessionSourceIDs))
     }
 
-    /// 后台建好了一批条目的搜索键、面板还开着：重新装一次，同一个输入再查一次（选中的行还在就留在它上面）。
+    /// 后台建好了一批条目的搜索键、面板还开着：重新装一次，同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。
     private func entryKeysAdded() {
         guard panel.isVisible else { return }
         loadEngine(entryItems: entries.sessionItems())
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
@@ -180,7 +188,9 @@ final class LauncherController {
         panel.setHeight(model.panelHeight)
     }
 
-    private func refresh(keepSelection: Bool = false) {
+    /// 查一次、换上新的行。`background`：同一个输入、后台结果回来了（文件、路径、搜索键、识别结果）—— 选中规则见
+    /// `LauncherSelectionState`（没手动选过 → 第一行；手动选过 → 留在他选的那一行）；false = 输入变了，选中第一行。
+    private func refresh(background: Bool = false) {
         engine.pastedText = pastedText
         engine.attachment = attachment
         let outcome = engine.search(text, records: usage.records, now: Date())
@@ -188,7 +198,7 @@ final class LauncherController {
         if outcome.duration > Self.slowQueryThreshold {
             Self.log.notice("slow query: \(outcome.duration * 1000, format: .fixed(precision: 2), privacy: .public) ms, \(outcome.candidateCount, privacy: .public) candidates")
         }
-        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, keepSelection: keepSelection,
+        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, newInput: !background,
                       searching: outcome.isPending)
         requestBackgroundResults(outcome)
     }
@@ -204,9 +214,10 @@ final class LauncherController {
             paths.cancel()
         }
         if let request = outcome.pendingFiles {
-            if files.inFlight != request {
-                files.search(request) { [weak self] request, pinned, ranked in
-                    self?.filesFound(pinned: pinned, ranked: ranked, for: request)
+            // 正在跑的就是它（只回来了一部分来源）时不重发，等它回齐（`LauncherFileResultState.shouldStart`）。
+            if LauncherFileResultState.shouldStart(pending: request, inFlight: files.inFlight) {
+                files.search(request) { [weak self] request, pinned, ranked, complete in
+                    self?.filesFound(pinned: pinned, ranked: ranked, for: request, complete: complete)
                 }
             }
         } else {
@@ -214,19 +225,33 @@ final class LauncherController {
         }
     }
 
-    /// 文件搜好了：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
-    private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest) {
+    /// 文件搜好了（或先回来了一部分来源）：交给引擎，同一个输入再查一次（后台刷新：没手动选过选中第一行 ——
+    /// 输入文件名后 ⏎ 打开的就是当下排第一的文件；手动选过留在他选的那一行。`LauncherSelectionState`）。
+    private func filesFound(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
+                            complete: Bool) {
         guard panel.isVisible else { return }
-        engine.setFileResult(pinned: pinned, ranked: ranked, for: request)
-        refresh(keepSelection: true)
+        engine.setFileResult(pinned: pinned, ranked: ranked, for: request, complete: complete)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
-    /// 后台查好了一个路径：交给引擎，同一个输入再查一次（选中的行还在就留在它上面）。
+    /// 文件来源的表换上了（扫完了、已知文件 / 剪贴板路径重建了）：面板开着、这次输入正在搜文件，就重查（结果先照旧显示）——
+    /// 刚呼出就贴文件名、冷扫描还没完时，不用再按一个键才出来。同一个请求只重查内存来源（PR 11 复查后定）：Spotlight 已经交回的
+    /// 那一批留着、还在路上的让它继续，列表里不会出现 Spotlight 的行消失又回来，也不多查一次 Spotlight。
+    /// 最近一次查询不是这个请求（或已经停了）时才整个重搜。
+    private func fileTablesChanged() {
+        guard panel.isVisible, let request = engine.expireFileResults() else { return }
+        guard !files.requeryLocalSources(for: request) else { return }
+        files.cancel()
+        refresh(background: true)
+        panel.setHeight(model.panelHeight)
+    }
+
+    /// 后台查好了一个路径：交给引擎，同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。
     private func pathResolved(_ items: [LauncherItem], for input: LauncherPathInput) {
         guard panel.isVisible else { return }
         engine.setPathResult(items, for: input)
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
@@ -482,10 +507,10 @@ final class LauncherController {
         }
     }
 
-    /// 挂着的这张图取完字了：同一个输入再查一次（选中的行还在就留在它上面）。不是当前附件的（换了、去了）不管。
+    /// 挂着的这张图取完字了：同一个输入再查一次（后台刷新，选中规则见 `LauncherSelectionState`）。不是当前附件的（换了、去了）不管。
     private func recognitionFinished(_ recognition: LauncherRecognition) {
         guard panel.isVisible, attachment?.recognition === recognition else { return }
-        refresh(keepSelection: true)
+        refresh(background: true)
         panel.setHeight(model.panelHeight)
     }
 
