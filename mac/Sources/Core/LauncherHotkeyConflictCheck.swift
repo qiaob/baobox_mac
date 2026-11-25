@@ -8,7 +8,7 @@ import AppKit
 enum LauncherHotkeyConflictCheck {
     /// 确认撞了的那个 App 的名字（Raycast）；没有证据时为 nil。
     static func confirmedConflictName() -> String? {
-        let id = LauncherHotkeyConflict.launcherHotkeyID
+        let id = LauncherHotkeyID.toggle
         let combo = HotkeyCenter.shared.combo(for: id)
         let registered = LauncherHotkeyConflict.isRegistered(
             hasCombo: combo != nil,

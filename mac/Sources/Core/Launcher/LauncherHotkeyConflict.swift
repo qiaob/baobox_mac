@@ -8,8 +8,6 @@ import Foundation
 // 读正在运行的 App、此刻的快捷键、Raycast 的那一个偏好键在 `Core/LauncherHotkeyConflictCheck.swift`。
 
 enum LauncherHotkeyConflict {
-    /// 快速入口呼出键的快捷键 id（= `LauncherTool.toggleHotkeyID`；Core 不认识模块，写一份）。
-    static let launcherHotkeyID = "launcher.toggle"
     /// Space 的虚拟键码。
     static let spaceKeyCode: UInt32 = 0x31
     /// Carbon 的 ⌘（= `KeyCombo.cmd`）。

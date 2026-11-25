@@ -8,6 +8,10 @@ final class LauncherHotkeyConflictTests: XCTestCase {
     private let shift: UInt32 = 512
     private let option: UInt32 = 2048
 
+    func testLauncherHotkeyIDIsStable() {
+        XCTAssertEqual(LauncherHotkeyID.toggle, "launcher.toggle", "也是持久化的键名（hotkey.launcher.toggle）：改了用户录的键位就丢了")
+    }
+
     func testCommandSpace() {
         XCTAssertTrue(LauncherHotkeyConflict.isCommandSpace(keyCode: space, carbonModifiers: cmd))
         XCTAssertFalse(LauncherHotkeyConflict.isCommandSpace(keyCode: space, carbonModifiers: option), "⌥Space 不算")
