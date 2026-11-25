@@ -39,10 +39,12 @@ enum LauncherInputClassifier {
     /// 有歧义的网址（可能是文件名）按普通文字算，但带上 `url`、标上 `isAmbiguousURL`。
     /// 不是网址、邮箱、颜色时再看两个标记（第 10 步）：像一条命令（`command`，这时按普通文字算：`git status` 不当成英文短语）、
     /// 带时间的句子（`reminder`，只在给了 `clock` 时认：要按「现在」算出时刻，已经过去的不算）。
-    static func classify(_ input: String, clock: LauncherCalcContext? = nil) -> LauncherInputClassification {
+    /// `recognizesPaths`：false = 设置里关掉了「路径」（第 13 步），以 `/`、`~` 开头的也按文字分类、照常出建议。
+    static func classify(_ input: String, clock: LauncherCalcContext? = nil,
+                         recognizesPaths: Bool = true) -> LauncherInputClassification {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return LauncherInputClassification(text: "", kinds: []) }
-        if text.hasPrefix("/") || text.hasPrefix("~") {
+        if recognizesPaths, text.hasPrefix("/") || text.hasPrefix("~") {
             return LauncherInputClassification(text: text, kinds: [], isPath: true)
         }
         if let link = LauncherURLDetector.detect(text) {

@@ -91,14 +91,15 @@ extension LauncherCommand {
     /// - Parameters:
     ///   - hint: 写进提示词的参数说明（二期「一句话 → 命令」用）。
     ///   - appliesTo: 对这段文字适不适用（类别之外再细一层，见 `LauncherCommand.appliesTo`）；nil = 适用。
-    static func textAction(id: String, title: String, symbolName: String,
+    ///   - settingsTitle: 设置页里这一行的固定名字（`title` 随状态变时给；见 `LauncherCommand.settingsTitle`）。
+    static func textAction(id: String, title: String, settingsTitle: String? = nil, symbolName: String,
                            suggestion: LauncherSuggestionTraits = LauncherSuggestionTraits(),
                            hint: String = "要处理的文字",
                            appliesTo: (@MainActor (String) -> Bool)? = nil,
                            run: @escaping @MainActor (String) -> Void) -> LauncherCommand {
         LauncherCommand(id: id, title: title, symbolName: symbolName,
                         parameters: [LauncherParameter(name: textParameterKey, kind: .text, required: true, hint: hint)],
-                        suggestion: suggestion, appliesTo: appliesTo) { arguments in
+                        suggestion: suggestion, appliesTo: appliesTo, settingsTitle: settingsTitle) { arguments in
             guard case .text(let text)? = arguments[textParameterKey] else { return }
             run(text)
         }

@@ -116,7 +116,10 @@ enum LauncherFilePolicy {
     /// - 多个词用空格隔开时都要包含。
     /// - 查询词像一个文件名（`add-approval-hook.py`，PR 11）：名字完全等于它的固定排在最前（`pinnedName`）；
     ///   这样的词至少有 3 个字符（`a.b`），不带前缀的长度门槛自然满足。
-    static func request(for query: LauncherQuery, hasCalculation: Bool) -> LauncherFileSearchRequest? {
+    static func request(for query: LauncherQuery, hasCalculation: Bool,
+                        features: LauncherFeatureSet = .allEnabled) -> LauncherFileSearchRequest? {
+        // 设置里关掉了「文件」（第 13 步）：不搜。前缀也跟着失效（`LauncherFeatureSet.prefixes`），`f readme` 不会走到 "files" 那一支。
+        guard features.isEnabled(.files) else { return nil }
         let text = query.text
         guard !text.isEmpty, text.count <= maxQueryLength, !text.contains(where: \.isNewline) else { return nil }
         switch query.sourceID {

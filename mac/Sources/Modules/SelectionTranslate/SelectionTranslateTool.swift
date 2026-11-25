@@ -136,6 +136,7 @@ final class SelectionTranslateTool: ToolModule {
         commands.append(LauncherCommand.textAction(
             id: "selectiontranslate.text.speak",
             title: speaking ? L("selectiontranslate.launcher.stopSpeaking") : L("selectiontranslate.launcher.speak"),
+            settingsTitle: L("selectiontranslate.launcher.speak"),  // 设置页的功能开关那一行：正在读时也叫「朗读」（第 13 步）
             symbolName: speaking ? "stop.circle" : "speaker.wave.2",
             suggestion: LauncherSuggestionTraits(priority: 65)) { text in
             SelectionTranslateController.shared.toggleSpeech(text)

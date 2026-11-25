@@ -68,6 +68,9 @@ struct LauncherCommand {
     /// 之外再细一层，比如「是会议链接」「不超过命令行的长度上限」。nil = 适用。类别对得上才调；打字时每次按键都可能调：
     /// 只能看这段文字和内存里的状态，不读盘、不联网、不阻塞。
     var appliesTo: (@MainActor (String) -> Bool)? = nil
+    /// 设置页「快速入口」功能开关那一行的名字（docs/launcher/TECH_DESIGN.md §11「功能开关」，第 13 步）：`title` 随状态变的
+    /// （带最近的项目名、正在朗读时是「停止朗读」）在这里给一个固定的名字 —— 开关管的是整个动作。nil = 用 `title`。
+    var settingsTitle: String? = nil
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void
 }

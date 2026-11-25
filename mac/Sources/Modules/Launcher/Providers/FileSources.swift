@@ -57,10 +57,13 @@ final class LauncherFileSources {
         ])
     }
 
-    /// 模块 activate：几秒后扫一次。
+    /// 模块 activate：几秒后扫一次（设置里关掉了「文件」就不扫；之后打开了，下次呼出时扫）。
     func activate() {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstScanDelay) { [weak self] in
-            MainActor.assumeIsolated { self?.rescanIfStale() }
+            MainActor.assumeIsolated {
+                guard LauncherFeatureSettings.load().isEnabled(.files) else { return }
+                self?.rescanIfStale()
+            }
         }
     }
 

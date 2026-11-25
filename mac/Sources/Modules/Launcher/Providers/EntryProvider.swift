@@ -5,6 +5,8 @@ import os
 // 面板呼出时向各来源取一次条目（只读内存），缓存到收起；搜索键按「条目键 + 文字」缓存（`Logic/LauncherEntryKeys.swift`），
 // 只给新出现的补建 —— 缺得多时只同步建最新的 200 条，其余在后台建，建完通知控制器刷新一次列表。
 // 不呼出时也预热：`activate()` 后几秒一次、每次收起后空闲时一次，让下次呼出基本不用现建。
+// 设置里关掉的来源（第 13 步，`features`）：条目照样取（只读内存 ——「刚复制的」、文件搜索里的剪贴板路径还要用），但不交给引擎、
+// 前缀不生效、不建搜索键。
 
 @MainActor
 final class LauncherEntryProvider {
@@ -43,14 +45,16 @@ final class LauncherEntryProvider {
 
     /// 后台建好了一批键、面板还开着：控制器重新装一次条目、刷新列表。
     var onKeysAdded: (() -> Void)?
+    /// 这次呼出读到的功能开关（第 13 步）：控制器在 `beginSession` 之前设；面板没开着时预热自己读一次设置。
+    var features = LauncherFeatureSet.allEnabled
 
     init(registry: ToolRegistry?) {
         self.registry = registry
     }
 
-    /// 这次会话里有的来源 id（它们的前缀才生效）。
+    /// 这次会话里有的、开着的来源 id（它们的前缀才生效）。
     var sessionSourceIDs: Set<String> {
-        Set((session ?? []).map(\.sourceID))
+        Set((session ?? []).map(\.sourceID).filter { features.isSourceEnabled($0) })
     }
 
     /// 面板呼出：取一次条目，补建缺的键（最新的至多 200 条现在建，其余交给后台）。
@@ -60,12 +64,14 @@ final class LauncherEntryProvider {
         let sources = collect()
         session = sources
         let specs = sources.flatMap(\.specs)
+        // 关掉的来源的键留在缓存里（打开后不用重建），但不补建。
         cache.retain(Set(specs.map(\.key)))
-        let missing = cache.missing(specs)
+        let enabled = enabledSpecs(sources)
+        let missing = cache.missing(enabled)
         let (now, later) = LauncherEntryKeyCache.split(missing, budget: Self.syncKeyBudget)
         cache.build(now)
         buildInBackground(later.filter { !building.contains($0.key) })
-        return Report(entries: specs.count, built: now.count, pending: later.count)
+        return Report(entries: enabled.count, built: now.count, pending: later.count)
     }
 
     /// 这次会话里键已经建好的条目（后台建好一批后再调一次，就能搜到新的）。
@@ -73,7 +79,7 @@ final class LauncherEntryProvider {
         guard let session else { return [] }
         var items: [LauncherItem] = []
         items.reserveCapacity(session.reduce(0) { $0 + $1.entries.count })
-        for source in session {
+        for source in session where features.isSourceEnabled(source.sourceID) {
             for (entry, spec) in zip(source.entries, source.specs) {
                 guard let keys = cache.keys(for: spec) else { continue }
                 let candidate = LauncherCandidate(sourceID: source.sourceID, entryID: entry.id, searchKeys: keys,
@@ -133,11 +139,18 @@ final class LauncherEntryProvider {
 
     /// 预热：取一次条目（只读内存），把缺的键全交给后台建；来源里已经没有的从缓存里删掉。
     func prewarm() {
-        let specs = collect().flatMap(\.specs)
+        // 面板没开着时按此刻的设置（启动后第一次预热还没呼出过；开着时保持这次呼出读到的，到收起为止不变）。
+        if session == nil { features = LauncherFeatureSettings.load() }
+        let sources = collect()
         if session == nil {
-            cache.retain(Set(specs.map(\.key)))
+            cache.retain(Set(sources.flatMap(\.specs).map(\.key)))
         }
-        buildInBackground(cache.missing(specs).filter { !building.contains($0.key) })
+        buildInBackground(cache.missing(enabledSpecs(sources)).filter { !building.contains($0.key) })
+    }
+
+    /// 开着的来源的键说明（关掉的不建键）。
+    private func enabledSpecs(_ sources: [SourceEntries]) -> [LauncherEntryKeySpec] {
+        sources.filter { features.isSourceEnabled($0.sourceID) }.flatMap(\.specs)
     }
 
     // MARK: - 内部

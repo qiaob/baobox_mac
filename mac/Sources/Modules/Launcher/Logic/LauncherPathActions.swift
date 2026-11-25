@@ -30,12 +30,16 @@ enum LauncherPathActionPlan {
     /// 最多几行（设计：路径行和文件夹内容之间不要隔太多）。
     static let maxRows = 3
 
-    /// 这个路径后面出哪几行。`declaredPriorities`：模块声明的文件动作的档位（按声明的顺序）；按档位排、同档按声明顺序。
-    static func actions(for target: LauncherPathTarget, declaredPriorities: [Int]) -> [LauncherPathAction] {
+    /// 这个路径后面出哪几行。`declaredPriorities`：模块声明的文件动作的档位（按声明的顺序；设置里关掉的调用方已经去掉了）；
+    /// 按档位排、同档按声明顺序。`features`：设置里关掉了「在终端里打开」「复制路径」的不出（第 13 步）。
+    static func actions(for target: LauncherPathTarget, declaredPriorities: [Int],
+                        features: LauncherFeatureSet = .allEnabled) -> [LauncherPathAction] {
+        let copyPath: [LauncherPathAction] = features.isEnabled(.copyPath) ? [.copyPath] : []
         if target.isDirectory && !target.isPackage {
-            return Array([LauncherPathAction.openInTerminal, .copyPath].prefix(maxRows))
+            let openInTerminal: [LauncherPathAction] = features.isEnabled(.openInTerminal) ? [.openInTerminal] : []
+            return Array((openInTerminal + copyPath).prefix(maxRows))
         }
-        var actions: [LauncherPathAction] = [.copyPath]
+        var actions = copyPath
         if !target.isPackage {
             let order = declaredPriorities.indices.sorted { a, b in
                 declaredPriorities[a] != declaredPriorities[b] ? declaredPriorities[a] < declaredPriorities[b] : a < b

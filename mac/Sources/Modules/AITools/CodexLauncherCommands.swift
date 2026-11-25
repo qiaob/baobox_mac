@@ -15,7 +15,9 @@ extension AIToolsTool {
         let directory = project == nil ? NSHomeDirectory() : recent
         let title = project.map { L("aitools.launcher.handOffTo \($0)") } ?? L("aitools.launcher.handOff")
         return [
-            .textAction(id: "aitools.text.handOff", title: title, symbolName: "chevron.left.forwardslash.chevron.right",
+            // 设置页的功能开关那一行用固定的名字（标题带最近的项目名，第 13 步）。
+            .textAction(id: "aitools.text.handOff", title: title, settingsTitle: L("aitools.launcher.handOff"),
+                        symbolName: "chevron.left.forwardslash.chevron.right",
                         suggestion: LauncherSuggestionTraits(priority: 56),
                         hint: "交给 Codex 的第一条消息",
                         appliesTo: { LauncherShellHandoff.canHandOff($0) }) { text in

@@ -36,6 +36,8 @@ struct LauncherSuggestionPlan: Equatable, Sendable {
     var top: [LauncherLeadingSuggestion] = []
     /// 输入是「提醒」/「reminders」：列出还没到点的提醒（每条一行，⏎ 取消，第 10 步）。
     var showsReminders = false
+    /// 兜底建议里快速入口自己的那几条（上网搜、搜文件名）：设置里关掉的不在这里（第 13 步，`LauncherFeatureRules.fallbackBuiltIns`）。
+    var fallbackBuiltIns: [LauncherSuggestionCandidate] = [LauncherSuggestionRanking.webSearch, LauncherSuggestionRanking.findFiles]
 
     static let none = LauncherSuggestionPlan(text: "", leading: [], fallbackKinds: nil)
 
@@ -64,53 +66,64 @@ enum LauncherSuggestionPolicy {
     ///   有计算结果时这两样都不出。输入是「提醒」/「reminders」时 `showsReminders`。分类读的同上：单行的放进来的文字就是输入框里的，
     ///   照常认；带换行的原文不是一条命令。
     /// - `clock`：认「带时间的句子」用的「现在」、日历、时区；nil = 不认。
+    /// - `features`：设置里关掉的功能不出（第 13 步，§11「功能开关」）—— 网址 / 邮箱 / 颜色 / 字数 / 提醒（含输入「提醒」列出待响的）/
+    ///   在终端里运行各自一个开关；上网搜、搜文件名（文件来源也要开着）不进兜底建议（`fallbackBuiltIns`）。关掉的只是不出那一行，
+    ///   输入照样分类、兜底建议照出。「路径」关着时以 `/`、`~` 开头的输入按普通文字分类（照常出文字的建议）。
     static func plan(for query: LauncherQuery, hasCalculation: Bool, hasRecognition: Bool,
-                     placed: LauncherPlacedText? = nil, clock: LauncherCalcContext? = nil) -> LauncherSuggestionPlan {
+                     placed: LauncherPlacedText? = nil, clock: LauncherCalcContext? = nil,
+                     features: LauncherFeatureSet = .allEnabled) -> LauncherSuggestionPlan {
         guard query.isUnscoped, !query.text.isEmpty else { return .none }
         let source = placed?.suggestionText ?? query.text
-        let input = LauncherInputClassifier.classify(source, clock: hasCalculation ? nil : clock)
+        let input = LauncherInputClassifier.classify(source, clock: hasCalculation || !features.isEnabled(.reminder) ? nil : clock,
+                                                     recognizesPaths: features.isEnabled(.path))
         guard !input.isPath, !input.kinds.isEmpty else { return .none }
         // 数到第 2 个字符就够了，几 MB 的粘贴也不用整段数。
         let allowsFallback = input.text.index(input.text.startIndex, offsetBy: minimumFallbackLength,
                                               limitedBy: input.text.endIndex) != nil
-        let showsReminders = LauncherReminderBook.isListQuery(input.text)
+        let showsReminders = features.isEnabled(.reminder) && LauncherReminderBook.isListQuery(input.text)
+        let builtIns = LauncherFeatureRules.fallbackBuiltIns(features, input: input.text)
         if hasCalculation {
             var plan = LauncherSuggestionPlan(text: input.text, leading: [],
                                               fallbackKinds: allowsFallback ? [.plainText] : nil)
             plan.showsReminders = showsReminders
+            plan.fallbackBuiltIns = builtIns
             return plan
         }
         var leading: [LauncherLeadingSuggestion] = []
         var fallbackLeading: [LauncherLeadingSuggestion] = []
         var top: [LauncherLeadingSuggestion] = []
         var kinds = input.kinds
-        // 确认时要完整显示整条命令（最多 6 行）：放不下的不出这一行（第 10 步验证后定）。
-        if let command = input.command, LauncherConfirmText.commandLines(command) != nil {
+        // 确认时要完整显示整条命令（最多 6 行）：放不下的不出这一行（第 10 步验证后定）。设置里关掉了也不出（第 13 步）。
+        if let command = input.command, features.isEnabled(.runInTerminal), LauncherConfirmText.commandLines(command) != nil {
             fallbackLeading.append(.runInTerminal(command))
         }
         if let reminder = input.reminder {
             top.append(.reminder(reminder))
         }
         if let url = input.url {
-            if input.isAmbiguousURL {
+            if !features.isEnabled(.url) {
+                // 关掉了「网址 → 打开」：不出那一行，类别照旧（二维码照样提前）。
+            } else if input.isAmbiguousURL {
                 fallbackLeading.append(.openURL(url))
             } else {
                 leading.append(.openURL(url))
             }
         } else if let email = input.email {
-            leading.append(.email(email))
+            if features.isEnabled(.email) { leading.append(.email(email)) }
         } else if let color = input.color {
-            leading.append(.color(color))
+            if features.isEnabled(.color) { leading.append(.color(color)) }
         } else if input.kinds.contains(.longText) {
             if hasRecognition {
                 kinds = [.plainText]
-            } else {
+            } else if features.isEnabled(.wordCount) {
                 leading.append(.wordCount(LauncherTextStats.count(input.text)))
             }
         }
-        return LauncherSuggestionPlan(text: input.text, leading: leading, fallbackKinds: allowsFallback ? kinds : nil,
-                                      fallbackLeading: allowsFallback ? fallbackLeading : [], top: top,
-                                      showsReminders: showsReminders)
+        var plan = LauncherSuggestionPlan(text: input.text, leading: leading, fallbackKinds: allowsFallback ? kinds : nil,
+                                          fallbackLeading: allowsFallback ? fallbackLeading : [], top: top,
+                                          showsReminders: showsReminders)
+        plan.fallbackBuiltIns = builtIns
+        return plan
     }
 }
 
