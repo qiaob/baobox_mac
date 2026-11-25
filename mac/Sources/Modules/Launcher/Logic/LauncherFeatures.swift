@@ -274,13 +274,14 @@ enum LauncherFeatureLayout {
     }
 
     /// 模块声明的动作 → 行：文字动作进「文字的去处」，图片动作进「图片的去处」，文件动作进「文件和文件夹的去处」；
-    /// 名字 = 命令的标题，右侧 = 所属工具名，图标 = 命令自己的；次序 = 默认档位（`suggestion.priority`），同档按传入的先后
+    /// 名字 = 命令的 `settingsTitle`（随状态变的标题给的固定名字），没有就是标题；右侧 = 所属工具名，图标 = 命令自己的；次序 = 默认档位（`suggestion.priority`），同档按传入的先后
     /// （模块注册顺序、模块里写的顺序）—— 和面板里默认的次序一致。
     static func actionRows(text: [LauncherCatalogCommand], image: [LauncherCatalogCommand],
                            file: [LauncherCatalogCommand]) -> [LauncherFeatureRow] {
         func rows(_ entries: [LauncherCatalogCommand], group: LauncherFeatureGroup) -> [LauncherFeatureRow] {
             entries.map { entry in
-                LauncherFeatureRow(id: LauncherFeatureID.action(entry.command.id), group: group, title: entry.command.title,
+                LauncherFeatureRow(id: LauncherFeatureID.action(entry.command.id), group: group,
+                                   title: entry.command.settingsTitle ?? entry.command.title,
                                    toolName: entry.toolName.isEmpty ? nil : entry.toolName,
                                    symbolName: entry.command.symbolName, order: entry.command.suggestion.priority)
             }

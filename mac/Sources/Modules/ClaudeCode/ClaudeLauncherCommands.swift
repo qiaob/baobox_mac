@@ -19,7 +19,9 @@ extension ClaudeCodeTool {
         let directory = project == nil ? NSHomeDirectory() : recent
         let title = project.map { L("claudecode.launcher.handOffTo \($0)") } ?? L("claudecode.launcher.handOff")
         return [
-            .textAction(id: "claudecode.text.handOff", title: title, symbolName: "bubble.left.and.bubble.right",
+            // 设置页的功能开关那一行用固定的名字（标题带最近的项目名，第 13 步）。
+            .textAction(id: "claudecode.text.handOff", title: title, settingsTitle: L("claudecode.launcher.handOff"),
+                        symbolName: "bubble.left.and.bubble.right",
                         suggestion: LauncherSuggestionTraits(priority: 55, boostedKinds: [.longText]),
                         hint: "交给 Claude Code 的第一条消息",
                         appliesTo: { LauncherShellHandoff.canHandOff($0) }) { text in

@@ -175,6 +175,24 @@ final class LauncherFeaturesTests: XCTestCase {
         XCTAssertNil(sections[.text]?.rows.first { $0.id == "suggest/webSearch" }?.toolName, "快速入口自己的不写工具名")
     }
 
+    func testActionRowsPreferTheFixedSettingsTitle() {
+        // 标题随状态变的（带最近的项目名、正在朗读时是「停止朗读」）：设置页用固定的名字；没给的照旧用标题。
+        let handOff = LauncherCatalogCommand(
+            command: .textAction(id: "claudecode.text.handOff", title: "交给 Claude Code（baobox_mac）",
+                                 settingsTitle: "交给 Claude Code", symbolName: "b") { _ in },
+            toolID: "claudecode", toolName: "Claude Code 助手")
+        let speak = LauncherCatalogCommand(
+            command: .textAction(id: "selectiontranslate.text.speak", title: "停止朗读", settingsTitle: "朗读",
+                                 symbolName: "s") { _ in },
+            toolID: "selectiontranslate", toolName: "划词助手")
+        XCTAssertEqual(handOff.command.settingsTitle, "交给 Claude Code")
+        XCTAssertEqual(handOff.command.title, "交给 Claude Code（baobox_mac）", "面板里的标题不变")
+        XCTAssertNil(text("clipboard.text.qrCode").command.settingsTitle, "别的命令不用填")
+        let rows = LauncherFeatureLayout.actionRows(text: [handOff, speak, text("clipboard.text.qrCode", title: "生成二维码")],
+                                                    image: [], file: [])
+        XCTAssertEqual(rows.map(\.title), ["交给 Claude Code", "朗读", "生成二维码"])
+    }
+
     func testSourceRowsNameTheirToolUnlessItIsTheSameName() {
         let history = LauncherFeatureLayout.sourceRow(sourceID: "clipboard", name: "剪贴板", toolName: "剪贴板", symbolName: "c")
         XCTAssertEqual(history.id, "source/clipboard")
