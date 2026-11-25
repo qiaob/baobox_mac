@@ -13,6 +13,8 @@ import Foundation
 extension MeetingTool {
     /// 下一场会议开始前多久起提「入会」。
     static let launcherJoinLead: TimeInterval = 10 * 60
+    /// 情景建议的次序（小的在前，§5.6 次序表）：会议最急，三条（结束会议 / 入会 / 开始会议记录）都排在最前。
+    static let launcherSuggestionPriority = 10
 
     func launcherContextSuggestions() -> [LauncherCommand] {
         let session = MeetingSessionController.shared
@@ -20,7 +22,7 @@ extension MeetingTool {
         switch session.phase {
         case .starting, .recording, .paused:
             commands += hotkeys().filter { $0.id == "meeting.startOnline" }
-                .compactMap { $0.launcherStateCommand(symbolName: "stop.circle") }
+                .compactMap { $0.launcherStateCommand(symbolName: "stop.circle", priority: Self.launcherSuggestionPriority) }
         case .idle, .finishing:
             break
         }
@@ -33,15 +35,16 @@ extension MeetingTool {
             return commands
         }
         let title = next.info.title
+        let priority = LauncherSuggestionTraits(priority: Self.launcherSuggestionPriority)
         if next.link != nil {
             commands.append(LauncherCommand(id: "meeting.join", title: L("meeting.launcher.join \(title)"),
-                                            symbolName: "video") { _ in
+                                            symbolName: "video", suggestion: priority) { _ in
                 MeetingActions.join(next)
             })
         }
         if !session.isActive {
             commands.append(LauncherCommand(id: "meeting.startOnline", title: L("meeting.launcher.record \(title)"),
-                                            symbolName: "record.circle") { _ in
+                                            symbolName: "record.circle", suggestion: priority) { _ in
                 MeetingActions.record(next)
             })
         }

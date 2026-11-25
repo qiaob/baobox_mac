@@ -66,7 +66,9 @@ protocol ToolModule: AnyObject {
     func launcherKnownFiles() -> [LauncherKnownFile]
     /// 快速入口空着的时候（呼出后还没打字）此刻值得提一句的动作，默认没有：正在专注 →「暂停专注」，防休眠开着 →「关闭防休眠」。
     /// 每次呼出调一次；只读内存、零磁盘 IO、不阻塞。命令 id 也是使用记录的键（`commands/<id>`），和对应的命令用同一个 id。
-    /// 开关类快捷键动作可以直接用 `HotkeyDefinition.launcherStateCommand(symbolName:)`。见 docs/launcher/TECH_DESIGN.md §5.6。
+    /// 开关类快捷键动作可以直接用 `HotkeyDefinition.launcherStateCommand(symbolName:priority:)`。
+    /// 次序看 `suggestion.priority`（按紧急程度，小的在前，不写是 50；各模块的档位见次序表），快速入口排好后取前 4 条。
+    /// 见 docs/launcher/TECH_DESIGN.md §5.6。
     func launcherContextSuggestions() -> [LauncherCommand]
 }
 

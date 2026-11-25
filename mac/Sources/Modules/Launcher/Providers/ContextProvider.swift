@@ -7,7 +7,8 @@ import AppKit
 // - 「刚复制的」：剪贴板历史里最新的一条（文字或图片；敏感条目本来就不交给快速入口），5 分钟内复制的才算。
 //   从这次呼出已经取到的剪贴板条目里拿（带时间），不读系统剪贴板；文字用条目交来的完整原文（`LauncherEntry.fullText`）。
 //   和选中的是同一段（空白归一后）时只出「选中的」。
-// - 情景建议：各模块 `launcherContextSuggestions()` 此刻值得提一句的动作（只读内存），每次呼出收一次；行 id / 使用记录的键
+// - 情景建议：各模块 `launcherContextSuggestions()` 此刻值得提一句的动作（只读内存），每次呼出收一次，按紧急程度
+//   （`suggestion.priority`，小的在前）排好再取前 4 条；行 id / 使用记录的键
 //   是 `commands/<id>`，和对应的命令同一个键。
 // 两样上下文只在内存里显示成一行：不发给模型、不联网、不写盘，收起面板就丢。两个开关：`launcher.context.selection`、
 // `launcher.context.clipboard`（默认开）。
@@ -191,17 +192,22 @@ final class LauncherContextProvider {
         return entry.image == nil ? "text" : "image"
     }
 
-    /// 各模块此刻的情景建议（注册顺序、模块里写的顺序）。没有 id 的、带参数的不要（这里只能无参数执行）。
+    /// 各模块此刻的情景建议，按紧急程度排好（`suggestion.priority` 小的在前；同一优先级保持注册顺序、模块里写的顺序，
+    /// `LauncherContextRules.situationalOrder`）。没有 id 的、带参数的不要（这里只能无参数执行）。上限 4 条在拼行时截。
     private func collectSituational() -> [LauncherItem] {
         guard let registry else { return [] }
-        var items: [LauncherItem] = []
+        var collected: [(command: LauncherCommand, toolName: String)] = []
         for tool in registry.tools {
             for command in tool.launcherContextSuggestions() where !command.id.isEmpty && command.parameters.isEmpty {
-                let candidate = LauncherCandidate(sourceID: LauncherCommandProvider.sourceID, entryID: command.id, searchKeys: [])
-                let row = LauncherRow(id: candidate.key, title: command.title, source: tool.name, icon: .symbol(command.symbolName))
-                items.append(LauncherItem(candidate: candidate, row: row, run: { command.run([:]) }))
+                collected.append((command, tool.name))
             }
         }
-        return items
+        let order = LauncherContextRules.situationalOrder(priorities: collected.map(\.command.suggestion.priority))
+        return order.map { index in
+            let (command, toolName) = collected[index]
+            let candidate = LauncherCandidate(sourceID: LauncherCommandProvider.sourceID, entryID: command.id, searchKeys: [])
+            let row = LauncherRow(id: candidate.key, title: command.title, source: toolName, icon: .symbol(command.symbolName))
+            return LauncherItem(candidate: candidate, row: row, run: { command.run([:]) })
+        }
     }
 }

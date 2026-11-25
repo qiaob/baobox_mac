@@ -536,14 +536,24 @@ func launcherContextSuggestions() -> [LauncherCommand]   // 默认 []；只读�
 
 // Core/LauncherStateCommand.swift
 extension HotkeyDefinition {
-    @MainActor func launcherStateCommand(symbolName: String) -> LauncherCommand?
+    @MainActor func launcherStateCommand(symbolName: String, priority: Int) -> LauncherCommand?
 }
 ```
 
 - 每次呼出调一次（`LauncherContextProvider.prepare`，在 `show()` 里、面板显示之前）。id 为空、带参数的不收（这里只能无参数执行）。
 - 开关类快捷键动作直接交出去，不重写业务逻辑：`launcherStateCommand` = 此刻 `stateTitle` 有值（开关开着、正在录 / 专注）时变成一条同 id、同动作、标题就是那句的命令（「关闭防休眠」「停止录屏」「暂停专注」），没有就 nil。和命令表里那一条（§3.1「白送的部分」）是同一个 id。
 - 行：键 `commands/<id>`，和对应命令同一个键 —— 执行时 `recordUse` 记在它上面（§5.3）。标题是命令标题；行首是命令自己的 `symbolName`（暂停 / 停止的图形，不是工具图标）；右侧小字是工具名。⏎ / ⌘⏎ / ⌘1–9 / 单击同命令：记使用、收起、等焦点回去再执行（§4「焦点」）；Tab 不做事。
-- 顺序：模块注册顺序、模块里写的顺序；最多 4 条（`LauncherContextRules.maxSituational`），多出的不出。
+- 次序（2026-11-25 定）：**按紧急程度**，不按模块注册顺序 —— 会议快开始、有会话在等你才是最该看到的。各模块在交出的命令上带优先级 `suggestion.priority`（`LauncherSuggestionTraits` 现成的字段，原来只给文字 / 图片动作用；小的在前，不写是 50），`launcherStateCommand` 的 `priority` 参数就是它。快速入口收齐后按它稳定排序（`LauncherContextRules.situationalOrder`，纯函数，有单元测试：同一优先级保持收集时的先后 = 注册顺序、模块里写的顺序），再取前 4 条（`maxSituational`），多出的不出。档位写在各模块的扩展里（`launcherSuggestionPriority`），框架不认识具体工具：
+
+| 次序 | 模块 | 建议 |
+|---|---|---|
+| 10 | Meeting | 入会 / 开始会议记录 / 结束会议 |
+| 20 | ClaudeCode | 切到在等你的会话 |
+| 30 | Screenshot | 停止录屏 |
+| 40 | FocusHealth | 暂停（继续）专注 / 结束专注（同一档，暂停在前） |
+| 50 | Caffeinate | 关闭防休眠 |
+
+  五类都有时出的是：会议、Claude Code、停止录屏、暂停专注（结束专注和防休眠被挤掉）。
 
 各模块声明了什么（都写成扩展 `Modules/<模块>/…LauncherContext.swift`，不动各模块的 `…Tool.swift`）：
 
@@ -561,7 +571,6 @@ extension HotkeyDefinition {
 
 - Claude Code 的「在等」在你回了那个提示之后、回合结束（Stop）之前不会变（hooks 只报 Stop / Notification / SessionStart / UserPromptSubmit），和菜单状态行「N 等待确认」一样。
 - Claude 的 id 带会话（两个会话同时在等时各一行），没有对应的命令，使用记录按会话记；使用记录有 2000 条上限、删最久没用的（§5.3），不会一直长。
-- 四类同时有时（录屏 + 防休眠 + 专注两条）注册在后面的会议、Claude Code 会被挤掉 —— 设计没定优先级，先按注册顺序。
 
 空着时的拼法（`Logic/LauncherContext.swift` 的 `LauncherContextRules.layout`，纯函数，有单元测试）：「选中的 / 刚复制的」最多 2 行（§8.4）→ 情景建议最多 4 条 → 最常用的（使用分 > 0，最多 8 行，同原来），**总共不超过 9 行**（`maxEmptyStateRows`）；同一个键只出一次，先出现的留着 —— 一条命令既是情景建议又在最常用里时留在情景建议里。引擎为此在空输入时多取 4 条最常用的（共 12 条），让出重复的再截。只打了前缀（`c `）时不出这两类，照旧最多 8 行；什么都没有时照旧一行提示。9 行比列表能完整显示的 8.5 行多，第 9 行露一半（§4 的高度规则不变）。
 

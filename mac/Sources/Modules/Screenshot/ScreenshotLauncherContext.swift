@@ -5,7 +5,10 @@ import Foundation
 /// 只读内存（`RecordingController.isRecording`）；截图、取字没有 `stateTitle`，不会出。
 /// 写在扩展里（不动 `ScreenshotTool.swift`）：协议要求由这里的实现满足。
 extension ScreenshotTool {
+    /// 情景建议的次序（小的在前，§5.6 次序表）：排在会议、Claude Code 之后，专注、防休眠之前。
+    static let launcherSuggestionPriority = 30
+
     func launcherContextSuggestions() -> [LauncherCommand] {
-        hotkeys().compactMap { $0.launcherStateCommand(symbolName: "stop.circle") }
+        hotkeys().compactMap { $0.launcherStateCommand(symbolName: "stop.circle", priority: Self.launcherSuggestionPriority) }
     }
 }

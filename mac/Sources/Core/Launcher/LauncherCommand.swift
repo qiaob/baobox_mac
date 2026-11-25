@@ -58,6 +58,7 @@ struct LauncherCommand {
     /// 作为「对当前输入的建议」时的属性（适用哪几类输入、默认排在哪）。只对文字动作（恰好一个必填 `.text` 参数，
     /// 见 `isTextAction`）和图片动作（恰好一个必填 `.image` 参数，见 `isImageAction`，只看 `priority`）有用，
     /// 其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4、§5.5）。
+    /// 例外：模块在 `launcherContextSuggestions()` 里交的情景建议也只看 `priority` —— 空着时按它排（小的在前，§5.6）。
     var suggestion = LauncherSuggestionTraits()
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void

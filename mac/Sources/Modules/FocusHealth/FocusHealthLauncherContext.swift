@@ -7,13 +7,17 @@ import Foundation
 ///   结束算完成）。没有对应的快捷键，id 是 `focushealth.endFocus`。
 /// 写在扩展里（不动 `FocusHealthTool.swift`）：协议要求由这里的实现满足。
 extension FocusHealthTool {
+    /// 情景建议的次序（小的在前，§5.6 次序表）：排在会议、Claude Code、录屏之后，防休眠之前。两条同一档，暂停（继续）在前。
+    static let launcherSuggestionPriority = 40
+
     func launcherContextSuggestions() -> [LauncherCommand] {
         let controller = FocusHealthController.shared
         guard controller.session.inFocus else { return [] }
         let toggleSymbol = controller.session.phase == .focusing ? "pause.circle" : "play.circle"
         var commands = hotkeys().filter { $0.id == "focushealth.focus" }
-            .compactMap { $0.launcherStateCommand(symbolName: toggleSymbol) }
-        commands.append(LauncherCommand(id: "focushealth.endFocus", title: L("focus.launcher.end"), symbolName: "stop.circle") { _ in
+            .compactMap { $0.launcherStateCommand(symbolName: toggleSymbol, priority: Self.launcherSuggestionPriority) }
+        commands.append(LauncherCommand(id: "focushealth.endFocus", title: L("focus.launcher.end"), symbolName: "stop.circle",
+                                        suggestion: LauncherSuggestionTraits(priority: Self.launcherSuggestionPriority)) { _ in
             FocusHealthController.shared.endFocusEarly(countAsDone: true)
         })
         return commands

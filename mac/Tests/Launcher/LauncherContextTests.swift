@@ -134,6 +134,49 @@ final class LauncherContextTests: XCTestCase {
         XCTAssertEqual(layout.all, ["context/selection", "commands/a", "commands/b", "apps/x"])
     }
 
+    // MARK: - 情景建议的次序（按紧急程度）
+
+    /// 收集到的情景建议（收集顺序 = 模块注册顺序、模块里写的顺序）按优先级排好后的行 id。
+    private func ordered(_ suggestions: [(id: String, priority: Int)]) -> [String] {
+        LauncherContextRules.situationalOrder(priorities: suggestions.map(\.priority)).map { suggestions[$0].id }
+    }
+
+    func testFiveKindsShowMeetingClaudeRecordingAndTheFirstFocusRow() {
+        // 注册顺序：截图 → 防休眠 → 专注 → 会议 → Claude Code；档位：会议 10、Claude 20、录屏 30、专注 40、防休眠 50。
+        let collected: [(id: String, priority: Int)] = [
+            ("commands/screenshot.record", 30), ("commands/caffeinate.toggle", 50),
+            ("commands/focushealth.focus", 40), ("commands/focushealth.endFocus", 40),
+            ("commands/meeting.startOnline", 10), ("commands/claudecode.waiting.s1", 20),
+        ]
+        let order = ordered(collected)
+        XCTAssertEqual(order, ["commands/meeting.startOnline", "commands/claudecode.waiting.s1", "commands/screenshot.record",
+                               "commands/focushealth.focus", "commands/focushealth.endFocus", "commands/caffeinate.toggle"])
+        let layout = LauncherContextRules.layout(context: ["context/selection"], situational: order, mostUsed: ["apps/safari"])
+        XCTAssertEqual(layout.situational, ["commands/meeting.startOnline", "commands/claudecode.waiting.s1",
+                                            "commands/screenshot.record", "commands/focushealth.focus"],
+                       "四条上限：会议、Claude、录屏、专注的第一条；结束专注、防休眠被挤掉")
+    }
+
+    func testSamePriorityKeepsTheOrderTheModulesGave() {
+        XCTAssertEqual(ordered([("commands/focushealth.focus", 40), ("commands/focushealth.endFocus", 40)]),
+                       ["commands/focushealth.focus", "commands/focushealth.endFocus"], "暂停专注在结束专注前面")
+        XCTAssertEqual(ordered([("commands/caffeinate.toggle", 50), ("commands/meeting.join", 10),
+                                ("commands/meeting.startOnline", 10), ("commands/claudecode.waiting.new", 20),
+                                ("commands/claudecode.waiting.old", 20)]),
+                       ["commands/meeting.join", "commands/meeting.startOnline", "commands/claudecode.waiting.new",
+                        "commands/claudecode.waiting.old", "commands/caffeinate.toggle"],
+                       "入会在开始记录前、新的会话在旧的前（模块给的先后）")
+        XCTAssertEqual(LauncherContextRules.situationalOrder(priorities: []), [])
+    }
+
+    func testAnUnrankedSuggestionSitsWithTheLastTier() {
+        let unranked = LauncherCommand(id: "other.thing", title: "Other", symbolName: "star") { _ in }
+        XCTAssertEqual(unranked.suggestion.priority, 50, "不写优先级是 50，和防休眠同一档")
+        XCTAssertEqual(ordered([("commands/other.thing", unranked.suggestion.priority), ("commands/caffeinate.toggle", 50),
+                                ("commands/screenshot.record", 30)]),
+                       ["commands/screenshot.record", "commands/other.thing", "commands/caffeinate.toggle"])
+    }
+
     func testNothingAtAllIsAnEmptyLayout() {
         XCTAssertEqual(LauncherContextRules.layout(context: [], situational: [], mostUsed: []).all, [],
                        "什么都没有：面板照旧显示那一行提示")

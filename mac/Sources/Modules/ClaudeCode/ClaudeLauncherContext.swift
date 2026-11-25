@@ -8,6 +8,9 @@ import Foundation
 /// id 带会话（`claudecode.waiting.<会话 id>`）：两个会话同时在等时各一行。
 /// 写在扩展里（不动 `ClaudeCodeTool.swift`）：协议要求由这里的实现满足。
 extension ClaudeCodeTool {
+    /// 情景建议的次序（小的在前，§5.6 次序表）：有会话在等你，仅次于会议。
+    static let launcherSuggestionPriority = 20
+
     func launcherContextSuggestions() -> [LauncherCommand] {
         let waiting = ClaudeLiveStatus.shared.sessions.values.filter { session in
             if case .waiting = session.state { return true }
@@ -19,7 +22,8 @@ extension ClaudeCodeTool {
             let terminal = session.terminal
             return LauncherCommand(id: "claudecode.waiting.\(sessionID)",
                                    title: L("claudecode.launcher.waiting \(session.projectName)"),
-                                   symbolName: symbolName) { _ in
+                                   symbolName: symbolName,
+                                   suggestion: LauncherSuggestionTraits(priority: Self.launcherSuggestionPriority)) { _ in
                 ClaudeTerminal.focusRunningSession(sessionID: sessionID, projectPath: cwd, location: terminal,
                                                    confirmRunning: false, isNewestInProject: true) { _ in }
             }

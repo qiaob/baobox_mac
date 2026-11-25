@@ -2,8 +2,8 @@ import Foundation
 
 // 快速入口空着的时候（docs/launcher/REQUIREMENTS.md §3.7、TECH_DESIGN.md §8.4、§5.6）：呼出后还没打字，列表最前面是
 // 「选中的」（呼出前那个 App 里选中的文字）和「刚复制的」（剪贴板历史里最新的一条，5 分钟内），⏎ / Tab 放进输入框；
-// 接着是各模块声明的情景建议（正在专注 →「暂停专注」……），最多 4 条；最后是最常用的行。总共不超过 9 行。
-// 这里是规则：什么时候出、两行去重、时间窗口、标题、各类行怎么拼、上限；还有读选区的流程（后台读、80 ms 封顶、过期的丢掉），
+// 接着是各模块声明的情景建议（正在专注 →「暂停专注」……），按紧急程度排、最多 4 条；最后是最常用的行。总共不超过 9 行。
+// 这里是规则：什么时候出、两行去重、时间窗口、标题、情景建议的次序、各类行怎么拼、上限；还有读选区的流程（后台读、80 ms 封顶、过期的丢掉），
 // 取词函数由调用方注入（App 侧是 Core 的 `SelectedTextReader`），所以流程和超时能在单元测试里测。
 // 纯 Foundation，进 BaoboxTests。换成面板的行（文案、图标、执行）在 App 侧 `Providers/ContextProvider.swift`。
 
@@ -125,6 +125,15 @@ enum LauncherContextRules {
         if elapsed > budget, outcome != .noPermission { return .timedOut }
         if case .text(let text) = outcome, isBlank(text) { return .none }
         return outcome
+    }
+
+    /// 情景建议的次序（`priorities[i]` 是第 i 条的 `suggestion.priority`，按收集的先后 = 模块注册顺序、模块里写的顺序）：
+    /// 按紧急程度排，小的在前；同一优先级保持收集时的先后（同一模块的「暂停专注 / 结束专注」不颠倒）。返回排好的下标；
+    /// 之后 `layout` 取前 `maxSituational` 条，所以四样同时有时被挤掉的是不急的（防休眠），不是会议、在等你的会话。
+    static func situationalOrder(priorities: [Int]) -> [Int] {
+        priorities.indices.sorted { lhs, rhs in
+            priorities[lhs] != priorities[rhs] ? priorities[lhs] < priorities[rhs] : lhs < rhs
+        }
     }
 
     /// 空着时的各类行拼成一列（行 id）：

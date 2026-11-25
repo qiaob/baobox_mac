@@ -7,10 +7,12 @@ import Foundation
 extension HotkeyDefinition {
     /// 此刻 `stateTitle` 有值（开关开着、正在录 / 专注……）时，变成一条同 id、同动作的命令，标题就是那句；
     /// 没有 `stateTitle`、或此刻返回 nil / 空白（此刻不值得提）为 nil。
+    /// `priority`：情景建议的次序（`suggestion.priority`，小的在前；各模块的档位见 §5.6 的次序表）。
     @MainActor
-    func launcherStateCommand(symbolName: String) -> LauncherCommand? {
+    func launcherStateCommand(symbolName: String, priority: Int) -> LauncherCommand? {
         guard let title = stateTitle?()?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
         let action = action
-        return LauncherCommand(id: id, title: title, symbolName: symbolName) { _ in action() }
+        return LauncherCommand(id: id, title: title, symbolName: symbolName,
+                               suggestion: LauncherSuggestionTraits(priority: priority)) { _ in action() }
     }
 }
