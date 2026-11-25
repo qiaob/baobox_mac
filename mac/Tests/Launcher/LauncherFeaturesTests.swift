@@ -291,6 +291,16 @@ final class LauncherFeaturesTests: XCTestCase {
         XCTAssertEqual(offPlan.fallbackLeading, [])
         XCTAssertEqual(offPlan.rankedFallbackLimit, LauncherSuggestionRanking.maxRows, "不再占名额")
         XCTAssertEqual(offPlan.fallbackKinds, [.plainText, .command])
+        // 开着时和第 10 步一致：放得下完整显示（最多 6 行）的才出；关着时哪种都不出（也就没有上膛、完整显示）。
+        let short = "docker run --rm -it node:20 sh -c 'npm ci && npm test'"
+        let long = "git commit -m '" + String(repeating: "很长的提交说明", count: 200) + "'"
+        for command in [short, long] {
+            let expected: [LauncherLeadingSuggestion] = LauncherConfirmText.commandLines(command) != nil
+                ? [.runInTerminal(command)] : []
+            XCTAssertEqual(plan(command, features: .allEnabled).fallbackLeading, expected, "开着：同第 10 步")
+            XCTAssertEqual(plan(command, features: off("suggest/runInTerminal")).fallbackLeading, [], "关着：不出")
+        }
+        XCTAssertNotNil(LauncherConfirmText.commandLines(short))
     }
 
     func testCalculatorAndTextFormatSwitches() {
