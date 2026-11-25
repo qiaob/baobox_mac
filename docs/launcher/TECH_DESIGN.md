@@ -1128,7 +1128,7 @@ UserDefaults 前缀 `launcher.`：
 **一项功能 = 一个 id**（`Logic/LauncherFeatures.swift`）：
 
 - 来源 `source/<来源 id>`（`LauncherFeatureID.source`）：`source/apps`、`source/commands`、`source/files`，以及各模块 `launcherSources()` 交来的 `source/clipboard`、`source/snippets`；路径不是一个来源，但同一组，id `source/path`。
-- 模块声明的文字 / 图片 / 文件动作 `action/<命令 id>`（`LauncherFeatureID.action`；三种动作都是 `LauncherCommand`，id 现成）。同一个模块的「发到手机」文字、图片、文件各是各的 id，各占一行。
+- 模块声明的文字 / 图片 / 文件动作 `action/<命令 id>`（`LauncherFeatureID.action`；三种动作都是 `LauncherCommand`，id 现成）。同一个模块的「发到手机」文字、图片、文件各是各的 id，各占一行。行名 = 命令的 `settingsTitle`，没有就是 `title`（验证后加：标题随状态变的 —— 交给 Claude Code / Codex 带最近的项目名、朗读正在读时是「停止朗读」—— 由模块给一个固定的名字，开关管的是整个动作；别的命令不填）。
 - 快速入口自己的功能：静态表 `LauncherBuiltInFeature`（id、组、组内次序、图标；名字和说明在 App 侧 `LauncherFeatureCatalog.swift` 的扩展里，`switch` 穷尽，漏了编不过）：
 
 | 组 | id | 名字 | 说明 |
@@ -1169,13 +1169,15 @@ UserDefaults 前缀 `launcher.`：
 | `LauncherEntryProvider` | 关着的模块来源：条目照样取（只读内存，「刚复制的」和文件搜索的剪贴板路径要用），但不交给引擎（`sessionItems`）、不算进 `sessionSourceIDs`、不建搜索键（retain 照旧，打开后不用重建） |
 | `LauncherEngine.load` | 前缀只留装进来、而且开着的来源的（`LauncherFeatureSet.prefixes`）：关掉文件后 `f readme` 整段当查询词 |
 | `LauncherEngine.search` | `source/path`（关着时不走路径那一支，按普通文字）；`instant/calculator`、`instant/textFormat`（`LauncherInstantPolicy.runs…(features:)`）；建议计划（下一行）；`source/files`（`LauncherFilePolicy.request(features:)` 为 nil）；`image/recognition`（`LauncherImageSuggestionProvider` 不出识别结果那几行，取字照样在后台跑，「图里的文字」要用）；`path/openInTerminal`、`path/copyPath`（`LauncherPathActionPlan.actions(features:)`）；`context/frequent`（空着时不接最常用的）；建议全关的小字 |
-| `LauncherSuggestionPolicy.plan(features:)` | `instant/url`（含有歧义网址的「打开」）、`instant/email`、`instant/color`、`instant/wordCount`：不出那一行，类别照旧（二维码照样提前、总结照样提前）；`instant/reminder`：分类时不给时钟（不认带时间的句子）、`showsReminders` 为 false；`suggest/runInTerminal`：不放进兜底组最前面（不占名额）；`source/path` 关着时分类不认路径（`classify(…, recognizesPaths: false)`）；兜底建议里快速入口自己的两条 `plan.fallbackBuiltIns`（`LauncherFeatureRules.fallbackBuiltIns`：上网搜；搜文件名要 `suggest/fileName` 和 `source/files` 都开着），关掉的不占名额，后面的补上 |
+| `LauncherSuggestionPolicy.plan(features:)` | `instant/url`（含有歧义网址的「打开」）、`instant/email`、`instant/color`、`instant/wordCount`：不出那一行，类别照旧（二维码照样提前、总结照样提前）；`instant/reminder`：分类时不给时钟（不认带时间的句子）、`showsReminders` 为 false；`suggest/runInTerminal`：不放进兜底组最前面（不占名额）；`source/path` 关着时分类不认路径（`classify(…, recognizesPaths: false)`）；兜底建议里快速入口自己的两条 `plan.fallbackBuiltIns`（`LauncherFeatureRules.fallbackBuiltIns`：上网搜；搜文件名要 `suggest/fileName` 和 `source/files` 都开着；输入以 `/`、`~` 开头时 —— 只在 `source/path` 关着时走到这里 —— 也不放：改成 `f ~/…` 后文件搜索不接，点了只会是「没有结果」，验证后定），关掉的不占名额，后面的补上 |
 | `LauncherContextProvider` | `context/selection`：`LauncherSelectionFetcher.begin` 不调取词函数（不做那次辅助功能调用，日志 `selection off`）；`context/clipboard`：不取「刚复制的」（`recent copy off`）；`context/situational`：不向模块收 |
 | `LauncherFileSources.activate()` | 启动后那次扫描时 `source/files` 关着就不扫（之后打开了，下次呼出时扫） |
 
+- **图片的去处全关**（验证后定，`LauncherFeatureRules.showsImageSuggestionsOff`）：挂着图片、一行都没有、图片动作过滤后为 0、带 `imageTextPriority` 的文字动作过滤后为 0、`image/recognition` 关着 → 同文字全关，`suggestionsOff`，消息行写「建议都关掉了」（打没打筛选词都一样）。挂着图片时一行都没有不算「输入为空」（结果里 `hasAttachment`，控制器传 `emptyInput` 时看它）：没全关、只是这次一行都没有（识别开着但图里没认出东西、动作全关；筛选词没对上）是「没有结果」，不再是空输入的提示文字。
+- 不改的（验证后记）：「全部打开 / 全部关闭」只改这一节此刻列出来的 id；来源关掉后条目照样取；关掉「计算」后算式按普通文字处理，够长时也会去搜文件；空输入的提示文字是固定的。
 - 已经设好的提醒照常响（`LauncherReminderCenter` 不看开关）；使用记录不动（关掉再打开，排序还在）；二次确认、焦点、选中规则都不动。
 - **建议全关**（`LauncherFeatureRules.showsSuggestionsOff`）：没打前缀、输入不少于 2 个字符（够出兜底建议）、一行都没有、而且「文字的去处」一项都没开着（模块的文字动作过滤后为 0、快速入口自己的两条都出不来、在终端里运行关着）→ 引擎在结果里标 `suggestionsOff`，面板消息那一行写「建议都关掉了，可以在设置里打开」（`LauncherPanelContent.suggestionsOff`，同「没有结果」的位置和高度）。文件还在搜时照旧先是「正在查找…」，搜完也没有才换成这一句。空输入什么都没有时照旧是提示文字。
-- 单元测试 `LauncherFeaturesTests`：id 拼法、集合的开关、设置键的容错（不认识的 id、非字符串、类型不对）与写回不丢、分组与排序、来源关掉后前缀失效 / 不搜文件 / 不出搜文件名、动作关掉后三张表都没有它（派生的也没有）、对应建议 / 提醒 / 在终端里运行 / 计算 / 识别 / 路径 / 路径行动作各自的开关、建议全关的条件、关掉 `context/selection` 后取词函数调用次数为 0。
+- 单元测试 `LauncherFeaturesTests`：id 拼法、集合的开关、设置键的容错（不认识的 id、非字符串、类型不对）与写回不丢、分组与排序、来源关掉后前缀失效 / 不搜文件 / 不出搜文件名、动作关掉后三张表都没有它（派生的也没有）、对应建议 / 提醒 / 在终端里运行 / 计算 / 识别 / 路径 / 路径行动作各自的开关、建议全关的条件（文字版、图片版）、`settingsTitle` 优先、路径关着时以 `/`、`~` 开头的输入不出搜文件名、关掉 `context/selection` 后取词函数调用次数为 0。
 
 本地化命名空间 `launcher.*`，en + zh-Hans，紧凑单行 JSON（约定 3）。单位名、城市名、设置页名这三张表量大，放进 `Localizable.xcstrings` 会很吵：做成代码里的静态表（每项自带 zh / en 两个名字和关键词），因为它们同时是**搜索词**，两种语言都要能搜到，不是单纯的显示文案。
 
