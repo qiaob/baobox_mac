@@ -115,13 +115,36 @@ final class LauncherActionApplicabilityTests: XCTestCase {
             .map { allActions[$0].id }
     }
 
+    func testTheCapIsTwelve() {
+        XCTAssertEqual(LauncherSuggestionRanking.maxRows, 12, "第 10 步从 8 放宽到 12：第 9 行以后的往下滚 / ↓ 看得到")
+    }
+
+    /// 普通文字：用户认可的那张清单仍是前 8 行，第 10 步加的接在后面，12 行之内都出；朗读第 13，不出（用过会往前挪）。
     func testPlainTextKeepsTheApprovedEightAndTheNewOnesFollow() {
-        XCTAssertEqual(defaultOrder([.plainText], limit: 20), [
-            "selectiontranslate.text.translate", "selectiontranslate.text.explain", "selectiontranslate.text.summarize",
-            "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
-            "clipboard.text.qrCode",
-            // 第 9 行以后：8 行的上限之内不出，用得多才露出来。
+        let approved = ["selectiontranslate.text.translate", "selectiontranslate.text.explain", "selectiontranslate.text.summarize",
+                        "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+                        "clipboard.text.qrCode"]
+        XCTAssertEqual(defaultOrder([.plainText]), approved + [
             "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff", "selectiontranslate.text.polish",
+        ])
+        XCTAssertEqual(defaultOrder([.plainText], limit: 20).last, "selectiontranslate.text.speak", "朗读排第 13")
+        XCTAssertEqual(Array(defaultOrder([.plainText]).prefix(8)), approved)
+    }
+
+    /// 没装 Codex（它不声明）：朗读进到第 12 行。
+    func testWithoutCodexReadAloudMakesTheCut() {
+        let withoutCodex = allActions.filter { $0.id != "aitools.text.handOff" }
+        let order = LauncherSuggestionRanking.order(withoutCodex, kinds: [.plainText], records: LauncherUsageRecords(), now: now)
+            .map { withoutCodex[$0].id }
+        XCTAssertEqual(order.count, 12)
+        XCTAssertEqual(order.last, "selectiontranslate.text.speak")
+    }
+
+    func testWordGetsLearnFirstAndEveryOtherAction() {
+        XCTAssertEqual(defaultOrder([.word]), [
+            "selectiontranslate.text.learn", "selectiontranslate.text.translate", "selectiontranslate.text.explain",
+            "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+            "clipboard.text.qrCode", "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff",
             "selectiontranslate.text.speak",
         ])
     }
@@ -130,28 +153,43 @@ final class LauncherActionApplicabilityTests: XCTestCase {
         XCTAssertEqual(defaultOrder([.longText]), [
             "selectiontranslate.text.summarize", "claudecode.text.handOff", "selectiontranslate.text.polish",
             "selectiontranslate.text.translate", "selectiontranslate.text.explain", "launcher.webSearch", "launcher.findFiles",
-            "clipboard.text.saveSnippet",
-        ])
+            "clipboard.text.saveSnippet", "clipboard.text.pinCard", "clipboard.text.qrCode", "phonetransfer.text.send",
+            "aitools.text.handOff",
+        ], "朗读第 13，不出")
     }
 
     func testURLGetsSendToPhoneEighthAndTheMeetingActionStaysOut() {
         XCTAssertEqual(defaultOrder([.url]), [
             "clipboard.text.qrCode", "selectiontranslate.text.translate", "selectiontranslate.text.explain",
             "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
-            "phonetransfer.text.send",
-        ])
+            "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff", "selectiontranslate.text.speak",
+        ], "总结、润色不对网址，一共 11 行")
         XCTAssertEqual(LauncherSuggestionRanking.leadingOrder(allActions, kinds: [.url]).map { allActions[$0].id },
                        ["meeting.text.joinAndRecord"])
     }
 
-    func testCommandLeavesSevenRankedRowsAfterRunInTerminal() {
+    func testEmailAndColorGetElevenRows() {
+        let expected = ["selectiontranslate.text.translate", "selectiontranslate.text.explain", "launcher.webSearch",
+                        "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard", "clipboard.text.qrCode",
+                        "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff", "selectiontranslate.text.speak"]
+        XCTAssertEqual(defaultOrder([.email]), expected)
+        XCTAssertEqual(defaultOrder([.color]), expected)
+    }
+
+    /// 排在兜底组第一条的（在终端里运行、有歧义的网址的「打开」）算在 12 行里：交给排序的只剩 11 行。
+    func testCommandLeavesElevenRankedRowsAfterRunInTerminal() {
         let plan = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("git status"), hasCalculation: false,
                                                  hasRecognition: false)
         XCTAssertEqual(plan.fallbackLeading, [.runInTerminal("git status")])
+        XCTAssertEqual(plan.rankedFallbackLimit, 11)
         XCTAssertEqual(defaultOrder(plan.fallbackKinds ?? [], limit: plan.rankedFallbackLimit), [
             "selectiontranslate.text.translate", "selectiontranslate.text.explain", "selectiontranslate.text.summarize",
             "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+            "clipboard.text.qrCode", "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff",
         ])
+        let ambiguous = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("claude.ai"), hasCalculation: false,
+                                                      hasRecognition: false)
+        XCTAssertEqual(ambiguous.rankedFallbackLimit, 11)
     }
 
     func testSameTierKeepsTheDeclarationOrder() {
