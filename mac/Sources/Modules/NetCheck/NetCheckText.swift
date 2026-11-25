@@ -33,6 +33,14 @@ enum NetCheckText {
         }
     }
 
+    /// 相对时间（「3 分钟前」），跟着 App 语言。
+    static func relative(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = L10n.locale
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     /// 菜单与报告里放在每一行前面的记号。
     static func mark(_ verdict: NetCheckVerdict) -> String {
         switch verdict {

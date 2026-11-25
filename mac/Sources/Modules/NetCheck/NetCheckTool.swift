@@ -16,7 +16,7 @@ final class NetCheckTool: ToolModule {
         if session.running {
             items.append(NSMenuItem(title: L("netcheck.window.running"), action: nil, keyEquivalent: ""))
         } else if let outcome = session.outcome {
-            let ago = CLIFormat.relative(outcome.at)
+            let ago = NetCheckText.relative(outcome.at)
             items.append(NSMenuItem(title: L("netcheck.menu.status \(NetCheckText.headline(outcome.overall)) \(ago)"),
                                     action: nil, keyEquivalent: ""))
             for summary in outcome.summary {
