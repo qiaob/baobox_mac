@@ -653,4 +653,21 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertEqual(NetCheckCountry.code(nil, name: "Congo (Kinshasa)"), "CD", "括号里的先留着查")
         XCTAssertEqual(NetCheckCountry.code(nil, name: "Congo (Brazzaville)"), "CG")
     }
+
+    /// 验证者的例子：去括号、去前缀后只剩 `congo` / `korea` 时不能认成 CG / KR（会显示另一个国家，还误报「不一致」）。
+    func testAmbiguousRootsAreNotGuessed() {
+        let samples: [(String, String?)] = [
+            ("Democratic Republic of Congo", "CD"), ("Congo (the Democratic Republic of the)", "CD"), ("Congo (DRC)", "CD"),
+            ("Korea (the Democratic People's Republic of)", "KP"), ("Korea (North)", "KP"), ("Korea (South)", "KR"),
+            ("Korea (the Republic of)", "KR"), ("Congo (the)", "CG"),
+            ("Congo", "CG"), ("Korea", "KR"),
+            // 修饰认不出时宁可不认（按名字比），不猜成同名的另一个
+            ("Congo (Unknown Region)", nil), ("Federal Republic of Korea", nil),
+        ]
+        for (name, code) in samples {
+            XCTAssertEqual(NetCheckCountry.code(nil, name: name), code, name)
+        }
+        XCTAssertNotEqual(NetCheckCountry.key(code: nil, name: "Democratic Republic of Congo"), NetCheckCountry.key(code: "cg", name: "Congo"))
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "Democratic Republic of Congo"), NetCheckCountry.key(code: "cd", name: "DR Congo"))
+    }
 }

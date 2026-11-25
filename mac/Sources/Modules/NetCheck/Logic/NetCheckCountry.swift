@@ -34,6 +34,7 @@ enum NetCheckCountry {
         "myanmar": "MM", "burma": "MM",
         "congo": "CG", "congo republic": "CG", "republic of the congo": "CG", "congo brazzaville": "CG",
         "dr congo": "CD", "drc": "CD", "democratic republic of the congo": "CD", "congo kinshasa": "CD",
+        "congo the": "CG", "democratic republic of congo": "CD", "congo drc": "CD", "congo dr": "CD", "drc congo": "CD",
         "palestine": "PS", "palestinian territory": "PS", "palestinian territories": "PS",
         "brunei": "BN", "brunei darussalam": "BN",
         "cabo verde": "CV", "cape verde": "CV",
@@ -103,15 +104,28 @@ enum NetCheckCountry {
         return nil
     }
 
-    /// 依次要查的写法：留括号 → 去括号 → ISO 倒装倒回来 → 去掉「Republic of」这类前缀。
+    /// 去括号、去前缀之后只剩这几个词时不认：它们各对应两个国家（`Korea (North)`、`Democratic Republic of Congo`
+    /// 去掉修饰后只剩 `korea` / `congo`，会被认成 KR / CG）。原文本身就是这个词时照常认（`Congo` → CG）。
+    private static let ambiguousRoots: Set<String> = ["congo", "korea"]
+
+    /// 依次要查的写法：留括号 → 括号里的倒到前面（`Korea (the Democratic People's Republic of)`）→ 去括号 →
+    /// ISO 倒装倒回来 → 去掉「Republic of」这类前缀。
     private static func variants(of name: String) -> [String] {
         var list: [String] = []
-        func add(_ text: String) {
-            if !text.isEmpty, !list.contains(text) { list.append(text) }
-        }
         let kept = fold(name, keepParenthesized: true)
+        func add(_ text: String) {
+            guard !text.isEmpty, !list.contains(text) else { return }
+            if text != kept, ambiguousRoots.contains(text) { return }
+            list.append(text)
+        }
         let stripped = fold(name)
         add(kept)
+        // `X (Y)` → `Y X`：ISO 现行短名把修饰放在括号里（`Congo (the Democratic Republic of the)`）
+        if let open = name.firstIndex(of: "("), let close = name.lastIndex(of: ")"), open < close {
+            let outer = String(name[..<open]) + String(name[name.index(after: close)...])
+            let inner = String(name[name.index(after: open)..<close])
+            add(fold(inner + " " + outer))
+        }
         add(stripped)
         // `Korea, Republic of` → `Republic of Korea`；`Congo, The Democratic Republic of the` → `Democratic Republic of the Congo`
         for base in [kept, stripped] {

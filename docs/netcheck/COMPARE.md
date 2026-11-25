@@ -139,6 +139,11 @@
 - **公共 DNS 不参加国家比较的代价**：出口在美国、系统 DNS 设成 8.8.8.8 而且没走隧道时，查询会落到本地（比如新加坡）的 Google 节点——
   这是典型的 DNS 泄露，但 Google 的节点在地址库里登记在美国，现在的结论是「一致」（国家那一格仍然显示，是灰色）。
   以后可以用 Google 公布的 `locations.publicdns.goog`（各节点所在城市与地址段）给它的节点准确定位，这一版不做。
+- **国家名宁可认不出，也不猜**：去括号、去「Republic of」这类前缀之后只剩 `congo` / `korea` 时不认（它们各对应两个国家），
+  按名字比；原文就是 `Congo` / `Korea` 时照常认成 CG / KR。`X (Y)` 先倒成 `Y X` 再查（ISO 现行短名
+  `Congo (the Democratic Republic of the)`、`Korea (the Democratic People's Republic of)` 靠这一步认对）。
+  仍认不出、按名字比的写法（2026-11-25 验证者列的）：UK 的正式长名、`Saint Vincent and the Grenadines`、`Åland`、
+  `Hong Kong, China`、`Slovak Republic`、`Kyrgyz Republic`、世界银行式缩写。认不出时只是可能多报一次「不一致」，不会显示错的国家。
 
 ## 9. 需要真机才能验证的
 
