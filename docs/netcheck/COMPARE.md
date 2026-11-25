@@ -70,16 +70,29 @@
   只有名字时（不带 key 的 ipapi.is 只给 `country` 名字）用名字查代码——Foundation 的地区表（ISO 地区代码 + `en_US` 的
   `localizedString(forRegionCode:)`）建一张「英文名 → 代码」，再加一小张别名表（USA、U.S.、US、United States of America、
   UK、Great Britain、Russia、South Korea、Korea、Vietnam、Hong Kong、Hong Kong SAR、Taiwan、Macau、Czechia、UAE 之类）。
-  名字本身就是两位代码（`US`、`sg`）也认。查不到代码的按名字（小写、去空白）比。
-- 显示：有代码时国家用 App 当前语言的地区名（中文界面「新加坡」「美国」），后面照旧跟城市（城市和国家名一样时不重复）；没有代码时显示原文。
+  名字本身就是两位代码（`US`、`sg`）也认。查不到代码的按名字（折叠过）比。
+- **查表前两边做同样的折叠**（独立验证发现 `Trinidad and Tobago` 对 `tt` 被判成不一致后加）：小写、去音调符号、撇号统一、
+  `&` → `and`、`st.` → `saint`、去掉开头的 `the`、压缩空白；括号里的部分先留着查一次（`Congo (Kinshasa)`），查不到再去掉查
+  （`Myanmar (Burma)`）。还查不到：ISO 的倒装写法倒回来再查（`Korea, Republic of` → `Republic of Korea`），「Republic of X」
+  「Kingdom of X」这类前缀去掉再查（`Hashemite Kingdom of Jordan`、`Republic of Lithuania`）。别名表补了 Myanmar / Burma、
+  Congo 的几种写法、Palestine、Brunei Darussalam、Cabo Verde / Cape Verde、Moldova、Macedonia / North Macedonia、
+  Swaziland / Eswatini、East Timor / Timor-Leste、Laos、Syria、Iran、Bolivia、Venezuela、Tanzania 的长名等；
+  `Democratic People's Republic of Korea`（KP）、`Republic of China`（TW）这类去掉前缀会认错的写法放在别名表里先查。
+  有测试做全量自检：系统地区表里每个代码的英文名折叠后都查回自己的代码，且没有两个代码撞到同一个折叠名（2026-11-25 本机 261 个）。
+- 显示：有代码时国家用 App 当前语言的地区名（中文界面「新加坡」「美国」），后面照旧跟城市；城市和国家同名时不重复——
+  本地化的国家名、回包里的原文都比一次（中文界面不会出现「新加坡 · Singapore」）。没有代码时显示原文。
 
 **公共 DNS 的位置不参加比较**（同日加：真机直连、没有任何代理时，一组 Google 的服务器被 bash.ws 标在 `USA`）：
 
 - Google、Cloudflare 这类公共 DNS 是全球任播的，地址库给的是运营方登记的国家，不是服务器真实所在，直连时也会被标成另一个国家。这种「不一致」是假的。
-- 归属是下面这些运营方的 DNS 服务器**不参加国家的比较**（照样列出来，国家那一格灰色、不会红），归属后面加灰色小标签 `公共 DNS`：
-  Google（AS15169）、Cloudflare（AS13335）、Quad9（AS19281）、OpenDNS / Cisco（AS36692）、NextDNS（AS34939）、
-  AdGuard（AS212772）、Control D（AS398962）。标准是「只收全球任播的公共 DNS」；ASN 2026-11-25 经 Team Cymru 核过
-  （AS 名字，以及 8.8.8.8、1.1.1.1、9.9.9.9、208.67.222.222、45.90.28.0、94.140.14.14、76.76.2.0 各自的起源 ASN）。
+- 归属是下面这些运营方的 DNS 服务器**不参加国家的比较**（照样列出来，国家那一格灰色、不会红），归属后面加灰色小标签 `公共 DNS`。
+  **认的是解析器向外查询时的出口 ASN**——bash.ws 报的是出口地址（向权威服务器发查询的那个），不是 8.8.8.8 这种服务地址：
+  Google（AS15169）、Cloudflare（AS13335）、OpenDNS / Cisco（AS36692）、Quad9（AS19281 的服务地址；出口在 PCH 的 AS42、AS715）。
+  这几个是 2026-11-25 实测的：对各家的服务地址发 `o-o.myaddr.l.google.com` 的 TXT 查询拿到出口地址，再经 Team Cymru 查起源 ASN
+  （独立验证一遍、实现者复核一遍；Quad9 两次都出 AS42，复核时还出过一次 AS715，同属 PCH 的 WoodyNet）。
+- **NextDNS、AdGuard、Control D 不收**：它们的出口在通用机房（实测 NextDNS → AS57695 / AS23961，AdGuard → AS60068 CDN77 / Datacamp，
+  Control D → AS212238 Datacamp），很多 VPN 也用这些机房，靠 ASN 认不出是不是公共 DNS；它们照常参加国家比较。
+  标准仍是「只收全球任播的公共 DNS，并且出口 ASN 是它自己的」。
 - 运营商自己的 DNS、云厂商的 DNS 照旧参加国家比较——「流量从国外出去、DNS 却由国内运营商在答」正是要标出来的情况。
 - DNS 全是公共 DNS 时，那一行的国家不参加比较，照常显示；不加额外的说明文字，小标签就够。
 - **按多数标红只是为了指给人看「哪里不一样」**，不是说多数那边就是对的。结论只有「一致 / 不一致」。
@@ -120,6 +133,12 @@
 ## 8. 测试要覆盖
 
 四样各自的一致 / 不一致 / 缺值；多数规则（3 比 1 只红 1 个；1 比 1 两个都红；2 比 2 四个都红；DNS 一组算一个值）；归属的「同一家云厂商」；地址按族分开比；值不足两个算一致；全都缺值时是「无法比较」而不是「一致」；DNS 按「国家 + 归属」分组与台数；WebRTC 只留公网地址、和 IPv4 / IPv6 那一行相同时不另查；结论下面「对不上的」清单的内容和次序；纯文本报告的 `（不一致）` 标记；ASN 不带分隔符。
+
+## 已知限制
+
+- **公共 DNS 不参加国家比较的代价**：出口在美国、系统 DNS 设成 8.8.8.8 而且没走隧道时，查询会落到本地（比如新加坡）的 Google 节点——
+  这是典型的 DNS 泄露，但 Google 的节点在地址库里登记在美国，现在的结论是「一致」（国家那一格仍然显示，是灰色）。
+  以后可以用 Google 公布的 `locations.publicdns.goog`（各节点所在城市与地址段）给它的节点准确定位，这一版不做。
 
 ## 9. 需要真机才能验证的
 

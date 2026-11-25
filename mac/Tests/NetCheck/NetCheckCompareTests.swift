@@ -556,13 +556,15 @@ final class NetCheckCompareTests: XCTestCase {
     }
 
     func testPublicDNSTable() {
-        for asn in [15169, 13335, 19281, 36692, 34939, 212772, 398962] {
+        // 解析器的出口 ASN（2026-11-25 实测）
+        for asn in [15169, 13335, 36692, 19281, 42, 715] {
             XCTAssertNotNil(NetCheckLogic.publicDNS(asn), "AS\(asn)")
         }
-        // 云厂商、运营商不算
-        for asn in [16509, 45102, 4134, 9506, 396982] {
+        // 出口在通用机房的公共 DNS 不收（NextDNS、AdGuard、Control D 的服务 ASN 和出口 ASN），云厂商、运营商也不算
+        for asn in [34939, 57695, 23961, 212772, 60068, 398962, 212238, 16509, 45102, 4134, 9506, 396982] {
             XCTAssertNil(NetCheckLogic.publicDNS(asn), "AS\(asn)")
         }
+        XCTAssertEqual(NetCheckLogic.publicDNS(42), "Quad9")
     }
 
     // MARK: - WebRTC 和 IPv4 / IPv6 是同一个地址时不多算一票（验证者发现，COMPARE.md §2）
@@ -597,5 +599,58 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, false)
         XCTAssertEqual(row(table, .webrtc)?.lines.first?.country.mismatch, false)
         XCTAssertEqual(row(table, .ipv6)?.lines.first?.country.mismatch, true)
+    }
+
+    // MARK: - 国家名的各种写法（验证者列的，COMPARE.md §2）
+
+    func testCountryWritings() {
+        let samples: [(String, String)] = [
+            ("Trinidad and Tobago", "TT"), ("Trinidad & Tobago", "TT"), ("Myanmar", "MM"), ("Burma", "MM"),
+            ("Congo", "CG"), ("Republic of the Congo", "CG"), ("DR Congo", "CD"), ("Democratic Republic of the Congo", "CD"),
+            ("Congo, The Democratic Republic of the", "CD"), ("Palestine", "PS"), ("Palestine, State of", "PS"),
+            ("Brunei Darussalam", "BN"), ("Cabo Verde", "CV"), ("Cape Verde", "CV"),
+            ("Moldova", "MD"), ("Republic of Moldova", "MD"), ("Moldova, Republic of", "MD"),
+            ("Macedonia", "MK"), ("North Macedonia", "MK"), ("Swaziland", "SZ"), ("Eswatini", "SZ"),
+            ("East Timor", "TL"), ("Timor-Leste", "TL"), ("Laos", "LA"), ("Lao People's Democratic Republic", "LA"),
+            ("Syria", "SY"), ("Syrian Arab Republic", "SY"), ("Iran", "IR"), ("Islamic Republic of Iran", "IR"),
+            ("Iran, Islamic Republic of", "IR"), ("Bolivia", "BO"), ("Bolivia, Plurinational State of", "BO"),
+            ("Venezuela", "VE"), ("Venezuela, Bolivarian Republic of", "VE"), ("Tanzania", "TZ"),
+            ("Tanzania, United Republic of", "TZ"), ("United Republic of Tanzania", "TZ"),
+            ("Hashemite Kingdom of Jordan", "JO"), ("Republic of Lithuania", "LT"), ("Kingdom of the Netherlands", "NL"),
+            ("Korea, Republic of", "KR"), ("Korea, Democratic People's Republic of", "KP"), ("Russian Federation", "RU"),
+            ("Saint Lucia", "LC"), ("St Kitts and Nevis", "KN"), ("Cote d'Ivoire", "CI"), ("Côte d’Ivoire", "CI"),
+            ("Curacao", "CW"), ("The Bahamas", "BS"), ("The Gambia", "GM"), ("Viet Nam", "VN"),
+            ("Taiwan, Province of China", "TW"), ("Micronesia, Federated States of", "FM"),
+            ("Holy See (Vatican City State)", "VA"), ("Virgin Islands, British", "VG"), ("Virgin Islands, U.S.", "VI"),
+            ("Reunion", "RE"), ("Sao Tome and Principe", "ST"), ("Turkey", "TR"), ("Czech Republic", "CZ"),
+        ]
+        for (name, code) in samples {
+            XCTAssertEqual(NetCheckCountry.code(nil, name: name), code, name)
+        }
+        // 验证者的例子：不带 key 的 ipapi.is 给名字、bash.ws 给代码，要对得上
+        XCTAssertEqual(NetCheckCountry.key(code: nil, name: "Trinidad and Tobago"), NetCheckCountry.key(code: "tt", name: "Trinidad & Tobago"))
+    }
+
+    /// 全量自检：系统给的每个地区代码的英文名，折叠后都能查回自己的代码，且没有两个代码撞到同一个折叠名。
+    func testEveryRegionNameRoundTrips() {
+        var seen: [String: String] = [:]
+        let regions = NetCheckCountry.englishNameList()
+        XCTAssertGreaterThan(regions.count, 200)
+        for (code, name) in regions {
+            XCTAssertEqual(NetCheckCountry.code(nil, name: name), code, "\(code) \(name)")
+            let folded = NetCheckCountry.fold(name)
+            XCTAssertNil(seen[folded], "\(folded)：\(seen[folded] ?? "") 和 \(code) 撞了")
+            seen[folded] = code
+        }
+    }
+
+    func testFold() {
+        XCTAssertEqual(NetCheckCountry.fold("  Côte  d’Ivoire "), "cote d'ivoire")
+        XCTAssertEqual(NetCheckCountry.fold("St. Kitts & Nevis"), "saint kitts and nevis")
+        XCTAssertEqual(NetCheckCountry.fold("The Gambia"), "gambia")
+        XCTAssertEqual(NetCheckCountry.fold("Myanmar (Burma)"), "myanmar")
+        XCTAssertEqual(NetCheckCountry.fold("Congo (Kinshasa)", keepParenthesized: true), "congo kinshasa")
+        XCTAssertEqual(NetCheckCountry.code(nil, name: "Congo (Kinshasa)"), "CD", "括号里的先留着查")
+        XCTAssertEqual(NetCheckCountry.code(nil, name: "Congo (Brazzaville)"), "CG")
     }
 }

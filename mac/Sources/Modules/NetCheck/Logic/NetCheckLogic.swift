@@ -125,20 +125,19 @@ enum NetCheckLogic {
         }
     }
 
-    /// 全球任播的公共 DNS 的运营方（ASN → 名字）。它们的服务器在地址库里登记的是运营方的国家，不是服务器真实所在，
+    /// 全球任播的公共 DNS（解析器**出口**的 ASN → 名字）。它们的服务器在地址库里登记的是运营方的国家，不是服务器真实所在，
     /// 直连、没有任何代理时也会被标成别的国家，所以这些 DNS 服务器的国家不参加比较（docs/netcheck/COMPARE.md §2）。
-    /// 标准：只收全球任播的公共 DNS；运营商自己的 DNS、云厂商的 DNS 不收（「DNS 由国内运营商在答」正是要标出来的）。
-    /// ASN 2026-11-25 经 Team Cymru 核过：AS 名字，以及各家解析地址（8.8.8.8、1.1.1.1、9.9.9.9、208.67.222.222、
-    /// 45.90.28.0、94.140.14.14、76.76.2.0）的起源 ASN。
+    /// 认的是出口 ASN：bash.ws 报的是解析器向外查询的地址，不是 8.8.8.8 这种服务地址。2026-11-25 实测（对各家服务地址发
+    /// `o-o.myaddr.l.google.com` TXT 拿出口地址，再查起源 ASN）：Google 15169、Cloudflare 13335、OpenDNS 36692，
+    /// Quad9 出口在 PCH 的 AS42 / AS715（19281 是它的服务地址）。
+    /// 不收 NextDNS、AdGuard、Control D：出口在通用机房（AS57695 / 23961、AS60068、AS212238），很多 VPN 也用，靠 ASN 认不出。
+    /// 运营商自己的 DNS、云厂商的 DNS 也不收（「DNS 由国内运营商在答」正是要标出来的）。
     static func publicDNS(_ asn: Int) -> String? {
         switch asn {
         case 15169: return "Google Public DNS"
         case 13335: return "Cloudflare"
-        case 19281: return "Quad9"
         case 36692: return "OpenDNS / Cisco"
-        case 34939: return "NextDNS"
-        case 212772: return "AdGuard DNS"
-        case 398962: return "Control D"
+        case 19281, 42, 715: return "Quad9"
         default: return nil
         }
     }

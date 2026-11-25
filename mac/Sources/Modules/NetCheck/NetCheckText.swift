@@ -68,12 +68,17 @@ enum NetCheckText {
         }
     }
 
-    /// 「新加坡 · Singapore」：认得出代码时国家用 App 语言的地区名，后面跟城市（和国家名一样时不重复）；认不出用原文。
+    /// 「美国 · Ashburn」：认得出代码时国家用 App 语言的地区名，后面跟城市（和国家同名时不重复）；认不出用原文。
     static func place(code: String?, country: String, city: String) -> String {
         let name = code.flatMap { L10n.locale.localizedString(forRegionCode: $0) } ?? country
         var parts: [String] = []
         if !name.isEmpty { parts.append(name) }
-        if !city.isEmpty, city.caseInsensitiveCompare(name) != .orderedSame { parts.append(city) }
+        // 城市和国家同名（新加坡）时不重复：本地化的国家名、回包里的原文都比一次（中文界面不会出现「新加坡 · Singapore」）
+        if !city.isEmpty, city.caseInsensitiveCompare(name) != .orderedSame,
+           city.caseInsensitiveCompare(country) != .orderedSame,
+           NetCheckCountry.code(nil, name: city) != code || code == nil {
+            parts.append(city)
+        }
         return parts.isEmpty ? L("netcheck.value.notFound") : parts.joined(separator: " · ")
     }
 
