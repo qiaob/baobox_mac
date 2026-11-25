@@ -64,6 +64,22 @@ final class LauncherActionApplicabilityTests: XCTestCase {
         XCTAssertEqual(LauncherSuggestionRanking.leadingOrder([], kinds: [.url]), [])
     }
 
+    /// 会议链接：输入分类认成网址（「入会并开始会议记录」只对网址声明），会议模块的 `MeetingLinkParser` 也认得 ——
+    /// 两样都成立这一行才出。普通网址、写在一段话里的链接不出。
+    func testMeetingLinksAreURLsTheMeetingParserKnows() {
+        let links = ["https://zoom.us/j/123456789?pwd=abc", "meet.google.com/abc-defg-hij",
+                     "https://meeting.tencent.com/dm/AbCdEf", "zoommtg://zoom.us/join?confno=123456789",
+                     "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x", "https://vc.feishu.cn/j/123456789"]
+        for link in links {
+            XCTAssertEqual(LauncherInputClassifier.classify(link).kinds, [.url], link)
+            XCTAssertFalse(MeetingLinkParser.links(in: link).isEmpty, link)
+        }
+        for url in ["https://example.com/meeting", "https://zoom.us/pricing", "https://meet.google.com/"] {
+            XCTAssertTrue(MeetingLinkParser.links(in: url).isEmpty, url)
+        }
+        XCTAssertNotEqual(LauncherInputClassifier.classify("明天的会 https://zoom.us/j/123").kinds, [.url], "一段话不是网址")
+    }
+
     func testSameTierKeepsTheDeclarationOrder() {
         let same = [
             LauncherSuggestionCandidate(id: "first", traits: LauncherSuggestionTraits(kinds: [.url], priority: 10, leading: true)),
