@@ -45,7 +45,7 @@ final class LauncherEntryProvider {
 
     /// 后台建好了一批键、面板还开着：控制器重新装一次条目、刷新列表。
     var onKeysAdded: (() -> Void)?
-    /// 这次呼出读到的功能开关（第 13 步）：控制器在 `beginSession` 之前设；收起后预热也按它（最近一次呼出时的）。
+    /// 这次呼出读到的功能开关（第 13 步）：控制器在 `beginSession` 之前设；面板没开着时预热自己读一次设置。
     var features = LauncherFeatureSet.allEnabled
 
     init(registry: ToolRegistry?) {
@@ -139,6 +139,8 @@ final class LauncherEntryProvider {
 
     /// 预热：取一次条目（只读内存），把缺的键全交给后台建；来源里已经没有的从缓存里删掉。
     func prewarm() {
+        // 面板没开着时按此刻的设置（启动后第一次预热还没呼出过；开着时保持这次呼出读到的，到收起为止不变）。
+        if session == nil { features = LauncherFeatureSettings.load() }
         let sources = collect()
         if session == nil {
             cache.retain(Set(sources.flatMap(\.specs).map(\.key)))
