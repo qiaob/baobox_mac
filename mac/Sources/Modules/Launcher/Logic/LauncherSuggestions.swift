@@ -81,7 +81,7 @@ enum LauncherSuggestionPolicy {
         let allowsFallback = input.text.index(input.text.startIndex, offsetBy: minimumFallbackLength,
                                               limitedBy: input.text.endIndex) != nil
         let showsReminders = features.isEnabled(.reminder) && LauncherReminderBook.isListQuery(input.text)
-        let builtIns = LauncherFeatureRules.fallbackBuiltIns(features)
+        let builtIns = LauncherFeatureRules.fallbackBuiltIns(features, input: input.text)
         if hasCalculation {
             var plan = LauncherSuggestionPlan(text: input.text, leading: [],
                                               fallbackKinds: allowsFallback ? [.plainText] : nil)

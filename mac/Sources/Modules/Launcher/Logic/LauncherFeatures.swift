@@ -274,8 +274,8 @@ enum LauncherFeatureLayout {
     }
 
     /// 模块声明的动作 → 行：文字动作进「文字的去处」，图片动作进「图片的去处」，文件动作进「文件和文件夹的去处」；
-    /// 名字 = 命令的 `settingsTitle`（随状态变的标题给的固定名字），没有就是标题；右侧 = 所属工具名，图标 = 命令自己的；次序 = 默认档位（`suggestion.priority`），同档按传入的先后
-    /// （模块注册顺序、模块里写的顺序）—— 和面板里默认的次序一致。
+    /// 名字 = 命令的 `settingsTitle`（随状态变的标题给的固定名字），没有就是标题；右侧 = 所属工具名，图标 = 命令自己的；
+    /// 次序 = 默认档位（`suggestion.priority`），同档按传入的先后（模块注册顺序、模块里写的顺序）—— 和面板里默认的次序一致。
     static func actionRows(text: [LauncherCatalogCommand], image: [LauncherCatalogCommand],
                            file: [LauncherCatalogCommand]) -> [LauncherFeatureRow] {
         func rows(_ entries: [LauncherCatalogCommand], group: LauncherFeatureGroup) -> [LauncherFeatureRow] {
@@ -301,10 +301,14 @@ enum LauncherFeatureLayout {
 
 enum LauncherFeatureRules {
     /// 兜底建议里快速入口自己的两条（上网搜、搜文件名）里开着的。搜文件名要文件来源也开着（它把输入改成 `f <文字>`）。
-    static func fallbackBuiltIns(_ features: LauncherFeatureSet) -> [LauncherSuggestionCandidate] {
+    /// `input`（去首尾空白后的输入）以 `/`、`~` 开头时也不放搜文件名（验证后定）：这样的输入只在「路径」关着时才走到兜底建议，
+    /// 改成 `f ~/…` 后文件搜索不接以 `/`、`~` 开头的查询词（`LauncherFilePolicy.fragment`），点了只会是「没有结果」。
+    static func fallbackBuiltIns(_ features: LauncherFeatureSet, input: String = "") -> [LauncherSuggestionCandidate] {
         var builtIns: [LauncherSuggestionCandidate] = []
         if features.isEnabled(.webSearch) { builtIns.append(LauncherSuggestionRanking.webSearch) }
-        if features.isEnabled(.fileName), features.isEnabled(.files) { builtIns.append(LauncherSuggestionRanking.findFiles) }
+        if features.isEnabled(.fileName), features.isEnabled(.files), !input.hasPrefix("/"), !input.hasPrefix("~") {
+            builtIns.append(LauncherSuggestionRanking.findFiles)
+        }
         return builtIns
     }
 

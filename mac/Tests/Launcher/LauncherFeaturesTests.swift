@@ -340,6 +340,18 @@ final class LauncherFeaturesTests: XCTestCase {
         let offPlan = plan("/Users/qiao/a.txt", features: off("source/path"))
         XCTAssertEqual(offPlan.fallbackKinds, [.plainText], "关着：按普通文字处理，仍有文字的建议")
         XCTAssertEqual(plan("~/Downloads", features: off("source/path")).fallbackKinds, [.plainText])
+        // 也不出「搜文件名」：改成 `f ~/…` 后文件搜索不接以 `/`、`~` 开头的查询词，点了只会是「没有结果」（验证后定）。
+        for input in ["~/项目/notes.txt", "/Users/qiao/a.txt"] {
+            let builtIns = plan(input, features: off("source/path")).fallbackBuiltIns.map(\.id)
+            XCTAssertEqual(builtIns, ["launcher.webSearch"], input)
+            XCTAssertNil(LauncherFilePolicy.request(for: LauncherQuery.parse("f " + input), hasCalculation: false),
+                         "就是因为这个：\(input)")
+        }
+        XCTAssertEqual(plan("~ 和 /", features: off("source/path")).fallbackBuiltIns.map(\.id), ["launcher.webSearch"],
+                       "规则只看开头")
+        XCTAssertEqual(plan("notes.txt", features: off("source/path")).fallbackBuiltIns.map(\.id),
+                       ["launcher.webSearch", "launcher.findFiles"], "别的输入照旧")
+        XCTAssertEqual(plan("a/b.txt", features: off("source/path")).fallbackBuiltIns.count, 2, "中间带 / 的片段照旧")
         XCTAssertTrue(LauncherInputClassifier.classify("/tmp").isPath)
         XCTAssertFalse(LauncherInputClassifier.classify("/tmp", recognizesPaths: false).isPath)
     }
