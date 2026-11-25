@@ -51,6 +51,15 @@ final class LauncherCommandProvider {
         return LauncherCommandCatalog.textActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
     }
 
+    /// 此刻各模块声明的图片动作（呼出时调一次）：只在输入里挂着图片、或输入是图片文件的路径时作为建议出现（§5.5）。
+    func imageActions() -> [LauncherCatalogCommand] {
+        guard let registry else { return [] }
+        let declared = registry.tools.flatMap { tool in
+            tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
+        }
+        return LauncherCommandCatalog.imageActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
+    }
+
     /// 快捷键动作 → 无参数命令。开关类动作此刻有 `stateTitle` 就用它当标题（「关闭防休眠」）。
     static func command(from definition: HotkeyDefinition, symbolName: String) -> LauncherCommand {
         var title = definition.title

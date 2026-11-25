@@ -87,6 +87,16 @@ final class LauncherPanelModel: ObservableObject {
     var onRun: (Int) -> Void = { _ in }
     /// 文件图标（App、文件、文件夹行）。
     var iconForFile: (String) -> NSImage? = { _ in nil }
+    /// 图片条目的缩略图（参数是行 id）：缓存里有就给，没有就在后台去取、先返回 nil，取到后 `thumbnailsChanged()`。
+    var thumbnailForRow: (String) -> NSImage? = { _ in nil }
+    /// 输入里挂着的图片（输入框左边的小标签）；nil = 没挂。
+    @Published var attachment: LauncherAttachmentChip?
+    /// 每取到一批缩略图 +1：列表重画、换上缩略图。
+    @Published private(set) var thumbnailsVersion = 0
+
+    func thumbnailsChanged() {
+        thumbnailsVersion += 1
+    }
 
     /// 鼠标上次的位置：悬停只有在鼠标真的动过之后才改选中行 —— 面板出现在鼠标下面、
     /// 打字换了一批结果、键盘选行之后，停着不动的鼠标下面换了一行，都不算。
@@ -188,6 +198,12 @@ final class LauncherFieldHandle {
         guard let field, let window = field.window else { return }
         window.makeFirstResponder(field)
     }
+
+    /// 输入框不在编辑时才给焦点（已经在编辑就不动：再给一次会全选，接着打的字会把刚放进去的路径覆盖掉）。
+    func focusIfNeeded() {
+        guard field?.currentEditor() == nil else { return }
+        focus()
+    }
 }
 
 /// 输入框本体。进了窗口还没拿到焦点就自己要一次（兜底：控制器在显示后已经同步给过焦点）。
@@ -207,6 +223,8 @@ final class LauncherTextField: NSTextField {
 
 struct LauncherSearchField: NSViewRepresentable {
     let handle: LauncherFieldHandle
+    /// 输入框为空时的提示（挂着图片时换一句）。
+    var placeholder: String = L("launcher.placeholder")
     let onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -221,7 +239,7 @@ struct LauncherSearchField: NSViewRepresentable {
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 20)
         field.textColor = .labelColor
-        field.placeholderString = L("launcher.placeholder")
+        field.placeholderString = placeholder
         field.lineBreakMode = .byTruncatingTail
         field.cell?.usesSingleLineMode = true
         field.cell?.wraps = false
@@ -238,6 +256,7 @@ struct LauncherSearchField: NSViewRepresentable {
         // 文字以输入框为准，这里不回写（组字时回写会打断输入法）。
         context.coordinator.onTextChange = onTextChange
         handle.field = field
+        if field.placeholderString != placeholder { field.placeholderString = placeholder }
     }
 
     @MainActor
@@ -314,7 +333,13 @@ struct LauncherPanelView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 18, weight: .regular))
                 .foregroundStyle(.secondary)
-            LauncherSearchField(handle: model.field) { [weak model] text in
+            // 挂着的图片（§5.5）：放大镜和文字之间一个小标签，输入框跟着变窄。
+            if let attachment = model.attachment {
+                LauncherAttachmentChipView(chip: attachment)
+            }
+            LauncherSearchField(handle: model.field,
+                                placeholder: model.attachment == nil ? L("launcher.placeholder") : L("launcher.placeholder.image")) {
+                [weak model] text in
                 model?.onTextChange(text)
             }
         }
@@ -336,6 +361,8 @@ struct LauncherPanelView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
+                    // 读一下：缩略图到了要重画（`thumbnailForRow` 本身不是被观察的值）。
+                    let _ = model.thumbnailsVersion
                     ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
                         LauncherResultRow(row: row,
                                           shortcutNumber: index < 9 ? index + 1 : nil,
@@ -363,8 +390,11 @@ struct LauncherPanelView: View {
     }
 
     private func fileIcon(for row: LauncherRow) -> NSImage? {
-        guard case .file(let path) = row.icon else { return nil }
-        return model.iconForFile(path)
+        switch row.icon {
+        case .file(let path): return model.iconForFile(path)
+        case .thumbnail: return model.thumbnailForRow(row.id)
+        default: return nil
+        }
     }
 }
 
@@ -441,14 +471,16 @@ struct LauncherResultRow: View {
 
     @ViewBuilder
     private var icon: some View {
-        if let fileIcon {
+        if let fileIcon, case .thumbnail = row.icon {
+            LauncherThumbnailIcon(image: fileIcon, selected: selected)
+        } else if let fileIcon {
             Image(nsImage: fileIcon)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 26, height: 26)
         } else if case .swatch(let color) = row.icon {
             LauncherColorSwatch(color: color, selected: selected)
-        } else if case .symbol(let name) = row.icon {
+        } else if let name = symbolName {
             Image(systemName: name)
                 .font(.system(size: 12))
                 .frame(width: 26, height: 26)
@@ -457,6 +489,15 @@ struct LauncherResultRow: View {
                 .foregroundStyle(selected ? Color.white : Color.primary)
         } else {
             Color.clear.frame(width: 26, height: 26)
+        }
+    }
+
+    /// SF Symbol 图标：命令行的图标；缩略图还没取到时的占位。
+    private var symbolName: String? {
+        switch row.icon {
+        case .symbol(let name): return name
+        case .thumbnail(let placeholder): return placeholder
+        default: return nil
         }
     }
 }

@@ -10,6 +10,8 @@ import Foundation
 // 新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
 // 建议（§5.4，没打前缀、输入不是路径时）：对应建议（打开网址、写邮件、颜色、字数）插在计算结果之后、识别结果之前，
 // 兜底建议（文字动作、上网搜、搜文件）接在最后 —— 输入不为空时列表里总有事可做，「没有结果」只在连兜底建议都没有时出现。
+// 输入里挂着图片时（§5.5）只出这张图的建议（识别结果 + 图片动作），输入框里的字是筛选词；
+// 输入是一个图片文件的路径时，路径行后面接同一组图片动作。
 
 /// 行左边的图标。
 enum LauncherRowIcon: Equatable {
@@ -19,6 +21,8 @@ enum LauncherRowIcon: Equatable {
     case symbol(String)
     /// 这个颜色的色块（颜色值的建议行，§5.4）。
     case swatch(LauncherColor)
+    /// 图片的缩略图（剪贴板历史里的图片条目，§5.5）：行要显示时才在后台取，取到之前显示这个 SF Symbol。
+    case thumbnail(placeholderSymbol: String)
 }
 
 /// 行的样子。
@@ -53,6 +57,12 @@ struct LauncherItem {
     var completion: String? = nil
     /// 执行时记不记使用记录（路径行不记）。
     var recordsUsage = true
+    /// 条目是一张图片（剪贴板历史里的图片）：行首缩略图从这里取，Tab 把它挂成输入里的附件（§5.5）。
+    var image: LauncherEntryImage? = nil
+    /// 路径行指向一个图片文件（§6.5）：后面接图片动作（取字、贴图……，图片从这个文件读）。
+    var imageFile: URL? = nil
+    /// 只在打了来源前缀时出现（图片条目，§3.2）。
+    var onlyWithPrefix = false
 }
 
 /// 「输入即出」的一行（计算结果、文本识别）：固定排在最前，不进排序、不记使用；⏎ 复制，⌘⏎ 插入前台 App。
@@ -104,6 +114,10 @@ final class LauncherEngine {
     private var suggestionsByKey: [String: LauncherSuggestion] = [:]
     /// 按 ⌘V 时记下的带换行的原文（控制器每次查询前设）：输入框里的文字还是它时，建议行用它（§5.4）。
     var pastedText: String?
+    /// 各模块声明的图片动作（§5.5）：呼出时装进来，只在挂着图片 / 输入是图片文件的路径时出现。
+    var imageActions: [LauncherCatalogCommand] = []
+    /// 输入里挂着的图片（控制器每次查询前设）；nil = 没挂。
+    var attachment: LauncherAttachment?
     /// 主目录：认路径时展开 `~`。
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
@@ -127,7 +141,8 @@ final class LauncherEngine {
         byKey.reserveCapacity(items.count)
         for item in items where byKey[item.candidate.key] == nil {
             byKey[item.candidate.key] = item
-            all.append(item.candidate)
+            // 只在打了前缀时出现的（图片条目）不进「全部」，只进它自己的来源。
+            if !item.onlyWithPrefix { all.append(item.candidate) }
             bySource[item.candidate.sourceID, default: []].append(item.candidate)
         }
         allCandidates = all
@@ -149,6 +164,8 @@ final class LauncherEngine {
         textActions = []
         suggestionsByKey = [:]
         pastedText = nil
+        imageActions = []
+        attachment = nil
     }
 
     func item(forKey key: String) -> LauncherItem? {
@@ -180,6 +197,22 @@ final class LauncherEngine {
     /// 最后接兜底建议（§5.4）。
     func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
         let start = DispatchTime.now().uptimeNanoseconds
+
+        // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
+        if let attachment {
+            pathResult = nil
+            fileResult = nil
+            asyncItemsByKey = [:]
+            let suggestions = LauncherImageSuggestionProvider.suggestions(
+                image: attachment.image, recognition: attachment.recognition, filter: input,
+                imageActions: imageActions, textActions: textActions, records: records, now: now)
+            instantsByKey = Dictionary(suggestions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+            return LauncherSearchOutcome(queryText: input.trimmingCharacters(in: .whitespacesAndNewlines),
+                                         rows: suggestions.rows, candidateCount: suggestions.rows.count, duration: duration)
+        }
+
         let query = LauncherQuery.parse(input, prefixBySource: prefixBySource)
 
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
@@ -190,8 +223,17 @@ final class LauncherEngine {
             // 还在同一处打字时先顶着上一次的行；换到别处的路径就先空着（显示「正在查找」）。
             let items = pathResult.map { $0.input == path || path.continues($0.input) ? $0.items : [] } ?? []
             asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var rows = items.map(\.row)
+            // 指向一个图片文件（§5.5）：路径行后面接图片动作（不先取字；「图里的文字」回车时才取）。
+            if items.count == 1, let file = items.first?.imageFile {
+                let suggestions = LauncherImageSuggestionProvider.suggestions(
+                    image: .file(file), recognition: nil, filter: "", imageActions: imageActions, textActions: textActions,
+                    records: records, now: now)
+                suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                rows += suggestions.rows
+            }
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
-            return LauncherSearchOutcome(queryText: query.text, rows: items.map(\.row), candidateCount: items.count,
+            return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: items.count,
                                          duration: duration, pendingPath: pathResult?.input == path ? nil : path)
         }
         pathResult = nil

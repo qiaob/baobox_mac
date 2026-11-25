@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 enum ResultMode {
     case standard   // 复制到剪贴板，按设置可同时落盘
@@ -91,11 +92,10 @@ enum ScreenshotSettings {
         UserDefaults.standard.bool(forKey: drawSavePreviewKey)
     }
 
-    /// 屏幕取字的识别语言组合，默认中英混合。
-    static let ocrLanguageKey = "screenshot.ocrLanguage"
+    /// 屏幕取字的识别语言组合，默认中英混合（读写都在 `TextRecognizer.LanguageOption`，快速入口也照它取字）。
+    static let ocrLanguageKey = TextRecognizer.LanguageOption.defaultsKey
     static var ocrLanguageOption: TextRecognizer.LanguageOption {
-        let raw = UserDefaults.standard.string(forKey: ocrLanguageKey) ?? ""
-        return TextRecognizer.LanguageOption(rawValue: raw) ?? .chineseEnglish
+        TextRecognizer.LanguageOption.preferred
     }
 
     /// 取字后直接复制、不弹结果窗，默认关（识别难免有错，默认给用户一次校对机会）。
@@ -175,24 +175,85 @@ enum ScreenshotResultHandler {
         if ScreenshotSettings.autoSave {
             save(image: image)
         }
-        ImagePreviewWindow.present(
-            image: image,
-            title: title,
-            actions: [
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.save")) {
-                    save(image: image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.ocr")) {
-                    OCRResultWindow.present(image: image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.pin"), closesWindow: true) {
-                    ScreenshotTool.pinCentered(image)
-                },
-                ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.copy"),
-                                          isDefault: true, closesWindow: true) {
-                    copy(image: image)
+        ImagePreviewWindow.present(image: image, title: title, actions: previewActions(for: image))
+    }
+
+    /// 只开预览窗（同一组按钮：保存 / 取字 / 贴图 / 复制），不记截图历史、不按设置自动落盘 ——
+    /// 快速入口交来的图（贴进来的、剪贴板历史里的、访达里的图片文件）不是刚截的，记进截图历史、
+    /// 自动往截图文件夹里存一份都不对（docs/launcher/TECH_DESIGN.md §5.5）。
+    @MainActor
+    static func presentPreviewOnly(image: CGImage, title: String) {
+        ImagePreviewWindow.present(image: image, title: title, actions: previewActions(for: image))
+    }
+
+    @MainActor
+    private static func previewActions(for image: CGImage) -> [ImagePreviewWindow.Action] {
+        [
+            ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.save")) {
+                save(image: image)
+            },
+            ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.ocr")) {
+                OCRResultWindow.present(image: image)
+            },
+            ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.pin"), closesWindow: true) {
+                ScreenshotTool.pinCentered(image)
+            },
+            ImagePreviewWindow.Action(title: L("screenshot.longshot.preview.copy"),
+                                      isDefault: true, closesWindow: true) {
+                copy(image: image)
+            }
+        ]
+    }
+
+    /// 快速入口「保存成文件」（docs/launcher/TECH_DESIGN.md §5.5）：照截图的保存位置和文件名模板存一份 PNG，
+    /// 回执一句存到了哪（同一秒内重名时追加序号，同 `saveToDisk`）。交来的就是 PNG 字节时原样写、不重新编码；
+    /// 别的格式（TIFF、JPEG、HEIC、图片文件）解码后编码成 PNG。解码、编码、写盘都在后台；失败时弹的说明同截图存盘失败。
+    @MainActor
+    static func saveFromLauncher(_ image: LauncherImage) {
+        let dir = ScreenshotSettings.saveDirectoryURL
+        let base = ScreenshotSettings.filenameBase(for: Date())
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome: Result<URL, Error>
+            if let png = pngData(for: image) {
+                do {
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let url = uniqueURL(in: dir, base: base, ext: "png")
+                    try png.write(to: url)
+                    outcome = .success(url)
+                } catch {
+                    outcome = .failure(error)
                 }
-            ])
+            } else {
+                outcome = .failure(CocoaError(.fileReadCorruptFile))
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    switch outcome {
+                    case .success(let url):
+                        let shown = (url.path as NSString).abbreviatingWithTildeInPath
+                        NotifyCenter.shared.post(Notice(source: "screenshot", level: .ambient,
+                                                        title: L("screenshot.launcher.saved \(shown)"),
+                                                        icon: "square.and.arrow.down", isUserFeedback: true))
+                    case .failure(let error):
+                        reportSaveFailure(dir: dir, error: error)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 要写进文件的 PNG：本来就是 PNG 字节就原样用；否则解码（不缩）再编码。读不出来为 nil。后台调。
+    private static func pngData(for image: LauncherImage) -> Data? {
+        if case .data(let data) = image, data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return data
+        }
+        guard let cgImage = LauncherImageLoader.cgImage(image, maxPixelCount: Int.max) else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
     private static func copyToPasteboard(png: Data, cgImage: CGImage) {
@@ -219,13 +280,18 @@ enum ScreenshotResultHandler {
         } catch {
             // 原先整条链路都是 try?：目录不可写、保存目录落在 TCC 保护目录（如 ~/Documents）
             // 被拒、磁盘写满，全部静默失败 —— 用户以为存下来了，其实什么都没有。
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = L("screenshot.error.saveFailed")
-            alert.informativeText = "\(dir.path)\n\(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.runModal()
+            reportSaveFailure(dir: dir, error: error)
         }
+    }
+
+    @MainActor
+    private static func reportSaveFailure(dir: URL, error: Error) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = L("screenshot.error.saveFailed")
+        alert.informativeText = "\(dir.path)\n\(error.localizedDescription)"
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     /// 文件名模板精确到秒，同一秒内连拍两张时后者会覆盖前者，这里追加序号避让。

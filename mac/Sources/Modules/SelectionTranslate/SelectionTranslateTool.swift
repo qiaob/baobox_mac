@@ -113,10 +113,12 @@ final class SelectionTranslateTool: ToolModule {
     /// 结果出在划词助手的结果面板里（交来的文字不可写，只给复制）。动作条上关掉的动作这里也不出（翻译永远在）。
     /// 适用范围与档位：翻译 10、学习 10（只对英文单词 / 短语，单词时提到最前）、解释 20、总结 20（一大段文字时提前）、
     /// 润色 60（一大段文字时提前；普通文字时排在兜底建议的第 9 位，用得多才露出来）。
+    /// 翻译也用在图片里认出的文字上（§5.5）：挂着图片时出「翻译图里的文字」，档位 15（取字 10 之后、钉在屏幕上 20 之前），
+    /// 快速入口先本机取字、再把认出的文字交过来。
     func launcherCommands() -> [LauncherCommand] {
         let visible = Set(SelectionActionStore.visible.map(\.id))
         let actions: [(SelectionBuiltinAction, LauncherSuggestionTraits)] = [
-            (.translate, LauncherSuggestionTraits(priority: 10)),
+            (.translate, LauncherSuggestionTraits(priority: 10, imageTextPriority: 15)),
             (.learn, LauncherSuggestionTraits(kinds: [.word], priority: 10, boostedKinds: [.word])),
             (.explain, LauncherSuggestionTraits(priority: 20)),
             (.summarize, LauncherSuggestionTraits(kinds: [.plainText, .longText], priority: 20, boostedKinds: [.longText])),

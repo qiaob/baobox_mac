@@ -33,23 +33,30 @@ mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些�
   LauncherCommand.swift                    命令与参数的模型（纯 Foundation）
   LauncherSearchable.swift                 「我有可搜索的条目」协议 + 条目模型 + 来源整理标题 / 搜索全文的 LauncherEntryText（纯 Foundation）
   LauncherTextAction.swift                 输入的类别 LauncherTextKind、文字动作的建议属性 LauncherSuggestionTraits、`textAction(…)`（纯 Foundation，§5.4）
+  LauncherImageAction.swift                交给图片动作的图 LauncherImage（编码字节 / 文件路径）、`imageAction(…)`（纯 Foundation，§5.5）
+
+mac/Sources/Core/LauncherImageLoader.swift  LauncherImage → 像素尺寸 / 缩略图 / 整图（ImageIO，后台调；快速入口和截图模块共用，§5.5）
 
 mac/Sources/Core/TextTools/                文本格式识别器（PR 5 从剪贴板模块下沉，剪贴板预览区与快速入口共用，§6.3）
 
 mac/Sources/Modules/Clipboard/
-  ClipboardLauncherSource.swift            剪贴板历史、文本片段两个来源（§3.2）
+  ClipboardLauncherSource.swift            剪贴板历史、文本片段两个来源（§3.2；PR 8 起剪贴板历史也交图片条目，§5.5）
   ClipboardTool.swift                      launcherCommands()：文字动作「存为片段 / 钉成贴卡 / 生成二维码」（§5.4）
 
+mac/Sources/Modules/Screenshot/
+  ScreenshotTool.swift                     launcherCommands()：图片动作「取字 / 钉在屏幕上 / 预览 / 保存成文件」（§5.5）
+  ScreenshotResultHandler.swift            presentPreviewOnly（不记历史的预览窗）、saveFromLauncher（存 PNG + 回执）（§5.5）
+
 mac/Sources/Modules/SelectionTranslate/
-  SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4）
+  SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4；翻译也用在图里的文字上，§5.5）
   SelectionTranslateController.swift       run(actionID:onText:)：对交来的文字直接出结果面板（§5.4）
 
 mac/Sources/Modules/Launcher/
   LauncherTool.swift                       模块壳：菜单一行、快捷键、设置 Tab、aiFeatures
   LauncherController.swift                 呼出 / 收起、上下文快照、会话状态、按键、执行
-  LauncherPanel.swift                      窗口外壳（见 §4）
+  LauncherPanel.swift                      窗口外壳（见 §4）：LauncherWindow（不接拖放的字段编辑器）、接拖放的 LauncherHostingView
   LauncherViews.swift                      面板状态（LauncherPanelModel）、输入框、结果列表、预览卡片、回答区、⌘K 菜单
-  LauncherSuggestionViews.swift            建议行的色块（§5.4）
+  LauncherSuggestionViews.swift            建议行的色块（§5.4）、挂着的图片标签、图片条目的缩略图（§5.5）
   LauncherEngine.swift                     装进各来源的条目、拆前缀、排序、换成行（LauncherItem / LauncherRow）
   LauncherUsagePersistence.swift           使用记录落盘（LauncherUsageStore，§5.3）
   LauncherAI.swift                         意图解析、问答、算式翻译的调用与提示词
@@ -67,6 +74,9 @@ mac/Sources/Modules/Launcher/
     FileProvider.swift                     LauncherFileProvider：文件搜索的防抖、序号、后台过滤排序、日志、换成行（§6.4）
     SpotlightFileSearch.swift              LauncherSpotlightFileSearch：文件搜索后端的 Spotlight 实现（NSMetadataQuery，§6.4）
     SuggestionProvider.swift               LauncherSuggestionProvider：建议行 —— 对应建议、兜底建议（§5.4）
+    ImageSuggestionProvider.swift          LauncherRecognition（一次后台取字）、LauncherAttachment、挂着图片时的建议行（§5.5）
+    PasteboardReader.swift                 LauncherPasteboardReader：⌘V / 放下时读剪贴板的快照与图片字节（§5.5）
+    ThumbnailProvider.swift                LauncherThumbnailProvider：图片条目的缩略图，后台取、NSCache（§5.5）
     WindowProvider.swift                   窗口列表（二期）
     WebSearchProvider.swift                搜索引擎列表的设置（二期；「上网搜（Google）」PR 7 起是兜底建议的一行，在 SuggestionProvider 里）
   Logic/                                   纯 Foundation，全部进 BaoboxTests
@@ -85,6 +95,8 @@ mac/Sources/Modules/Launcher/
     LauncherColor.swift                    颜色值的解析与 HEX / RGB / HSL 三种写法（§5.4）
     LauncherSuggestions.swift              建议的规则：出哪些、兜底建议怎么排、字数、标题里的引用、搜索引擎表（§5.4）
     LauncherPastedText.swift               粘贴时记下的带换行的原文：值不值得记、输入框里的文字还是不是它（§5.4）
+    LauncherPasteboardContent.swift        ⌘V / 拖放的东西归哪一类（文件 / 图片 / 文字）、贴进文件时换进输入框的路径（§5.5）
+    LauncherImageSuggestions.swift         挂着图片时的建议：图片动作的排序、打字筛选、二维码与识别出的文字怎么换成行（§5.5）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -101,7 +113,7 @@ mac/Tests/Launcher*Tests.swift             对应上面 Logic/ 的单元测试 +
 ```swift
 // Core/Launcher/LauncherCommand.swift
 struct LauncherParameter {
-    enum Kind { case duration, number, text, choice([String]), clipboardRef }
+    enum Kind { case duration, number, text, choice([String]), clipboardRef, image }   // image：PR 8，§5.5
     let name: String            // 模型输出里的键，如 "duration"
     let kind: Kind
     let required: Bool
@@ -130,6 +142,7 @@ struct LauncherCommand {
 
 - 不收：快速入口自己的 `launcher.toggle`；带 `onRelease` 的快捷键（按住说话靠「按下 + 松开」，单次执行没意义）；id 为空的；一期面板只执行无参数命令，`parameters` 非空的先不收（`includesParameterized` 以后打开）。
 - **文字动作**（PR 7，2026-11-24）：`parameters` 恰好是一个必填 `.text` 参数的命令（`LauncherCommand.isTextAction`）。它们**永远不进** `merge` 出的普通命令表（`includesParameterized` 打开了也不进：没有文字可给时执行不了），由 `LauncherCommandCatalog.textActions(declared:)` 另收一张表，只作为「对当前输入的建议」排在列表最后；`LauncherCommand.suggestion` 写它适用哪几类输入、默认档位、哪几类时提前。详见 §5.4。
+- **图片动作**（PR 8，2026-11-24）：`parameters` 恰好是一个必填 `.image` 参数的命令（`isImageAction`），同文字动作一样**永远不进** `merge` 出的普通命令表，由 `LauncherCommandCatalog.imageActions(declared:)` 另收一张表，只在输入里挂着图片、或输入是图片文件的路径时作为建议出现。详见 §5.5。
 - **先过滤再合并**：同一组里 id 重复只留第一条；自动的保持注册顺序，声明的同 id 时在原位替换，其余声明的接在后面。被过滤掉的声明（带参数）不会顶掉同 id 的自动那条 —— 快捷键动作本来就能无参数执行。
 - 每条命令的搜索文字：标题（第一个，排序同分时看它的长度）、关键词、「工具名 标题」拼成的一段。工具名不单独做一个键：单独的话输入工具名时这个工具的每条命令都「完全相等」，会压过真正叫这个名字的那一行；拼起来以后是开头匹配、按标题长短排，`截图 区域` 这样连着写也能中。
 - 搜索键缓存（`LauncherCommandKeyCache`）：按命令 id 记「搜索文字 → 搜索键」，文字没变就复用，变了（「开关防休眠」↔「关闭防休眠」）才重建，这次没出现的 id 从缓存删掉。打字路径上不建键。
@@ -164,6 +177,8 @@ struct LauncherEntry {
     let date: Date?
     let primary: @MainActor () -> Void               // ⏎
     let actions: [LauncherEntryAction]               // ⌘K 里的其余动作
+    var image: LauncherEntryImage?                   // 条目是一张图片：缓存键 + 「怎么取字节」（PR 8，§5.5）
+    var onlyWithPrefix: Bool                         // 只在打了来源前缀时出现（图片条目，PR 8）
 }
 
 @MainActor
@@ -178,7 +193,7 @@ protocol LauncherSearchable {
 
 | 来源 | 实现在 | 数据 | ⏎ |
 |---|---|---|---|
-| 剪贴板历史 `clipboard` | `ClipboardTool` → `ClipboardLauncherSource(kind: .history)` | `ClipboardStore.items` 里**没收藏**的文字条目（`.text` / `.link`）；`isConcealed` 的（密码管理器标记为敏感的）不交，图片、文件这一期不交 | `PasteService.paste`（同剪贴板面板回车：回填不进历史、切回前台 App 再合成 ⌘V、没有辅助功能权限时说明降级） |
+| 剪贴板历史 `clipboard` | `ClipboardTool` → `ClipboardLauncherSource(kind: .history)` | `ClipboardStore.items` 里**没收藏**的文字条目（`.text` / `.link`）和全部图片条目（`.image`，收藏了的也在这里，PR 8）；`isConcealed` 的（密码管理器标记为敏感的）不交，文件这一期不交 | `PasteService.paste`（同剪贴板面板回车：回填不进历史、切回前台 App 再合成 ⌘V、没有辅助功能权限时说明降级） |
 | 文本片段 `snippets` | `ClipboardTool` → `ClipboardLauncherSource(kind: .snippets)` | **收藏了**的文字条目（= 片段管理列表 `ClipboardStore.snippets` 的范围：片段就是收藏的条目，docs/snippets/DESIGN.md），同样不交敏感的；同一条只在一个来源里 | 同上 |
 | 会话（二期） | `ClaudeCodeTool` / `AIToolsTool` | 现有的 `CLISessionSource` | 数据源自己的续接 |
 | 会议（二期） | `MeetingTool` | `MeetingStore.records` | `MeetingStore.open(_:)` |
@@ -187,6 +202,7 @@ protocol LauncherSearchable {
 
 - 剪贴板：标题 = 第一行（去首尾空白，最多 80 个字符）；`searchText` = 去掉开头空白后的前 200 个字符（`LauncherEntryText.parts`，只看开头一小段，不整段复制几 MB 的条目）；副标题 = 来源 App · 相对时间（「3 分钟前」，按分钟 / 小时 / 天 / 30 天分桶，同一个桶只格式化一次）；图标 `doc.text`；`date` = 复制时间。
 - 片段：标题 = 片段的名字，没有名字时是内容首行（同片段管理列表）；`searchText` = 关键字 + 内容前 200 个字符；副标题 = 关键字 · 内容首行（有名字时）；图标 `text.badge.star`。
+- 剪贴板里的图片（PR 8）：标题「图片 · 来源 App」（没有来源时只写「图片」）；`searchText` = 标题 + 「图片 截图 照片 image screenshot picture photo」，再用空格补到 160 个字符 —— 匹配分按「比查询长多少」扣分（封顶 100），不补的话来源 App 名短的图片总排在前面，补齐后同样命中的按复制时间新旧排；副标题 = 相对时间（尺寸要读文件才知道，不放），这一种条目的副标题显示在行里（标题都差不多，靠它分哪一张）；`onlyWithPrefix`：只在 `c ` 前缀下出现。行首缩略图、Tab 挂成附件要的字节经 `LauncherEntryImage.loadData`（解密读盘）交出来，快速入口在后台调，`launcherEntries()` 仍然零磁盘 IO。⏎ 同文字条目，`PasteService.paste` 粘贴这张图。详见 §5.5。
 
 `launcherEntries()` 在面板呼出时调一次并缓存到收起，不是每次按键都调（`Providers/EntryProvider.swift`，`LauncherEntryProvider`）：
 
@@ -202,11 +218,11 @@ protocol LauncherSearchable {
 
 ## 4. 面板窗口
 
-沿用快速切换面板和剪贴板面板已经验证过的形态：`QuickSwitchWindow`（borderless + `.nonactivatingPanel`、`canBecomeKey = true`、`.floating`、不激活 Baobox）。输入框拿键盘焦点，但前台 App 不变，收起后焦点自然回到原处。
+沿用快速切换面板和剪贴板面板已经验证过的形态：`QuickSwitchWindow`（borderless + `.nonactivatingPanel`、`canBecomeKey = true`、`.floating`、不激活 Baobox）。输入框拿键盘焦点，但前台 App 不变，收起后焦点自然回到原处。PR 8 起窗口类换成同样写法的 `LauncherWindow`：多做一件事 —— 给输入框一个不接拖放的字段编辑器（§5.5「拖放」）。
 
 和 `QuickSwitchPanelHost` 的差别：它是固定 640×420、内容由调用方给；快速入口要高度跟内容变（只有输入框 → 长出列表 → 展开回答区）。做法：
 
-- 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`，键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听（点外面认左键和右键）。
+- 新写 `LauncherPanel`，窗口类直接用 `QuickSwitchWindow`（PR 8 起换成同样写法的 `LauncherWindow`，多一个不接拖放的字段编辑器），键盘监听和「点外面收起」照抄 `QuickSwitchPanelHost` 的两个监听（点外面认左键和右键；PR 8 起左键等松开再决定，见下面）。
 - 宽 680 固定。窗口顶边固定（向下长），变化时不做动画（跟手优先）。高度不靠 `fittingSize`（里面有 `ScrollView`，量不准），由内容算：`LauncherLayout.height(for:)` = 搜索栏 56 + 分隔线 1 + 内容（提示 / 「没有结果」一行 40；结果每行 40、计算结果那一行 58，最多 8.5 个普通行高、前几行里有计算结果时多给它高出来的 18，底下照样露半行；没超时上下各留 6、超了只留上面的 6）。`NSHostingView.sizingOptions = []`（同会议控制条、字幕条），SwiftUI 不反过来改窗口大小；根视图贴顶对齐，窗口和内容在同一次刷新里更新（`setFrame(display: false)`），改完下一轮重算阴影。
 - 位置：鼠标所在屏幕可见区域水平居中，顶边在从上往下 1/5 处；结果长到最多时底边也要在屏幕里，矮屏往上挪。不能拖动（`isMovableByWindowBackground = false`，顶边要固定）。
 - 每次呼出新建窗口、收起时销毁（现有两个面板都这么做）。呼出延迟目标：按键到窗口可见 ≤ 60 ms，待验证；超了再改成常驻一个实例。控制器用 `os.Logger`（subsystem `com.baobox.app`，category `launcher`）记从 `toggle()` 到 `orderFront` 返回的毫秒数（`panel shown in … ms`）和超过 5 ms 的查询（`slow query`），没用 `os_signpost`。
@@ -218,6 +234,8 @@ protocol LauncherSearchable {
 - 盖在全屏 App 上：这类浮层是「有意叠在全屏 App 上」的窗口，不走 `DesktopSpaceWindow`（那是给设置这类普通窗口用的）。`collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]`（同听写的收集面板、宠物）。
 - 文件、文件夹行（PR 6）：标题后面同一行跟一段灰色小字（所在目录，12 号，放不下时中间截断；`LauncherRow.subtitle`），行高不变。别的行没有副标题，样子不变。后台的结果（路径、文件）还没回来、一行都没有时，消息那一行写「正在查找…」（`LauncherPanelContent.searching`，高度同「没有结果」）。
 - 鼠标：单击一行 = 执行；悬停只在鼠标真的动过之后才改选中行 —— 记一个「上次的鼠标位置」，面板出现、换一批结果、键盘选行时都更新它，悬停事件里鼠标位置没变就不算。
+- 挂着图片（PR 8，§5.5）：放大镜和输入框之间一个圆角小标签（缩略图约 28pt 高、最宽 56pt，右边小字是像素尺寸「2560×1440」），输入框跟着变窄，占位文字换成「要拿这张图做什么？打字筛选」。图片条目行首是缩略图（26 × 26 圆角，按比例铺满后裁），取到之前是 `photo` 图标。
+- 点外面收起（PR 8 改）：右键照旧立刻收；左键等松开再决定 —— 在别的 App 里按住拖东西过来时那一下按下也是「点外面」，松开时鼠标在面板上就不收（每 30 ms 看一次 `NSEvent.pressedMouseButtons`）。普通单击只是晚了按住的那一下。
 
 面板里的按钮、菜单自己画（`.borderless` 非当前 App 的窗口里，系统控件会按「非活动窗口」发灰，划词助手 #95 踩过，沿用 `SelectionButtons.swift` 的做法或把它下沉到 Core）。PR 4 的选中高亮（强调色底、白字）、命令图标底都由 SwiftUI 自己画。
 
@@ -239,6 +257,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 剪贴板最多 5 行（PR 5）：没打前缀时剪贴板最多出 5 行（`LauncherEngine.unscopedSourceLimits`，排序的 `sourceLimits` 参数：超出的跳过、由后面的行补上），免得一个常见词把 App 和命令挤下去；`c ` 前缀下不限。片段不限。文件同理（PR 6）：没打前缀时最多 5 行，`f ` 前缀下最多 30 行（`LauncherFileFilter.maxResults`）。
 - 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空：没打前缀、输入也不是路径时列表里总有建议（§5.4，PR 7）；「没有结果」只在连兜底建议都没有时出现 —— 不足 2 个字符、或者打了来源前缀而那一类一个没中。
 - 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它；路径行不记，`LauncherItem.recordsUsage`），收起面板，下一个 runloop 再执行（很多命令作用于前台 App / 当前窗口，要等面板让开）。⌘⏎ 在文件、路径行上是在访达里显示（`LauncherItem.alternate`），Tab 在路径行上是补全（`LauncherItem.completion`，§6.5），其余行照旧。 建议行的执行见 §5.4。
+- 挂着图片（PR 8，§5.5）：引擎在拆前缀之前就返回 —— 只出这张图的建议，输入框里的字是筛选词，不认路径、不算、不识别、不搜文件。
 
 ### 5.1 匹配打分（`Logic/LauncherMatch.swift`）
 
@@ -306,7 +325,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 **文字动作（框架机制）**。快速入口不认识划词助手、剪贴板（§1 约束 3），所以用参数化命令：
 
 - 模块在 `launcherCommands()` 里用 `LauncherCommand.textAction(id:title:symbolName:suggestion:run:)` 声明，它造一条只有一个必填 `.text` 参数（键 `text`）的命令，`run` 直接收到那段文字。命令表规则见 §3.1：文字动作不进普通搜索，另收一张表；呼出时 `LauncherCommandProvider.textActions()` 收一次交给引擎。
-- `LauncherSuggestionTraits`（`Core/Launcher/LauncherTextAction.swift`，纯 Foundation，有默认值，不影响别的命令）：`kinds`（适用哪几类输入，默认全部）、`priority`（档位，小的在前，默认 50）、`boostedKinds`（输入属于这几类时提到所有档位前面）。
+- `LauncherSuggestionTraits`（`Core/Launcher/LauncherTextAction.swift`，纯 Foundation，有默认值，不影响别的命令）：`kinds`（适用哪几类输入，默认全部）、`priority`（档位，小的在前，默认 50）、`boostedKinds`（输入属于这几类时提到所有档位前面）；PR 8 加 `imageTextPriority`（默认 nil；有值时这条文字动作也用在图里认出的文字上，§5.5）。
 - 现在声明的：
 
 | 模块 | id | 标题 | 适用 | 档位 | 提前 | 执行 |
@@ -371,6 +390,85 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 **接进引擎**（`LauncherEngine.search`，只加接入点）：行的次序 = 计算结果 → 对应建议 → 识别结果 → 文件片段的确切命中（§6.4 的 `files.pinned`）→ 排好序的普通行（含文件）→ 兜底建议；输入是路径时提前返回，不出任何建议。`LauncherSuggestionProvider`（App 侧，带 `L()` 文案和执行闭包）每次输入算一次；复制行并进 `instantsByKey`，动作行进 `suggestionsByKey`（`engine.suggestion(forKey:)`）。「让 AI 来办」提前的旧规则（`shouldPromoteAIRow`）现在没有界面用它，二期把「让 AI 来办」加进兜底建议时再接。
 
 **实测**（2026-11-24，M3，`swiftc -O` 探针，137 个 App + 400 条剪贴板 + 假的命令表）：带建议的一次查询中位数 0.1–0.5 ms（最慢的一次 2.4 ms）；建议这一块对 125 个字的一段话 0.15 ms。粘进 18.75 万字时整次查询 18.7 ms，其中建议约 2.5 ms（字数统计要整段数一遍），其余是原来的匹配（和建议无关，PR 4 起就是这样）。
+
+### 5.5 图片与文件：放进来的不只是文字（PR 8，2026-11-24）
+
+需求 §3.11「图片」「文件」：用户问「现在是不是不能输入图片」—— 输入框是纯文字的 `NSTextField`，贴图片没反应；剪贴板历史里的图片搜不到；访达里复制的文件贴进来也不当成文件。
+
+**图片动作（框架机制，照 §5.4 的文字动作）**：
+
+- `LauncherParameter.Kind.image`、`LauncherArgument.image(LauncherImage)`。`LauncherImage`（`Core/Launcher/LauncherImageAction.swift`）是 `.data(Data)`（编码后的字节：PNG / TIFF / JPEG……，剪贴板上原样拿来）或 `.file(URL)`（磁盘上的图片文件）。这样传的理由：`Core/Launcher` 只能 import Foundation；附件要在面板开着的整段时间里留着，留编码字节比留位图省（2560×1440 的截图 PNG 一两 MB，位图 14 MB），`Data` 写时复制，附件和交给动作的是同一块内存；访达里的图片本来就在磁盘上，给路径、不先读；贴进来的图本来就在内存里，不写临时文件（多一次磁盘 IO，还多一个要清理的文件）。动作真要用时各自在后台解码一次。
+- 解码在 `Core/LauncherImageLoader.swift`（ImageIO，非 `@MainActor`，后台调）：像素尺寸只读文件头；缩略图只解到目标尺寸；整图超过 4000 万像素（约 8000 × 5000）时等比缩到以内（不设上限的话 30000 × 30000 的图解出来要 3.6 GB；长截屏 1600 × 20000 = 3200 万不受影响）；按 EXIF 方向转正；读不出来返回 nil，不抛错。
+- 恰好一个必填 `.image` 参数的命令是图片动作（`LauncherCommand.isImageAction`，`imageAction(id:title:symbolName:keywords:suggestion:run:)` 造）。命令表规则见 §3.1：不进普通搜索，另收一张表（`LauncherCommandCatalog.imageActions`，呼出时 `LauncherCommandProvider.imageActions()` 收一次交给引擎）。排在哪只看 `suggestion.priority`（图片不分类别，`kinds` / `boostedKinds` 不看）。
+- 文字动作也能用在图里认出的文字上：`LauncherSuggestionTraits.imageTextPriority` 有值时，挂着图片出一行「<命令名>图里的文字」（`launcher.image.textAction %@`），和图片动作排在一起，档位是这个值；执行时先取字，再把认出的文字交给这条文字动作。这样「翻译图里的文字」由快速入口串起来（取字结果多半已经有了，回车立刻出翻译），划词助手只多声明一个数。
+- 现在声明的：
+
+| 模块 | id | 标题 | 档位 | 执行 |
+|---|---|---|---|---|
+| 截图 | `screenshot.image.ocr` | 取字 | 10 | 后台解码 → `OCRResultWindow.present(image:)`（照「识别后直接复制」设置：开着就静默复制，不开窗） |
+| 划词助手 | `selectiontranslate.text.translate`（`imageTextPriority: 15`） | 翻译图里的文字 | 15 | 取字 → `SelectionTranslateController.run(actionID: "translate", onText:)`；没认出字回执「图里没有认出文字」 |
+| 截图 | `screenshot.image.pin` | 钉在屏幕上 | 20 | 后台解码 → `ScreenshotTool.pinCentered` |
+| 截图 | `screenshot.image.preview` | 预览 | 30 | 后台解码 → `ScreenshotResultHandler.presentPreviewOnly`：同一个预览窗、同一组按钮（保存 / 取字 / 贴图 / 复制），但**不记截图历史、不按设置自动落盘** —— `presentPreview` 会两样都做，对不是刚截的图（贴进来的、剪贴板历史里的、访达里的文件）不对 |
+| 截图 | `screenshot.image.save` | 保存成文件 | 40 | `ScreenshotResultHandler.saveFromLauncher`：截图的保存位置 + 文件名模板（同一秒重名加序号），交来的就是 PNG 字节时原样写、不重新编码，别的格式解码后编成 PNG；都在后台；回执「已保存到 ~/Pictures/Baobox/…」，失败弹的说明同截图存盘失败 |
+
+  没有「标注」：标注编辑器只在截图选区的 overlay 里，没有能对任意图片开标注的入口；要做得先把标注引擎接到预览窗上，是另一件事。解码失败（文件刚被删了、格式不认识）回执「读不出这张图片」。
+
+**剪贴板内容归类**（`Logic/LauncherPasteboardContent.swift`，纯函数，单元测试）：输入是「有哪些类型、纯文字、文件网址」这样的纯数据（`LauncherPasteboardSnapshot`），读剪贴板在 App 侧（`Providers/PasteboardReader.swift`），只在按 ⌘V / 放下的那一下读。按顺序：
+
+1. 有文件网址（只收 `file://`）→ **文件**，取第一个（一次复制好几个时这一期只取第一个）。访达复制文件时还带着文件名文字和图标图片，都不看。
+2. 有图片数据（PNG / TIFF / JPEG / HEIC / GIF / WebP / BMP；PDF 不算）：没有文字（或全是空白）→ **图片**；文字是这张图的地址（单行无空白的 `http(s)://`、`file://`、`data:image/`）或一个图片文件名（`IMG_1234.png`）→ 图片；同时有带格式的文字（RTF / HTML / webarchive：从文档、表格里复制了一段，表格软件会顺带放一张这段内容的截图）→ **文字**；文字很短（单行、不超过 20 个字符，多半是替代文字）→ 图片；其余 → 文字（文字是用户要的，图片是顺带的）。
+3. 有文字 → 文字；都没有 → 什么都没有（交给输入框）。
+
+原来 `notePaste()` 在 ⌘V 时自己读剪贴板文字；现在先归类，文字那一支再用同一次读出的文字记「带换行的原文」（§5.4），图片、文件两支不碰输入框的粘贴。图片字节按 PNG > JPEG > HEIC > GIF > WebP > TIFF 取第一种、原样不转码（同一张图有几种格式时取最省内存的：系统截图到剪贴板时 PNG 0.8 MB、TIFF 14 MB）；都没有、但能读成 `NSImage`（老格式）时转一份 TIFF。
+
+**附件的生命周期与内存**（`LauncherController`；`LauncherAttachment` 在 `Providers/ImageSuggestionProvider.swift`）：
+
+- 挂上：⌘V 归为图片 / 拖进图片 / 剪贴板历史里的图片条目上按 Tab（字节在后台取：来源要解密读盘）。一次只有一张，再挂就换掉。挂上时输入框清空（之后打的字是筛选词），标签先显示一个图片图标；后台解缩略图（长边 112 像素）和像素尺寸，回来时附件已经换了 / 去了就丢掉；**缩略图解不出来 = 不是能用的图片**：去掉附件，回执一句。
+- 留着的只有一份：编码字节（或文件路径）+ 一张小缩略图。取字时解出的整图只活在后台那一次取字里。
+- 去掉：输入框为空时 ⌫；Esc 第一下去掉图片（连同筛选词），第二下才收起面板；贴进 / 拖进文件、拖进文字时也去掉。面板收起即丢（不像文字那样保留 60 秒：图片占内存），那时输入框里的字是这张图的筛选词，也不留。
+
+**识别的时机**（`LauncherRecognition`）：挂上那一下在后台跑一次（解码 + `TextRecognizer.recognize`，语言照截图设置里的「识别语言」—— 读取挪到了 Core 的 `TextRecognizer.LanguageOption.preferred`，键不变），只跑这一次。结果回主线程时按对象比较：不是当前附件的（换了、去了、面板收起了）不再刷新列表；但已经回车了「<命令名>图里的文字」、在等它的照样拿到结果（`whenDone`）。打字路径上不碰：打字只是用已有的结果筛行。输入是图片文件的路径时不预先识别，「翻译图里的文字」回车时才识别（路径可能一直在变，没必要每换一个就取一次字）。
+
+**挂着图片时的行**（`LauncherImageSuggestionProvider`；规则在 `Logic/LauncherImageSuggestions.swift`）：
+
+| 行 | 什么时候 | 右侧 | ⏎ | ⌘⏎ |
+|---|---|---|---|---|
+| 正在识别图里的文字… | 还没识别完、没打筛选词 | 本机识别 | 不做事 | 不做事 |
+| 打开 <网址> | 图里的二维码 / 条码内容是 http(s) 网址（同输入分类的网址，`weixin://`、`WIFI:…` 不算） | 二维码 | 浏览器打开 | 同 ⏎ |
+| <内容> | 其余的二维码 / 条码内容（去重，和上一种合计最多 3 行） | 二维码 | 复制 | 插入原来的 App |
+| <文字开头，压成一行、最多 60 个字符> | 认出了文字 | 识别出的文字 · N 字 | 复制全文 | 插入原来的 App |
+| 图片动作、「<命令名>图里的文字」 | 一直有（认出来确定没有字时，后者不出） | 所属工具名 | 执行 | 同 ⏎ |
+
+- 动作排序同兜底建议：档位 − min(30, 使用分 ÷ 10)，使用记录的键是 `imageaction/<id>`（和文字的 `textaction/` 分开记：同一个动作对文字、对图片用得多不多是两回事）。默认次序：取字、翻译图里的文字、钉在屏幕上、预览、保存成文件。
+- 输入框里打字 = 筛这些行：标题匹配得上（`LauncherMatch`：开头、词首、包含、跳字，拼音全拼和首字母也算，所以 `qz` 能找到「取字」、`ping` 能找到「钉在屏幕上」）就留下；「正在识别…」那一行打了字就不出。不出 App、命令、剪贴板、文件这些普通结果，也不出文字的兜底建议。
+- 执行：图片动作同建议行（先记使用、收起面板、还焦点、下一个 runloop 执行，交过去的是附件那份字节）；「<命令名>图里的文字」收起、还焦点后等这次取字的结果，有字就交给动作，没有回执一句。⌘1–⌘9、鼠标单击照旧。
+- 识别完后同一个输入再查一次（选中的行还在就留在它上面；「正在识别…」那一行没了就回到第一行）。
+
+**文件**：
+
+- 贴进 / 拖进一个文件（`LauncherPastedFile.fieldText`）：输入框换成它的路径 —— 主目录下写 `~/…`（贴进来的没有「用户自己的写法」可跟，取短的、和路径行副标题一样的写法），文件夹末尾带 `/`（访达给的文件夹网址本身以 `/` 结尾，不用查磁盘）；不用 `standardizedFileURL`（它会查磁盘、把 `/private/tmp` 改写成 `/tmp`）。之后就是 §6.5 的路径行。
+- 路径指向一个图片文件时（`LauncherPathProvider.isReadableImageFile`：扩展名对应的类型是图片、而且在 ImageIO 能读的类型表里，SVG 这类矢量图不算；只看扩展名，不读文件），那一行带上 `LauncherItem.imageFile`，引擎在它后面接同一组图片动作（`LauncherImage.file`），不出识别结果的行。手打一个图片文件的路径也一样。评估过「同时挂成附件」：要么在路径解析之后再读一次文件出缩略图、取字，要么让路径和附件两种状态并存（Esc / ⌫ / Tab 都得重新定义），都比「路径行 + 动作行」绕，收益只是多一行识别结果，所以没做。
+
+**拖放**：
+
+- 面板的内容视图是 `LauncherHostingView`（`NSHostingView` 的子类），登记文件、网址、常见位图、文字这几种拖放类型，放下时交给控制器，和 ⌘V 同一套归类：文件换成路径、图片挂成附件、文字放进输入框（换行换成空格，带换行的原文记下）。接了就让面板重新拿键盘焦点（在别的 App 里按下鼠标时那个 App 的窗口成了 key；nonactivating panel 能直接 `makeKey`，不激活 Baobox），输入框不在编辑时才给焦点（已经在编辑时再给一次会全选，接着打的字会把刚放进去的路径覆盖掉）。
+- 系统默认的字段编辑器会接下拖到输入框上的文件、图片（往框里插一段路径或网址），而且它比内容视图更深、先拿到拖放。所以窗口类换成 `LauncherWindow`，`fieldEditor(_:for:)` 给输入框一个 `LauncherFieldEditor`（`NSTextView` 子类，`acceptableDragTypes` 为空，于是什么都不登记）。探针确认：整棵视图里只有内容视图登记了拖放（9 种类型），字段编辑器 0 种；组字（`setMarkedText` 时 `isComposing`、`insertText` 后回调一次）、Tab 补全换文字、⌘Z 撤销照旧。
+- 在别的 App 里按住鼠标拖过来，按下那一下全局监听就会当成「点外面」把面板收了：改成左键等松开再决定（§4）。
+- **待真机验证**：从访达、浏览器、预览真的拖一次（探针里只能拿假的拖放信息直接调这几个方法，系统把拖放交给哪个视图、跨 App 拖动时全局监听收不收得到这几下，要在装好的 Baobox 里试）。
+
+**剪贴板历史里的图片**（§3.2）：`c ` 前缀下出现，⏎ 粘贴；行首缩略图由 `LauncherThumbnailProvider` 在行要显示时取（后台串行队列调来源给的 `loadData` → 长边 64 像素的缩略图，按来源给的键 —— 剪贴板图片文件名，即内容哈希 —— 缓存进 `NSCache`，最多 60 张；读不出来的记下、不反复试），取到一张面板重画一次（`LauncherPanelModel.thumbnailsVersion`）。Tab 在图片条目上 = 把这张图挂成附件（Tab 在路径行上是补全、其余行上不做事，这里加一种，不和别的按键冲突；考虑过 ⌘⏎，但 ⌘⏎ 在别的行上都是「另一种执行」，挂附件不是执行）。
+
+**实测**（2026-11-24，M3，`swiftc -O` 探针，测试图自己画：2560 × 1440 的「截图」带中英文 8 行 + 一块随机色块（PNG 0.80 MB），1400 × 800 带二维码的图）：
+
+| | 耗时 |
+|---|---|
+| 读剪贴板 + 归类 + 取图片字节（探针自建的具名剪贴板，同进程） | 0.03 ms（跨进程读要看源 App，未测） |
+| 缩略图 + 像素尺寸（长边 112 像素） | 截图 22 ms，二维码图 3.7 ms |
+| 从挂上到识别结果回到主线程 | 截图 370 ms（新进程第一次）、之后 200 ms，认出 330 个字符；二维码图 83 ms，认出网址。这台机器上**有史以来第一次**用 Vision 识别中文花了 20.6 s（系统编译模型，之后所有进程都快），真机第一次用时可能遇到 |
+| 路径行上「翻译图里的文字」回车后才识别 | 203 ms |
+| 9000 × 7000（6300 万像素）的图 | 缩略图 140–170 ms；整图缩到 7171 × 5577（4000 万像素）330–375 ms |
+
+内存：附件留的是编码字节（截图 0.80 MB）+ 缩略图（112 × 63，约 28 KB）；取字时解出的整图 14.1 MB，识别过程中进程占用峰值比平时高约 43 MB（Vision 自己的），完了回落。读不出来的字节、不存在的文件：缩略图 / 整图都是 nil（控制器去掉附件、回执一句）。
 
 ### 5.3 使用记录（`Logic/LauncherUsageStore.swift` 的 `LauncherUsageRecords`）
 
@@ -508,7 +606,8 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 **解析与列出**（`LauncherPathProvider.resolve`，在后台；纯计算在 `Logic/LauncherPathListing.swift`）：
 
-- 路径存在且是文件（或包：`.app` 当成一个文件，不进去）→ 一行：标题是文件名，副标题是所在目录（主目录缩写成 `~`），右侧小字「文件」（`.app` 是「App」）。
+- 路径存在且是文件（或包：`.app` 当成一个文件，不进去）→ 一行：标题是文件名，副标题是所在目录（主目录缩写成 `~`），右侧小字「文件」（`.app` 是「App」）。是 ImageIO 读得了的图片文件时（PR 8），后面接图片动作（取字、翻译图里的文字、钉在屏幕上、预览、保存成文件，§5.5）。
+- 从访达贴进 / 拖进一个文件（PR 8，§5.5）：输入框换成它的路径（主目录下 `~/…`、文件夹末尾带 `/`），于是走这里。
 - 存在且是文件夹 → 第一行是这个文件夹本身（右侧「文件夹」，副标题是上一级），下面是里面的内容：文件夹在前、按名字（`localizedStandardCompare`，同访达），点开头的不列，最多 50 行。里面的项不写副标题（都在同一个文件夹里，第一行已经写着）。
 - 不存在 → 取上一级；它存在的话，列出里面名字和最后一段匹配的项（`LauncherMatch` 打分，只认开头 > 词首 > 包含，不认跳字；同分文件夹在前）—— 路径补全。最后一段以 `.` 开头时才列隐藏项；只打一个点（`~/.`）= 列全部隐藏项。上一级也不存在 → 没有结果。
 - 容错：一个目录最多读 5000 项（`FileManager.enumerator` 逐项读，读够就停）；没有读权限 = 空的；软链跟过去（`/tmp`）；`/Applications/Safari.app` 是指向系统 Cryptex 的软链、软链本身问不出「是包」，要看它指向的那个（不然 Safari 被当成文件夹、Tab 会钻进去，2026-11-24 实测）。不用 `.skipsHiddenFiles`（同 §6.1）。
@@ -711,7 +810,7 @@ UserDefaults 前缀 `launcher.`：
 | 键 | 含义 | 默认 |
 |---|---|---|
 | `sources.<来源 id>` | 这个来源开不开 | 开 |
-| `prefix.<来源 id>` | 只搜一类的前缀 | `a` `c` `f` `s` `m` `w`；命令 `>`。来源上线了前缀才生效（PR 6 起 `a` `c` `f` `>`），设置页（PR 8）出来之前是出厂值、不读设置 |
+| `prefix.<来源 id>` | 只搜一类的前缀 | `a` `c` `f` `s` `m` `w`；命令 `>`。来源上线了前缀才生效（PR 6 起 `a` `c` `f` `>`），设置页（PR 10）出来之前是出厂值、不读设置 |
 | `ai.attachContext` | 提问时带上选中的文字和剪贴板 | 开 |
 | `ai.prewarm` | 呼出时预热本机模型 | 关 |
 | `rates.enabled` | 汇率联网取数 | 看需求文档 §7 第 5 条 |
@@ -725,7 +824,7 @@ UserDefaults 前缀 `launcher.`：
 
 ## 12. 分 PR
 
-一期 9 个（2026-11-24 插进「路径与文件」「放进任何东西都有建议」两个），前后依赖按顺序；每个都能单独合并、单独验证。
+一期 10 个（2026-11-24 插进「路径与文件」「放进任何东西都有建议」「图片与文件」三个），前后依赖按顺序；每个都能单独合并、单独验证。
 
 | PR | 内容 | 验证 |
 |---|---|---|
@@ -736,10 +835,11 @@ UserDefaults 前缀 `launcher.`：
 | 5 | 文本识别器下沉到 Core；剪贴板 / 片段来源；计算与文本识别接进面板（⌘K 不在这个 PR，挪到后面） | 真机：粘贴、转换、算式 |
 | 6 | 路径与文件（2026-11-24 加，用户试用时贴路径只得到「没有结果」）：输入是路径时直接读磁盘列出来、Tab 补全（§6.5）；按名字搜文件，Spotlight 查 + 自己过滤排序，后端放在 `LauncherFileSearching` 协议后面（§6.4） | 真机：贴路径、补全、`f ` 搜文件、日志里的查询耗时 |
 | 7 | 放进任何东西都有建议（2026-11-24 加，用户试用时说「我预期的是我放入任何东西，都能给我一些建议」）：输入分类；文字动作（`LauncherCommand.suggestion`，划词助手、剪贴板声明，划词助手加 `run(actionID:onText:)`）；对应建议（网址、邮箱、颜色、字数）与兜底建议（§5.4） | 真机：网址、邮箱、颜色、单词、长文本、随便什么字、算式各试一次；划词助手结果面板的位置、只给复制 |
-| 8 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
-| 9 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
+| 8 | 图片与文件（2026-11-24 加，用户问「现在是不是不能输入图片」）：图片动作（`.image` 参数，截图声明取字 / 钉在屏幕上 / 预览 / 保存成文件，划词助手的翻译也用在图里的文字上）；⌘V / 拖放先归类（文件 / 图片 / 文字）；输入里挂一张图片（缩略图标签、后台取一次字、识别结果 + 图片动作、打字筛选、⌫ / Esc 去掉）；贴进文件 = 路径，图片文件的路径行后接图片动作；剪贴板历史里的图片（`c ` 前缀、缩略图、Tab 挂成附件）（§5.5） | 真机：⌘V 贴截图 / 网页图片 / 表格一段 / 访达文件、拖进访达文件和浏览器图片、`c 图片`、各动作走一遍 |
+| 9 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
+| 10 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
 
-> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 8、9（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」后顺延），和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
+> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 9、10（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」「图片与文件」后顺延），和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
 
 二期开工前先做探针 2、3、4、5、8，按结果定「理解一句话命令」的建议模型，再拆 PR：AI 服务层（流式、多轮、JSON）→ 问 AI → 意图解析与预览卡片 → 一次性提醒 → 语音 → 其余来源 → 汇率。
 
@@ -754,5 +854,5 @@ UserDefaults 前缀 `launcher.`：
 | 呼出慢、打字卡 | 打字路径零 IO；性能预算写进单元测试（5000 候选 ≤ 5 ms）；呼出延迟先探针 |
 | 用户不愿意让出 ⌘Space | 功能不依赖它；快捷键页自设，菜单里也有入口 |
 | 本机模型冷启动要等几秒 | 卡片上写明正在启动；可选预热；AI 之外的功能不受影响 |
-| 文件搜索依赖系统的 Spotlight 索引：用户关了某个目录的索引就搜不到；「包含」查询收齐要 200 ms 上下 | 设置页写明（PR 8）；贴路径不靠索引（§6.5）；后端在协议后面，慢了换成自己的内存索引（§6.4） |
+| 文件搜索依赖系统的 Spotlight 索引：用户关了某个目录的索引就搜不到；「包含」查询收齐要 200 ms 上下 | 设置页写明（PR 10）；贴路径不靠索引（§6.5）；后端在协议后面，慢了换成自己的内存索引（§6.4） |
 | 快速入口和剪贴板面板、快速切换面板功能重叠 | 一期不动那两个面板；快速入口稳定后再评估把它们的入口并进来 |
