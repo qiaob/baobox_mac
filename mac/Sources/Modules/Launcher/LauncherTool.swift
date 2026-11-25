@@ -15,9 +15,12 @@ final class LauncherTool: ToolModule {
     let symbolName = "magnifyingglass"
 
     private let controller: LauncherController
+    /// 设置页的功能清单也从注册表收（第 13 步）。注册表持有这个模块，这里不持有它。
+    private weak var registry: ToolRegistry?
 
     /// 命令表从注册表里收（同设置的快捷键页：注册表由外面传进来）。
     init(registry: ToolRegistry) {
+        self.registry = registry
         controller = LauncherController(registry: registry)
     }
 
@@ -40,7 +43,7 @@ final class LauncherTool: ToolModule {
     }
 
     func settingsTab() -> AnyView {
-        AnyView(LauncherSettingsView())
+        AnyView(LauncherSettingsView(registry: registry))
     }
 
     func activate() {

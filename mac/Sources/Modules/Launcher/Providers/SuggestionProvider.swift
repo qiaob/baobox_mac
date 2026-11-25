@@ -70,14 +70,16 @@ struct LauncherSuggestions {
 @MainActor
 enum LauncherSuggestionProvider {
 
-    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次）；`placed`：放进来的原文（控制器核对过，输入框还是它）。
+    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次，设置里关掉的已经去掉）；`placed`：放进来的原文
+    /// （控制器核对过，输入框还是它）；`features`：这次呼出读到的功能开关（第 13 步，关掉的对应建议、快速入口自己的兜底建议不出）。
     static func suggestions(for query: LauncherQuery, textActions: [LauncherCatalogCommand],
                             hasCalculation: Bool, hasRecognition: Bool, placed: LauncherPlacedText? = nil,
+                            features: LauncherFeatureSet = .allEnabled,
                             records: LauncherUsageRecords, now: Date) -> LauncherSuggestions {
         // 认「带时间的句子」用的「现在」、日历、时区（第 10 步）：日历和时区跟系统，同计算引擎。
         let clock = LauncherCalcContext(now: now, calendar: .current, timeZone: .current, locale: L10n.locale)
         let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition,
-                                                 placed: placed, clock: clock)
+                                                 placed: placed, clock: clock, features: features)
         var suggestions = LauncherSuggestions()
         suggestions.top = plan.top.compactMap { topRow($0, now: now) }
         if plan.showsReminders {
@@ -99,6 +101,7 @@ enum LauncherSuggestionProvider {
                     return nil
                 }
             suggestions.trailing = first + fallbackRows(text: plan.text, kinds: kinds, textActions: actions,
+                                                        builtIns: plan.fallbackBuiltIns,
                                                         records: records, now: now, limit: plan.rankedFallbackLimit)
         }
         return suggestions
@@ -214,11 +217,11 @@ enum LauncherSuggestionProvider {
 
     // MARK: - 兜底建议
 
-    /// `textActions`：已经筛过的（文字动作、对这段文字适用）。
+    /// `textActions`：已经筛过的（文字动作、对这段文字适用）；`builtIns`：快速入口自己的、开着的那几条（上网搜、搜文件名）。
     private static func fallbackRows(text: String, kinds: Set<LauncherTextKind>, textActions actions: [LauncherCatalogCommand],
+                                     builtIns: [LauncherSuggestionCandidate],
                                      records: LauncherUsageRecords, now: Date, limit: Int) -> [LauncherSuggestion] {
-        let candidates = actions.map { LauncherSuggestionCandidate(id: $0.command.id, traits: $0.command.suggestion) }
-            + [LauncherSuggestionRanking.webSearch, LauncherSuggestionRanking.findFiles]
+        let candidates = actions.map { LauncherSuggestionCandidate(id: $0.command.id, traits: $0.command.suggestion) } + builtIns
         let quote = LauncherSuggestionText.quote(text)
         let order = LauncherSuggestionRanking.order(candidates, kinds: kinds, records: records, now: now, limit: limit)
         return order.compactMap { index in

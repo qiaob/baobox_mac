@@ -13,6 +13,8 @@ import Foundation
 // 输入里挂着图片时（§5.5）只出这张图的建议（识别结果 + 图片动作），输入框里的字是筛选词；
 // 输入是一个图片文件的路径时，路径行后面接同一组图片动作。
 // 输入框为空时（§3.7）：「选中的 / 刚复制的」（⏎ 放进输入框）→ 各模块的情景建议 → 最常用的，共不超过 9 行。
+// 功能开关（第 13 步，§11「功能开关」）：设置里关掉的不出 —— 关掉的来源不装进来、前缀失效；路径、计算、识别、对应建议、
+// 最常用的在这里按 `features` 跳过；模块的动作在呼出收集时已经过滤。建议都关掉了、一行都没有时，消息那一行换成「建议都关掉了」。
 
 /// 行左边的图标。
 enum LauncherRowIcon: Equatable {
@@ -97,6 +99,9 @@ struct LauncherSearchOutcome {
     /// 控制器去搜（`LauncherFileProvider`；正在跑的就是它时不重发），搜完 `setFileResult`。
     var pendingFiles: LauncherFileSearchRequest? = nil
 
+    /// 一行都没有，因为「文字的去处」全关掉了（第 13 步）：消息那一行写「建议都关掉了，可以在设置里打开」，不写「没有结果」。
+    var suggestionsOff = false
+
     /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
     var isPending: Bool { pendingPath != nil || pendingFiles != nil }
 }
@@ -132,6 +137,8 @@ final class LauncherEngine {
     var attachment: LauncherAttachment?
     /// 各模块声明的文件动作（§6.5，第 10 步）：呼出时装进来，只接在完整存在的文件的路径行后面。
     var fileActions: [LauncherCatalogCommand] = []
+    /// 这次呼出读到的功能开关（第 13 步）：控制器呼出时、`load` 之前设，到收起为止不变。
+    var features = LauncherFeatureSet.allEnabled
     /// 主目录：认路径时展开 `~`。
     private let home: String
     /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
@@ -154,6 +161,7 @@ final class LauncherEngine {
 
     /// 装进这次呼出的全部条目。条目键重复的只留第一个。
     /// `sourceIDs`：这一期有的来源；只有它们的前缀生效（`f ` 这类以后才有的来源前缀不拆，整段当查询词）。
+    /// 设置里关掉的来源前缀也不生效（`LauncherFeatureSet.prefixes`）：关掉文件后 `f readme` 整段当查询词。
     func load(_ items: [LauncherItem], sourceIDs: Set<String>) {
         var all: [LauncherCandidate] = []
         var bySource: [String: [LauncherCandidate]] = [:]
@@ -169,7 +177,7 @@ final class LauncherEngine {
         allCandidates = all
         candidatesBySource = bySource
         itemsByKey = byKey
-        prefixBySource = LauncherQuery.defaultPrefixBySource.filter { sourceIDs.contains($0.key) }
+        prefixBySource = features.prefixes(LauncherQuery.defaultPrefixBySource, loadedSources: sourceIDs)
         calcLocale = L10n.locale
     }
 
@@ -250,7 +258,8 @@ final class LauncherEngine {
             asyncItemsByKey = [:]
             let suggestions = LauncherImageSuggestionProvider.suggestions(
                 image: attachment.image, recognition: attachment.recognition, filter: input,
-                imageActions: imageActions, textActions: textActions, records: records, now: now)
+                imageActions: imageActions, textActions: textActions,
+                showsRecognition: features.isEnabled(.imageRecognition), records: records, now: now)
             instantsByKey = Dictionary(suggestions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
@@ -262,7 +271,8 @@ final class LauncherEngine {
         let query = LauncherQuery.parse(input, prefixBySource: prefixBySource, literal: placedText != nil)
 
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
-        if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
+        // 设置里关掉了「路径」：按普通文字处理（仍有文字的建议）。
+        if query.isUnscoped, features.isEnabled(.path), let path = LauncherPathInput.parse(query.text, home: home) {
             instantsByKey = [:]
             suggestionsByKey = [:]
             fileResult = nil
@@ -273,7 +283,7 @@ final class LauncherEngine {
             var actions: [LauncherSuggestion] = []
             // 完整存在的路径（第 10 步，§6.5）：路径行（文件夹是它本身那一行）后面、文件夹内容之前接最多 3 行动作。
             if let target = items.first?.pathTarget {
-                let pathActions = LauncherPathActionProvider.rows(for: target, fileActions: fileActions)
+                let pathActions = LauncherPathActionProvider.rows(for: target, fileActions: fileActions, features: features)
                 rows.insert(contentsOf: pathActions.rows, at: min(1, rows.count))
                 instantsByKey = Dictionary(pathActions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
                 actions += pathActions.actions
@@ -297,23 +307,25 @@ final class LauncherEngine {
         asyncItemsByKey = [:]
 
         var instants: [LauncherInstant] = []
-        if LauncherInstantPolicy.runsCalculator(query),
+        if LauncherInstantPolicy.runsCalculator(query, features: features),
            let calculation = LauncherCalculatorProvider.instant(for: query.text, now: now, locale: calcLocale) {
             instants.append(calculation)
         }
         let calculationCount = instants.count
-        if LauncherInstantPolicy.runsTextRecognition(query, hasCalculation: !instants.isEmpty) {
+        if LauncherInstantPolicy.runsTextRecognition(query, hasCalculation: !instants.isEmpty, features: features) {
             instants.append(contentsOf: LauncherTextFormatProvider.instants(for: query.text))
         }
         // 建议（§5.4）：对应建议排在计算结果之后、识别结果之前，兜底建议排在最后。
         let suggestions = LauncherSuggestionProvider.suggestions(
             for: query, textActions: textActions, hasCalculation: calculationCount > 0,
-            hasRecognition: instants.count > calculationCount, placed: placedText, records: records, now: now)
+            hasRecognition: instants.count > calculationCount, placed: placedText, features: features,
+            records: records, now: now)
         instantsByKey = Dictionary((instants + suggestions.instants).map { ($0.row.id, $0) },
                                    uniquingKeysWith: { first, _ in first })
         suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-        let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID)
+        let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID,
+                                                     features: features)
         lastFileRequest = fileRequest
         let files = currentFiles(for: fileRequest)
         asyncItemsByKey = Dictionary((files.pinned + files.ranked).map { ($0.row.id, $0) },
@@ -350,9 +362,10 @@ final class LauncherEngine {
         if query.text.isEmpty {
             if query.isUnscoped {
                 // 输入框为空（§3.7）：「选中的 / 刚复制的」→ 情景建议 → 最常用的，共不超过 9 行。
+                // 「最常用的」关着（第 13 步）：只出「选中的 / 刚复制的」和情景建议（它们的开关在 `LauncherContextProvider` 里看）。
                 let layout = LauncherContextRules.layout(context: emptyState.context.map(\.row.id),
                                                          situational: emptyState.situational.map(\.candidate.key),
-                                                         mostUsed: rankedKeys)
+                                                         mostUsed: features.isEnabled(.frequent) ? rankedKeys : [])
                 shownContext = Dictionary(emptyState.context.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
                     .filter { layout.context.contains($0.key) }
                 shownSituational = Dictionary(emptyState.situational.map { ($0.candidate.key, $0) },
@@ -370,9 +383,12 @@ final class LauncherEngine {
         let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
         // 结果不完整（只回来了一部分来源）也算还要搜：改错字（R → R' → R）时 R 的搜索已经被顶掉了，不重发 Spotlight 就再也不来。
         let state = fileResult.map { LauncherFileResultState(request: $0.request, complete: $0.complete) }
-        return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
-                                     fileRequest: fileRequest,
-                                     pendingFiles: LauncherFileResultState.pending(for: fileRequest, have: state))
+        var outcome = LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
+                                            fileRequest: fileRequest,
+                                            pendingFiles: LauncherFileResultState.pending(for: fileRequest, have: state))
+        outcome.suggestionsOff = LauncherFeatureRules.showsSuggestionsOff(query: query, rowCount: rows.count,
+                                                                          textActionCount: textActions.count, features: features)
+        return outcome
     }
 
     /// 这次输入能用的文件行：搜好的正是这个请求 → 用它（不完整也先用）；还没回来 → 上一次「名字包含」的结果里

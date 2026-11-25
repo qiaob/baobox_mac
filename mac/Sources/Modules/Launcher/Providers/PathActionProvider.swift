@@ -15,10 +15,13 @@ struct LauncherPathActionRows {
 
 @MainActor
 enum LauncherPathActionProvider {
-    static func rows(for target: LauncherPathTarget, fileActions: [LauncherCatalogCommand]) -> LauncherPathActionRows {
+    /// `fileActions`：模块声明的文件动作（设置里关掉的已经去掉）；`features`：「在终端里打开」「复制路径」的开关（第 13 步）。
+    static func rows(for target: LauncherPathTarget, fileActions: [LauncherCatalogCommand],
+                     features: LauncherFeatureSet = .allEnabled) -> LauncherPathActionRows {
         let declared = fileActions.filter { $0.command.isFileAction }
         var output = LauncherPathActionRows()
-        let plan = LauncherPathActionPlan.actions(for: target, declaredPriorities: declared.map(\.command.suggestion.priority))
+        let plan = LauncherPathActionPlan.actions(for: target, declaredPriorities: declared.map(\.command.suggestion.priority),
+                                                  features: features)
         for action in plan {
             switch action {
             case .copyPath:

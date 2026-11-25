@@ -3,6 +3,8 @@ import Foundation
 // 快速入口的命令来源（docs/launcher/TECH_DESIGN.md §3.1）：每次呼出现建命令表 ——
 // `ToolRegistry.allHotkeys()` 里的每个快捷键动作自动成为一条无参数命令，再合上各模块 `launcherCommands()` 声明的；
 // 合并规则在 `Logic/LauncherCommandCatalog.swift`。搜索键按「id + 文字」缓存，只给新出现或标题变了的补建。
+// 功能开关（第 13 步）：「Baobox 的命令」这个来源关着时没有命令条目；文字 / 图片 / 文件动作里关掉的（`action/<命令 id>`）不交出去 ——
+// 呼出时收这一次就过滤掉，打字路径上不再看。设置页收全部动作时用一个不设开关的实例。
 
 @MainActor
 final class LauncherCommandProvider {
@@ -10,6 +12,8 @@ final class LauncherCommandProvider {
 
     private weak var registry: ToolRegistry?
     private var keyCache = LauncherCommandKeyCache()
+    /// 这次呼出读到的功能开关（控制器呼出时设）；默认全开。
+    var features = LauncherFeatureSet.allEnabled
 
     init(registry: ToolRegistry?) {
         self.registry = registry
@@ -17,7 +21,7 @@ final class LauncherCommandProvider {
 
     /// 此刻的命令条目（呼出时调一次）。
     func items() -> [LauncherItem] {
-        guard let registry else { return [] }
+        guard let registry, features.isSourceEnabled(Self.sourceID) else { return [] }
         return items(from: Self.catalog(from: registry))
     }
 
@@ -48,7 +52,7 @@ final class LauncherCommandProvider {
         let declared = registry.tools.flatMap { tool in
             tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
         }
-        return LauncherCommandCatalog.textActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
+        return features.enabledActions(LauncherCommandCatalog.textActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID]))
     }
 
     /// 此刻各模块声明的图片动作（呼出时调一次）：只在输入里挂着图片、或输入是图片文件的路径时作为建议出现（§5.5）。
@@ -57,7 +61,7 @@ final class LauncherCommandProvider {
         let declared = registry.tools.flatMap { tool in
             tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
         }
-        return LauncherCommandCatalog.imageActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
+        return features.enabledActions(LauncherCommandCatalog.imageActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID]))
     }
 
     /// 此刻各模块声明的文件动作（呼出时调一次）：只在输入是一个存在的文件的路径时接在路径行后面（§6.5，第 10 步）。
@@ -66,7 +70,7 @@ final class LauncherCommandProvider {
         let declared = registry.tools.flatMap { tool in
             tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
         }
-        return LauncherCommandCatalog.fileActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
+        return features.enabledActions(LauncherCommandCatalog.fileActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID]))
     }
 
     /// 快捷键动作 → 无参数命令。开关类动作此刻有 `stateTitle` 就用它当标题（「关闭防休眠」）。

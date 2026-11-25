@@ -9,15 +9,17 @@ enum LauncherInstantPolicy {
     /// 文本识别至少要这么多个字符（太短的输入几乎都是在搜东西）。
     static let textRecognitionMinimumLength = 4
 
-    /// 算不算：没打来源前缀（`a `、`c `、`> ` 都不算）、查询词不为空。
-    static func runsCalculator(_ query: LauncherQuery) -> Bool {
-        query.isUnscoped && !query.text.isEmpty
+    /// 算不算：没打来源前缀（`a `、`c `、`> ` 都不算）、查询词不为空；设置里关掉了「计算」就不算（第 13 步）。
+    static func runsCalculator(_ query: LauncherQuery, features: LauncherFeatureSet = .allEnabled) -> Bool {
+        features.isEnabled(.calculator) && query.isUnscoped && !query.text.isEmpty
     }
 
     /// 识不识别：没打来源前缀、查询词不少于 4 个字符、而且没有计算结果（两者都能认的输入计算优先；
-    /// 计算引擎已经不处理裸时间戳，所以 `1700000000` 走这里）。
-    static func runsTextRecognition(_ query: LauncherQuery, hasCalculation: Bool) -> Bool {
-        query.isUnscoped && !hasCalculation && query.text.count >= textRecognitionMinimumLength
+    /// 计算引擎已经不处理裸时间戳，所以 `1700000000` 走这里）；设置里关掉了「识别文本格式」就不识别（第 13 步）。
+    static func runsTextRecognition(_ query: LauncherQuery, hasCalculation: Bool,
+                                    features: LauncherFeatureSet = .allEnabled) -> Bool {
+        features.isEnabled(.textFormat) && query.isUnscoped && !hasCalculation
+            && query.text.count >= textRecognitionMinimumLength
     }
 }
 

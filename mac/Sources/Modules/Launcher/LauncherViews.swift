@@ -53,7 +53,7 @@ enum LauncherLayout {
     /// 面板在这种内容下的高度（窗口顶边固定、向下长）。
     static func height(for content: LauncherPanelContent) -> CGFloat {
         switch content {
-        case .hint, .noResults, .searching:
+        case .hint, .noResults, .searching, .suggestionsOff:
             return searchBarHeight + 1 + messageHeight
         case .results(let rowHeights):
             let total = rowHeights.reduce(CGFloat(0), +)
@@ -81,6 +81,8 @@ enum LauncherPanelContent: Equatable {
     case noResults
     /// 一行都还没有、后台的结果（路径、文件）还没回来。
     case searching
+    /// 输入了、一行都没有，因为设置里把「文字的去处」全关掉了（第 13 步）：「建议都关掉了，可以在设置里打开」。
+    case suggestionsOff
     /// 有结果：值是每一行的高度（计算结果那一行比普通行高）。
     case results([CGFloat])
 }
@@ -142,7 +144,9 @@ final class LauncherPanelModel: ObservableObject {
     /// `newInput`：输入变了 → 选中第一行，「手动选过」清零；false = 同一个输入、后台结果回来（文件、路径、搜索键、识别结果）——
     /// 没手动选过选中第一行，手动选过留在他选的那一行（`LauncherSelectionState.rowsChanged`，PR 11 复查后定）。
     /// `searching`：后台的结果还没回来，一行都没有时显示「正在查找」而不是「没有结果」。
-    func setRows(_ rows: [LauncherRow], emptyInput: Bool, newInput: Bool = true, searching: Bool = false) {
+    /// `suggestionsOff`：一行都没有是因为建议全关掉了（第 13 步），显示「建议都关掉了，可以在设置里打开」而不是「没有结果」。
+    func setRows(_ rows: [LauncherRow], emptyInput: Bool, newInput: Bool = true, searching: Bool = false,
+                 suggestionsOff: Bool = false) {
         let scrollsToTop = selection.rowsChanged(from: self.rows.map(\.id), to: rows.map(\.id), newInput: newInput)
         var rows = rows
         if newInput {
@@ -160,7 +164,7 @@ final class LauncherPanelModel: ObservableObject {
         }
         self.rows = rows
         if rows.isEmpty {
-            content = searching ? .searching : (emptyInput ? .hint : .noResults)
+            content = searching ? .searching : (emptyInput ? .hint : (suggestionsOff ? .suggestionsOff : .noResults))
         } else {
             content = .results(rows.map(LauncherLayout.rowHeight(for:)))
         }
@@ -438,6 +442,8 @@ struct LauncherPanelView: View {
                 message("launcher.noResults")
             case .searching:
                 message("launcher.searching")
+            case .suggestionsOff:
+                message("launcher.suggestionsOff")
             case .results:
                 resultList
             }

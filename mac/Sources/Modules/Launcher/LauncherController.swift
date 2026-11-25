@@ -16,6 +16,7 @@ import os
 // 剪贴板历史里的图片条目（`c ` 前缀下）：行首缩略图在后台取（`LauncherThumbnailProvider`），⏎ 粘贴，Tab 挂成附件。
 // 输入框为空时（§3.7，`LauncherContextProvider`）：最前面是「选中的」（呼出前那个 App 里选中的文字，后台读、80 ms 封顶，
 // 读到了再补上那一行）和「刚复制的」（剪贴板最新一条，5 分钟内），⏎ / Tab 放进输入框；接着是各模块的情景建议。
+// 功能开关（第 13 步，§11「功能开关」）：每次呼出读一次设置（`LauncherFeatureSettings`），交给引擎和各 Provider，到收起为止不变。
 
 @MainActor
 final class LauncherController {
@@ -131,6 +132,13 @@ final class LauncherController {
     /// 呼出（菜单「打开快速入口」也走这里）。已经开着就什么都不做。
     func show(startedAt start: DispatchTime = .now()) {
         guard !panel.isVisible else { return }
+        // 功能开关（第 13 步）：这次呼出读一次，到收起为止不变。关掉的来源、动作在收集这一步就不交进来；
+        // 「带上你选中的文字」关着就不读选区。
+        let features = LauncherFeatureSettings.load()
+        engine.features = features
+        context.features = features
+        entries.features = features
+        commands.features = features
         // 必须在面板拿焦点之前记：收起后要把焦点还给它，粘贴 / 插入也以它为目标。
         let capturedPID = LauncherFocus.capture()
         // 「选中的」（§8.4）：同一刻、面板拿焦点之前开始读它里面选中的文字 —— 后台读、80 ms 封顶，读到了再补上那一行，不拖慢面板出现。
@@ -145,7 +153,7 @@ final class LauncherController {
         let conflict = LauncherHotkeyConflictCheck.confirmedConflictName()
         model.notice = conflict.map { L("launcher.panel.hotkeyConflict \($0)") }
         if let conflict { Self.log.notice("hotkey conflict hint shown: \(conflict, privacy: .public)") }
-        baseItems = commands.items() + apps.items
+        baseItems = commands.items() + (features.isSourceEnabled(LauncherAppProvider.sourceID) ? apps.items : [])
         engine.textActions = commands.textActions()
         engine.imageActions = commands.imageActions()
         engine.fileActions = commands.fileActions()
@@ -155,7 +163,9 @@ final class LauncherController {
         let entryItems = entries.sessionItems()
         let entriesMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - entriesStart) / 1_000_000
         // 文件来源（§6.4）：已知文件、剪贴板里的路径在后台建表；自己扫的目录距上次超过 30 秒就后台重扫。
-        fileSources.panelShown(clipboardTexts: entries.sessionTexts(sourceIDs: LauncherFileSources.clipboardSourceIDs))
+        if features.isSourceEnabled(LauncherFileProvider.sourceID) {
+            fileSources.panelShown(clipboardTexts: entries.sessionTexts(sourceIDs: LauncherFileSources.clipboardSourceIDs))
+        }
         // 空着时的行（§3.7）：「刚复制的」从刚取到的剪贴板条目里拿；情景建议向各模块收一次（只读内存）。
         let contextReport = context.prepare(
             latestClipboard: entries.latestEntry(sourceID: LauncherContextProvider.clipboardSourceID), now: Date())
@@ -289,7 +299,7 @@ final class LauncherController {
             Self.log.notice("slow query: \(outcome.duration * 1000, format: .fixed(precision: 2), privacy: .public) ms, \(outcome.candidateCount, privacy: .public) candidates")
         }
         model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, newInput: !background,
-                      searching: outcome.isPending)
+                      searching: outcome.isPending, suggestionsOff: outcome.suggestionsOff)
         requestBackgroundResults(outcome)
     }
 

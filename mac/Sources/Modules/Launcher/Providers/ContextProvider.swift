@@ -10,8 +10,9 @@ import AppKit
 // - 情景建议：各模块 `launcherContextSuggestions()` 此刻值得提一句的动作（只读内存），每次呼出收一次，按紧急程度
 //   （`suggestion.priority`，小的在前）排好再取前 4 条；行 id / 使用记录的键
 //   是 `commands/<id>`，和对应的命令同一个键；声明方说不记的（`suggestion.recordsUsage == false`）执行时不记。
-// 两样上下文只在内存里显示成一行：不发给模型、不联网、不写盘，收起面板就丢。两个开关：`launcher.context.selection`、
-// `launcher.context.clipboard`（默认开）。
+// 两样上下文只在内存里显示成一行：不发给模型、不联网、不写盘，收起面板就丢。
+// 开关（第 13 步，设置页「刚呼出、还没打字时」那一节，键 `launcher.disabledFeatures`）：`context/selection` 关着不读选区
+// （不做那次辅助功能调用）、`context/clipboard` 关着不取「刚复制的」、`context/situational` 关着不向模块收情景建议。
 
 /// 「选中的」「刚复制的」一行。⏎ / Tab 把它放进输入框：文字填进去（多行的记下原文，同 ⌘V），图片挂成附件。
 struct LauncherContextItem {
@@ -39,20 +40,6 @@ struct LauncherEmptyState {
     var situational: [LauncherItem] = []
 }
 
-/// 两个开关（设置页「快速入口」里各一行，默认开）。
-enum LauncherContextSettings {
-    static let selectionKey = "launcher.context.selection"
-    static let clipboardKey = "launcher.context.clipboard"
-
-    static var includesSelection: Bool {
-        UserDefaults.standard.object(forKey: selectionKey) as? Bool ?? true
-    }
-
-    static var includesClipboard: Bool {
-        UserDefaults.standard.object(forKey: clipboardKey) as? Bool ?? true
-    }
-}
-
 @MainActor
 final class LauncherContextProvider {
     static let selectionRowID = "context/selection"
@@ -60,7 +47,7 @@ final class LauncherContextProvider {
     /// 「刚复制的」从哪个来源里取。
     static let clipboardSourceID = "clipboard"
     /// `beginSelectionRead` 的返回值：在后台读（结果之后回调）。
-    static let readingStatus = "reading"
+    static let readingStatus = LauncherSelectionStart.reading.logLabel
 
     /// 呼出时收情景建议、取剪贴板最新一条的统计（记进 `panel shown in … ms` 那条日志）。
     struct Report {
@@ -82,6 +69,8 @@ final class LauncherContextProvider {
     /// 剪贴板最新一条（在窗口里的，收起即丢）。
     private var recentCopy: (copy: LauncherRecentCopy, image: LauncherEntryImage?, label: String)?
     private var situational: [LauncherItem] = []
+    /// 这次呼出读到的功能开关（第 13 步）：控制器在 `beginSelectionRead` 之前设。
+    var features = LauncherFeatureSet.allEnabled
 
     /// `readSelection`：默认只走辅助功能（Core 的 `SelectedTextReader`）；探针里换成假的。
     init(registry: ToolRegistry?,
@@ -111,15 +100,13 @@ final class LauncherContextProvider {
                             onRead: @escaping @MainActor (LauncherSelectionRead) -> Void) -> String {
         fetcher.cancel()
         selection = nil
-        guard LauncherContextSettings.includesSelection else { return "off" }
-        guard let pid else { return "no app" }
-        let readSelection = readSelection
-        fetcher.start({ budget in readSelection(pid, budget) }) { [weak self] read in
+        // 「带上你选中的文字」关着就不读（不调取词函数），不只是不显示。
+        let start = fetcher.begin(features: features, pid: pid, read: readSelection) { [weak self] read in
             guard let self else { return }
             if case .text(let text) = read.outcome { self.selection = text }
             onRead(read)
         }
-        return Self.readingStatus
+        return start.logLabel
     }
 
     // MARK: - 刚复制的、情景建议
@@ -174,7 +161,7 @@ final class LauncherContextProvider {
 
     private func prepareRecentCopy(_ entry: LauncherEntry?, now: Date) -> String {
         recentCopy = nil
-        guard LauncherContextSettings.includesClipboard else { return "off" }
+        guard features.isEnabled(.clipboard) else { return "off" }
         guard let entry else { return "none" }
         guard LauncherContextRules.isRecentCopy(at: entry.date, now: now) else { return "old" }
         let content: LauncherRecentCopy.Content
@@ -195,7 +182,7 @@ final class LauncherContextProvider {
     /// 各模块此刻的情景建议，按紧急程度排好（`suggestion.priority` 小的在前；同一优先级保持注册顺序、模块里写的顺序，
     /// `LauncherContextRules.situationalOrder`）。没有 id 的、带参数的不要（这里只能无参数执行）。上限 4 条在拼行时截。
     private func collectSituational() -> [LauncherItem] {
-        guard let registry else { return [] }
+        guard let registry, features.isEnabled(.situational) else { return [] }
         var collected: [(command: LauncherCommand, toolName: String)] = []
         for tool in registry.tools {
             for command in tool.launcherContextSuggestions() where !command.id.isEmpty && command.parameters.isEmpty {

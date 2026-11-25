@@ -105,8 +105,11 @@ enum LauncherImageSuggestionProvider {
     /// - Parameters:
     ///   - recognition: 挂着的附件的那次取字（出识别结果的行）；nil = 输入是图片文件的路径（不出识别结果，图片动作照出）。
     ///   - filter: 输入框里打的字（去首尾空白后为空 = 不筛）。
+    ///   - showsRecognition: false = 设置里关掉了「识别图里的文字和二维码」（第 13 步）：不出识别结果的几行（「正在识别…」、
+    ///     二维码、识别出的文字）；取字照样在后台跑 ——「<命令名>图里的文字」要用它。
     static func suggestions(image: LauncherImage, recognition: LauncherRecognition?, filter: String,
                             imageActions: [LauncherCatalogCommand], textActions: [LauncherCatalogCommand],
+                            showsRecognition: Bool = true,
                             records: LauncherUsageRecords, now: Date) -> LauncherImageSuggestions {
         var output = LauncherImageSuggestions()
         let filtering = !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -115,7 +118,7 @@ enum LauncherImageSuggestionProvider {
         }
 
         // 识别结果。
-        if let recognition {
+        if let recognition, showsRecognition {
             if let result = recognition.result {
                 for (index, code) in LauncherRecognizedContent.codes(result.barcodes).enumerated() {
                     let source = L("launcher.image.source.code")
