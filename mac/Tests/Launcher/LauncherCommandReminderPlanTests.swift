@@ -59,6 +59,17 @@ final class LauncherCommandReminderPlanTests: XCTestCase {
         XCTAssertEqual(plan("$ ls").fallbackLeading, [.runInTerminal("ls")])
     }
 
+    /// 完整显示放不下 6 行的命令不出「在终端里运行」（第 10 步验证后定）。
+    func testCommandsTooLongToShowWholeGetNoRunRow() {
+        let fits = "curl -fsSL " + String(repeating: "a", count: LauncherConfirmText.commandColumns * 6 - 11)
+        XCTAssertEqual(LauncherConfirmText.commandLines(fits)?.count, 6)
+        XCTAssertEqual(plan(fits).fallbackLeading, [.runInTerminal(fits)], "正好 6 行")
+        let tooLong = fits + "b"
+        XCTAssertNotNil(LauncherInputClassifier.classify(tooLong).command, "仍认得是命令")
+        XCTAssertEqual(plan(tooLong).fallbackLeading, [], "只是不出那一行")
+        XCTAssertEqual(plan(tooLong).rankedFallbackLimit, LauncherSuggestionRanking.maxRows, "不占名额")
+    }
+
     func testReminderGoesToTheTop() {
         let result = plan("明天下午三点开会", clock: clock)
         guard case .reminder(let draft)? = result.top.first else { return XCTFail("没出提醒") }

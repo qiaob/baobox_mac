@@ -22,12 +22,22 @@ enum LauncherLayout {
     static let messageHeight: CGFloat = 40
     /// 面板最下面那行不可选的小字提示（快捷键和别的启动器撞了，§9），含上面的分隔线。
     static let noticeHeight: CGFloat = 30
+    /// 「在终端里运行」上膛后完整显示命令：每行命令的高度（12 号等宽字），和标题那一行、上下留白加起来是行高。
+    static let confirmCommandLineHeight: CGFloat = 16
+    /// 完整显示的命令用的字号：和 `LauncherConfirmText.commandColumns`（每行最多几个 ASCII 字符宽）一起定，改一个要看另一个。
+    static let confirmCommandFontSize: CGFloat = 12
+
+    /// 上膛后完整显示 `lines` 行命令的那一行有多高：上下留白 + 标题 + 每行命令。1 行 54、3 行 86、6 行 134。
+    static func confirmCommandRowHeight(lines: Int) -> CGFloat {
+        38 + CGFloat(max(1, lines)) * confirmCommandLineHeight
+    }
 
     /// 一行的高度。
     static func rowHeight(for row: LauncherRow) -> CGFloat {
         switch row.style {
         case .standard: return rowHeight
         case .calculation: return calculationRowHeight
+        case .confirmCommand(let lines): return confirmCommandRowHeight(lines: lines.count)
         }
     }
 
@@ -52,9 +62,11 @@ enum LauncherLayout {
         }
     }
 
-    /// 结果最多时的高度（定位时保证这么高也放得下）：第一行是计算结果、后面一长串，最下面还有一行提示。
+    /// 结果最多时的高度（定位时保证这么高也放得下）：最高的那一行（计算结果，或上膛后完整显示 6 行的命令 —— 两者不会同时有）、
+    /// 后面一长串，最下面还有一行提示。
     static var maxHeight: CGFloat {
-        height(for: .results([calculationRowHeight] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
+        let tallest = max(calculationRowHeight, confirmCommandRowHeight(lines: LauncherConfirmText.maxCommandLines))
+        return height(for: .results([tallest] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
             + noticeHeight
     }
 }
@@ -73,6 +85,12 @@ enum LauncherPanelContent: Equatable {
 
 // MARK: - 状态
 
+/// 要按两次的行上膛后的样子：换上的标题；`style` 不是 nil 时连样式一起换（「在终端里运行」完整显示命令，第 10 步验证后定）。
+struct LauncherArmedLook: Equatable {
+    let title: String
+    var style: LauncherRowStyle? = nil
+}
+
 /// 面板的显示状态。只在主线程改；控制器负责搜索和执行，这里只记显示和选中。
 @MainActor
 final class LauncherPanelModel: ObservableObject {
@@ -83,7 +101,11 @@ final class LauncherPanelModel: ObservableObject {
     private var selection = LauncherSelectionState()
     /// 二次确认（第 10 步）：哪一行在等第二次 ⏎；它原来的样子（复位时换回来）和换上的标题。
     private var confirm = LauncherConfirmState()
-    private var armed: (original: LauncherRow, title: String)?
+    private var armed: (original: LauncherRow, look: LauncherArmedLook)?
+    /// 行高变了（上膛后完整显示命令的那一行变高 / 复位变回来）：控制器据此改窗口高度。
+    var onHeightChange: () -> Void = {}
+    /// 每 +1 一次：把选中的那一行整个滚进可见范围（上膛后那一行变高，下半截可能在外面）。
+    @Published private(set) var revealSelectedVersion = 0
     /// 每换一批结果 +1：列表回到顶上。
     @Published private(set) var resultsVersion = 0
 
@@ -128,8 +150,8 @@ final class LauncherPanelModel: ObservableObject {
         // 同一个输入、后台结果回来：在等第二次 ⏎ 的那一行还在、还选着 → 新的一批里也换上「再按一次回车…」；否则复位。
         if let armed, let id = confirm.armedID {
             if rows.indices.contains(selectedIndex), rows[selectedIndex].id == id {
-                self.armed = (rows[selectedIndex], armed.title)
-                rows[selectedIndex] = Self.retitled(rows[selectedIndex], armed.title)
+                self.armed = (rows[selectedIndex], armed.look)
+                rows[selectedIndex] = Self.armedRow(rows[selectedIndex], armed.look)
             } else {
                 disarm(restoring: false)
             }
@@ -166,9 +188,9 @@ final class LauncherPanelModel: ObservableObject {
     // MARK: 二次确认（第 10 步）
 
     /// 对第 `index` 行按了一次 ⏎ / ⌘N / 单击，而这一行要按两次（`LauncherConfirmation`）。
-    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、标题换成 `title`，等第二次；
+    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、换成上膛后的样子（`look`），等第二次；
     /// 或者是上膛后双击间隔之内的又一次点击，什么都不做（`LauncherConfirmState.press`）。
-    func confirmPress(at index: Int, title: String, source: LauncherConfirmSource = .key,
+    func confirmPress(at index: Int, look: LauncherArmedLook, source: LauncherConfirmSource = .key,
                       now: TimeInterval = ProcessInfo.processInfo.systemUptime,
                       doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) -> Bool {
         guard rows.indices.contains(index) else { return false }
@@ -188,8 +210,10 @@ final class LauncherPanelModel: ObservableObject {
         }
         selection.choose(index, rowCount: rows.count)
         selectedIndex = selection.index
-        armed = (rows[index], title)
-        rows[index] = Self.retitled(rows[index], title)
+        armed = (rows[index], look)
+        rows[index] = Self.armedRow(rows[index], look)
+        rowHeightsChanged()
+        revealSelectedVersion += 1
         resetHoverBaseline()
         return false
     }
@@ -217,11 +241,22 @@ final class LauncherPanelModel: ObservableObject {
     private func restoreArmedRow() {
         guard let armed, let at = rows.firstIndex(where: { $0.id == armed.original.id }) else { return }
         rows[at] = armed.original
+        rowHeightsChanged()
     }
 
-    /// 换了标题的同一行（id、图标、右侧小字都不变）。
-    private static func retitled(_ row: LauncherRow, _ title: String) -> LauncherRow {
-        LauncherRow(id: row.id, title: title, source: row.source, icon: row.icon, subtitle: row.subtitle, style: row.style)
+    /// 某一行的高度可能变了：重算内容高度，告诉控制器改窗口高度。
+    private func rowHeightsChanged() {
+        guard !rows.isEmpty else { return }
+        let heights = rows.map(LauncherLayout.rowHeight(for:))
+        guard content != .results(heights) else { return }
+        content = .results(heights)
+        onHeightChange()
+    }
+
+    /// 上膛后的同一行（id、图标、右侧小字都不变）：换标题；完整显示命令的换成等宽的多行样式。
+    private static func armedRow(_ row: LauncherRow, _ look: LauncherArmedLook) -> LauncherRow {
+        LauncherRow(id: row.id, title: look.title, source: row.source, icon: row.icon, subtitle: row.subtitle,
+                    style: look.style ?? row.style)
     }
 
     func resetHoverBaseline() {
@@ -489,6 +524,10 @@ struct LauncherPanelView: View {
                 guard model.rows.indices.contains(index) else { return }
                 proxy.scrollTo(model.rows[index].id)
             }
+            .onChange(of: model.revealSelectedVersion) { _, _ in
+                guard model.rows.indices.contains(model.selectedIndex) else { return }
+                proxy.scrollTo(model.rows[model.selectedIndex].id)
+            }
             .onChange(of: model.resultsVersion) { _, _ in
                 if let first = model.rows.first { proxy.scrollTo(first.id, anchor: .top) }
             }
@@ -556,6 +595,24 @@ struct LauncherResultRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
+                }
+            }
+        case .confirmCommand(let lines):
+            // 上膛后完整显示整条命令（第 10 步验证后定）：确认时看到的就是要跑的，一个字符都不省。
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: row.title)
+                    .font(.system(size: 14))
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? Color.white : Color.primary)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(verbatim: line)
+                            .font(.system(size: LauncherLayout.confirmCommandFontSize, design: .monospaced))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(height: LauncherLayout.confirmCommandLineHeight, alignment: .leading)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                    }
                 }
             }
         case .calculation(let interpretation, let failed):

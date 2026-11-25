@@ -71,6 +71,11 @@ final class LauncherController {
         files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
         model.onRun = { [weak self] index in self?.run(at: index, source: .click) }
+        // 上膛后完整显示命令的那一行变高 / 复位变回来：窗口跟着改高度（顶边不动）。
+        model.onHeightChange = { [weak self] in
+            guard let self else { return }
+            self.panel.setHeight(self.model.panelHeight)
+        }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
         model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
         thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
@@ -619,7 +624,7 @@ final class LauncherController {
         }
         // 要按两次 ⏎ 的行（第 10 步）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
         if let confirmation = engine.suggestion(forKey: id)?.confirmation ?? engine.item(forKey: id)?.confirmation,
-           !model.confirmPress(at: index, title: Self.confirmTitle(confirmation), source: source) {
+           !model.confirmPress(at: index, look: Self.armedLook(confirmation), source: source) {
             return
         }
         if let instant = engine.instant(forKey: id) {
@@ -744,6 +749,17 @@ final class LauncherController {
         hide()
         let toast = L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))")
         LauncherFocus.restore { Self.toast(toast) }
+    }
+
+    /// 二次确认时那一行的样子。完整显示的（「在终端里运行」）：标题「再按一次回车运行：」，下面用等宽字把整条命令换行显示；
+    /// 其余的只换标题（`confirmTitle`）。
+    static func armedLook(_ confirmation: LauncherConfirmation) -> LauncherArmedLook {
+        if confirmation.showsWholeObject, let verb = confirmation.verb,
+           let lines = LauncherConfirmText.commandLines(confirmation.object) {
+            let title = L("launcher.confirm.action \(verb) \("")").trimmingCharacters(in: .whitespaces)
+            return LauncherArmedLook(title: title, style: .confirmCommand(lines: lines))
+        }
+        return LauncherArmedLook(title: confirmTitle(confirmation))
     }
 
     /// 二次确认时那一行的标题：「再按一次回车<做什么>：<对象>」（对象太长中间截断，开头结尾都在）；没有「做什么」的写「再按一次回车：<对象>」。

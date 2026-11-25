@@ -20,8 +20,10 @@ enum LauncherShellHandoff {
 
     /// 「交给 Claude Code / Codex」：`'<可执行文件>' '<文字>'`，文字是一个参数（新会话的第一条消息，换行保住）。
     /// 文字以 `-` 开头时前面加 `--`，免得被当成选项。
+    /// 文字里的 NUL 去掉（shell 的参数里放不进 NUL，第 10 步验证后定）。
     static func promptLine(binary: String, prompt: String) -> String {
-        Shell.quote(binary) + (prompt.hasPrefix("-") ? " -- " : " ") + Shell.quote(prompt)
+        let prompt = prompt.replacingOccurrences(of: "\u{0}", with: "")
+        return Shell.quote(binary) + (prompt.hasPrefix("-") ? " -- " : " ") + Shell.quote(prompt)
     }
 
     /// 文字能不能整段交给命令行（不超过 `maxPromptBytes`）。打字时调：`utf8.count` 对 Swift 原生字符串是 O(1)。

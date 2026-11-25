@@ -11,6 +11,9 @@ struct LauncherConfirmation: Equatable, Sendable {
     let verb: String?
     /// 对什么：完整的命令、提醒的时刻和事由。标题里放不下时中间截断（`LauncherConfirmText.object`）。
     let object: String
+    /// 完整显示（第 10 步验证后定，只给「在终端里运行」）：确认时显示的必须是将要执行的全部内容 —— 上膛后那一行变高，
+    /// 对象用等宽字按 `LauncherConfirmText.commandColumns` 硬换行、完整显示（`commandLines`，最多 6 行）；false = 一行、中间截断。
+    var showsWholeObject = false
 }
 
 /// 这一下是从哪来的：键盘（⏎、⌘N）还是鼠标单击。
@@ -66,6 +69,34 @@ struct LauncherConfirmState: Equatable, Sendable {
 }
 
 enum LauncherConfirmText {
+    /// 完整显示时每行最多这么宽（ASCII 字符算 1，其余算 2）。视图（`LauncherResultRow`）用 12 号等宽字画这些行，
+    /// 12 号的等宽字一个 ASCII 字符约 7.2 点宽，64 个约 461 点，放得进标题那一栏（约 520 点，右边还有来源小字和 ⌘1）。
+    static let commandColumns = 64
+    /// 完整显示最多几行；放不下的命令不出「在终端里运行」（太长的命令没法靠眼睛确认，用户自己贴进终端）。
+    static let maxCommandLines = 6
+
+    /// 完整显示时的行：按 `columns` 宽硬换行（不按词断开、一个字符都不省，空格也照原样留着 —— 看到的就是要跑的），
+    /// 超过 `maxLines` 行为 nil。空文字为 nil。宽度算法同 `width`。调用方保证文字里没有换行和控制字符（「像命令」不认这些）。
+    static func commandLines(_ text: String, columns: Int = commandColumns, maxLines: Int = maxCommandLines) -> [String]? {
+        guard !text.isEmpty, columns >= 2, maxLines >= 1 else { return nil }
+        var lines: [String] = []
+        var line = ""
+        var lineWidth = 0
+        for character in text {
+            let w = width(character)
+            if lineWidth + w > columns {
+                lines.append(line)
+                guard lines.count < maxLines else { return nil }
+                line = ""
+                lineWidth = 0
+            }
+            line.append(character)
+            lineWidth += w
+        }
+        lines.append(line)
+        return lines
+    }
+
     /// 标题里的对象最多占这么宽（ASCII 字符算 1，其余算 2）：面板 680 宽、标题 14 号字，前面还有「再按一次回车运行：」，
     /// 右边有来源小字和 ⌘N —— 这么宽的对象正好放得下（英文约 48 个字母，中文约 24 个字）。
     static let maxObjectWidth = 48

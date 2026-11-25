@@ -200,7 +200,7 @@ enum LauncherSuggestionProvider {
             let suggestion = LauncherSuggestion(
                 row: row, usageKey: nil,
                 action: .run { TerminalLauncher.run(command: LauncherShellHandoff.runLine(command), in: nil) },
-                confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.run"), object: command))
+                confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.run"), object: command, showsWholeObject: true))
             return [.action(suggestion)]
         case .reminder:
             return []

@@ -48,6 +48,14 @@ final class LauncherShellHandoffTests: XCTestCase {
         }
     }
 
+    /// shell 的参数里放不进 NUL：交给 Claude Code / Codex 的文字去掉 NUL（第 10 步验证后定）。
+    func testNULIsRemovedFromThePrompt() throws {
+        XCTAssertEqual(LauncherShellHandoff.promptLine(binary: "claude", prompt: "a\u{0}b"), "'claude' 'ab'")
+        XCTAssertEqual(LauncherShellHandoff.promptLine(binary: "claude", prompt: "\u{0}-x"), "'claude' -- '-x'", "去掉后以 - 开头照样加 --")
+        let fake = "fakeclaude() { [[ $1 == -- ]] && shift; printf '%d|%s' $# \"$1\"; }; "
+        XCTAssertEqual(try zsh(fake + LauncherShellHandoff.promptLine(binary: "fakeclaude", prompt: "修\u{0}一下")), "1|修一下")
+    }
+
     func testPromptStartingWithADashGetsAnEndOfOptions() {
         XCTAssertEqual(LauncherShellHandoff.promptLine(binary: "/opt/homebrew/bin/claude", prompt: "-x"),
                        "'/opt/homebrew/bin/claude' -- '-x'")

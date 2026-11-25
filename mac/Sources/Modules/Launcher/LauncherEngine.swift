@@ -32,6 +32,9 @@ enum LauncherRowStyle: Equatable {
     case standard
     /// 计算结果：结果用大一号的字，下面一行小字是「理解成了什么」；`failed` = 出错（结果的位置是那句说明，⏎ 不做事）。
     case calculation(interpretation: String, failed: Bool)
+    /// 「在终端里运行」上膛后（第 10 步验证后定）：标题是「再按一次回车运行：」，下面用等宽字把整条命令一行一行完整显示
+    /// （`LauncherConfirmText.commandLines` 换好的行，最多 6 行）。行高跟着行数变。
+    case confirmCommand(lines: [String])
 }
 
 /// 面板里的一行（只有显示用的值）。

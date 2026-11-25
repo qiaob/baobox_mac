@@ -64,6 +64,31 @@ final class LauncherShellCommandTests: XCTestCase {
         XCTAssertNil(LauncherShellCommand.detect("git " + String(repeating: "-a ", count: 1_000)), "太长")
     }
 
+    /// 看不见、或让看到的和实际的不一样的字符：不认成命令（第 10 步验证后定，确认时显示的必须就是要跑的）。
+    func testHiddenCharactersAreNeverCommands() {
+        let cases = [
+            "echo \u{202E}olleh",            // 从右往左覆盖
+            "r\u{200B}m -rf /tmp/x",          // 零宽空格
+            "git status\u{200D}",             // 零宽连接符
+            "\u{FEFF}ls -la",                 // BOM
+            "ls -la \u{2066}x\u{2069}",        // 方向隔离
+            "rm -rf /tmp/x\u{0}",             // NUL
+            "ls\t-la",                        // 中间的制表符
+            "echo \u{7}hi -n",                // BEL
+            "ls -la \u{1B}[31m",              // ESC 转义序列
+            "echo \u{85}x -n",                // C1（NEL）
+            "ls -la \u{061C}",                // 阿拉伯字母标记
+            "git status\u{2028}rm -rf ~",     // 行分隔符：不止一行
+            "git status\rrm -rf ~",
+        ]
+        for text in cases {
+            XCTAssertNil(LauncherShellCommand.detect(text), text.debugDescription)
+        }
+        XCTAssertEqual(LauncherShellCommand.detect("\tls -la\t"), "ls -la", "首尾的制表符是空白，去掉")
+        XCTAssertTrue(LauncherShellCommand.hasHiddenCharacters("a\u{200F}b"))
+        XCTAssertFalse(LauncherShellCommand.hasHiddenCharacters("git commit -m \"修复登录 🎉\""))
+    }
+
     func testTokenRules() {
         XCTAssertTrue(LauncherShellCommand.isOption("-x"))
         XCTAssertTrue(LauncherShellCommand.isOption("--force"))

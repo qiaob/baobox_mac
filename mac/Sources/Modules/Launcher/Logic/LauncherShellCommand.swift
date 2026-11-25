@@ -39,7 +39,8 @@ enum LauncherShellCommand {
     ///   所以 `open the door`、`make it work`、`find my phone`、单独一个 `ls` 都不算。
     static func detect(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed.utf8.count <= maxLength, !trimmed.contains(where: \.isNewline) else { return nil }
+        guard !trimmed.isEmpty, trimmed.utf8.count <= maxLength, !trimmed.contains(where: \.isNewline),
+              !hasHiddenCharacters(trimmed) else { return nil }
         if trimmed.hasPrefix("$ ") {
             let command = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
             return command.isEmpty ? nil : command
@@ -55,6 +56,20 @@ enum LauncherShellCommand {
         if let second = rest.first, subcommands[first]?.contains(second) == true { return true }
         if first == "sudo" { return isCommandLike(Array(rest)) }
         return false
+    }
+
+    /// 看不见、或者会让看到的和实际的不一样的字符（第 10 步验证后定）：确认时显示的必须就是要跑的，有这些的不认成命令 ——
+    /// C0 控制符（含 NUL、制表符；换行另有「只认一行」的规则）、DEL、C1 控制符，双向控制符（U+202A–202E、U+2066–2069、
+    /// U+061C），零宽字符（U+200B–200F、U+FEFF）。
+    static func hasHiddenCharacters(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x00...0x1F, 0x7F...0x9F: return true
+            case 0x202A...0x202E, 0x2066...0x2069, 0x061C: return true
+            case 0x200B...0x200F, 0xFEFF: return true
+            default: return false
+            }
+        }
     }
 
     /// `-x`、`-9`、`--force`、`--name=value`：一到两个连字符后面紧跟字母或数字。
