@@ -34,8 +34,9 @@ enum LauncherShellCommand {
         ]
     }()
 
-    /// 英文虚词（第 10 步验证后定）：没有选项形状的词时，后面只要有一个不在引号里的词（含 `/` 的拆开看）是这些，
-    /// 就是一句英文，不是命令 ——「cat and/or dog」「python is great for data/science」「cat videos on youtube.com」。
+    /// 英文虚词（第 10 步验证后定）：没有选项形状的词时，后面只要有一个不在引号里的词是这些，就是一句英文，不是命令 ——
+    /// 「python is great for data/science」「cat videos on youtube.com」。含 `/` 的词不拆开查（复查后定：`cd my/project` 是命令）；
+    /// 它算不算路径证据看 `isPath`（`and/or` 不算，所以「cat and/or dog」仍不是命令）。
     static let functionWords: Set<String> = [
         "the", "a", "an", "and", "or", "is", "are", "was", "be", "to", "of", "on", "in", "for", "with", "my", "your",
         "you", "i", "it", "this", "that", "me", "we", "not", "sure",
@@ -111,13 +112,11 @@ enum LauncherShellCommand {
         return false
     }
 
-    /// 这个词（含 `/` 的拆开看，每段去掉句末标点、不分大小写）里有英文虚词。
+    /// 这个词（去掉句末标点、不分大小写）是英文虚词。含 `/` 的词不拆开（`and/or` 不是虚词，第 10 步复查后定）。
     static func isFunctionWord(_ word: String) -> Bool {
-        word.split(separator: "/").contains { part in
-            var stripped = Substring(part)
-            while let last = stripped.last, ".,!?;:…".contains(last) { stripped = stripped.dropLast() }
-            return functionWords.contains(stripped.lowercased())
-        }
+        var stripped = Substring(word)
+        while let last = stripped.last, ".,!?;:…".contains(last) { stripped = stripped.dropLast() }
+        return functionWords.contains(stripped.lowercased())
     }
 
     /// `$ ` 后面的第一个词像不像命令名：以字母、`_`、`.`、`/`、`~` 开头，只含字母数字和 `_ . + - / ~`（第 10 步验证后定）。
@@ -166,10 +165,17 @@ enum LauncherShellCommand {
         return ("a"..."z").contains(next) || ("A"..."Z").contains(next) || ("0"..."9").contains(next)
     }
 
-    /// 路径：含 `/`；或是 `~`、`.`、`..`、`~` 开头；或含一个后面还跟着字的 `.`（`README.md`、`.env`）。
+    /// 路径：`.`、`..`，以 `/`、`./`、`../`、`~` 开头；中间含 `/` 的要拆开后的各段不全是虚词或空串（`my/project`、`in/out.log`、
+    /// `src/app` 算，`and/or`、`to/` 不算，第 10 步复查后定）；或含一个后面还跟着字的 `.`（`README.md`、`.env`）。
     /// 以 `.` 结尾的（`U.S.`、`e.g.`、`i.e.`、句末的 `door.`，第 10 步验证后定）、句末别的标点（`work!`）和纯数字（`3.5`）不算。
     static func isPath(_ word: String) -> Bool {
-        if word.contains("/") || word == "." || word == ".." || word.hasPrefix("~") { return true }
+        if word == "." || word == ".." || word.hasPrefix("/") || word.hasPrefix("./") || word.hasPrefix("../")
+            || word.hasPrefix("~") { return true }
+        if word.contains("/") {
+            return word.split(separator: "/", omittingEmptySubsequences: false).contains { part in
+                !part.isEmpty && !isFunctionWord(String(part))
+            }
+        }
         guard !word.hasSuffix(".") else { return false }
         var stripped = Substring(word)
         while let last = stripped.last, ",!?;:…".contains(last) { stripped = stripped.dropLast() }

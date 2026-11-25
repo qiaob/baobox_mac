@@ -169,13 +169,34 @@ final class LauncherShellCommandTests: XCTestCase {
         XCTAssertEqual(LauncherShellCommand.detect("git merge the-branch"), "git merge the-branch", "the-branch 不是 the")
         XCTAssertEqual(LauncherShellCommand.detect("git push origin main"), "git push origin main")
         XCTAssertNil(LauncherShellCommand.detect("git push it to me"))
-        XCTAssertTrue(LauncherShellCommand.isFunctionWord("and/or"))
+        XCTAssertFalse(LauncherShellCommand.isFunctionWord("and/or"), "含 / 的词不拆开查（复查后定）")
         XCTAssertTrue(LauncherShellCommand.isFunctionWord("The"))
         XCTAssertTrue(LauncherShellCommand.isFunctionWord("me,"))
         XCTAssertFalse(LauncherShellCommand.isFunctionWord("it's"))
         XCTAssertFalse(LauncherShellCommand.isFunctionWord("main"))
         XCTAssertEqual(LauncherShellCommand.words("a 'b c' \"d\" e").map(\.quoted), [false, true, true, true, false])
         XCTAssertEqual(LauncherShellCommand.words("it's fine").map(\.quoted), [false, false], "词中间的撇号不开引号")
+    }
+
+    /// 含 `/` 的词：不拆开查虚词，但要拆开后不全是虚词或空串才算路径证据（第 10 步复查后定）。
+    func testSlashWords() {
+        for text in ["cd my/project", "cat in/out.log", "cp a.txt to/", "ls src/app", "cd /", "open ./a", "cat ../x"] {
+            XCTAssertEqual(LauncherShellCommand.detect(text), text, text)
+        }
+        for text in ["cat and/or dog", "find and/or replace text", "python is great for data/science", "cat to/ from",
+                     "open and/or close"] {
+            XCTAssertNil(LauncherShellCommand.detect(text), text)
+        }
+        // 已知限制：参数里正好有英文虚词的认不出；加 `$ ` 就认。
+        XCTAssertNil(LauncherShellCommand.detect("grep the file.txt"))
+        XCTAssertEqual(LauncherShellCommand.detect("$ grep the file.txt"), "grep the file.txt")
+        XCTAssertFalse(LauncherShellCommand.isPath("and/or"))
+        XCTAssertFalse(LauncherShellCommand.isPath("to/"))
+        XCTAssertTrue(LauncherShellCommand.isPath("/and/or"), "以 / 开头的照算")
+        XCTAssertTrue(LauncherShellCommand.isPath("my/project"))
+        XCTAssertTrue(LauncherShellCommand.isPath("in/out.log"))
+        XCTAssertTrue(LauncherShellCommand.isPath("src/app"))
+        XCTAssertFalse(LauncherShellCommand.isPath("and//or"), "只有虚词和空串")
     }
 
     func testDollarPromptNeedsACommandName() {
