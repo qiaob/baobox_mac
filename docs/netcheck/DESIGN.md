@@ -1,6 +1,7 @@
-# 网络泄露检测（NetCheck）—— 需求与技术设计
+# 网络检测（NetCheck）—— 泄露检测的需求与技术设计
 
-2026-11-25。模块 id `netcheck`，菜单顺序在「网络抓包」之后。
+2026-11-25。模块 id `netcheck`，菜单顺序在「网络抓包」之后。工具叫「网络检测」（原名「网络泄露检测」），窗口顶部分段切换
+「泄露检测」|「测速」：这一页讲泄露检测；测速与菜单栏实时网速见 [SPEED.md](SPEED.md)。
 
 ## 1. 要回答什么
 
@@ -37,6 +38,9 @@
 所以**只在用户点「立即检测」时测**，启动时不测、不定时测。结果只在内存里，不落盘。
 ipapi.is 的 key（可选）存钥匙串。
 
+测速（SPEED.md §1.5）同理：会把出口 IP 告诉 Cloudflare（speed.cloudflare.com），一次用掉几十到几百 MB 流量，
+所以只在用户点了才测，不自动、不定时，结果不落盘。菜单栏实时网速只读本机网卡计数，不联网，默认关。
+
 ## 3. 规格来源
 
 判定规则与 baobox_shared 的 `baobox-core/src/netcheck.rs` 是同一套（Windows / Linux 用那份 Rust），
@@ -51,11 +55,17 @@ Modules/NetCheck/
 ├── NetCheckEngine.swift        URLSession 请求、系统解析器探测、系统时区
 ├── NetCheckWebRTC.swift        隐藏的 1×1 WKWebView 跑 RTCPeerConnection，收集 ICE 候选
 ├── NetCheckSession.swift       @MainActor 状态：跑一次检测、上次结果、记真实网络
-├── NetCheckWindow.swift        结果窗口（DesktopSpaceWindow），也承载那个 WebView
-├── NetCheckText.swift          结论 → 文案、纯文本报告
+├── NetCheckWindow.swift        窗口（DesktopSpaceWindow）：分段切换、泄露检测页、测速页，也承载那个 WebView
+├── NetCheckText.swift          结论 → 文案、纯文本报告（测速的文案也在这里）
 ├── NetCheckSettings.swift      设置键 + 钥匙串
 ├── NetCheckSettingsView.swift  设置页
-└── NetCheckTool.swift          ToolModule 壳
+├── NetCheckTool.swift          ToolModule 壳（二级菜单、快速入口命令）
+│   —— 测速与菜单栏实时网速（SPEED.md §3）——
+├── Logic/NetSpeedLogic.swift   纯 Foundation（进 BaoboxTests）：速率格式化、定宽候选、测速窗口、延迟、网卡筛选、计数差值、/meta
+├── NetSpeedTest.swift          测速：URLSession 的三个阶段、取消、进度回调
+├── NetSpeedTestSession.swift   @MainActor 状态：进行中的阶段与速度、上次结果
+├── NetTrafficSampler.swift     每秒读网卡计数（后台），发布速度
+└── NetSpeedStatusItem.swift    菜单栏状态项（定宽模板图）与它的小菜单
 ```
 
 ### 4.1 请求顺序（`NetCheckEngine`）
@@ -92,8 +102,8 @@ STUN 服务器默认 `stun:stun.l.google.com:19302`，设置里可改。
 
 ### 4.3 界面
 
-- 菜单：状态行（上次结论 + 多久前）、两行总结、「立即检测」（开窗口并开始）、「打开检测窗口…」
-- 窗口：顶部整体结论 + 「立即检测」+「复制报告」；两张总结卡片；五项逐行（图标按结论着色）；
+- 菜单：状态行（上次结论 + 多久前）、两行总结、「立即检测」（开窗口并开始）、「打开检测窗口…」；之后是测速的几项（SPEED.md §1.4）
+- 窗口：最上面「泄露检测」|「测速」分段切换；泄露检测页：顶部整体结论 + 「立即检测」+「复制报告」；两张总结卡片；五项逐行（图标按结论着色）；
   底部：bash.ws 的原话、没声明真实网络时的提示与「把 ASxxxx 记为真实网络」按钮、定位权限的说明
 - 设置页：真实网络（ASN 列表）、ipapi.is 的 key（钥匙串）、DNS 探测个数（1–50）、STUN 服务器
 
