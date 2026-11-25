@@ -31,55 +31,86 @@ final class LauncherFileResultStateTests: XCTestCase {
     }
 
     // MARK: - 整条路
+    //
+    // 不和真实时间赛跑（2026-11-25 第 10 步第四轮复查：机器忙时两次 `pump(0.03)` 之和会超过 80 ms 防抖）：
+    // 合并器的防抖换成手动触发的（`ManualDebounce`），Spotlight 的结果由测试放行（`ControllableSpotlight.release`），
+    // 等待一律是「等到某个条件成立」（`pump(until:)`，超时只为不挂死，不靠它定输赢）。
 
     @MainActor
-    private func makeLauncher(spotlightFiles: [LauncherFileHit], scanned: [String]) -> (MiniLauncher, ControllableSpotlight) {
-        let spotlight = ControllableSpotlight(files: spotlightFiles, latency: 0.1)
+    private func makeLauncher(spotlightFiles: [LauncherFileHit],
+                              scanned: [String]) -> (MiniLauncher, ControllableSpotlight, ManualDebounce, LauncherMemoryFileSearch) {
+        let spotlight = ControllableSpotlight(files: spotlightFiles)
+        let debounce = ManualDebounce()
         let memory = LauncherMemoryFileSearch(label: "test.scanned", verifiesExistence: false)
         memory.replace(LauncherFileCatalog(files: scanned.map { .init(path: $0, modified: Date()) }))
         let merger = LauncherMergedFileSearch(sources: [
             .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.08),
             .init(name: "scanned", origin: .scanned, backend: memory),
-        ])
-        return (MiniLauncher(backend: merger), spotlight)
+        ], scheduleDebounce: debounce.schedule)
+        return (MiniLauncher(backend: merger), spotlight, debounce, memory)
     }
 
-    private func pump(_ seconds: TimeInterval) {
-        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    /// 让主线程转到 `condition` 成立（超时为 false）。
+    @MainActor
+    @discardableResult
+    private func pump(until condition: () -> Bool, timeout: TimeInterval = 10) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return false }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+        }
+        return true
+    }
+
+    /// 只用来让已经排着的主线程回调跑完（之后断言「没有再发生什么」），不靠它等结果。
+    private func drain() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    /// 防抖到点（排着的全部触发；被新查询顶掉的那些自己不查），再等 Spotlight 收到 `searches` 次查询、放行结果。
+    @MainActor
+    private func fireDebounceAndRelease(_ debounce: ManualDebounce, _ spotlight: ControllableSpotlight, scheduled: Int,
+                                        searches: Int, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(pump { debounce.count == scheduled }, "防抖排了 \(scheduled) 次", file: file, line: line)
+        debounce.fireAll()
+        XCTAssertTrue(pump { spotlight.heldCount == searches }, "Spotlight 收到查询", file: file, line: line)
+        spotlight.release()
     }
 
     @MainActor
     func testRetypedQueryStillGetsSpotlight() {
-        let (launcher, spotlight) = makeLauncher(
+        let (launcher, spotlight, debounce, _) = makeLauncher(
             spotlightFiles: [LauncherFileHit(path: "/Users/me/Documents/report.pdf", modified: Date().addingTimeInterval(-3600))],
             scanned: ["/private/tmp/c/report.pdf.log"])
         launcher.type("report.pdf")
-        pump(0.03)
+        XCTAssertTrue(pump { launcher.have != nil })
         XCTAssertEqual(launcher.have, LauncherFileResultState(request: r, complete: false), "内存来源先交了一批，R 的结果还不完整")
         launcher.type("report.pdfx")
-        pump(0.03)
         launcher.type("report.pdf")
-        pump(0.6)
+        // 三次查询的防抖都还没到点：前两次被顶掉，到点后只有最后那次查 Spotlight。
+        fireDebounceAndRelease(debounce, spotlight, scheduled: 3, searches: 1)
+        XCTAssertTrue(pump { launcher.have?.complete == true })
         XCTAssertEqual(launcher.have, LauncherFileResultState(request: r, complete: true), "退格回到 R 之后 R 重新发起、回齐了")
         XCTAssertEqual(launcher.results.first?.hit.path, "/Users/me/Documents/report.pdf")
         XCTAssertEqual(launcher.results.first?.pinned, true, "真正的文件是固定行（不是扫的目录里的 report.pdf.log）")
         XCTAssertEqual(launcher.starts, [r, other, r], "R、R'、R 各发一次")
         XCTAssertEqual(spotlight.searchCount, 1, "Spotlight 只查最后那次（前两次在防抖里就被顶掉了）")
-        pump(0.3)
+        drain()
         XCTAssertEqual(launcher.starts.count, 3, "回齐以后不再发")
+        XCTAssertEqual(debounce.count, 0, "也没有新的防抖在排")
     }
 
     @MainActor
     func testRetypedFilesPrefixDoesNotHangSearching() {
-        let (launcher, _) = makeLauncher(
+        let (launcher, spotlight, debounce, _) = makeLauncher(
             spotlightFiles: [LauncherFileHit(path: "/Users/me/Documents/notes.md", modified: Date())],
             scanned: ["/private/tmp/c/notes.md.app"])
         launcher.type("f notes.md")
-        pump(0.03)
+        XCTAssertTrue(pump { launcher.have != nil })
         launcher.type("f notes.mdx")
-        pump(0.03)
         launcher.type("f notes.md")
-        pump(0.6)
+        fireDebounceAndRelease(debounce, spotlight, scheduled: 3, searches: 1)
+        XCTAssertTrue(pump { launcher.have?.complete == true })
         XCTAssertFalse(launcher.isSearching, "不会一直「正在查找」")
         XCTAssertEqual(launcher.results.map(\.hit.path), ["/Users/me/Documents/notes.md"])
     }
@@ -87,42 +118,39 @@ final class LauncherFileResultStateTests: XCTestCase {
     @MainActor
     func testTableSwapRequeriesTheCurrentInput() {
         // 刚呼出就输入文件名、自己扫的目录还没扫完：表换上之后不用再按一个键就出来；只重查内存来源，不另外发起、不重查 Spotlight。
-        let spotlight = ControllableSpotlight(files: [LauncherFileHit(path: "/Users/me/proj/hook.py.md")], latency: 0.05)
-        let memory = LauncherMemoryFileSearch(label: "test.swap", verifiesExistence: false)
-        let merger = LauncherMergedFileSearch(sources: [
-            .init(name: "spotlight", origin: .spotlight, backend: spotlight, delay: 0.08),
-            .init(name: "scanned", origin: .scanned, backend: memory),
-        ])
-        let launcher = MiniLauncher(backend: merger)
+        let (launcher, spotlight, debounce, memory) = makeLauncher(
+            spotlightFiles: [LauncherFileHit(path: "/Users/me/proj/hook.py.md")], scanned: [])
         launcher.type("hook.py")
-        pump(0.3)
-        XCTAssertEqual(launcher.have?.complete, true)
+        fireDebounceAndRelease(debounce, spotlight, scheduled: 1, searches: 1)
+        XCTAssertTrue(pump { launcher.have?.complete == true })
         XCTAssertEqual(launcher.results.map(\.hit.path), ["/Users/me/proj/hook.py.md"], "扫描还没完：只有 Spotlight 的")
         memory.replace(LauncherFileCatalog(files: [.init(path: "/private/tmp/c/scratchpad/hook.py", modified: Date())]))
         launcher.tablesChanged()
-        pump(0.02)
-        XCTAssertEqual(launcher.results.first?.hit.path, "/private/tmp/c/scratchpad/hook.py", "换表后内存来源立刻出")
+        XCTAssertTrue(pump { launcher.results.first?.hit.path == "/private/tmp/c/scratchpad/hook.py" }, "换表后内存来源立刻出")
         XCTAssertEqual(launcher.results.first?.pinned, true)
         XCTAssertTrue(launcher.results.contains { $0.hit.path == "/Users/me/proj/hook.py.md" }, "Spotlight 的行一直在")
         XCTAssertTrue(launcher.everyDeliveryHad("/Users/me/proj/hook.py.md"), "没有哪一次交出的结果里少了 Spotlight 的行")
-        pump(0.3)
+        XCTAssertTrue(pump { launcher.have?.complete == true })
+        drain()
         XCTAssertEqual(launcher.starts.count, 1, "没有另外发起")
+        XCTAssertEqual(debounce.count, 0, "没有新的防抖在排")
         XCTAssertEqual(spotlight.searchCount, 1, "Spotlight 不多查")
         XCTAssertEqual(launcher.have?.complete, true)
     }
 
     @MainActor
     func testSameRequestIsNotResentWhileGathering() {
-        let (launcher, spotlight) = makeLauncher(
+        let (launcher, spotlight, debounce, _) = makeLauncher(
             spotlightFiles: [LauncherFileHit(path: "/Users/me/a/report.pdf")], scanned: ["/private/tmp/c/report.pdf"])
         launcher.type("report.pdf")
-        pump(0.02)
-        XCTAssertEqual(launcher.have?.complete, false)
+        XCTAssertTrue(pump { launcher.have != nil })
+        XCTAssertEqual(launcher.have?.complete, false, "Spotlight 还没放行：一定不完整")
         for _ in 0..<5 { launcher.refresh() }   // 后台结果回来、别的来源建完键……都会再查一次
         XCTAssertEqual(launcher.starts, [r], "正在跑的就是它：不重发")
-        pump(0.4)
-        XCTAssertEqual(launcher.have?.complete, true)
+        fireDebounceAndRelease(debounce, spotlight, scheduled: 1, searches: 1)
+        XCTAssertTrue(pump { launcher.have?.complete == true })
         for _ in 0..<5 { launcher.refresh() }
+        drain()
         XCTAssertEqual(launcher.starts, [r], "回齐了也不重发")
         XCTAssertEqual(spotlight.searchCount, 1)
     }
@@ -217,17 +245,45 @@ private final class MiniLauncher {
     }
 }
 
-/// 可控延迟的假 Spotlight：按名字包含筛，过 `latency` 秒交回；被取消 / 顶掉的不交。
+/// 手动触发的防抖计时（替换合并器里的 `asyncAfter`）：排着的工作等测试调 `fireAll()` 才在合并器的队列上执行。
+private final class ManualDebounce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scheduled: [(DispatchQueue, @Sendable () -> Void)] = []
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return scheduled.count
+    }
+
+    var schedule: LauncherMergedFileSearch.DebounceScheduler {
+        { [self] _, queue, work in
+            lock.lock()
+            scheduled.append((queue, work))
+            lock.unlock()
+        }
+    }
+
+    /// 排着的全部按先后放到各自的队列上执行（被新查询顶掉的那些自己会跳过）。
+    func fireAll() {
+        lock.lock()
+        let due = scheduled
+        scheduled = []
+        lock.unlock()
+        for (queue, work) in due { queue.async(execute: work) }
+    }
+}
+
+/// 假 Spotlight：按名字包含筛，结果先扣着，测试调 `release()` 才交回；被取消 / 顶掉的不交。
 private final class ControllableSpotlight: LauncherFileSearching, @unchecked Sendable {
     private let files: [LauncherFileHit]
-    private let latency: TimeInterval
     private let lock = NSLock()
     private var generation = 0
     private var searches = 0
+    private var held: [(ticket: Int, batch: LauncherFileSearchBatch, completion: @Sendable (LauncherFileSearchBatch) -> Void)] = []
 
-    init(files: [LauncherFileHit], latency: TimeInterval) {
+    init(files: [LauncherFileHit]) {
         self.files = files
-        self.latency = latency
     }
 
     var searchCount: Int {
@@ -236,22 +292,31 @@ private final class ControllableSpotlight: LauncherFileSearching, @unchecked Sen
         return searches
     }
 
+    /// 收到了、还扣着没交的查询数。
+    var heldCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return held.count
+    }
+
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void) {
+        guard case .nameContains(let words) = request.kind else { return }
+        let hits = files.filter { file in words.allSatisfy { file.name.localizedCaseInsensitiveContains($0) } }
         lock.lock()
         generation += 1
         searches += 1
-        let ticket = generation
+        held.append((generation, LauncherFileSearchBatch(hits: hits, totalCount: hits.count, elapsed: 0.1, timedOut: false),
+                     completion))
         lock.unlock()
-        guard case .nameContains(let words) = request.kind else { return }
-        let hits = files.filter { file in words.allSatisfy { file.name.localizedCaseInsensitiveContains($0) } }
-        let latency = latency
-        DispatchQueue.global().asyncAfter(deadline: .now() + latency) { [self] in
-            lock.lock()
-            let current = ticket == generation
-            lock.unlock()
-            guard current else { return }
-            completion(LauncherFileSearchBatch(hits: hits, totalCount: hits.count, elapsed: latency, timedOut: false))
-        }
+    }
+
+    /// 把扣着的结果交回（只交还没被顶掉的那次）。
+    func release() {
+        lock.lock()
+        let due = held.filter { $0.ticket == generation }
+        held = []
+        lock.unlock()
+        for item in due { item.completion(item.batch) }
     }
 
     func cancel() {
