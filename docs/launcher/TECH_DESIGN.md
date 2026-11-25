@@ -557,7 +557,7 @@ extension HotkeyDefinition {
 | 40 | FocusHealth | 暂停（继续）专注 / 结束专注（同一档，暂停在前） |
 | 50 | Caffeinate | 关闭防休眠 |
 
-  五类都有时出的是：会议、Claude Code、停止录屏、暂停专注（结束专注和防休眠被挤掉）。
+  五类都有、**会议和 Claude Code 各只给一条**时，出的是：会议、Claude Code、停止录屏、暂停专注（结束专注和防休眠被挤掉）。前提要写明：会议可能同时给「入会」「开始会议记录」两条（下一场有会议链接、又没在记任何会时），两个 Claude Code 会话同时在等也各占一条 —— 那时按次序往后挤，录屏、专注可能都出不来，四条全是会议和 Claude Code 也可能。
 
 各模块声明了什么（都写成扩展 `Modules/<模块>/…LauncherContext.swift`，不动各模块的 `…Tool.swift`）：
 
