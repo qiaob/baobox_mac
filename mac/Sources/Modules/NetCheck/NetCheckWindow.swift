@@ -44,6 +44,7 @@ final class NetCheckWindowController: NSObject, NSWindowDelegate {
             window = created
         }
         if let page { NetCheckWindowState.shared.page = page }
+        NetCheckSession.shared.windowOpened()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         guard start else { return }

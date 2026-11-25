@@ -8,6 +8,8 @@ enum NetCheckSettings {
 
     static let defaultDNSProbes = 10
     static let dnsProbesRange = 1...50
+    /// DNS 探测（并发解析）整段最多等这么久，到点用已经回来的继续。
+    static let dnsProbeDeadline: TimeInterval = 10
     static let defaultSTUNServer = "stun:stun.l.google.com:19302"
 
     /// 检测服务的地址（与 baobox_shared 的默认值相同；Mac 版不开放修改）。

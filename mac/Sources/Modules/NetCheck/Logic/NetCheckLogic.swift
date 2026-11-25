@@ -286,11 +286,77 @@ enum NetCheckLogic {
         return a.caseInsensitiveCompare(b) == .orderedSame
     }
 
+    /// IPv6 探测失败时是「没有 IPv6」还是「没测出来」：连接立刻失败（没有 IPv6 路由、找不到 / 连不上这个只有 AAAA 记录的服务）
+    /// 算没有；超时、TLS 出错、服务回错这些算没测出来。没有 IPv6 的 Mac 上 URLSession 0.02 秒就报 -1009
+    /// （notConnectedToInternet，2026-11-25 实测），所以它也算「没有」。
+    static func meansNoIPv6(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// 两个 ASN 是不是同一家：号码相同，或者在云厂商表里是同一家
     /// （Google 的 15169 / 396982、AWS 的 16509 / 14618 常常一个出 IPv4、一个出 IPv6）。
     static func sameNetwork(_ a: Int, _ b: Int) -> Bool {
         if a == b { return true }
         guard let x = knownHosting(a), let y = knownHosting(b) else { return false }
         return x == y
+    }
+}
+
+// MARK: - 并发、有总期限
+
+/// 一批会阻塞的活（系统解析器）并发跑，整批最多等 `deadline` 秒：都做完或到点就返回，没做完的留在后台自己结束、不等。
+/// 不在主线程等。返回按时做完了几个。
+enum NetCheckParallel {
+    private final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Int, Never>?
+        private var done = 0
+        private let total: Int
+
+        init(_ continuation: CheckedContinuation<Int, Never>, total: Int) {
+            self.continuation = continuation
+            self.total = total
+        }
+
+        func finishedOne() {
+            lock.lock()
+            done += 1
+            let resume = done >= total ? continuation : nil
+            if resume != nil { continuation = nil }
+            let count = done
+            lock.unlock()
+            resume?.resume(returning: count)
+        }
+
+        func deadlinePassed() {
+            lock.lock()
+            let resume = continuation
+            continuation = nil
+            let count = done
+            lock.unlock()
+            resume?.resume(returning: count)
+        }
+    }
+
+    static func run(_ jobs: [@Sendable () -> Void], deadline: TimeInterval) async -> Int {
+        guard !jobs.isEmpty else { return 0 }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
+            let state = State(continuation, total: jobs.count)
+            for job in jobs {
+                DispatchQueue.global(qos: .utility).async {
+                    job()
+                    state.finishedOne()
+                }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(0, deadline)) {
+                state.deadlinePassed()
+            }
+        }
     }
 }

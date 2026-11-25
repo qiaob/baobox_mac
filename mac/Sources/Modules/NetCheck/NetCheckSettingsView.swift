@@ -6,7 +6,10 @@ struct NetCheckSettingsView: View {
     @AppStorage(NetCheckSettings.stunServerKey) private var stunServer = ""
     @AppStorage(NetCheckSettings.liveSpeedEnabledKey) private var liveSpeedEnabled = false
     @AppStorage(NetCheckSettings.liveSpeedModeKey) private var liveSpeedMode = NetSpeedDisplayMode.down.rawValue
-    @State private var apiKey = NetCheckKeychain.load() ?? ""
+    /// 钥匙串在 `onAppear` 里读一次（不放在 @State 初值里：视图结构体每次重建都会再读一遍）。
+    @State private var apiKey = ""
+    /// 读到的 key；nil = 还没读过，这时不写钥匙串
+    @State private var storedKey: String?
     @State private var keySaveFailed = false
 
     var body: some View {
@@ -72,12 +75,20 @@ struct NetCheckSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            guard storedKey == nil else { return }
+            let key = NetCheckKeychain.load() ?? ""
+            storedKey = key
+            apiKey = key
+        }
         // 回车或离开设置页时才写钥匙串，不是每敲一个字写一次
         .onDisappear { saveKey() }
     }
 
     private func saveKey() {
-        guard apiKey != (NetCheckKeychain.load() ?? "") else { return }
-        keySaveFailed = !NetCheckKeychain.save(apiKey)
+        guard let storedKey, apiKey != storedKey else { return }
+        let saved = NetCheckKeychain.save(apiKey)
+        keySaveFailed = !saved
+        if saved { self.storedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 }

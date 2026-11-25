@@ -14,6 +14,8 @@ final class NetCheckSession: ObservableObject {
     @Published private(set) var outcome: Outcome?
     /// WebRTC 探测用的隐藏 WebView。检测窗口把它挂进视图层级（不挂会被 WebKit 挂起）。
     @Published private(set) var webrtc: NetCheckWebRTC?
+    /// 检测中关了窗口：跑完再放掉 WebView。
+    private var releaseWhenDone = false
 
     private init() {}
 
@@ -43,12 +45,28 @@ final class NetCheckSession: ObservableObject {
                                                     webrtcLookups: lookups)
             self.outcome = Outcome(at: Date(), table: NetCheckCompare.table(observations))
             self.running = false
+            if self.releaseWhenDone {
+                self.releaseWhenDone = false
+                self.releaseWebView()
+            }
         }
     }
 
-    /// 窗口关了：没在跑就把 WebView 放掉。
+    /// 窗口关了：没在跑就把 WebView 放掉；正在跑就等跑完再放。
     func windowClosed() {
-        guard !running else { return }
+        guard !running else {
+            releaseWhenDone = true
+            return
+        }
+        releaseWebView()
+    }
+
+    /// 窗口又打开了：检测中关窗口时记下的「跑完再放」作废。
+    func windowOpened() {
+        releaseWhenDone = false
+    }
+
+    private func releaseWebView() {
         webrtc?.stop()
         webrtc = nil
     }

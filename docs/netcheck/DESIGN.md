@@ -64,9 +64,12 @@ Modules/NetCheck/
 1. `GET https://api.ipapi.is/[?key=]` → IPv4。认两种回包：不带 key 的（2026-09-01 起
    没有 `is_datacenter` 等判定，`asn` 是 `"AS15169 Google LLC"` 字符串）与带 key 的（`asn` / `location` 是对象）。
    没有机房判定时退回内置的云厂商 ASN 表（只用来打「机房」小标签和判断「同一家」）
-2. `GET https://api6.ipify.org`：只有 AAAA 记录。连不上 = 没有 IPv6（两者在客户端分不开）；连上了再 `?q=<v6>` 查归属
-3. DNS：`GET https://bash.ws/id` 拿 id（只收字母数字）→ 后台线程 `getaddrinfo("<i>.<id>.bash.ws")` × N
-   （走系统解析器，正是要测的那条路）→ `GET https://bash.ws/dnsleak/test/<id>?json=2`，只收 `dns` 与 `error` 记录。
+2. `GET https://api6.ipify.org`：只有 AAAA 记录。连接立刻失败（没有 IPv6 路由、找不到 / 连不上；没有 IPv6 的 Mac 上
+   URLSession 0.02 秒就报 -1009）= 没有；超时、TLS 出错、服务回错 = 没测出来，格子里写原因（`NetCheckLogic.meansNoIPv6`）。
+   连上了再 `?q=<v6>` 查归属
+3. DNS：`GET https://bash.ws/id` 拿 id（只收字母数字）→ `getaddrinfo("<i>.<id>.bash.ws")` × N 在后台**并发**发出
+   （走系统解析器，正是要测的那条路），整段最多等 10 秒，到点用已经回来的继续、没回来的不等（`NetCheckParallel`）
+   → `GET https://bash.ws/dnsleak/test/<id>?json=2`，只收 `dns` 与 `error` 记录。
    回 `error`（一台解析器都没来）那一行写「没测出来」
 4. WebRTC（见 4.2）；拿到的公网地址和 IPv4 / IPv6 那一行都不同时，`?q=<地址>` 另查归属，最多 3 个，查不到就只显示地址
 5. `TimeZone.current.identifier`
@@ -89,6 +92,8 @@ macOS 没有公开的 WebRTC API，借 WebKit 的浏览器实现，做法照搬�
   内网地址（含 `100.64.0.0/10`，Tailscale 的地址在这里）不列，也不另外提示。一个公网地址都没有时写「网页没拿到公网地址」
 
 STUN 服务器默认 `stun:stun.l.google.com:19302`，设置里可改。
+
+检测中关掉窗口不打断检测；WebView 在检测跑完时放掉（窗口在这之前又打开了就留着）。
 
 ### 4.3 界面
 

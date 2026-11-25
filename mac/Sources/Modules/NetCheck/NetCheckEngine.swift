@@ -17,25 +17,42 @@ struct NetCheckEngine {
         return URLSession(configuration: config)
     }()
 
-    /// GET，返回正文。连不上、超时、非 2xx 都抛 `NetCheckFailure`。
-    private func get(_ urlString: String) async throws -> String {
+    /// 服务回了非 2xx。
+    private struct HTTPStatusError: Error {
+        let host: String
+        let status: Int
+    }
+
+    /// GET，返回正文。抛原始的错（`URLError`、`HTTPStatusError`；地址不对是 `NetCheckFailure`）：IPv6 要据此分「没有」和「没测出来」。
+    private func fetch(_ urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else {
             throw NetCheckFailure(L("netcheck.error.badURL \(urlString)"))
         }
         var request = URLRequest(url: url)
         request.setValue("Baobox-NetCheck", forHTTPHeaderField: "User-Agent")
-        let fetched: (Data, URLResponse)
-        do {
-            fetched = try await Self.session.data(for: request)
-        } catch {
-            let host = url.host ?? urlString
-            throw NetCheckFailure(L("netcheck.error.unreachable \(host) \(error.localizedDescription)"))
-        }
-        let (data, response) = fetched
+        let (data, response) = try await Self.session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw NetCheckFailure(L("netcheck.error.status \(url.host ?? urlString) \(http.statusCode)"))
+            throw HTTPStatusError(host: url.host ?? urlString, status: http.statusCode)
         }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// GET，返回正文。连不上、超时、非 2xx 都抛 `NetCheckFailure`（给人看的原因）。
+    private func get(_ urlString: String) async throws -> String {
+        do {
+            return try await fetch(urlString)
+        } catch {
+            throw Self.failure(error, urlString)
+        }
+    }
+
+    private static func failure(_ error: Error, _ urlString: String) -> NetCheckFailure {
+        if let failure = error as? NetCheckFailure { return failure }
+        if let status = error as? HTTPStatusError {
+            return NetCheckFailure(L("netcheck.error.status \(status.host) \(status.status)"))
+        }
+        let host = URL(string: urlString)?.host ?? urlString
+        return NetCheckFailure(L("netcheck.error.unreachable \(host) \(error.localizedDescription)"))
     }
 
     /// ipapi.is 的地址：`q=<ip>` 与 `key=<key>`，没有就不带。
@@ -63,9 +80,16 @@ struct NetCheckEngine {
         }
     }
 
-    /// IPv6 出口：连得上纯 IPv6 的服务就有，连不上就当没有（这正是不会漏的那种情况）。
+    /// IPv6：连得上纯 IPv6 的服务就有。连接立刻失败（没有 IPv6 路由、找不到 / 连不上）= 没有；
+    /// 超时、服务回错 = 没测出来（`NetCheckLogic.meansNoIPv6`）。
     func ipv6Exit() async -> Result<NetCheckIPInfo?, NetCheckFailure> {
-        guard let body = try? await get(NetCheckSettings.ipv6Endpoint) else { return .success(nil) }
+        let body: String
+        do {
+            body = try await fetch(NetCheckSettings.ipv6Endpoint)
+        } catch {
+            if NetCheckLogic.meansNoIPv6(error) { return .success(nil) }
+            return .failure(Self.failure(error, NetCheckSettings.ipv6Endpoint))
+        }
         let ip = body.trimmingCharacters(in: .whitespacesAndNewlines)
         // 只认一个真正的 IPv6 地址：回了 IPv4（服务被换成了双栈的）或一页 HTML（门户页）都测不了
         guard NetCheckLogic.ipv6Bytes(ip) != nil else {
@@ -96,19 +120,18 @@ struct NetCheckEngine {
         }
     }
 
-    /// 用系统解析器（getaddrinfo → mDNSResponder）逐个解析。结果不要紧，要的是查询发出去了。
+    /// 用系统解析器（getaddrinfo → mDNSResponder）并发解析，整段最多等 10 秒：到点就去取结果，没回来的不等
+    /// （它们在后台自己结束）。结果不要紧，要的是查询发出去了。
     private static func resolve(_ hosts: [String]) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .utility).async {
-                for host in hosts {
-                    var result: UnsafeMutablePointer<addrinfo>?
-                    if getaddrinfo(host, nil, nil, &result) == 0, let result {
-                        freeaddrinfo(result)
-                    }
+        let jobs: [@Sendable () -> Void] = hosts.map { host in
+            {
+                var result: UnsafeMutablePointer<addrinfo>?
+                if getaddrinfo(host, nil, nil, &result) == 0, let result {
+                    freeaddrinfo(result)
                 }
-                continuation.resume()
             }
         }
+        _ = await NetCheckParallel.run(jobs, deadline: NetCheckSettings.dnsProbeDeadline)
     }
 
     static var systemTimezone: String? {
