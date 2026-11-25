@@ -83,6 +83,8 @@ final class LauncherController {
         apps.start()
         usage.load()
         fileSources.activate()
+        // 一次性提醒（PR 10）：后台读回、补响过了点的、定下一条的计时器。
+        LauncherReminderCenter.shared.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstPrewarmDelay) { [weak self] in
             MainActor.assumeIsolated { self?.prewarm() }
         }
@@ -101,6 +103,7 @@ final class LauncherController {
     /// 模块 willTerminate：同步写掉没落盘的使用记录。
     func willTerminate() {
         usage.flush()
+        LauncherReminderCenter.shared.flush()
         LauncherFocus.cancel(reason: "quitting")
         apps.stop()
         paths.cancel()

@@ -320,7 +320,9 @@ final class LauncherEngine {
                                           sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:],
                                           groupLimits: query.isUnscoped ? Self.unscopedGroupLimits : [:]).items
         }
-        var rows: [LauncherRow] = instants.prefix(calculationCount).map(\.row)
+        // 最前面：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒（PR 10；和计算结果不会同时有）。
+        var rows: [LauncherRow] = suggestions.top.map(\.row)
+        rows += instants.prefix(calculationCount).map(\.row)
         // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。
         rows += files.pinned.map(\.row)
         rows += suggestions.leadingRows

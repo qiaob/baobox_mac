@@ -45,6 +45,8 @@ struct LauncherSuggestions {
     var leading: [Leading] = []
     /// 排在普通结果之后的兜底建议。
     var trailing: [LauncherSuggestion] = []
+    /// 排在所有行之前的（计算结果那个位置，PR 10）：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒。
+    var top: [LauncherSuggestion] = []
 
     var leadingRows: [LauncherRow] { leading.map(\.row) }
 
@@ -56,9 +58,9 @@ struct LauncherSuggestions {
         }
     }
 
-    /// 动作类的行（对应建议 + 兜底建议）。
+    /// 动作类的行（最前面的、对应建议、兜底建议）。
     var actions: [LauncherSuggestion] {
-        leading.compactMap { entry in
+        top + leading.compactMap { entry in
             if case .action(let suggestion) = entry { return suggestion }
             return nil
         } + trailing
@@ -72,9 +74,15 @@ enum LauncherSuggestionProvider {
     static func suggestions(for query: LauncherQuery, textActions: [LauncherCatalogCommand],
                             hasCalculation: Bool, hasRecognition: Bool, placed: LauncherPlacedText? = nil,
                             records: LauncherUsageRecords, now: Date) -> LauncherSuggestions {
+        // 认「带时间的句子」用的「现在」、日历、时区（PR 10）：日历和时区跟系统，同计算引擎。
+        let clock = LauncherCalcContext(now: now, calendar: .current, timeZone: .current, locale: L10n.locale)
         let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition,
-                                                 placed: placed)
+                                                 placed: placed, clock: clock)
         var suggestions = LauncherSuggestions()
+        suggestions.top = plan.top.compactMap { topRow($0, now: now) }
+        if plan.showsReminders {
+            suggestions.top += pendingReminderRows(now: now)
+        }
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {
             // 对这段文字适用的文字动作：类别对得上，模块的 `appliesTo` 也说行（PR 10）。先看类别 —— `appliesTo` 可能要跑一遍正则。
@@ -94,6 +102,42 @@ enum LauncherSuggestionProvider {
                                                         records: records, now: now, limit: plan.rankedFallbackLimit)
         }
         return suggestions
+    }
+
+    // MARK: - 提醒（PR 10，§5.6）
+
+    /// 带时间的句子：「14:35 提醒我：取快递」（今天以外的带日期），右侧「提醒」；⏎ 设好，回执「已设好：今天 14:35 提醒你取快递」。
+    private static func topRow(_ suggestion: LauncherLeadingSuggestion, now: Date) -> LauncherSuggestion? {
+        guard case .reminder(let draft) = suggestion else { return nil }
+        let when = LauncherReminderText.when(draft.date, now: now)
+        let event = LauncherSuggestionText.quote(draft.text, maxLength: LauncherSuggestionText.leadingQuoteLength)
+        let row = LauncherRow(id: "reminder/new", title: L("launcher.reminder.row \(when) \(event)"),
+                              source: L("launcher.reminder.source"), icon: .symbol("alarm"))
+        return LauncherSuggestion(row: row, usageKey: nil, action: .run {
+            let reminder = LauncherReminderCenter.shared.add(draft)
+            let at = LauncherReminderText.when(reminder.date, now: Date(), alwaysDay: true)
+            LauncherController.toast(L("launcher.reminder.toast.set \(at) \(LauncherSuggestionText.quote(reminder.text, maxLength: 40))"))
+        })
+    }
+
+    /// 输入「提醒」/「reminders」：每条还没到点的提醒一行（「14:35 取快递」，右侧「提醒」）；⏎ 两次取消。
+    private static func pendingReminderRows(now: Date) -> [LauncherSuggestion] {
+        LauncherReminderCenter.shared.pending.map { reminder in
+            let when = LauncherReminderText.when(reminder.date, now: now)
+            let event = LauncherSuggestionText.quote(reminder.text, maxLength: LauncherSuggestionText.leadingQuoteLength)
+            let row = LauncherRow(id: "reminder/\(reminder.id)", title: L("launcher.reminder.listRow \(when) \(event)"),
+                                  source: L("launcher.reminder.source"), icon: .symbol("alarm"))
+            let id = reminder.id
+            let text = reminder.text
+            return LauncherSuggestion(
+                row: row, usageKey: nil,
+                action: .run {
+                    guard LauncherReminderCenter.shared.cancel(id: id) else { return }
+                    LauncherController.toast(L("launcher.reminder.toast.cancelled \(LauncherSuggestionText.quote(text, maxLength: 40))"))
+                },
+                confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.cancelReminder"),
+                                                   object: L("launcher.reminder.listRow \(when) \(reminder.text)")))
+        }
     }
 
     /// 排在对应建议后面的文字动作（`traits.leading`）：标题就是命令名（输入已经在上一行写着了），右侧是所属工具名；不记使用。
