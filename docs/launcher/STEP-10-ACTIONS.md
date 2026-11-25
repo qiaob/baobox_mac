@@ -144,3 +144,5 @@ AI 理解一句话；往日历里写日程；⌘K；完整设置页；系统设�
 9. **提醒事由切错**：时间后面紧跟「前 / 之前 / 以前」→ 照那个时刻提醒，事由去掉这个词（「下午3点前交报告」→ 15:00「交报告」）。时间段（「3点到5点开会」「3点-5点」「3点至5点」）→ 按开始时刻，事由去掉后一个时刻和连接词（→「开会」）。「明天6点起床」按 18:00 是现有规则，不改（行上写着具体时刻）。
 10. **取消一条已经响过的提醒**：回执「这条提醒已经响过了」。
 11. **`launcherCommands()` 每次呼出被调 4 次**：Claude / Codex 模块已有内存里的「是否安装」状态就用，没有就不动（不强求）。
+
+实现结果（2026-11-25）：1–10 照上面做了（单元测试见 `LauncherConfirmTests`、`LauncherShellCommandTests`、`LauncherShellHandoffTests`、`LauncherReminderParserTests`、`LauncherCommandReminderPlanTests`）。11 没改：Claude Code、Codex 两个模块都没有内存里的「CLI 装没装」状态（已有的 `isInstalled` 是状态栏 / 完成通知钩子装没装），按决定不动。
