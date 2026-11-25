@@ -304,7 +304,6 @@ struct NetSpeedLatencyResult: Equatable {
     /// 秒
     let median: TimeInterval
     let jitter: TimeInterval?
-    let count: Int
 }
 
 /// 测速服务器与出口：`/meta` 给的。
@@ -315,8 +314,6 @@ struct NetSpeedServer: Equatable {
     var asn: Int?
     /// 出口运营商 / 机房名
     var organization: String = ""
-    var city: String = ""
-    var country: String = ""
 
     /// 「Frankfurt (FRA)」；什么都没有时 nil。
     var node: String? {
@@ -370,8 +367,6 @@ enum NetSpeedMeta {
         }
         server.asn = asn(root["asn"])
         server.organization = string(root["asOrganization"])
-        server.city = string(root["city"])
-        server.country = string(root["country"])
         guard server.node != nil || server.exit != nil else { return nil }
         return server
     }

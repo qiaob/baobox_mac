@@ -201,11 +201,15 @@ enum NetCheckCompare {
             votes.append(Vote(aspect: aspect, group: group, key: key, row: rows.count, line: line, column: column))
         }
 
-        /// IPv4 / IPv6 那一行，以及 WebRTC 里借用的那一条：地址、国家、归属三格都参加比较。
-        func infoLine(_ info: NetCheckIPInfo, line: Int) -> NetCheckLine {
+        /// IPv4 / IPv6 那一行、WebRTC 另查到的那一条：地址、国家、归属三格都参加比较。
+        /// `samePlaceAsRow`：WebRTC 的地址就是 IPv4 / IPv6 那一行的（国家、归属借用那一行的）——同一个地址是同一个观测，
+        /// 不再为国家、归属多算一票，只有地址参加比较。
+        func infoLine(_ info: NetCheckIPInfo, line: Int, samePlaceAsRow: Bool = false) -> NetCheckLine {
             if let address = addressKey(info.ip) { vote(.address, group: address.group, address.key, line: line, .address) }
-            vote(.country, countryKey(info.country, code: info.countryCode), line: line, .country)
-            vote(.owner, ownerKey(info.asn), line: line, .owner)
+            if !samePlaceAsRow {
+                vote(.country, countryKey(info.country, code: info.countryCode), line: line, .country)
+                vote(.owner, ownerKey(info.asn), line: line, .owner)
+            }
             return NetCheckLine(address: NetCheckCell(.text(info.ip)),
                                 country: NetCheckCell(place(city: info.city, country: info.country, code: info.countryCode)),
                                 owner: NetCheckCell(owner(name: ownerName(info), asn: info.asn)),
@@ -254,12 +258,12 @@ enum NetCheckCompare {
                     var lines: [NetCheckLine] = []
                     for address in addresses {
                         let index = lines.count
-                        // 和 IPv4 / IPv6 那一行相同：国家、归属用那一行的；不同：用另查的
-                        let source = known.first { NetCheckLogic.sameAddress($0.ip, address) }
-                            ?? o.webrtcLookups.first { NetCheckLogic.sameAddress($0.key, address) }?.value
+                        // 和 IPv4 / IPv6 那一行相同：国家、归属用那一行的（不另算一票）；不同：用另查的
+                        let borrowed = known.first { NetCheckLogic.sameAddress($0.ip, address) }
+                        let source = borrowed ?? o.webrtcLookups.first { NetCheckLogic.sameAddress($0.key, address) }?.value
                         if var info = source {
                             info.ip = address
-                            lines.append(infoLine(info, line: index))
+                            lines.append(infoLine(info, line: index, samePlaceAsRow: borrowed != nil))
                         } else {
                             // 没查到：地址照样参加地址的比较，国家和归属不参加
                             if let key = addressKey(address) { vote(.address, group: key.group, key.key, line: index, .address) }

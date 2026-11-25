@@ -44,7 +44,6 @@ struct NetCheckResolver: Equatable {
     var ip: String
     var asn: Int?
     var network: String = ""
-    var city: String = ""
     var country: String = ""
     /// bash.ws 给的两位国家代码（小写，如 `us`）；没有是空串
     var countryCode: String = ""
@@ -98,7 +97,6 @@ struct NetCheckCandidate: Equatable {
     let kind: NetCheckCandidateKind
     /// IP，或浏览器混淆过的 `xxxx.local`
     let address: String
-    let transport: String
 
     var isMDNS: Bool { address.lowercased().hasSuffix(".local") }
 }
@@ -224,7 +222,6 @@ enum NetCheckLogic {
                 let org = string(record["org"])
                 result.resolvers.append(NetCheckResolver(ip: string(record["ip"]), asn: asn,
                                                          network: org.isEmpty ? fromASN : org,
-                                                         city: string(record["city_name"]),
                                                          country: string(record["country_name"]),
                                                          countryCode: string(record["country"])))
             case "error":
@@ -255,7 +252,7 @@ enum NetCheckLogic {
         }
         var address = String(fields[4])
         address = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return NetCheckCandidate(kind: kind, address: address, transport: fields[2].lowercased())
+        return NetCheckCandidate(kind: kind, address: address)
     }
 
     // MARK: 地址
@@ -326,13 +323,6 @@ enum NetCheckLogic {
         }
     }
 
-    /// 两个 ASN 是不是同一家：号码相同，或者在云厂商表里是同一家
-    /// （Google 的 15169 / 396982、AWS 的 16509 / 14618 常常一个出 IPv4、一个出 IPv6）。
-    static func sameNetwork(_ a: Int, _ b: Int) -> Bool {
-        if a == b { return true }
-        guard let x = knownHosting(a), let y = knownHosting(b) else { return false }
-        return x == y
-    }
 }
 
 // MARK: - 并发、有总期限

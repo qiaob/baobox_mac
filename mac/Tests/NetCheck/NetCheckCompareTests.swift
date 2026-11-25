@@ -16,7 +16,7 @@ final class NetCheckCompareTests: XCTestCase {
     /// 默认是 Google（公共 DNS，国家不参加比较）；要参加比较的用运营商的 ASN。
     private func resolver(_ ip: String, country: String = "Singapore", code: String = "", asn: Int? = 15169,
                           network: String = "Google LLC") -> NetCheckResolver {
-        NetCheckResolver(ip: ip, asn: asn, network: network, city: "", country: country, countryCode: code)
+        NetCheckResolver(ip: ip, asn: asn, network: network, country: country, countryCode: code)
     }
 
     private func srflx(_ address: String) -> String {
@@ -141,13 +141,15 @@ final class NetCheckCompareTests: XCTestCase {
     // MARK: - 归属
 
     func testOwnerDiffers() {
-        // IPv6 走的是另一家（本地运营商），国家一样：只有 IPv6 的归属那一格红（IPv4 和 WebRTC 借用的那一条是同一家，2 比 1）
+        // IPv6 走的是另一家（本地运营商），国家一样：归属 1 比 1，IPv4 和 IPv6 的归属都红（WebRTC 的地址就是 IPv4，不另算一票）
         var o = clean()
         o.ipv6 = .success(info(v6, asn: 4657, network: "StarHub Ltd"))
         let table = NetCheckCompare.table(o)
         XCTAssertEqual(table.conclusion, .inconsistent([.owner]))
         let ipv6 = row(table, .ipv6)?.lines.first
         XCTAssertEqual(ipv6?.owner.mismatch, true)
+        XCTAssertEqual(row(table, .ipv4)?.lines.first?.owner.mismatch, true)
+        XCTAssertEqual(row(table, .webrtc)?.lines.first?.owner.mismatch, false, "借用的那一条不参加归属的比较")
         XCTAssertEqual(ipv6?.country.mismatch, false)
         XCTAssertEqual(ipv6?.address.mismatch, false, "地址两族分开比：IPv6 只有一个值")
     }
@@ -521,7 +523,7 @@ final class NetCheckCompareTests: XCTestCase {
     }
 
     func testCarrierDNSInAnotherCountryIsInconsistent() {
-        // 出口在新加坡，DNS 却是一组中国运营商的：不一致，那一组的国家红
+        // 出口在新加坡，DNS 却是一组中国运营商的：不一致，那一组的国家红（只有两个值，一边一个：IPv4 的国家也红）
         var o = clean()
         o.dns = .success(NetCheckDNSResult(resolvers: [
             resolver("202.96.128.86", country: "China", code: "cn", asn: 4134, network: "China Telecom"),
@@ -533,7 +535,8 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertEqual(line?.country.mismatch, true)
         XCTAssertEqual(line?.country.muted, false)
         XCTAssertEqual(line?.flags, [])
-        XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, false, "IPv4 和 WebRTC 两票对一票")
+        XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, true, "WebRTC 的地址就是 IPv4，不另算一票：1 比 1")
+        XCTAssertEqual(row(table, .webrtc)?.lines.first?.country.mismatch, false)
     }
 
     func testOnlyCarrierDNSIsComparedWhenMixedWithPublicDNS() {
@@ -560,5 +563,39 @@ final class NetCheckCompareTests: XCTestCase {
         for asn in [16509, 45102, 4134, 9506, 396982] {
             XCTAssertNil(NetCheckLogic.publicDNS(asn), "AS\(asn)")
         }
+    }
+
+    // MARK: - WebRTC 和 IPv4 / IPv6 是同一个地址时不多算一票（验证者发现，COMPARE.md §2）
+
+    func testWebRTCSameAsIPv4DoesNotTipTheMajority() {
+        // IPv4 在新加坡、IPv6 在日本，WebRTC 的地址就是 IPv4：国家 1 比 1，两个都红（不是只红 IPv6）
+        var o = clean()
+        o.ipv6 = .success(info(v6, country: "Japan", city: "Tokyo", timezone: "Asia/Tokyo"))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, true)
+        XCTAssertEqual(row(table, .ipv6)?.lines.first?.country.mismatch, true)
+        let webrtc = row(table, .webrtc)?.lines.first
+        XCTAssertEqual(webrtc?.country.mismatch, false, "借用的国家不参加比较，也就不会红")
+        XCTAssertEqual(webrtc?.country.value, .place(code: "SG", country: "Singapore", city: "Singapore"), "照样显示")
+        // 地址照样参加：和 IPv4 一样，一致
+        XCTAssertEqual(webrtc?.address.mismatch, false)
+        // 没有 WebRTC 时结果一样
+        o.webrtc = nil
+        let without = NetCheckCompare.table(o)
+        XCTAssertEqual(row(without, .ipv4)?.lines.first?.country.mismatch, true)
+        XCTAssertEqual(row(without, .ipv6)?.lines.first?.country.mismatch, true)
+    }
+
+    func testWebRTCLookedUpAddressStillCounts() {
+        // 地址不同、另查到的：国家、归属照样各算一票（这是独立的观测）
+        var o = clean()
+        o.ipv6 = .success(info(v6, country: "Japan", city: "Tokyo"))
+        o.webrtc = .success([srflx(v4Other)])
+        o.webrtcLookups = [v4Other: info(v4Other)]
+        let table = NetCheckCompare.table(o)
+        // 国家：新加坡 2（IPv4、WebRTC 另查）比日本 1 —— 只有 IPv6 红
+        XCTAssertEqual(row(table, .ipv4)?.lines.first?.country.mismatch, false)
+        XCTAssertEqual(row(table, .webrtc)?.lines.first?.country.mismatch, false)
+        XCTAssertEqual(row(table, .ipv6)?.lines.first?.country.mismatch, true)
     }
 }

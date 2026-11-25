@@ -227,7 +227,7 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
 
     private func finishLatency() {
         if let median = NetSpeedLatency.median(pings) {
-            latency = .success(NetSpeedLatencyResult(median: median, jitter: NetSpeedLatency.jitter(pings), count: pings.count))
+            latency = .success(NetSpeedLatencyResult(median: median, jitter: NetSpeedLatency.jitter(pings)))
         } else {
             latency = .failure(latencyFailure ?? NetSpeedFailure(L("netcheck.speed.error.noData")))
         }

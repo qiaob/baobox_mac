@@ -101,7 +101,6 @@ final class NetCheckLogicTests: XCTestCase {
         let c = NetCheckLogic.parseCandidate(srflxHome)
         XCTAssertEqual(c?.kind, .serverReflexive)
         XCTAssertEqual(c?.address, "82.66.115.249")
-        XCTAssertEqual(c?.transport, "udp")
         XCTAssertEqual(NetCheckLogic.parseCandidate(hostMDNS)?.isMDNS, true)
         XCTAssertNil(NetCheckLogic.parseCandidate("candidate:1 1 udp 1 1.2.3.4 5 typ weird"))
         XCTAssertNil(NetCheckLogic.parseCandidate("not a candidate"))
@@ -119,14 +118,6 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertFalse(NetCheckLogic.isPublic("256.1.1.1"))
         XCTAssertTrue(NetCheckLogic.sameAddress("2001:db8::1", "2001:0db8:0:0::1"))
         XCTAssertFalse(NetCheckLogic.sameAddress("1.2.3.4", "1.2.3.5"))
-    }
-
-    func testSameNetwork() {
-        XCTAssertTrue(NetCheckLogic.sameNetwork(15169, 15169))
-        XCTAssertTrue(NetCheckLogic.sameNetwork(15169, 396982), "Google 的两个 ASN 算同一家")
-        XCTAssertTrue(NetCheckLogic.sameNetwork(16509, 14618), "AWS 的两个 ASN 算同一家")
-        XCTAssertFalse(NetCheckLogic.sameNetwork(15169, 16509))
-        XCTAssertFalse(NetCheckLogic.sameNetwork(4657, 9506))
     }
 
     // MARK: IPv6：没有 / 没测出来
