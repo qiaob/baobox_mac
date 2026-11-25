@@ -44,6 +44,7 @@ final class LauncherCoreModelTests: XCTestCase {
     private struct FakeSource: LauncherSearchable {
         let entries: [LauncherEntry]
         var launcherSourceID: String { "clipboard" }
+        var launcherSourceName: String { "剪贴板" }
         func launcherEntries() -> [LauncherEntry] { entries }
     }
 
@@ -71,5 +72,51 @@ final class LauncherCoreModelTests: XCTestCase {
         entries.first?.primary()
         entries.last?.actions.last?.run()
         XCTAssertEqual(log, ["paste", "delete"])
+    }
+
+    // MARK: - LauncherEntryText
+
+    func testEntryTitleIsTheFirstLineAndSearchTextIsTheHead() {
+        let parts = LauncherEntryText.parts("\n\n   docker run -it   \n  ubuntu bash\n\n")
+        XCTAssertEqual(parts.title, "docker run -it")
+        XCTAssertEqual(parts.searchText, "docker run -it   \n  ubuntu bash")
+        XCTAssertTrue(parts.searchText.hasPrefix(parts.title))
+    }
+
+    func testEntryTextLimits() {
+        let long = String(repeating: "长", count: 500)
+        let parts = LauncherEntryText.parts(long)
+        XCTAssertEqual(parts.title.count, LauncherEntryText.maxTitleLength)
+        XCTAssertEqual(parts.searchText.count, LauncherEntryText.maxSearchLength)
+        XCTAssertTrue(parts.searchText.hasPrefix(parts.title))
+
+        let small = LauncherEntryText.parts("abcdef\nxyz", maxTitleLength: 3, maxSearchLength: 8)
+        XCTAssertEqual(small.title, "abc")
+        XCTAssertEqual(small.searchText, "abcdef\nx")
+    }
+
+    func testEntryTextBlank() {
+        XCTAssertEqual(LauncherEntryText.parts("").title, "")
+        XCTAssertEqual(LauncherEntryText.parts(" \n\t ").searchText, "")
+    }
+
+    func testEntryTitleAlwaysStartsTheSearchText() {
+        for text in ["a", " a b ", "x\ny", "\t\tfoo   \n", "e\u{301}clair\nb", "😀 smile", String(repeating: "ab ", count: 100)] {
+            let parts = LauncherEntryText.parts(text)
+            XCTAssertTrue(parts.searchText.hasPrefix(parts.title), text)
+        }
+    }
+
+    func testRelativeBuckets() {
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: -5), 0, "将来的当成现在")
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 59), 0)
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 61), 60)
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 3_599), 59 * 60)
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 3_600 * 5 + 10), 3_600 * 5)
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 86_400 * 3 + 100), 86_400 * 3)
+        XCTAssertEqual(LauncherEntryText.relativeBucket(age: 86_400 * 65), 86_400 * 60)
+        // 一天里的几千条只落在几十个桶里。
+        let buckets = Set((0..<5000).map { LauncherEntryText.relativeBucket(age: Double($0) * 17) })
+        XCTAssertLessThan(buckets.count, 90)
     }
 }

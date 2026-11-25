@@ -138,7 +138,7 @@ final class ClipboardPanelViewModel: ObservableObject {
     var visibleActions: [FormatAction] {
         var actions = activeMatch?.actions ?? []
         if let item = selectedItem, item.type != .image, let text = item.text, !text.isEmpty {
-            actions += TextFormatRegistry.commonActions(for: text)
+            actions += CommonTextActions.all(for: text)
         }
         return actions
     }

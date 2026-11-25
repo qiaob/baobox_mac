@@ -12,6 +12,15 @@ final class ClipboardTool: ToolModule {
     let store = ClipboardStore()
     private lazy var monitor = ClipboardMonitor(store: store)
     private lazy var panelController = ClipboardPanelController(store: store, monitor: monitor)
+    /// 交给快速入口搜索的两个来源：剪贴板历史、文本片段（docs/launcher/TECH_DESIGN.md §3.2）。
+    private lazy var launcherSourceList: [any LauncherSearchable] = [
+        ClipboardLauncherSource(kind: .history, store: store, monitor: monitor),
+        ClipboardLauncherSource(kind: .snippets, store: store, monitor: monitor),
+    ]
+
+    func launcherSources() -> [any LauncherSearchable] {
+        launcherSourceList
+    }
 
     func willTerminate() {
         store.flushPendingSave()

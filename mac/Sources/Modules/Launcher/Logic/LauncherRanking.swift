@@ -12,11 +12,14 @@ struct LauncherCandidate: Equatable, Sendable {
     let sourceID: String
     /// 参与匹配的文本，取最高分。第一个是标题：同分时按它的长度排。
     let searchKeys: [LauncherSearchKey]
+    /// 条目的时间（剪贴板的复制时间、片段的创建时间）：同分时新的在前。App、命令没有（nil）。
+    let date: Date?
 
-    init(sourceID: String, entryID: String, searchKeys: [LauncherSearchKey]) {
+    init(sourceID: String, entryID: String, searchKeys: [LauncherSearchKey], date: Date? = nil) {
         self.key = Self.key(sourceID: sourceID, entryID: entryID)
         self.sourceID = sourceID
         self.searchKeys = searchKeys
+        self.date = date
     }
 
     static func key(sourceID: String, entryID: String) -> String {
@@ -74,18 +77,28 @@ enum LauncherRanking {
     static let aiPromotionScoreThreshold = LauncherMatch.substringScore
     /// ……且输入至少这么多个字符（「超过 6 个」）时，「让 AI 来办」提到第一行。
     static let aiPromotionMinimumLength = 7
+    /// 出厂的按来源最低匹配分：剪贴板要「包含这段字」（连续子串及以上），不认按顺序跳字 ——
+    /// 剪贴板是几百字的长文本，跳字几乎什么都能凑上（`72 f to c` 能在一段 JSON 里跳出来）。片段、App、命令照旧可以跳字。
+    static let defaultMinimumMatchScores = ["clipboard": LauncherMatch.substringMinimumScore]
 
     /// 排序。
     ///
     /// 次序：查询完全等于别名的那一行排第一；上次为这个输入选的那一行（且这次也命中、没隐藏）其次
     /// （两者是同一行时只出现一次）；其余按最终分从高到低，
-    /// 同分先看使用分（高的在前），再看标题长度（短的在前），最后按条目键的字典序 —— 结果与候选的先后无关。
+    /// 同分先看使用分（高的在前），再看时间（有时间的新的在前；没有时间的 —— App、命令 —— 排在有时间的前面），
+    /// 再看标题长度（短的在前），最后按条目键的字典序 —— 结果与候选的先后无关。
     /// 查询为空时所有候选都算命中（匹配分 0），等于按使用分排。
     /// - Parameters:
     ///   - query: 查询词（`LauncherQuery.text`，前缀已拆掉）。
     ///   - now: 当前时间，算使用分的衰减用。
+    ///   - sourceLimits: 某些来源最多出几行（没打前缀时剪贴板最多 5 行，免得把 App 和命令挤下去）；
+    ///     超出的跳过、由后面的行补上，`limit` 仍是总行数。
+    ///   - minimumMatchScores: 某些来源的最低匹配分，低于它的候选不出、也不算进最高匹配分（出厂：剪贴板不认跳字）。
+    ///     别名命中、「这个输入上次选了它」不受门槛限制；查询为空时不看门槛。
     static func rank(_ candidates: [LauncherCandidate], query: String, records: LauncherUsageRecords, now: Date,
-                     weights: LauncherSourceWeights = .standard, limit: Int = LauncherRanking.defaultLimit) -> LauncherRankingResult {
+                     weights: LauncherSourceWeights = .standard, limit: Int = LauncherRanking.defaultLimit,
+                     sourceLimits: [String: Int] = [:],
+                     minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores) -> LauncherRankingResult {
         let matchQuery = LauncherMatchQuery(query)
         let aliasKey = records.key(forAlias: query)
         let rememberedKey = records.rememberedKey(forInput: query)
@@ -103,6 +116,11 @@ enum LauncherRanking {
             } else {
                 continue
             }
+            let isRemembered = candidate.key == rememberedKey
+            if !isAliasMatch, !isRemembered, !matchQuery.isEmpty,
+               let minimum = minimumMatchScores[candidate.sourceID], match < minimum {
+                continue
+            }
             if checksHidden && records.isHidden(candidate.key) { continue }
             let usage = records.usageScore(for: candidate.key, now: now)
             let item = LauncherRankedItem(
@@ -112,15 +130,35 @@ enum LauncherRanking {
                 usageScore: usage,
                 score: Double(match) * weights.weight(for: candidate.sourceID) + usage,
                 isAliasMatch: isAliasMatch,
-                isRemembered: candidate.key == rememberedKey
+                isRemembered: isRemembered
             )
-            scored.append(Scored(item: item, titleLength: candidate.searchKeys.first?.length ?? 0))
+            scored.append(Scored(item: item, titleLength: candidate.searchKeys.first?.length ?? 0,
+                                 date: candidate.date ?? .distantFuture))
             best = max(best ?? match, match)
         }
 
         scored.sort(by: precedes)
-        let items = scored.prefix(max(0, limit)).map(\.item)
-        return LauncherRankingResult(items: items, bestMatchScore: best)
+        return LauncherRankingResult(items: top(scored, limit: limit, sourceLimits: sourceLimits), bestMatchScore: best)
+    }
+
+    /// 排好序的前 `limit` 行，每个来源不超过 `sourceLimits` 里给的行数。
+    private static func top(_ scored: [Scored], limit: Int, sourceLimits: [String: Int]) -> [LauncherRankedItem] {
+        let limit = max(0, limit)
+        guard !sourceLimits.isEmpty else { return scored.prefix(limit).map(\.item) }
+        var items: [LauncherRankedItem] = []
+        items.reserveCapacity(min(limit, scored.count))
+        var used: [String: Int] = [:]
+        for entry in scored {
+            guard items.count < limit else { break }
+            let sourceID = entry.item.sourceID
+            if let sourceLimit = sourceLimits[sourceID] {
+                let count = used[sourceID, default: 0]
+                guard count < sourceLimit else { continue }
+                used[sourceID] = count + 1
+            }
+            items.append(entry.item)
+        }
+        return items
     }
 
     /// 「让 AI 来办」要不要提到第一行：其余结果的最高匹配分低于 400 且输入超过 6 个字符（§5.2）。
@@ -140,6 +178,8 @@ enum LauncherRanking {
     private struct Scored {
         let item: LauncherRankedItem
         let titleLength: Int
+        /// 没有时间的记成 distantFuture：同分时排在有时间的前面（一个全序，排序结果确定）。
+        let date: Date
     }
 
     private static func precedes(_ a: Scored, _ b: Scored) -> Bool {
@@ -147,6 +187,7 @@ enum LauncherRanking {
         if a.item.isRemembered != b.item.isRemembered { return a.item.isRemembered }
         if a.item.score != b.item.score { return a.item.score > b.item.score }
         if a.item.usageScore != b.item.usageScore { return a.item.usageScore > b.item.usageScore }
+        if a.date != b.date { return a.date > b.date }
         if a.titleLength != b.titleLength { return a.titleLength < b.titleLength }
         return a.item.key < b.item.key
     }

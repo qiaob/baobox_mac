@@ -1,6 +1,11 @@
 import CoreGraphics
 import Foundation
 
+// 文本格式识别（docs/clipboard-text-tools/）：识别器、识别结果模型、注册表与开关。
+// 在 Core 里给两处共用：剪贴板预览区（徽章、表格、转换动作）和快速入口（输入像时间戳 / JWT / Base64 时直接给出转换结果，
+// docs/launcher/TECH_DESIGN.md §6.3）。剪贴板预览区专有的通用动作（编码下拉、二维码、钉卡片、大窗编辑）
+// 留在剪贴板模块的 `CommonTextActions`。
+
 // MARK: - 数据结构
 
 /// 表格里的一行（时间转换表、URL query、JWT 声明）。
@@ -82,6 +87,7 @@ enum TextToolLimits {
 /// 文本工具的开关。识别是主线程同步跑的，**关掉的识别器压根不参与检测**（在
 /// `detectAll` 里先 filter 再 detect），所以用户不需要的格式是真的零开销，
 /// 不是「跑完再藏起来」。
+/// 开关在剪贴板设置页里；快速入口走同一个 `detectAll`，关掉的格式在那边也不出。
 enum TextToolSettings {
     struct Descriptor {
         let id: String
@@ -167,12 +173,5 @@ enum TextFormatRegistry {
             .filter { TextToolSettings.isEnabled($0.id) }
             .sorted { $0.priority < $1.priority }
             .compactMap { $0.detect(trimmed) }
-    }
-
-    /// 对任何文本条目都出现的动作，排在格式专属动作之后。
-    /// 各通用动作的独立开关在 CommonTextActions 里逐个判断；这里只把总开关的关。
-    static func commonActions(for text: String) -> [FormatAction] {
-        guard TextToolSettings.isMasterEnabled else { return [] }
-        return CommonTextActions.all(for: text)
     }
 }

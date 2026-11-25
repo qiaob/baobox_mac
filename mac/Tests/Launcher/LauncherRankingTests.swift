@@ -13,8 +13,11 @@ final class LauncherRankingTests: XCTestCase {
     private func rank(_ candidates: [LauncherCandidate], _ query: String,
                       records: LauncherUsageRecords = LauncherUsageRecords(),
                       weights: LauncherSourceWeights = .standard,
-                      limit: Int = LauncherRanking.defaultLimit) -> LauncherRankingResult {
-        LauncherRanking.rank(candidates, query: query, records: records, now: now, weights: weights, limit: limit)
+                      limit: Int = LauncherRanking.defaultLimit,
+                      sourceLimits: [String: Int] = [:],
+                      minimumMatchScores: [String: Int] = LauncherRanking.defaultMinimumMatchScores) -> LauncherRankingResult {
+        LauncherRanking.rank(candidates, query: query, records: records, now: now, weights: weights, limit: limit,
+                             sourceLimits: sourceLimits, minimumMatchScores: minimumMatchScores)
     }
 
     private func records(_ build: (inout LauncherUsageRecords) -> Void) -> LauncherUsageRecords {
@@ -238,6 +241,166 @@ final class LauncherRankingTests: XCTestCase {
         XCTAssertEqual(result.keys, ["b/1", "a/1"])
     }
 
+    // MARK: - 时间（剪贴板、片段）
+
+    private func dated(_ sourceID: String, _ entryID: String, _ title: String, _ secondsAgo: TimeInterval) -> LauncherCandidate {
+        LauncherCandidate(sourceID: sourceID, entryID: entryID, searchKeys: [LauncherSearchKey(title, pinyin: false)],
+                          date: now.addingTimeInterval(-secondsAgo))
+    }
+
+    func testCandidateDateDefaultsToNil() {
+        XCTAssertNil(candidate("apps", "a", "Alpha").date)
+        XCTAssertNotNil(dated("clipboard", "1", "x", 0).date)
+    }
+
+    func testEqualScoresPutTheNewerEntryFirst() {
+        // 同一段文字复制过三次：同分时新的在前，不看条目键和标题长度。
+        let candidates = [
+            dated("clipboard", "a", "docker ps", 300),
+            dated("clipboard", "b", "docker ps", 10),
+            dated("clipboard", "c", "docker ps", 3_600),
+        ]
+        XCTAssertEqual(rank(candidates, "docker").keys, ["clipboard/b", "clipboard/a", "clipboard/c"])
+        for seed in 0..<10 {
+            var shuffled = candidates
+            var generator = LauncherSeededGenerator(seed: UInt64(seed))
+            shuffled.shuffle(using: &generator)
+            XCTAssertEqual(rank(shuffled, "docker").keys, ["clipboard/b", "clipboard/a", "clipboard/c"])
+        }
+    }
+
+    func testDateComesBeforeTitleLength() {
+        // 都是开头匹配且扣分一样（长度差都超过 100）：较长的那条更新，排前面。
+        let long = String(repeating: "x", count: 150)
+        let candidates = [
+            dated("clipboard", "old", "curl " + long, 600),
+            dated("clipboard", "new", "curl " + long + long, 5),
+        ]
+        let result = rank(candidates, "curl")
+        XCTAssertEqual(result.items.map(\.score), [result.items[0].score, result.items[0].score])
+        XCTAssertEqual(result.keys, ["clipboard/new", "clipboard/old"])
+    }
+
+    func testUndatedEntriesPrecedeDatedOnesAtEqualScore() {
+        // App 1000 × 0.7（权重改成和剪贴板一样）与剪贴板同分：没有时间的排在有时间的前面。
+        let candidates = [dated("clipboard", "1", "Notes", 1), candidate("apps", "notes", "Notes")]
+        let weights = LauncherSourceWeights(bySource: ["clipboard": 0.7, "apps": 0.7], other: 1)
+        XCTAssertEqual(rank(candidates, "notes", weights: weights).keys, ["apps/notes", "clipboard/1"])
+    }
+
+    func testUsageStillBeatsDate() {
+        let candidates = [dated("snippets", "old", "signature", 86_400 * 30), dated("snippets", "new", "signature", 1)]
+        let used = records { $0.recordUse(of: "snippets/old", at: now) }
+        XCTAssertEqual(rank(candidates, "signature", records: used).keys, ["snippets/old", "snippets/new"])
+    }
+
+    // MARK: - 每个来源最多几行
+
+    func testSourceLimitCapsOneSourceAndLetsOthersFill() {
+        var candidates = (0..<8).map { dated("clipboard", "\($0)", "notes \($0)", TimeInterval($0)) }
+        candidates.append(candidate("apps", "notes", "Notes"))
+        candidates.append(candidate("snippets", "s", "notes snippet"))
+        let result = rank(candidates, "notes", sourceLimits: ["clipboard": 5])
+        XCTAssertEqual(result.items.filter { $0.sourceID == "clipboard" }.count, 5)
+        XCTAssertEqual(result.keys.prefix(2), ["apps/notes", "snippets/s"])
+        XCTAssertEqual(result.keys.dropFirst(2), ["clipboard/0", "clipboard/1", "clipboard/2", "clipboard/3", "clipboard/4"],
+                       "留下的是最新的 5 条")
+        XCTAssertEqual(rank(candidates, "notes").items.filter { $0.sourceID == "clipboard" }.count, 8, "不传就不限")
+    }
+
+    func testSourceLimitKeepsTheTotalLimit() {
+        let candidates = (0..<10).map { dated("clipboard", "\($0)", "notes \($0)", TimeInterval($0)) }
+            + (0..<10).map { candidate("apps", "\($0)", "Panotes \($0)") }   // 中间的子串，分数低于剪贴板
+        let result = rank(candidates, "notes", limit: 8, sourceLimits: ["clipboard": 2])
+        XCTAssertEqual(result.items.count, 8)
+        XCTAssertEqual(result.items.filter { $0.sourceID == "clipboard" }.count, 2)
+        XCTAssertEqual(rank(candidates, "notes", limit: 0, sourceLimits: ["clipboard": 2]).items.count, 0)
+    }
+
+    func testSourceLimitZeroHidesThatSourceButBestScoreStillCountsIt() {
+        let candidates = [dated("clipboard", "1", "safari", 1), candidate("apps", "safari", "Safari browser")]
+        let result = rank(candidates, "safari", sourceLimits: ["clipboard": 0])
+        XCTAssertEqual(result.keys, ["apps/safari"])
+        XCTAssertEqual(result.bestMatchScore, 1000)
+    }
+
+    func testAliasRowCountsTowardsItsSourceLimit() {
+        let candidates = (0..<3).map { dated("clipboard", "\($0)", "token \($0)", TimeInterval($0)) }
+        let aliased = records { $0.setAlias("tk", for: "clipboard/2") }
+        let result = rank(candidates, "tk", records: aliased, sourceLimits: ["clipboard": 1])
+        XCTAssertEqual(result.keys, ["clipboard/2"])
+    }
+
+    // MARK: - 剪贴板不认跳字
+
+    /// 一段长剪贴板文本：`summarize notes` 只能按顺序跳字凑上，`meeting notes` 是连续出现的。
+    private let longClip = "please summarize the meeting notes from yesterday and send them to the team before friday"
+
+    func testSubstringMinimumIsTheLowestSubstringScore() {
+        XCTAssertEqual(LauncherMatch.substringMinimumScore, 300)
+        XCTAssertEqual(LauncherRanking.defaultMinimumMatchScores, ["clipboard": 300])
+        XCTAssertGreaterThan(LauncherMatch.substringMinimumScore, LauncherMatch.fuzzyScore, "跳字最高也到不了门槛")
+    }
+
+    func testClipboardNeedsTheQueryAsAContiguousRun() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        let fuzzy = LauncherMatch.score(LauncherMatchQuery("summarize notes"), in: candidates[0].searchKeys)
+        XCTAssertNotNil(fuzzy, "前提：跳字能中")
+        XCTAssertLessThan(fuzzy ?? 1000, LauncherMatch.substringMinimumScore, "前提：只有跳字能中")
+        XCTAssertTrue(rank(candidates, "summarize notes").items.isEmpty, "只有跳字能中：不出")
+        XCTAssertNil(rank(candidates, "summarize notes").bestMatchScore, "被门槛挡掉的也不算进最高匹配分")
+        XCTAssertEqual(rank(candidates, "meeting notes").keys, ["clipboard/1"], "包含这段字：出")
+        XCTAssertEqual(rank(candidates, "please").keys, ["clipboard/1"])
+    }
+
+    func testLengthPenalizedSubstringStillPassesTheBar() {
+        // 「notes」夹在一串字母中间（不是词首），文本又很长：连续子串扣满长度惩罚正好 300，仍然要出。
+        let text = String(repeating: "a", count: 150) + "bnotesb"
+        let candidates = [candidate("clipboard", "1", text)]
+        let result = rank(candidates, "notes")
+        XCTAssertEqual(result.keys, ["clipboard/1"])
+        XCTAssertEqual(result.items.first?.matchScore, LauncherMatch.substringMinimumScore)
+    }
+
+    func testOtherSourcesMayStillMatchFuzzily() {
+        let candidates = [
+            candidate("clipboard", "1", longClip),
+            candidate("snippets", "1", longClip),
+            candidate("apps", "vsc", "Visual Studio Code"),
+            candidate("commands", "x", "summarize every notes"),
+        ]
+        XCTAssertEqual(Set(rank(candidates, "summarize notes").keys), ["snippets/1", "commands/x"])
+        XCTAssertEqual(rank(candidates, "vsc").keys, ["apps/vsc"])
+    }
+
+    func testClipboardPrefixAppliesTheSameBar() {
+        let query = LauncherQuery.parse("c summarize notes")
+        XCTAssertEqual(query.sourceIDs, ["clipboard", "snippets"])
+        let pool = [candidate("clipboard", "1", longClip), candidate("snippets", "2", longClip)]
+            .filter { query.sourceIDs?.contains($0.sourceID) ?? true }
+        XCTAssertEqual(rank(pool, query.text).keys, ["snippets/2"], "`c ` 前缀下剪贴板照样只认包含")
+        XCTAssertEqual(Set(rank(pool, LauncherQuery.parse("c meeting notes").text).keys), ["clipboard/1", "snippets/2"])
+    }
+
+    func testRememberedChoiceAndAliasIgnoreTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        let remembered = records { $0.recordChoice("clipboard/1", forInput: "summarize notes", at: now) }
+        XCTAssertEqual(rank(candidates, "summarize notes", records: remembered).keys, ["clipboard/1"],
+                       "上次为这个输入选过它：照样出")
+        let aliased = records { $0.setAlias("sn", for: "clipboard/1") }
+        XCTAssertEqual(rank(candidates, "sn", records: aliased).keys, ["clipboard/1"])
+    }
+
+    func testEmptyQueryIgnoresTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip), candidate("apps", "a", "Alpha")]
+        XCTAssertEqual(Set(rank(candidates, "").keys), ["clipboard/1", "apps/a"])
+    }
+
+    func testCallerCanDropTheBar() {
+        let candidates = [candidate("clipboard", "1", longClip)]
+        XCTAssertEqual(rank(candidates, "summarize notes", minimumMatchScores: [:]).keys, ["clipboard/1"])
+    }
+
     // MARK: - 前 N 行与最高匹配分
 
     func testLimit() {
@@ -305,13 +468,14 @@ final class LauncherRankingTests: XCTestCase {
     }
 
     func testAIRowFromRankingResult() {
+        // 用片段：剪贴板不认跳字（见上），片段认。
         let candidates = [
             candidate("apps", "safari", "Safari"),
-            candidate("clipboard", "1", "please summarize the meeting notes from yesterday"),
+            candidate("snippets", "1", "please summarize the meeting notes from yesterday"),
         ]
         let query = "summarize notes"
         let result = rank(candidates, query)
-        XCTAssertEqual(result.keys, ["clipboard/1"], "只有跳字匹配")
+        XCTAssertEqual(result.keys, ["snippets/1"], "只有跳字匹配")
         XCTAssertLessThan(result.bestMatchScore ?? 0, 400)
         XCTAssertTrue(LauncherRanking.shouldPromoteAIRow(query: query, result: result))
 

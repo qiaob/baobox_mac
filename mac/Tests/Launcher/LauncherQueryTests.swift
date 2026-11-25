@@ -88,6 +88,38 @@ final class LauncherQueryTests: XCTestCase {
         XCTAssertEqual(parse("b foo"), query(nil, "b foo"))
     }
 
+    // MARK: - 一个前缀管几个来源
+
+    func testClipboardPrefixAlsoSearchesSnippets() {
+        let parsed = parse("c 签名")
+        XCTAssertEqual(parsed.sourceID, "clipboard")
+        XCTAssertEqual(parsed.sourceIDs, ["clipboard", "snippets"])
+        XCTAssertEqual(parsed.text, "签名")
+        XCTAssertFalse(parsed.isUnscoped)
+    }
+
+    func testOtherPrefixesSearchOnlyTheirOwnSource() {
+        XCTAssertEqual(parse("a Safari").sourceIDs, ["apps"])
+        XCTAssertEqual(parse("> 截图").sourceIDs, ["commands"])
+        XCTAssertEqual(parse("f 周报").sourceIDs, ["files"])
+    }
+
+    func testNoPrefixSearchesEverything() {
+        let parsed = parse("12*(3+4)")
+        XCTAssertNil(parsed.sourceID)
+        XCTAssertNil(parsed.sourceIDs)
+        XCTAssertTrue(parsed.isUnscoped)
+        XCTAssertTrue(parse("").isUnscoped)
+    }
+
+    func testCustomSourceGroups() {
+        let groups: [String: Set<String>] = ["meetings": ["meetings", "notes"], "apps": []]
+        let meeting = LauncherQuery.parse("m 站会", sourceGroups: groups)
+        XCTAssertEqual(meeting.sourceIDs, ["meetings", "notes"])
+        XCTAssertEqual(LauncherQuery.parse("a x", sourceGroups: groups).sourceIDs, ["apps"], "组里漏写自己也算上自己")
+        XCTAssertEqual(LauncherQuery.parse("c x", sourceGroups: groups).sourceIDs, ["clipboard"], "不在组表里就只有自己")
+    }
+
     // MARK: - 传入的前缀表
 
     func testCustomPrefixTable() {

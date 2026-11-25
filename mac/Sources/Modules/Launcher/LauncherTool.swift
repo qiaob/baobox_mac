@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// 快速入口（docs/launcher/）：一个快捷键呼出输入框，搜 App 和 Baobox 的命令，回车执行。
+/// 快速入口（docs/launcher/）：一个快捷键呼出输入框，搜 App、Baobox 的命令、剪贴板历史和文本片段，回车执行 / 粘贴；
+/// 输入算式、单位、日期，或像时间戳、JWT、Base64 的文字，结果排在最前，回车复制。
 /// 菜单只有一行「打开快速入口」；快捷键出厂是 ⌘Space（2026-11-24 用户定），在设置页或快捷键页可改。注册在第一个（它是总入口）。
 /// ⌘Space 被系统的 Spotlight 占着时注册不上、快捷键页标冲突：在系统设置里关掉 Spotlight 的快捷键后恢复默认即可（docs/launcher/TECH_DESIGN.md §9）。
 @MainActor
