@@ -39,12 +39,12 @@ final class LauncherReminderCenter {
         guard !loadRequested else { return }
         loadRequested = true
         let center = NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { LauncherReminderCenter.shared.recheck(reason: "wake") }
+        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recheck(reason: "wake") }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .NSSystemClockDidChange, object: nil,
-                                                                queue: .main) { _ in
-            MainActor.assumeIsolated { LauncherReminderCenter.shared.recheck(reason: "clock changed") }
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recheck(reason: "clock changed") }
         })
         let url = fileURL
         queue.async {
@@ -145,11 +145,10 @@ final class LauncherReminderCenter {
         timer?.invalidate()
         timer = nil
         guard loaded, let next = pending.first?.date else { return }
-        let timer = Timer(fire: max(next, Date()), interval: 0, repeats: false) { _ in
+        let timer = Timer(fire: max(next, Date()), interval: 0, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                let center = LauncherReminderCenter.shared
-                center.fireDue(now: Date())
-                center.reschedule()
+                self?.fireDue(now: Date())
+                self?.reschedule()
             }
         }
         timer.tolerance = Self.timerTolerance
