@@ -75,16 +75,37 @@ enum LauncherSuggestionProvider {
         var suggestions = LauncherSuggestions()
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {
+            // 对这段文字适用的文字动作：类别对得上，模块的 `appliesTo` 也说行（PR 10）。先看类别 —— `appliesTo` 可能要跑一遍正则。
+            let actions = textActions.filter { entry in
+                entry.command.isTextAction && !entry.command.suggestion.kinds.isDisjoint(with: kinds)
+                    && entry.command.applies(to: plan.text)
+            }
+            // 标了 `leading` 的（会议链接的「入会并开始会议记录」）紧跟在对应建议后面，不进兜底建议。
+            suggestions.leading += leadingActionRows(text: plan.text, kinds: kinds, textActions: actions)
             // 有歧义的网址的「打开」排在兜底建议最前面（翻译前面），占一个名额。
             let first = plan.fallbackLeading.flatMap { leadingRows($0, text: plan.text, inFallback: true) }
                 .compactMap { entry -> LauncherSuggestion? in
                     if case .action(let suggestion) = entry { return suggestion }
                     return nil
                 }
-            suggestions.trailing = first + fallbackRows(text: plan.text, kinds: kinds, textActions: textActions,
+            suggestions.trailing = first + fallbackRows(text: plan.text, kinds: kinds, textActions: actions,
                                                         records: records, now: now, limit: plan.rankedFallbackLimit)
         }
         return suggestions
+    }
+
+    /// 排在对应建议后面的文字动作（`traits.leading`）：标题就是命令名（输入已经在上一行写着了），右侧是所属工具名；不记使用。
+    private static func leadingActionRows(text: String, kinds: Set<LauncherTextKind>,
+                                          textActions: [LauncherCatalogCommand]) -> [LauncherSuggestions.Leading] {
+        let candidates = textActions.map { LauncherSuggestionCandidate(id: $0.command.id, traits: $0.command.suggestion) }
+        return LauncherSuggestionRanking.leadingOrder(candidates, kinds: kinds).compactMap { index in
+            let entry = textActions[index]
+            let command = entry.command
+            guard let parameter = command.textParameterName else { return nil }
+            let row = LauncherRow(id: "suggest/leading/\(command.id)", title: command.title, source: entry.toolName,
+                                  icon: .symbol(command.symbolName))
+            return .action(LauncherSuggestion(row: row, usageKey: nil, action: .run { command.run([parameter: .text(text)]) }))
+        }
     }
 
     // MARK: - 对应建议
@@ -132,9 +153,9 @@ enum LauncherSuggestionProvider {
 
     // MARK: - 兜底建议
 
-    private static func fallbackRows(text: String, kinds: Set<LauncherTextKind>, textActions: [LauncherCatalogCommand],
+    /// `textActions`：已经筛过的（文字动作、对这段文字适用）。
+    private static func fallbackRows(text: String, kinds: Set<LauncherTextKind>, textActions actions: [LauncherCatalogCommand],
                                      records: LauncherUsageRecords, now: Date, limit: Int) -> [LauncherSuggestion] {
-        let actions = textActions.filter { $0.command.isTextAction }
         let candidates = actions.map { LauncherSuggestionCandidate(id: $0.command.id, traits: $0.command.suggestion) }
             + [LauncherSuggestionRanking.webSearch, LauncherSuggestionRanking.findFiles]
         let quote = LauncherSuggestionText.quote(text)

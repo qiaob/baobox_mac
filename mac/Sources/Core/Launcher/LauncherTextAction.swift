@@ -28,7 +28,7 @@ enum LauncherTextKind: String, CaseIterable, Sendable {
 /// 一条文字动作作为建议时的属性：对哪些输入适用、默认排在哪。不是文字动作的命令用不到它。
 ///
 /// 优先级是档位，小的在前；快速入口自己的两条是「上网搜」30、「搜文件名」40。现在各模块用的档位：
-/// 10 翻译 / 学习，20 解释 / 总结，50 存为片段 / 钉成贴卡 / 二维码，60 润色。
+/// 10 翻译 / 学习，20 解释 / 总结，50 存为片段 / 钉成贴卡 / 二维码，60 润色（PR 10 起的见 docs/launcher/TECH_DESIGN.md §5.4 的表）。
 /// 同一档里用得多的在前，用得很多（7 次以上）的能往前挪三档；输入属于 `boostedKinds` 时直接排到所有档位前面。
 struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 对这几类输入适用（默认：任何文字）。
@@ -45,14 +45,19 @@ struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 默认记（和对应的命令同一个键）；每一行都只出现一次、以后用不上的（Claude Code 在等的会话，id 带会话）设 false ——
     /// 不然每执行一次就多一个永远用不上的键，还把会话 id 写进使用记录文件。文字 / 图片动作不看它。
     var recordsUsage: Bool
+    /// 文字动作：适用时不进兜底建议，排在最前的对应建议后面（网址的「打开」后面紧接着），不看使用记录、只按档位排 ——
+    /// 只给很确定的输入用（「是会议链接」→「入会并开始会议记录」，配合 `LauncherCommand.appliesTo`）。PR 10。
+    var leading = false
 
     init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,
-         boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil, recordsUsage: Bool = true) {
+         boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil, recordsUsage: Bool = true,
+         leading: Bool = false) {
         self.kinds = kinds
         self.priority = priority
         self.boostedKinds = boostedKinds
         self.imageTextPriority = imageTextPriority
         self.recordsUsage = recordsUsage
+        self.leading = leading
     }
 }
 
@@ -72,15 +77,24 @@ extension LauncherCommand {
         isTextAction ? parameters.first?.name : nil
     }
 
+    /// 这条文字动作对 `text` 适不适用：没写 `appliesTo` 就适用（类别由调用方先看）。
+    @MainActor
+    func applies(to text: String) -> Bool {
+        appliesTo?(text) ?? true
+    }
+
     /// 造一条文字动作：一个必填的文字参数，`run` 直接收到那段文字。
-    /// - Parameter hint: 写进提示词的参数说明（二期「一句话 → 命令」用）。
+    /// - Parameters:
+    ///   - hint: 写进提示词的参数说明（二期「一句话 → 命令」用）。
+    ///   - appliesTo: 对这段文字适不适用（类别之外再细一层，见 `LauncherCommand.appliesTo`）；nil = 适用。
     static func textAction(id: String, title: String, symbolName: String,
                            suggestion: LauncherSuggestionTraits = LauncherSuggestionTraits(),
                            hint: String = "要处理的文字",
+                           appliesTo: (@MainActor (String) -> Bool)? = nil,
                            run: @escaping @MainActor (String) -> Void) -> LauncherCommand {
         LauncherCommand(id: id, title: title, symbolName: symbolName,
                         parameters: [LauncherParameter(name: textParameterKey, kind: .text, required: true, hint: hint)],
-                        suggestion: suggestion) { arguments in
+                        suggestion: suggestion, appliesTo: appliesTo) { arguments in
             guard case .text(let text)? = arguments[textParameterKey] else { return }
             run(text)
         }

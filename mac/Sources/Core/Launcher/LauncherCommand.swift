@@ -60,6 +60,10 @@ struct LauncherCommand {
     /// 其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4、§5.5）。
     /// 例外：模块在 `launcherContextSuggestions()` 里交的情景建议也只看 `priority` —— 空着时按它排（小的在前，§5.6）。
     var suggestion = LauncherSuggestionTraits()
+    /// 文字动作对这段文字适不适用（PR 10，docs/launcher/TECH_DESIGN.md §5.4「适用性判断」）：类别（`suggestion.kinds`）
+    /// 之外再细一层，比如「是会议链接」「不超过命令行的长度上限」。nil = 适用。类别对得上才调；打字时每次按键都可能调：
+    /// 只能看这段文字和内存里的状态，不读盘、不联网、不阻塞。
+    var appliesTo: (@MainActor (String) -> Bool)? = nil
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void
 }

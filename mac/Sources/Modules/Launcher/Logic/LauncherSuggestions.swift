@@ -193,7 +193,10 @@ enum LauncherSuggestionRanking {
     static func order(_ candidates: [LauncherSuggestionCandidate], kinds: Set<LauncherTextKind>,
                       records: LauncherUsageRecords, now: Date, limit: Int = maxRows,
                       usageKeyPrefix: String = usageKeyPrefix) -> [Int] {
-        let applicable = candidates.indices.filter { !candidates[$0].traits.kinds.isDisjoint(with: kinds) }
+        // 标了 `traits.leading` 的不在这里：它们排在对应建议后面（`leadingOrder`）。
+        let applicable = candidates.indices.filter {
+            !candidates[$0].traits.leading && !candidates[$0].traits.kinds.isDisjoint(with: kinds)
+        }
         let keyed = applicable.map { index -> (index: Int, key: Double, base: Int) in
             let traits = candidates[index].traits
             let priority = traits.boostedKinds.isDisjoint(with: kinds) ? traits.priority : boostedPriority
@@ -206,6 +209,17 @@ enum LauncherSuggestionRanking {
             return a.index < b.index
         }
         return sorted.prefix(max(0, limit)).map(\.index)
+    }
+
+    /// 排在对应建议后面的文字动作（`traits.leading`，「入会并开始会议记录」排在「打开网址」后面）：适用于 `kinds` 的，
+    /// 按档位、再按传入的先后；不看使用记录（这一块的次序是固定的），不占兜底建议的名额。返回下标。
+    static func leadingOrder(_ candidates: [LauncherSuggestionCandidate], kinds: Set<LauncherTextKind>) -> [Int] {
+        candidates.indices
+            .filter { candidates[$0].traits.leading && !candidates[$0].traits.kinds.isDisjoint(with: kinds) }
+            .sorted { a, b in
+                let (pa, pb) = (candidates[a].traits.priority, candidates[b].traits.priority)
+                return pa != pb ? pa < pb : a < b
+            }
     }
 }
 
