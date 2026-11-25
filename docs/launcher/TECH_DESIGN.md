@@ -35,6 +35,7 @@ mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些�
   LauncherTextAction.swift                 输入的类别 LauncherTextKind、文字动作的建议属性 LauncherSuggestionTraits、`textAction(…)`（纯 Foundation，§5.4）
   LauncherImageAction.swift                交给图片动作的图 LauncherImage（编码字节 / 文件路径）、`imageAction(…)`（纯 Foundation，§5.5）
   LauncherKnownFile.swift                  模块交给文件搜索的已知文件（路径、时间、说明）（纯 Foundation，§3.4、§6.4，PR 11）
+  LauncherSelectedTextSteps.swift          读选中文字的步骤与顺序（AX 调用由 Core/SelectedTextReader 注入；带时限时先读范围，§8.4，第 9 步）
 
 mac/Sources/Core/LauncherImageLoader.swift  LauncherImage → 像素尺寸 / 缩略图 / 整图（ImageIO，后台调；快速入口和截图模块共用，§5.5）
 mac/Sources/Core/SelectedTextReader.swift   只走辅助功能读一个 App 焦点元素里选中的文字，可带总时限（第 9 步从划词助手下沉，两边共用，§8.4）
@@ -933,7 +934,7 @@ extension HotkeyDefinition {
 
 **读选区**：
 
-- `Core/SelectedTextReader.swift`（从划词助手下沉）：焦点元素（`kAXFocusedUIElement`）→ 先读 `kAXSelectedText`，没有就用「全文 + 选区范围」切 —— 同划词助手原来的两步。带时限时，每次 AX 调用前把**这一个元素**的消息超时（`AXUIElementSetMessagingTimeout`）设成剩下的时间，几次调用加起来不超过预算；超时的那次返回 `cannotComplete`，算超时。**不对系统级元素设超时**（那会改掉本进程所有 AX 调用的默认超时）。不带时限的版本一次都不设：划词助手（`SelectionText.fetchViaAccessibility` / `currentSelection`）调它，行为同下沉前。没有辅助功能权限（`AXIsProcessTrusted()`，不弹窗）直接返回。AX 的客户端调用可以在任何线程上做。
+- `Core/SelectedTextReader.swift`（从划词助手下沉）：焦点元素（`kAXFocusedUIElement`）→ 先读 `kAXSelectedText`，没有就用「全文 + 选区范围」切 —— 同划词助手原来的两步。带时限时这一步**先读选区范围、长度 > 0 才读全文**（第 9 步验证后改：很多文本视图没选中时 `kAXSelectedText` 回「成功 + 空串」，先读 `kAXValue` 会让光标停在大文件里时每次呼出都在后台把整篇正文拉过来，超过 80 ms 还把「没有」记成「超时」）；不带时限的（划词助手）保持先全文、后范围。读哪几个属性、按什么顺序在 `Core/Launcher/LauncherSelectedTextSteps.swift`（纯 Foundation，AX 调用注入，有单元测试）。带时限时，每次 AX 调用前把**这一个元素**的消息超时（`AXUIElementSetMessagingTimeout`）设成剩下的时间，几次调用加起来不超过预算；超时的那次返回 `cannotComplete`，算超时。**不对系统级元素设超时**（那会改掉本进程所有 AX 调用的默认超时）。不带时限的版本一次都不设：划词助手（`SelectionText.fetchViaAccessibility` / `currentSelection`）调它，行为同下沉前。没有辅助功能权限（`AXIsProcessTrusted()`，不弹窗）直接返回。AX 的客户端调用可以在任何线程上做。
 - `LauncherSelectionFetcher`（纯 Foundation，有单元测试）管流程：后台读，回主线程交结果，每次呼出只交一次。读完了就交 —— 读的时间超过 80 ms 的按超时、不要那段文字（硬上限）；80 ms + 40 ms 宽限到了还没回来（AX 卡住），主线程直接交「超时」，之后回来的丢掉。再次呼出作废上一次；收起（`endSession`）之后什么都不交。取词函数是注入的（单元测试、探针里换成假的；App 里默认是 `SelectedTextReader`）。
 - 面板不等它：`show()` 照常算行、显示。读到文字、面板还开着、输入框还空着（没挂图片）就后台刷新一次，最前面出「选中的」；选中按 §4「选中行」的统一规则（`refresh(background: true)`）：没手动选过 → 选中它；按过 ↑ ↓ / 悬停换过行 → 留在他选的那一行。
 - 结果四种：取到（日志只记字数）/ 没有（没选中、App 不暴露选区、全是空白）/ 超时 / 没权限。后三种都没有这一行，不提示、不弹窗。

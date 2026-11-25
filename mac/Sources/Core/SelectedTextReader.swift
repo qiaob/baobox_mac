@@ -91,22 +91,23 @@ enum SelectedTextReader {
         return unsafeBitCast(focused, to: AXUIElement.self)
     }
 
-    /// 先读 kAXSelectedText；没有就用「全文 + 选区范围」切（不少文本视图只给后者）。
+    /// 先读 kAXSelectedText；没有就用「全文 + 选区范围」切（不少文本视图只给后者）。读哪几个属性、按什么顺序在
+    /// `LauncherSelectedTextSteps`（纯逻辑，有单元测试）：带时限时先读范围、有选区才读全文；不带时限同下沉前，先全文后范围。
     private static func selectedText(of element: AXUIElement, clock: inout Clock) -> String? {
-        if let ref = clock.copy(element, kAXSelectedTextAttribute), let text = ref as? String, !text.isEmpty {
-            return text
-        }
-        if clock.timedOut { return nil }
-        guard let value = clock.copy(element, kAXValueAttribute) as? String,
-              let rangeRef = clock.copy(element, kAXSelectedTextRangeAttribute),
+        LauncherSelectedTextSteps.read(
+            timed: clock.deadline != nil,
+            selectedText: { clock.copy(element, kAXSelectedTextAttribute) as? String },
+            selectedRange: { selectedRange(of: element, clock: &clock) },
+            value: { clock.copy(element, kAXValueAttribute) as? String },
+            stopped: { clock.timedOut })
+    }
+
+    /// 选区范围（kAXSelectedTextRange）；读不到、不是范围为 nil。
+    private static func selectedRange(of element: AXUIElement, clock: inout Clock) -> NSRange? {
+        guard let rangeRef = clock.copy(element, kAXSelectedTextRangeAttribute),
               CFGetTypeID(rangeRef) == AXValueGetTypeID() else { return nil }
         var range = CFRange()
-        guard AXValueGetValue(unsafeBitCast(rangeRef, to: AXValue.self), .cfRange, &range), range.length > 0 else {
-            return nil
-        }
-        // AX 的 CFRange 按 UTF-16 计，与 NSString 同口径。
-        let ns = value as NSString
-        guard range.location >= 0, range.location + range.length <= ns.length else { return nil }
-        return ns.substring(with: NSRange(location: range.location, length: range.length))
+        guard AXValueGetValue(unsafeBitCast(rangeRef, to: AXValue.self), .cfRange, &range) else { return nil }
+        return NSRange(location: range.location, length: range.length)
     }
 }
