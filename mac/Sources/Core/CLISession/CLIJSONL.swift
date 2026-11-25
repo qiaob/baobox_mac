@@ -48,4 +48,11 @@ enum CLISessionPaths {
         let name = URL(fileURLWithPath: path).lastPathComponent
         return name.isEmpty ? path : name
     }
+
+    /// 同 `projectName(fromPath:)`，但只做字符串处理、不碰文件系统 —— `URL(fileURLWithPath:)` 会去查一次这个路径是不是目录。
+    /// 给只读内存的地方用：快速入口的情景建议每次呼出都要算（docs/launcher/TECH_DESIGN.md §5.6）。原来那个有十几处在用，不动它。
+    static func projectNameWithoutFileSystem(fromPath path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? path : name
+    }
 }

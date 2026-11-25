@@ -12,6 +12,13 @@ extension ClaudeCodeTool {
     /// 情景建议的次序（小的在前，§5.6 次序表）：有会话在等你，仅次于会议。
     static let launcherSuggestionPriority = 20
 
+    /// 那一行写的项目名：cwd 的最后一段，没有 cwd 时是会话 id（同 `ClaudeLiveSession.projectName`）。只做字符串处理 ——
+    /// `projectName` 走 `URL(fileURLWithPath:)` 会去文件系统查一次，情景建议只读内存。
+    static func launcherProjectName(_ session: ClaudeLiveSession) -> String {
+        guard let cwd = session.cwd, !cwd.isEmpty else { return session.sessionID }
+        return CLISessionPaths.projectNameWithoutFileSystem(fromPath: cwd)
+    }
+
     func launcherContextSuggestions() -> [LauncherCommand] {
         let waiting = ClaudeLiveStatus.shared.sessions.values.filter { session in
             if case .waiting = session.state { return true }
@@ -22,7 +29,7 @@ extension ClaudeCodeTool {
             let cwd = session.cwd
             let terminal = session.terminal
             return LauncherCommand(id: "claudecode.waiting.\(sessionID)",
-                                   title: L("claudecode.launcher.waiting \(session.projectName)"),
+                                   title: L("claudecode.launcher.waiting \(Self.launcherProjectName(session))"),
                                    symbolName: symbolName,
                                    suggestion: LauncherSuggestionTraits(priority: Self.launcherSuggestionPriority,
                                                                         recordsUsage: false)) { _ in

@@ -568,7 +568,7 @@ extension HotkeyDefinition {
 | 正在专注 / 专注暂停中 | 暂停专注（暂停中是「继续专注」）· 结束专注 | `focushealth.focus` / `focushealth.endFocus` | 「开始 / 暂停专注」的 `stateTitle`（`FocusHealthController.session`）；结束 = `endFocusEarly(countAsDone: true)`，同暂停卡片的「结束这一轮」、菜单「提前结束 ▸ 记为完成」（用户 2026-11-08 定的：结束算完成），没有对应的快捷键 |
 | 会议记录进行中（开始中 / 记录中 / 暂停） | 结束会议 | `meeting.startOnline` | 「开始 / 结束线上会议记录」的 `stateTitle`（`MeetingSessionController.phase`）；正在收尾时不出（按了也没用） |
 | 下一场会议 10 分钟内开始、或已经开始（`MeetingSchedule.next` 认开始不到 15 分钟的），而且没在记这一场 | 入会 · <标题>（有会议链接时）；开始会议记录 · <标题>（没在记任何会时） | `meeting.join` / `meeting.startOnline` | `MeetingCalendar.next()`（日历没在设置里打开 / 没授权时是 nil，就没有这两条）；⏎ = `MeetingActions.join` / `MeetingActions.record`（同提醒气泡的 [开始记录]：绑这一场，有链接按线上会议）。「还没入会」读不到 —— 会议 App 在不在开会只在会议检测里按进程查麦克风 —— 所以按「没在记这一场」算 |
-| 有 Claude Code 会话在等你确认 | 切到 <项目> · 在等你确认（每个在等的会话一条，新的在前） | `claudecode.waiting.<会话 id>` | `ClaudeLiveStatus.sessions` 里状态是 `waiting` 的（hooks 的 Notification 事件；没装 Claude Code / hooks 时是空的）；⏎ = `ClaudeTerminal.focusRunningSession`，同点「等你确认」的通知 |
+| 有 Claude Code 会话在等你确认 | 切到 <项目> · 在等你确认（每个在等的会话一条，新的在前） | `claudecode.waiting.<会话 id>` | `ClaudeLiveStatus.sessions` 里状态是 `waiting` 的（hooks 的 Notification 事件；没装 Claude Code / hooks 时是空的）；⏎ = `ClaudeTerminal.focusRunningSession`，同点「等你确认」的通知。项目名是 cwd 的最后一段，只做字符串处理（`CLISessionPaths.projectNameWithoutFileSystem`；会话自己的 `projectName` 走 `URL(fileURLWithPath:)`，会查一次文件系统） |
 | Codex 会话在等你回复 | **没做** | | Codex 助手没有现成的「等待中」状态（它的 notify 只报回合结束），按设计「有现成的才做」 |
 
 注意：
