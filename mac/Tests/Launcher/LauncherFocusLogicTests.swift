@@ -116,12 +116,104 @@ final class LauncherFocusLogicTests: XCTestCase {
         var later: (() -> String?)?
         scope.run("otty") {
             seenInside = scope.current
-            // 闭包里排到之后的一步（异步粘贴、全局快捷键 1 秒内再按）：执行时已经读不到。
+            // 闭包里留到之后再跑的一步（异步粘贴、紧接着按的全局快捷键）：执行时已经读不到。
             later = { scope.current }
         }
         XCTAssertEqual(seenInside, "otty")
         XCTAssertNil(scope.current, "闭包一返回就清掉，没有时间窗口")
         XCTAssertNil(later?(), "之后的异步步骤读不到：要用就在闭包里先读走")
+    }
+
+    func testStepsQueuedOnTheMainQueueInsideTheClosureCannotSeeTheContext() {
+        let box = AsyncStepBox()
+        let ran = expectation(description: "排到主队列的那一步跑了")
+        box.scope.run("otty") {
+            // `PasteService` 的写法：进门同步读走，后面的步骤用读走的值。
+            let context = box.scope.current
+            DispatchQueue.main.async {
+                box.seenLater = box.scope.current
+                box.carried = context
+                ran.fulfill()
+            }
+        }
+        wait(for: [ran], timeout: 2)
+        XCTAssertNil(box.seenLater, "排到主队列的一步（同 `PasteService` 等 0.12 s 再发 ⌘V）回头读全局状态：读不到")
+        XCTAssertEqual(box.carried, "otty", "闭包里读走的值带得过去")
+    }
+
+    func testStepsInATaskStartedInsideTheClosureCannotSeeTheContext() {
+        let box = AsyncStepBox()
+        let ran = expectation(description: "Task 跑了")
+        box.scope.run("otty") {
+            // ⌘⏎ 插入的写法：闭包里读走目标，再开 Task 交给 `TextInserter`。
+            let target = box.scope.current
+            Task { @MainActor in
+                box.seenLater = box.scope.current
+                box.carried = target
+                ran.fulfill()
+            }
+        }
+        wait(for: [ran], timeout: 2)
+        XCTAssertNil(box.seenLater, "Task 里的异步步骤读不到")
+        XCTAssertEqual(box.carried, "otty")
+    }
+
+    func testContinuingAnActionLaterRestoresTheContextOnlyForThatStep() {
+        // 「翻译图里的文字」：闭包里读走上下文，取字完了再在它里面执行那一步（`LauncherFocus.continueAction`）。
+        let scope = LauncherActionScope<String>()
+        var context: String?
+        scope.run("otty") { context = scope.current }
+        XCTAssertNil(scope.current)
+        var seen: String?
+        if let context { scope.run(context) { seen = scope.current } }
+        XCTAssertEqual(seen, "otty")
+        XCTAssertNil(scope.current, "那一步跑完又清掉")
+    }
+
+    /// `PasteService.paste` 进门的那一步：读 `actionContext`，交给 `LauncherPasteTarget.choose`。
+    /// 动作的上下文 = 目标（呼出前的前台 App，已经退出时为 nil）。
+    private func enterPaste(_ scope: LauncherActionScope<String?>, explicit: String? = nil,
+                            clipboardPanel: String? = nil) -> LauncherPasteTarget.Choice<String> {
+        let action = scope.current
+        return LauncherPasteTarget.choose(explicit: explicit, clipboardPanel: clipboardPanel,
+                                          inLauncherAction: action != nil, launcher: action ?? nil)
+    }
+
+    func testPasteInsideALauncherActionUsesItsTarget() {
+        let scope = LauncherActionScope<String?>()
+        var choice: LauncherPasteTarget.Choice<String>?
+        scope.run("otty") { choice = enterPaste(scope) }
+        XCTAssertEqual(choice, LauncherPasteTarget.Choice(app: "otty", source: .launcher, fromLauncher: true),
+                       "剪贴板条目、「纯文本粘贴上一条」从快速入口执行：目标来自动作，算快速入口来的")
+    }
+
+    func testPasteRightAfterALauncherActionDoesNotSeeItsTarget() {
+        let scope = LauncherActionScope<String?>()
+        scope.run("otty") { _ = enterPaste(scope) }
+        XCTAssertEqual(enterPaste(scope), LauncherPasteTarget.Choice<String>(app: nil, source: .missing, fromLauncher: false),
+                       "紧接着按全局快捷键 ⌘⌥V：没有目标（粘给此刻的前台），不看键盘、不回执，和改动前一样")
+        XCTAssertEqual(enterPaste(scope, clipboardPanel: "notes"),
+                       LauncherPasteTarget.Choice(app: "notes", source: .clipboardPanel, fromLauncher: false),
+                       "剪贴板面板：用它自己记下的")
+    }
+
+    func testPasteInsideALauncherActionWhoseAppQuit() {
+        let scope = LauncherActionScope<String?>()
+        var choice: LauncherPasteTarget.Choice<String>?
+        scope.run(nil) { choice = enterPaste(scope) }
+        XCTAssertEqual(choice, LauncherPasteTarget.Choice<String>(app: nil, source: .missing, fromLauncher: true),
+                       "呼出前的 App 已经退出：没有目标，但还是快速入口来的（粘不出去要回执）")
+    }
+
+    func testChooseIgnoresALauncherTargetOutsideALauncherAction() {
+        XCTAssertEqual(LauncherPasteTarget.choose(explicit: nil, clipboardPanel: nil, inLauncherAction: false, launcher: "otty"),
+                       LauncherPasteTarget.Choice<String>(app: nil, source: .missing, fromLauncher: false),
+                       "不在快速入口的动作里：就算传进来也不用")
+        XCTAssertEqual(LauncherPasteTarget.choose(explicit: "a", clipboardPanel: "b", inLauncherAction: true, launcher: "c"),
+                       LauncherPasteTarget.Choice(app: "a", source: .explicit, fromLauncher: true))
+        XCTAssertEqual(LauncherPasteTarget.choose(explicit: nil, clipboardPanel: "b", inLauncherAction: true, launcher: "c"),
+                       LauncherPasteTarget.Choice(app: "b", source: .clipboardPanel, fromLauncher: false),
+                       "剪贴板面板开着时是它自己的粘贴")
     }
 
     func testNestedActionContextRestoresTheOuterOne() {
@@ -162,4 +254,11 @@ final class LauncherFocusLogicTests: XCTestCase {
         XCTAssertEqual(none.source, .missing,
                        "全局快捷键触发，或快速入口的剪贴板条目、而呼出前的 App 已经退出：没有目标，粘给前台（不拿退出的 App 当目标）")
     }
+}
+
+/// 异步步骤里看到的东西（只在主线程读写）。
+private final class AsyncStepBox: @unchecked Sendable {
+    let scope = LauncherActionScope<String>()
+    var seenLater: String? = "unset"
+    var carried: String?
 }

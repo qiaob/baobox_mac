@@ -35,7 +35,8 @@ enum LauncherFocus {
     static let pollInterval: TimeInterval = 0.015
 
     /// 呼出快速入口那一刻的前台 App；当时前台就是 Baobox 自己（比如从设置窗口里呼出）则为 nil。
-    private(set) static var previousApp: NSRunningApplication?
+    /// 不对外：它在面板收起后还留着，别的模块读它就成了时间窗口；要目标只能在动作闭包里读 `actionContext`。
+    private static var previousApp: NSRunningApplication?
     private static let actionScope = LauncherActionScope<ActionContext>()
     /// 正在执行的快速入口动作：只在动作闭包同步执行的那一段有值，闭包一返回就是 nil（没有时间窗口）。
     /// 要在之后的异步步骤里用，就在闭包里同步读走（`PasteService.paste` 进门就读）。

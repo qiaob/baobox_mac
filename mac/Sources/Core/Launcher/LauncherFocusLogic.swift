@@ -147,4 +147,24 @@ enum LauncherPasteTarget {
     static func isFromLauncher(inLauncherAction: Bool, source: Source) -> Bool {
         inLauncherAction && source != .clipboardPanel
     }
+
+    /// 一次粘贴往哪儿粘、目标从哪儿来、算不算快速入口来的。
+    struct Choice<App> {
+        let app: App?
+        let source: Source
+        let fromLauncher: Bool
+    }
+
+    /// `PasteService.paste` 进门同步调一次，后面的异步步骤只用它的结果。
+    /// - Parameters:
+    ///   - inLauncherAction: 进门那一刻是不是正在快速入口动作的闭包里（`LauncherFocus.actionContext != nil`）。
+    ///     不在的话（全局快捷键、剪贴板面板、菜单）`launcher` 一律不用 —— 快速入口的目标在闭包外不起作用。
+    ///   - launcher: 那个动作的目标（呼出前的前台 App；已经退出时为 nil）。
+    static func choose<App>(explicit: App?, clipboardPanel: App?, inLauncherAction: Bool, launcher: App?) -> Choice<App> {
+        let resolved = resolve(explicit: explicit, clipboardPanel: clipboardPanel, launcher: inLauncherAction ? launcher : nil)
+        return Choice(app: resolved.app, source: resolved.source,
+                      fromLauncher: isFromLauncher(inLauncherAction: inLauncherAction, source: resolved.source))
+    }
 }
+
+extension LauncherPasteTarget.Choice: Equatable where App: Equatable {}

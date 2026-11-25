@@ -35,12 +35,13 @@ enum PasteService {
 
         // 2) 关闭面板前先取出唤起时记录的前台 App —— 那才是真正的粘贴目标。
         //    面板拿过焦点，此刻的 frontmostApplication 已经不可靠。
-        let choice = LauncherPasteTarget.resolve(explicit: explicitTarget,
-                                                 clipboardPanel: ClipboardPanelController.current?.previousApp,
-                                                 launcher: launcherAction?.target)
+        let choice = LauncherPasteTarget.choose(explicit: explicitTarget,
+                                                clipboardPanel: ClipboardPanelController.current?.previousApp,
+                                                inLauncherAction: launcherAction != nil,
+                                                launcher: launcherAction?.target)
         let target = choice.app
         // 从快速入口执行的（剪贴板条目、「纯文本粘贴上一条」这类命令）：发 ⌘V 前看键盘，粘不出去时要给一句回执。
-        let fromLauncher = LauncherPasteTarget.isFromLauncher(inLauncherAction: launcherAction != nil, source: choice.source)
+        let fromLauncher = choice.fromLauncher
         ClipboardPanelController.current?.hide()
 
         // 3) 已授权辅助功能 → 切回目标 App 并合成 ⌘V；否则明确告知降级为仅复制。
