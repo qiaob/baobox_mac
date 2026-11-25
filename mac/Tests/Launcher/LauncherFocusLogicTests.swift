@@ -216,6 +216,47 @@ final class LauncherFocusLogicTests: XCTestCase {
                        "剪贴板面板开着时是它自己的粘贴")
     }
 
+    func testOutsideActionInsideAnActionCannotSeeTheContext() {
+        // 动作闭包里同步弹了模态框（嵌套 runloop），用户这时按了全局快捷键：`HotkeyCenter` 把动作包进 `runOutsideAction`。
+        let scope = LauncherActionScope<String>()
+        var seenByHotkey: String? = "unset"
+        var seenAfterHotkey: String?
+        scope.run("otty") {
+            scope.runOutsideAction { seenByHotkey = scope.current }
+            seenAfterHotkey = scope.current
+        }
+        XCTAssertNil(seenByHotkey, "全局快捷键的动作读不到快速入口的目标")
+        XCTAssertEqual(seenAfterHotkey, "otty", "快捷键的动作跑完，快速入口的动作接着用自己的上下文")
+        XCTAssertNil(scope.current)
+    }
+
+    func testOutsideActionWithNoActionRunningChangesNothing() {
+        let scope = LauncherActionScope<String>()
+        var seen: String? = "unset"
+        scope.runOutsideAction { seen = scope.current }
+        XCTAssertNil(seen)
+        XCTAssertNil(scope.current)
+    }
+
+    func testActionInsideOutsideActionSeesOnlyItsOwnContext() {
+        // 全局快捷键的动作里又开了一次快速入口的动作（不会真的发生，规则照样成立）：内层只看得到自己的，退出逐层恢复。
+        let scope = LauncherActionScope<String>()
+        var inner: String?
+        var backInHotkey: String? = "unset"
+        var backInOuter: String?
+        scope.run("outer") {
+            scope.runOutsideAction {
+                scope.run("inner") { inner = scope.current }
+                backInHotkey = scope.current
+            }
+            backInOuter = scope.current
+        }
+        XCTAssertEqual(inner, "inner")
+        XCTAssertNil(backInHotkey)
+        XCTAssertEqual(backInOuter, "outer")
+        XCTAssertNil(scope.current)
+    }
+
     func testNestedActionContextRestoresTheOuterOne() {
         let scope = LauncherActionScope<String>()
         scope.run("outer") {

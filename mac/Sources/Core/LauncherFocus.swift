@@ -140,6 +140,12 @@ enum LauncherFocus {
         actionScope.run(ActionContext(target: target)) { action() }
     }
 
+    /// 执行不属于快速入口动作的代码（全局快捷键的动作，`HotkeyCenter` 调）：里面读不到 `actionContext`。
+    /// 快速入口的动作闭包里同步弹了模态框（嵌套 runloop）时，用户按的全局快捷键会在那段时间里同步执行，不包的话会读到快速入口的目标。
+    static func runOutsideAction(_ body: () -> Void) {
+        actionScope.runOutsideAction(body)
+    }
+
     /// 动作里有一步要等（「翻译图里的文字」等取字）：在动作闭包里读走的上下文，等到了再在它里面执行那一步。nil 时直接执行。
     static func continueAction(in context: ActionContext?, _ body: @MainActor () -> Void) {
         guard let context else {

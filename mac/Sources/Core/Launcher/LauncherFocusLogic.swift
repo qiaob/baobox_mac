@@ -114,12 +114,22 @@ enum LauncherKeyboardGate: Equatable {
 /// 「正在执行的快速入口动作」的上下文（目标 App 等）：只在 `run` 包着的那一段闭包**同步**执行时看得到，闭包一返回就清掉。
 /// 闭包里排到之后的异步步骤读不到 —— 要用就在闭包里同步读走；全局快捷键、剪贴板面板、听写这些别的途径于是不可能读到它。
 /// 嵌套时退出内层恢复外层。只在主线程用（`LauncherFocus` 持有一个）。
+/// 闭包里开了嵌套 runloop（同步弹模态框）时，别的途径的动作可能在这段时间里同步执行（全局快捷键）：它们要包进
+/// `runOutsideAction`，在里面读不到快速入口的上下文。
 final class LauncherActionScope<Context> {
     private(set) var current: Context?
 
     func run(_ context: Context, _ body: () -> Void) {
         let outer = current
         current = context
+        defer { current = outer }
+        body()
+    }
+
+    /// 执行一段不属于快速入口动作的代码：进入时清空上下文，退出时恢复。
+    func runOutsideAction(_ body: () -> Void) {
+        let outer = current
+        current = nil
         defer { current = outer }
         body()
     }
