@@ -70,7 +70,7 @@ final class LauncherController {
         fileSources = LauncherFileSources(registry: registry)
         files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
-        model.onRun = { [weak self] index in self?.run(at: index) }
+        model.onRun = { [weak self] index in self?.run(at: index, source: .click) }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
         model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
         thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
@@ -354,6 +354,8 @@ final class LauncherController {
             model.moveSelection(by: 1)
             return true
         case 0x24, 0x4C: // Return / 小键盘 Enter；⌘⏎ 在计算结果、识别结果上 = 插入前台 App，文件 / 路径行上 = 在访达里显示，其余行同 ⏎
+            // 按住 ⏎ 的自动重复一律不算（第 10 步验证后定）：不会连续执行，也不会把「按两次」的行一口气确认掉。
+            if event.isARepeat { return true }
             if flags.contains(.command) {
                 insertOrRun(at: model.selectedIndex)
             } else {
@@ -382,7 +384,8 @@ final class LauncherController {
             // ⌘1…⌘9：直接执行第 N 行。
             if flags.contains(.command), flags.isDisjoint(with: [.control, .option]),
                let slot = Self.digitKeyCodes.firstIndex(of: event.keyCode) {
-                run(at: slot)
+                // 按住 ⌘N 的自动重复同 ⏎，不算。
+                if !event.isARepeat { run(at: slot) }
                 return true
             }
             return false
@@ -606,7 +609,8 @@ final class LauncherController {
 
     // MARK: - 执行
 
-    private func run(at index: Int) {
+    /// `source`：⏎ / ⌘N 是按键，单击是点击 —— 要按两次的行上，上膛后双击间隔之内的点击不算确认。
+    private func run(at index: Int, source: LauncherConfirmSource = .key) {
         guard model.rows.indices.contains(index) else { return }
         let id = model.rows[index].id
         if let contextItem = engine.contextItem(forKey: id) {
@@ -615,7 +619,7 @@ final class LauncherController {
         }
         // 要按两次 ⏎ 的行（第 10 步）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
         if let confirmation = engine.suggestion(forKey: id)?.confirmation ?? engine.item(forKey: id)?.confirmation,
-           !model.confirmPress(at: index, title: Self.confirmTitle(confirmation)) {
+           !model.confirmPress(at: index, title: Self.confirmTitle(confirmation), source: source) {
             return
         }
         if let instant = engine.instant(forKey: id) {

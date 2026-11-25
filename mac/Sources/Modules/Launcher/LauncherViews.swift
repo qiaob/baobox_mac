@@ -166,13 +166,21 @@ final class LauncherPanelModel: ObservableObject {
     // MARK: 二次确认（第 10 步）
 
     /// 对第 `index` 行按了一次 ⏎ / ⌘N / 单击，而这一行要按两次（`LauncherConfirmation`）。
-    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、标题换成 `title`，等第二次。
-    func confirmPress(at index: Int, title: String) -> Bool {
+    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、标题换成 `title`，等第二次；
+    /// 或者是上膛后双击间隔之内的又一次点击，什么都不做（`LauncherConfirmState.press`）。
+    func confirmPress(at index: Int, title: String, source: LauncherConfirmSource = .key,
+                      now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                      doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) -> Bool {
         guard rows.indices.contains(index) else { return false }
         let id = rows[index].id
-        if confirm.press(id) {
+        switch confirm.press(id, source: source, now: now, doubleClickInterval: doubleClickInterval) {
+        case .run:
             disarm(restoring: true)
             return true
+        case .ignored:
+            return false
+        case .armed:
+            break
         }
         // 之前在等的别的那一行换回原来的标题（`press` 已经改成等这一行了）。
         if let previous = armed, let at = rows.firstIndex(where: { $0.id == previous.original.id }) {

@@ -9,19 +9,51 @@ final class LauncherConfirmTests: XCTestCase {
     func testFirstPressArmsSecondPressRuns() {
         var state = LauncherConfirmState()
         XCTAssertNil(state.armedID)
-        XCTAssertFalse(state.press("suggest/terminal"), "第一次只是等着")
+        XCTAssertEqual(state.press("suggest/terminal"), .armed, "第一次只是等着")
         XCTAssertEqual(state.armedID, "suggest/terminal")
-        XCTAssertTrue(state.press("suggest/terminal"), "第二次才执行")
+        XCTAssertEqual(state.press("suggest/terminal"), .run, "第二次才执行")
         XCTAssertNil(state.armedID, "执行后复位")
-        XCTAssertFalse(state.press("suggest/terminal"), "复位后又要按两次")
+        XCTAssertEqual(state.press("suggest/terminal"), .armed, "复位后又要按两次")
     }
 
     func testPressingAnotherRowMovesTheWait() {
         var state = LauncherConfirmState()
         _ = state.press("reminder/a")
-        XCTAssertFalse(state.press("reminder/b"), "换了一行：只算那一行的第一次")
+        XCTAssertEqual(state.press("reminder/b"), .armed, "换了一行：只算那一行的第一次")
         XCTAssertEqual(state.armedID, "reminder/b")
-        XCTAssertTrue(state.press("reminder/b"))
+        XCTAssertEqual(state.press("reminder/b"), .run)
+    }
+
+    /// 双击不能一口气确认：上膛后双击间隔之内的又一次点击什么都不做（第 10 步验证后定）。
+    func testASecondClickWithinTheDoubleClickIntervalDoesNothing() {
+        var state = LauncherConfirmState()
+        XCTAssertEqual(state.press("t", source: .click, now: 100, doubleClickInterval: 0.5), .armed)
+        XCTAssertEqual(state.armedAt, 100)
+        XCTAssertEqual(state.press("t", source: .click, now: 100.3, doubleClickInterval: 0.5), .ignored, "双击的第二下")
+        XCTAssertEqual(state.armedID, "t", "仍在等")
+        XCTAssertEqual(state.press("t", source: .click, now: 100.49, doubleClickInterval: 0.5), .ignored, "三击也一样")
+        XCTAssertEqual(state.press("t", source: .click, now: 100.5, doubleClickInterval: 0.5), .run, "过了双击间隔再点一下才确认")
+    }
+
+    /// 键盘的两次分开的按键不设间隔；键盘上膛、马上双击鼠标同样不算。
+    func testKeysHaveNoIntervalButClicksAlwaysDo() {
+        var state = LauncherConfirmState()
+        XCTAssertEqual(state.press("t", source: .key, now: 10, doubleClickInterval: 0.5), .armed)
+        XCTAssertEqual(state.press("t", source: .key, now: 10.05, doubleClickInterval: 0.5), .run, "两次独立的 ⏎ 就是有意的")
+        XCTAssertEqual(state.press("t", source: .key, now: 20, doubleClickInterval: 0.5), .armed)
+        XCTAssertEqual(state.press("t", source: .click, now: 20.1, doubleClickInterval: 0.5), .ignored, "上膛后马上的点击不算")
+        XCTAssertEqual(state.press("t", source: .key, now: 20.2, doubleClickInterval: 0.5), .run, "接着按 ⏎ 照常确认")
+        XCTAssertEqual(state.press("u", source: .click, now: 30, doubleClickInterval: 0.5), .armed)
+        XCTAssertEqual(state.press("u", source: .key, now: 30.1, doubleClickInterval: 0.5), .run, "点一下上膛、按 ⏎ 确认")
+    }
+
+    /// 点另一行：那一行重新上膛、时刻重新算。
+    func testClickingAnotherRowRestartsTheClock() {
+        var state = LauncherConfirmState()
+        _ = state.press("a", source: .click, now: 1, doubleClickInterval: 0.5)
+        XCTAssertEqual(state.press("b", source: .click, now: 2, doubleClickInterval: 0.5), .armed)
+        XCTAssertEqual(state.press("b", source: .click, now: 2.2, doubleClickInterval: 0.5), .ignored)
+        XCTAssertEqual(state.press("b", source: .click, now: 2.6, doubleClickInterval: 0.5), .run)
     }
 
     func testMovingTheSelectionAwayResets() {
@@ -42,7 +74,7 @@ final class LauncherConfirmTests: XCTestCase {
         _ = state.press("x")
         XCTAssertEqual(state.reset(), "x")
         XCTAssertNil(state.armedID)
-        XCTAssertFalse(state.press("x"), "复位后第一次又只是等着")
+        XCTAssertEqual(state.press("x"), .armed, "复位后第一次又只是等着")
     }
 
     // MARK: - 标题里的对象

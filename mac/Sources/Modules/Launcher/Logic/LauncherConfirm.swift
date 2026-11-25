@@ -13,20 +13,42 @@ struct LauncherConfirmation: Equatable, Sendable {
     let object: String
 }
 
+/// 这一下是从哪来的：键盘（⏎、⌘N）还是鼠标单击。
+enum LauncherConfirmSource: Equatable, Sendable {
+    case key
+    case click
+}
+
+/// 对一行按了一下之后怎么办。
+enum LauncherConfirmOutcome: Equatable, Sendable {
+    /// 执行（它已经在等第二次了，复位）。
+    case run
+    /// 这一下只是让它等着（之前在等的别的行不等了）。
+    case armed
+    /// 什么都不做：上膛后双击间隔之内的又一次点击（双击不会一口气确认，验证后定）。
+    case ignored
+}
+
 /// 哪一行在等第二次 ⏎。
 struct LauncherConfirmState: Equatable, Sendable {
     /// 在等第二次 ⏎ 的那一行（行 id）；nil = 没有。
     private(set) var armedID: String?
+    /// 上膛的时刻（开机以来的秒数，`ProcessInfo.systemUptime`）。
+    private(set) var armedAt: TimeInterval = 0
 
-    /// 对 `id` 这一行按了一次 ⏎（⌘N、单击同）。true = 执行（它已经在等了，复位）；false = 这一下只是让它等着
-    /// （之前在等的别的行不等了）。
-    mutating func press(_ id: String) -> Bool {
+    /// 对 `id` 这一行按了一下（⏎、⌘N、单击）。键盘的两次分开的按键不设间隔（两次独立按键就是有意的）；
+    /// 鼠标点击在上膛后 `doubleClickInterval` 之内的不算确认（`.ignored`）—— 双击一下不能一口气确认。
+    /// 按键的自动重复不在这里：控制器直接丢掉（对所有行）。
+    mutating func press(_ id: String, source: LauncherConfirmSource = .key, now: TimeInterval = 0,
+                        doubleClickInterval: TimeInterval = 0) -> LauncherConfirmOutcome {
         if armedID == id {
+            if source == .click, now - armedAt < doubleClickInterval { return .ignored }
             armedID = nil
-            return true
+            return .run
         }
         armedID = id
-        return false
+        armedAt = now
+        return .armed
     }
 
     /// 选中的行换成了 `id`（↑ ↓、悬停、列表刷新后）：不是在等的那一行就复位。返回复位了的行 id（没复位为 nil）。
