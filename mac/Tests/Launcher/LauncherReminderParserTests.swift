@@ -158,6 +158,91 @@ final class LauncherReminderParserTests: XCTestCase {
         XCTAssertNil(parse("20 分钟后提醒我\n取快递"))
     }
 
+    // MARK: - 第 10 步验证后定
+
+    /// 中文数字 + 点、又没有别的时间信号：不是提醒（「一点也不好玩」）。代价是「三点开会」不再认。
+    func testChineseNumeralClockNeedsAnotherSignal() {
+        for text in ["一点也不好玩", "两点之间直线最短", "三点开会", "八点开会", "十二点吃饭", "两点一线的生活", "三点十五开会",
+                     "三点零五开会"] {
+            XCTAssertNil(parse(text), text)
+        }
+        // 别的时间信号：日子词、时段词、提醒 / 叫我、点后面的钟 / 半 / 一刻 / 三刻 / N 分 / 整。
+        assertReminder("明天三点开会", date(11, 24, 15, 0), "开会")
+        assertReminder("周五三点开会", date(11, 27, 15, 0), "开会")
+        assertReminder("今晚八点看球", date(11, 23, 20, 0), "看球")
+        assertReminder("下午三点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("提醒我三点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("三点提醒我开会", date(11, 23, 15, 0), "开会")
+        assertReminder("叫我两点起来", date(11, 23, 14, 0), "起来")
+        assertReminder("两点钟开会", date(11, 23, 14, 0), "开会")
+        assertReminder("三点半开会", date(11, 23, 15, 30), "开会")
+        assertReminder("三点一刻开会", date(11, 23, 15, 15), "开会")
+        assertReminder("三点三刻开会", date(11, 23, 15, 45), "开会")
+        assertReminder("三点十五分开会", date(11, 23, 15, 15), "开会")
+        assertReminder("三点整开会", date(11, 23, 15, 0), "开会")
+        // 阿拉伯数字的钟点不受限制。
+        assertReminder("3点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("15:30 开会", date(11, 23, 15, 30), "开会")
+        assertReminder("3pm meeting", date(11, 23, 15, 0), "meeting")
+    }
+
+    func testAboutSomeHourIsNotAReminder() {
+        for text in ["三点多开会", "3点多开会", "下午三点多开会", "明天3点多到"] {
+            XCTAssertNil(parse(text), text)
+        }
+    }
+
+    private func at(_ hour: Int, _ minute: Int, day: Int = 23) -> Date {
+        date(11, day, hour, minute)
+    }
+
+    /// 晚上 / 今晚 / 夜里 + 1–5 点：那一晚之后的凌晨（所指那天的次日）；说的是今天而今天那个钟点还没到 → 今天。
+    func testEveningSmallHoursAreTheMorningAfter() {
+        // 现在 10:00（周一）
+        let ten = at(10, 0)
+        XCTAssertEqual(parse("晚上一点睡觉", now: ten)?.date, at(1, 0, day: 24))
+        XCTAssertEqual(parse("今晚1点睡觉", now: ten)?.date, at(1, 0, day: 24))
+        XCTAssertEqual(parse("夜里两点发布", now: ten)?.date, at(2, 0, day: 24))
+        XCTAssertEqual(parse("明天晚上一点睡觉", now: ten)?.date, at(1, 0, day: 25), "明天晚上一点 = 后天 01:00")
+        XCTAssertEqual(parse("明晚两点半发布", now: ten)?.date, at(2, 30, day: 25))
+        XCTAssertEqual(parse("周五晚上两点发布", now: ten)?.date, date(11, 28, 2, 0), "周五晚上两点 = 周六 02:00")
+        XCTAssertEqual(parse("晚上八点看球", now: ten)?.date, at(20, 0), "6 点以后照旧")
+        XCTAssertEqual(parse("晚上12点跨年", now: ten)?.date, at(0, 0, day: 24), "同晚上12点 = 次日 0 点")
+        // 现在 00:30：今天的 1 点还没到
+        let early = at(0, 30)
+        XCTAssertEqual(parse("晚上1点睡觉", now: early)?.date, at(1, 0))
+        XCTAssertEqual(parse("今晚1点睡觉", now: early)?.date, at(1, 0))
+        XCTAssertEqual(parse("明天晚上一点睡觉", now: early)?.date, at(1, 0, day: 25))
+        XCTAssertEqual(parse("晚上十二点睡觉", now: early)?.date, at(0, 0, day: 24))
+        // 现在 23:50
+        let late = at(23, 50)
+        XCTAssertEqual(parse("晚上一点睡觉", now: late)?.date, at(1, 0, day: 24))
+        XCTAssertEqual(parse("今晚1点睡觉", now: late)?.date, at(1, 0, day: 24))
+        XCTAssertEqual(parse("明天晚上一点睡觉", now: late)?.date, at(1, 0, day: 25))
+        XCTAssertEqual(parse("晚上12点睡觉", now: late)?.date, at(0, 0, day: 24))
+    }
+
+    /// 时间后面跟「前 / 之前 / 以前」：照那个时刻，事由去掉这个词。
+    func testBeforeATime() {
+        assertReminder("下午3点前交报告", date(11, 23, 15, 0), "交报告")
+        assertReminder("明天下午三点之前交报告", date(11, 24, 15, 0), "交报告")
+        assertReminder("3点以前交报告", date(11, 23, 15, 0), "交报告")
+        assertReminder("明天 15:30 前 交周报", date(11, 24, 15, 30), "交周报")
+    }
+
+    /// 时间段：按开始时刻，事由去掉后一个时刻和连接词；后面不是时刻的「到」照常进事由。
+    func testTimeRangesStartAtTheFirstTime() {
+        assertReminder("3点到5点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("3点-5点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("3点至5点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("下午三点到五点开会", date(11, 23, 15, 0), "开会")
+        assertReminder("15:00-17:00 评审", date(11, 23, 15, 0), "评审")
+        assertReminder("明天下午3点 ~ 5点 培训", date(11, 24, 15, 0), "培训")
+        assertReminder("3点到公司", date(11, 23, 15, 0), "到公司")
+        // 现有规则：没写时段的 1–6 点当下午（行上写着具体时刻，用户看得到）。
+        assertReminder("明天6点起床", date(11, 24, 18, 0), "起床")
+    }
+
     func testOtherTimeZone() {
         // 同一个时刻在纽约是 2026-11-22 21:00（周日）。
         var cal = Calendar(identifier: .gregorian)

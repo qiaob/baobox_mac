@@ -35,8 +35,10 @@ enum LauncherReminderParser {
         text.skipSpaces(&start)
         text.skipFillers(&start)
         if text.take("在", at: &start) { text.skipSpaces(&start) }
+        // 「提醒 / 叫我」也是时间信号（中文数字的钟点要有别的信号才算，见 `absolute`）。
+        let asksForReminder = trimmed.contains("提醒") || trimmed.contains("叫我")
         if let (date, end) = relative(text, at: start, now: context.now, cal: cal)
-            ?? absolute(text, at: start, now: context.now, cal: cal) {
+            ?? absolute(text, at: start, now: context.now, cal: cal, asksForReminder: asksForReminder) {
             return draft(date: date, event: text.event(from: end, to: text.count))
         }
         // 英文：事由在前，`in 20 minutes` 在最后（remind me to call mom in 20 minutes）。
@@ -158,13 +160,17 @@ enum LauncherReminderParser {
         ("下午", .afternoon), ("傍晚", .afternoon), ("晚上", .evening), ("夜里", .evening),
     ]
 
-    private static func absolute(_ text: ReminderText, at index: Int, now: Date, cal: Calendar) -> (Date, Int)? {
+    /// `asksForReminder`：句子里有「提醒 / 叫我」。
+    private static func absolute(_ text: ReminderText, at index: Int, now: Date, cal: Calendar,
+                                 asksForReminder: Bool) -> (Date, Int)? {
         var j = index
         var day = Day.offset(0)
+        var sawDay = false
         var period: Period?
         if let (word, matchedDay, matchedPeriod) = dayWords.first(where: { text.hasWord($0.0, at: j) }) {
             j += word.count
             day = matchedDay
+            sawDay = true
             period = matchedPeriod
         }
         text.skipSpaces(&j)
@@ -175,8 +181,24 @@ enum LauncherReminderParser {
         }
         let sawAt = text.takeWord(["at"], at: &j) != nil
         text.skipSpaces(&j)
-        guard let clock = clockTime(text, at: &j, bareHourAllowed: sawAt),
-              let hours = candidateHours(clock, period: period),
+        guard let clock = clockTime(text, at: &j, bareHourAllowed: sawAt) else { return nil }
+        // 「一点也不好玩」「两点之间直线最短」：中文数字 + 点、又没有别的时间信号的不算（第 10 步验证后定 ——
+        // 这一行排第一且默认选中，误判比漏判糟；代价是「三点开会」要写成「下午三点开会」或「3点开会」）。
+        if clock.chineseDian, !clock.firmSuffix, !sawDay, period == nil, !asksForReminder { return nil }
+        // 时间段「3点到5点」「3点-5点」「15:00~17:00」：按开始时刻，后一个时刻和连接词不进事由。
+        var afterRange = j
+        text.skipSpaces(&afterRange)
+        if text.takeAny(["到", "至", "-", "~", "～", "—", "－"], at: &afterRange) != nil {
+            text.skipSpaces(&afterRange)
+            if clockTime(text, at: &afterRange, bareHourAllowed: false) != nil { j = afterRange }
+        }
+        // 「下午3点前交报告」：照那个时刻提醒，「前 / 之前 / 以前」不进事由。
+        var beforeWord = j
+        text.skipSpaces(&beforeWord)
+        if text.takeAny(["之前", "以前", "前"], at: &beforeWord) != nil { j = beforeWord }
+        let today: Bool
+        if case .offset(0) = day { today = true } else { today = false }
+        guard let hours = candidateHours(clock, period: period, today: today),
               let dayStart = dayStart(day, now: now, cal: cal) else { return nil }
         for hour in hours {
             if let date = time(hour: hour, minute: clock.minute, on: dayStart, cal: cal), date > now { return (date, j) }
@@ -199,12 +221,12 @@ enum LauncherReminderParser {
         }
     }
 
-    /// 当天的 `hour:minute`（`hour` 可以是 24 = 第二天 0 点）。
+    /// 当天的 `hour:minute`；`hour` 24–29 = 第二天的 0–5 点（「晚上12点」「晚上一点」）。
     private static func time(hour: Int, minute: Int, on dayStart: Date, cal: Calendar) -> Date? {
-        guard (0...24).contains(hour), (0...59).contains(minute) else { return nil }
-        if hour == 24 {
-            guard minute == 0, let next = cal.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
-            return next
+        guard (0...29).contains(hour), (0...59).contains(minute) else { return nil }
+        if hour >= 24 {
+            guard let next = cal.date(byAdding: .day, value: 1, to: dayStart) else { return nil }
+            return cal.date(bySettingHour: hour - 24, minute: minute, second: 0, of: next)
         }
         return cal.date(bySettingHour: hour, minute: minute, second: 0, of: dayStart)
     }
@@ -217,6 +239,10 @@ enum LauncherReminderParser {
         var meridiem: Bool?
         /// 写成 `15:30` 的（按 24 小时算，不猜上午下午）。
         var colon = false
+        /// 钟点是「中文数字 + 点」（「三点」「两点」，不是「3点」）：要有别的时间信号才算提醒。
+        var chineseDian = false
+        /// 点后面紧跟「钟 / 半 / 一刻 / 三刻 / N 分 / 整」：本身就是时间信号。
+        var firmSuffix = false
     }
 
     /// 钟点：`15:30`、`3:30 pm`、`3pm`、`三点`、`三点半`、`三点一刻`、`三点十五(分)`、`3 点 05`；`bareHourAllowed`（前面写了 at）时
@@ -245,20 +271,33 @@ enum LauncherReminderParser {
         }
         // 三点…
         if text.take("点", at: &afterNumber) {
-            _ = text.take("钟", at: &afterNumber)
+            // 「三点多」「3点多」说不清几点，不算（第 10 步验证后定）。
+            if text.has("多", at: afterNumber) { return nil }
+            let chinese = !(text.lower[j].isASCII && text.lower[j].isNumber)
+            let clock = { (minute: Int, firm: Bool) -> Clock in
+                var clock = Clock(hour: hour, minute: minute)
+                clock.chineseDian = chinese
+                clock.firmSuffix = firm
+                return clock
+            }
+            let sawZhong = text.take("钟", at: &afterNumber)
             var m = afterNumber
             text.skipSpaces(&m)
             if text.take("半", at: &m) {
                 j = m
-                return Clock(hour: hour, minute: 30)
+                return clock(30, true)
             }
             if text.take("一刻", at: &m) {
                 j = m
-                return Clock(hour: hour, minute: 15)
+                return clock(15, true)
             }
             if text.take("三刻", at: &m) {
                 j = m
-                return Clock(hour: hour, minute: 45)
+                return clock(45, true)
+            }
+            if text.take("整", at: &m) {
+                j = m
+                return clock(0, true)
             }
             let leadingZero = text.has("零", at: m) || text.has("〇", at: m) || text.has("0", at: m)
             var digitsEnd = m
@@ -270,10 +309,10 @@ enum LauncherReminderParser {
                 // 「三点十五」「3 点 05」「三点零五」「三点五分」认；「三点五」（是 3:05 还是 3:50？）不认。
                 guard unit || leadingZero || minute >= 10 || digitCount >= 2 else { return nil }
                 j = unit ? end : digitsEnd
-                return Clock(hour: hour, minute: minute)
+                return clock(minute, unit || sawZhong)
             }
             j = afterNumber
-            return Clock(hour: hour, minute: 0)
+            return clock(0, sawZhong)
         }
         if bareHourAllowed {
             j = k
@@ -294,7 +333,8 @@ enum LauncherReminderParser {
     /// - 写了上午 / 下午……：下午、傍晚、晚上的 1–11 点加 12；中午的 1–3 点加 12；晚上 12 点是第二天 0 点。
     /// - 写成 `15:30`：就是这个钟点。
     /// - 都没写：13 点以后、0 点、12 点照写的；1–6 点当成下午（很少有人设凌晨的提醒）；7–11 点先当上午，已经过了再当晚上。
-    private static func candidateHours(_ clock: Clock, period: Period?) -> [Int]? {
+    /// `today`：说的是今天（没写日子，或写的是今天 / 今晚）。
+    private static func candidateHours(_ clock: Clock, period: Period?, today: Bool) -> [Int]? {
         let h = clock.hour
         if let pm = clock.meridiem {
             guard (1...12).contains(h) else { return nil }
@@ -313,7 +353,10 @@ enum LauncherReminderParser {
                 if (1...11).contains(h) { return [h + 12] }
                 return (12...23).contains(h) ? [h] : nil
             case .evening:
-                if (1...11).contains(h) { return [h + 12] }
+                // 晚上 1–5 点是那一晚之后的凌晨：所指那天的次日（「明天晚上一点」= 后天 01:00）；说的是今天、而且今天的
+                // 那个钟点还没到（00:30 说「晚上1点」）就是今天的（第 10 步验证后定，同「晚上12点 = 次日 0 点」）。
+                if (1...5).contains(h) { return today ? [h, h + 24] : [h + 24] }
+                if (6...11).contains(h) { return [h + 12] }
                 if h == 12 { return [24] }
                 return (13...23).contains(h) ? [h] : nil
             }
