@@ -46,9 +46,17 @@ struct LauncherQuery: Equatable, Sendable {
     /// - 两个来源的前缀相同（不分大小写）时按来源 id 排序取第一个，结果稳定、不随字典顺序变。
     /// - 查询词去掉首尾空白；"a " 得到「只搜 App、查询词为空」。
     /// - 搜哪些来源按 `sourceGroups` 展开（"c " = 剪贴板 + 片段）。
+    /// - `placed`：这次输入不是打字打进来的，是放进来的原文（「选中的 / 刚复制的」放进输入框、⌘V 粘贴、拖放，§5.4）。
+    ///   输入框里的文字在空白归一后还是它（`LauncherPastedText.matches`）时**按字面处理、不拆前缀**：
+    ///   「A quick fix…」「> quoted reply」「c is a language」放进来是要拿这段文字做事，不是只搜一类。
+    ///   改动一个字就不再是它，照常拆前缀 —— 手打的 `f readme` 不受影响。
     static func parse(_ input: String,
                       prefixBySource: [String: String] = defaultPrefixBySource,
-                      sourceGroups: [String: Set<String>] = defaultSourceGroups) -> LauncherQuery {
+                      sourceGroups: [String: Set<String>] = defaultSourceGroups,
+                      placed: String? = nil) -> LauncherQuery {
+        if let placed, LauncherPastedText.matches(original: placed, fieldText: input) {
+            return LauncherQuery(sourceID: nil, text: trimmed(input), sourceGroups: sourceGroups)
+        }
         for (sourceID, rawPrefix) in prefixBySource.sorted(by: { $0.key < $1.key }) {
             let prefix = rawPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !prefix.isEmpty, let rest = remainder(of: input, afterPrefix: prefix) else { continue }

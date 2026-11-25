@@ -116,7 +116,8 @@ final class LauncherEngine {
     var textActions: [LauncherCatalogCommand] = []
     /// 这次输入的建议行（动作类），按行 id。每次查询换一批。
     private var suggestionsByKey: [String: LauncherSuggestion] = [:]
-    /// 按 ⌘V 时记下的带换行的原文（控制器每次查询前设）：输入框里的文字还是它时，建议行用它（§5.4）。
+    /// 放进来的原文（⌘V、拖放、「选中的 / 刚复制的」放进输入框；控制器每次查询前设）：输入框里的文字还是它时
+    /// 按字面处理、不拆前缀（`LauncherQuery.parse(placed:)`），带换行的建议行用原文（§5.4）。
     var pastedText: String?
     /// 各模块声明的图片动作（§5.5）：呼出时装进来，只在挂着图片 / 输入是图片文件的路径时出现。
     var imageActions: [LauncherCatalogCommand] = []
@@ -247,7 +248,8 @@ final class LauncherEngine {
                                          rows: suggestions.rows, candidateCount: suggestions.rows.count, duration: duration)
         }
 
-        let query = LauncherQuery.parse(input, prefixBySource: prefixBySource)
+        // 放进来的文字（不是打字打进来的）按字面处理、不拆前缀；改动过就照常拆（§5.4）。
+        let query = LauncherQuery.parse(input, prefixBySource: prefixBySource, placed: pastedText)
 
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
         if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
