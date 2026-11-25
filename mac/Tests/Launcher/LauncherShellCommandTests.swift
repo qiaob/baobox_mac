@@ -51,7 +51,7 @@ final class LauncherShellCommandTests: XCTestCase {
     }
 
     func testSingleWordsAndNonCommandsAreRejected() {
-        for text in ["git", "ls", "docker", "npm", "", " ", "$", "$ ", "hello world", "swift build", "make install",
+        for text in ["git", "ls", "docker", "npm", "", " ", "$", "$ ", "hello world", "swift build",
                      "ps aux", "git 怎么回滚", "cd 到桌面", "docker 是什么", "open 3.5 files", "rm 1.5",
                      "怎么用 git status"] {
             XCTAssertNil(LauncherShellCommand.detect(text), text)
@@ -89,6 +89,61 @@ final class LauncherShellCommandTests: XCTestCase {
         XCTAssertFalse(LauncherShellCommand.hasHiddenCharacters("git commit -m \"修复登录 🎉\""))
     }
 
+    // MARK: - 第 10 步验证后定
+
+    /// 验证者列的误判：一句英文、一句广告，不是命令。
+    func testVerifierFalsePositivesAreRejected() {
+        for text in ["cat and/or dog", "find and/or replace text", "python is great for data/science",
+                     "find the U.S. embassy", "cd e.g. somewhere", "make sure i.e. it works", "cat videos on youtube.com",
+                     "ps: I love you", "git gud", "npm i love you", "$ 5 off your first order", "$ 100 is a lot",
+                     "brew coffee", "cp a b", "open the U.S. site", "cat my/your notes", "find it in Downloads/",
+                     "kill the process", "open a.txt and b.txt", "$ -rf /", "$ 3.5 percent"] {
+            XCTAssertNil(LauncherShellCommand.detect(text), text)
+        }
+    }
+
+    /// 验证者列的漏判里该补的：make 的常见目标、ssh / scp 带 `@`。`echo hello`、`ssh host` 照旧不认。
+    func testVerifierFalseNegativesThatAreNowCommands() {
+        for text in ["make build", "make install", "make test", "make clean", "make all", "make run", "make dev", "make lint",
+                     "ssh me@host", "ssh root@10.0.0.1", "scp me@host:notes notes", "npm --version", "tail -f log",
+                     "ls ~/Desktop", "mv old.txt new.txt", "open google.com", "export const a=1", "npm i lodash",
+                     "$ ./run.sh", "$ ~/bin/deploy --dry-run", "$ _build", "$ .venv/bin/python app.py", "$ g++ -O2 a.cpp"] {
+            XCTAssertEqual(LauncherShellCommand.detect(text), text.hasPrefix("$ ") ? String(text.dropFirst(2)) : text, text)
+        }
+        for text in ["echo hello", "ssh host", "make it work", "make me a sandwich"] {
+            XCTAssertNil(LauncherShellCommand.detect(text), text)
+        }
+    }
+
+    /// 虚词只看引号外的词；有选项形状的词时不查；子命令位置上的那个子命令不查。
+    func testFunctionWordRule() {
+        XCTAssertEqual(LauncherShellCommand.detect("git commit \"fix the bug in my app\""),
+                       "git commit \"fix the bug in my app\"", "引号里的虚词不算")
+        XCTAssertEqual(LauncherShellCommand.detect("git commit -m fix the bug"), "git commit -m fix the bug", "有选项时不查")
+        XCTAssertEqual(LauncherShellCommand.detect("git merge the-branch"), "git merge the-branch", "the-branch 不是 the")
+        XCTAssertEqual(LauncherShellCommand.detect("git push origin main"), "git push origin main")
+        XCTAssertNil(LauncherShellCommand.detect("git push it to me"))
+        XCTAssertTrue(LauncherShellCommand.isFunctionWord("and/or"))
+        XCTAssertTrue(LauncherShellCommand.isFunctionWord("The"))
+        XCTAssertTrue(LauncherShellCommand.isFunctionWord("me,"))
+        XCTAssertFalse(LauncherShellCommand.isFunctionWord("it's"))
+        XCTAssertFalse(LauncherShellCommand.isFunctionWord("main"))
+        XCTAssertEqual(LauncherShellCommand.words("a 'b c' \"d\" e").map(\.quoted), [false, true, true, true, false])
+        XCTAssertEqual(LauncherShellCommand.words("it's fine").map(\.quoted), [false, false], "词中间的撇号不开引号")
+    }
+
+    func testDollarPromptNeedsACommandName() {
+        XCTAssertTrue(LauncherShellCommand.looksLikeCommandName("npm"))
+        XCTAssertTrue(LauncherShellCommand.looksLikeCommandName("./run.sh"))
+        XCTAssertTrue(LauncherShellCommand.looksLikeCommandName("~/bin/x"))
+        XCTAssertTrue(LauncherShellCommand.looksLikeCommandName("g++"))
+        XCTAssertFalse(LauncherShellCommand.looksLikeCommandName("5"))
+        XCTAssertFalse(LauncherShellCommand.looksLikeCommandName("$5"))
+        XCTAssertFalse(LauncherShellCommand.looksLikeCommandName("-rf"))
+        XCTAssertFalse(LauncherShellCommand.looksLikeCommandName("修复"))
+        XCTAssertFalse(LauncherShellCommand.looksLikeCommandName("a;b"))
+    }
+
     func testTokenRules() {
         XCTAssertTrue(LauncherShellCommand.isOption("-x"))
         XCTAssertTrue(LauncherShellCommand.isOption("--force"))
@@ -104,6 +159,10 @@ final class LauncherShellCommandTests: XCTestCase {
         XCTAssertFalse(LauncherShellCommand.isPath("door."))
         XCTAssertFalse(LauncherShellCommand.isPath("work..."))
         XCTAssertFalse(LauncherShellCommand.isPath("3.5"))
+        XCTAssertFalse(LauncherShellCommand.isPath("U.S."), "以 . 结尾的不算")
+        XCTAssertFalse(LauncherShellCommand.isPath("e.g."))
+        XCTAssertTrue(LauncherShellCommand.isPath(".."))
+        XCTAssertTrue(LauncherShellCommand.isPath("a/b."), "含 / 照算")
         XCTAssertTrue(LauncherShellCommand.isAssignment("a=b"))
         XCTAssertFalse(LauncherShellCommand.isAssignment("=b"))
         XCTAssertFalse(LauncherShellCommand.isAssignment("a="))

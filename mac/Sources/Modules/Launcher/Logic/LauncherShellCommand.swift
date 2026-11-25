@@ -29,33 +29,106 @@ enum LauncherShellCommand {
                         "top", "edit", "create", "cp", "label", "annotate"],
             "brew": ["install", "uninstall", "reinstall", "upgrade", "update", "list", "search", "info", "services",
                      "doctor", "cleanup", "tap", "outdated"],
+            // make 的常见目标（第 10 步验证后加：`make build`、`make install` 原来认不出）。
+            "make": ["build", "install", "test", "clean", "all", "run", "dev", "lint"],
         ]
     }()
 
+    /// 英文虚词（第 10 步验证后定）：没有选项形状的词时，后面只要有一个不在引号里的词（含 `/` 的拆开看）是这些，
+    /// 就是一句英文，不是命令 ——「cat and/or dog」「python is great for data/science」「cat videos on youtube.com」。
+    static let functionWords: Set<String> = [
+        "the", "a", "an", "and", "or", "is", "are", "was", "be", "to", "of", "on", "in", "for", "with", "my", "your",
+        "you", "i", "it", "this", "that", "me", "we", "not", "sure",
+    ]
+
+    /// 后面有含 `@` 的词（`ssh deploy@host`、`scp a.txt me@host:/tmp`）也算证据的命令。
+    static let atCommands: Set<String> = ["ssh", "scp"]
+
     /// 像一条命令就给出要跑的那条命令（`$ ` 去掉、去首尾空白），否则 nil。规则：
-    /// - 只认一行；`$ ` 开头的（从文档里复制的提示符）都算，后面不能是空的。
+    /// - 只认一行；有控制字符、双向控制符、零宽字符的不认（`hasHiddenCharacters`）。
+    /// - `$ ` 开头的（从文档里复制的提示符）：后面第一个词像命令名就算（`looksLikeCommandName`；「$ 5 off」不算）。
     /// - 否则第一个词在 `knownCommands` 里、后面还有参数，而且后面至少有一个词像选项（`-x`、`--xx`）、路径（含 `/` 或 `.`，
-    ///   `~`、`.`、`..`）、赋值（`a=b`），或是这个命令的常见子命令；`sudo` 后面跟的是一条像命令的命令也算。
-    ///   所以 `open the door`、`make it work`、`find my phone`、单独一个 `ls` 都不算。
+    ///   `~`、`.`、`..`；以 `.` 结尾的不算）、赋值（`a=b`）、`ssh` / `scp` 后面含 `@` 的词，或是这个命令的常见子命令；
+    ///   `sudo` 后面跟的是一条像命令的命令也算。
+    /// - 没有选项形状的词时，后面有一个不在引号里的英文虚词（`functionWords`）就不算 —— 子命令位置上的那个子命令不查。
+    ///   所以 `open the door`、`make it work`、`find my phone`、`cat and/or dog`、单独一个 `ls` 都不算。
     static func detect(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed.utf8.count <= maxLength, !trimmed.contains(where: \.isNewline),
               !hasHiddenCharacters(trimmed) else { return nil }
         if trimmed.hasPrefix("$ ") {
             let command = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
-            return command.isEmpty ? nil : command
+            guard let name = command.split(whereSeparator: { $0 == " " || $0 == "\t" }).first,
+                  looksLikeCommandName(String(name)) else { return nil }
+            return command
         }
-        let words = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        return isCommandLike(words) ? trimmed : nil
+        return isCommandLike(words(trimmed)) ? trimmed : nil
     }
 
-    private static func isCommandLike(_ words: [String]) -> Bool {
-        guard let first = words.first, knownCommands.contains(first), words.count >= 2 else { return false }
-        let rest = words.dropFirst()
-        if rest.contains(where: { isOption($0) || isPath($0) || isAssignment($0) }) { return true }
-        if let second = rest.first, subcommands[first]?.contains(second) == true { return true }
-        if first == "sudo" { return isCommandLike(Array(rest)) }
+    /// 拆开的一个词；`quoted` = 在引号里（`'…'`、`"…"`，以引号开头的词到以同一个引号结尾的词为止）。
+    struct Word: Equatable {
+        let text: String
+        let quoted: Bool
+    }
+
+    /// 按空格、制表符拆词，记下哪些在引号里。词中间的撇号（`it's`）不算开引号。
+    static func words(_ text: String) -> [Word] {
+        var result: [Word] = []
+        var open: Character?
+        for piece in text.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
+            let word = String(piece)
+            if let quote = open {
+                result.append(Word(text: word, quoted: true))
+                if word.last == quote { open = nil }
+                continue
+            }
+            if let first = word.first, first == "'" || first == "\"" {
+                result.append(Word(text: word, quoted: true))
+                if !(word.count > 1 && word.last == first) { open = first }
+                continue
+            }
+            result.append(Word(text: word, quoted: false))
+        }
+        return result
+    }
+
+    private static func isCommandLike(_ words: [Word]) -> Bool {
+        guard let first = words.first?.text, knownCommands.contains(first), words.count >= 2 else { return false }
+        let rest = Array(words.dropFirst())
+        let commandSubcommands = subcommands[first] ?? []
+        let hasOption = rest.contains { isOption($0.text) }
+        // 没有选项形状的词：一句英文的样子（虚词）就不是命令。子命令位置上的那个子命令（`npm i lodash` 的 i）不查。
+        if !hasOption {
+            for (index, word) in rest.enumerated() where !word.quoted {
+                if index == 0, commandSubcommands.contains(word.text) { continue }
+                if isFunctionWord(word.text) { return false }
+            }
+        }
+        if hasOption || rest.contains(where: { isPath($0.text) || isAssignment($0.text) }) { return true }
+        if atCommands.contains(first), rest.contains(where: { $0.text.contains("@") }) { return true }
+        if let second = rest.first?.text, commandSubcommands.contains(second) { return true }
+        if first == "sudo" { return isCommandLike(rest) }
         return false
+    }
+
+    /// 这个词（含 `/` 的拆开看，每段去掉句末标点、不分大小写）里有英文虚词。
+    static func isFunctionWord(_ word: String) -> Bool {
+        word.split(separator: "/").contains { part in
+            var stripped = Substring(part)
+            while let last = stripped.last, ".,!?;:…".contains(last) { stripped = stripped.dropLast() }
+            return functionWords.contains(stripped.lowercased())
+        }
+    }
+
+    /// `$ ` 后面的第一个词像不像命令名：以字母、`_`、`.`、`/`、`~` 开头，只含字母数字和 `_ . + - / ~`（第 10 步验证后定）。
+    static func looksLikeCommandName(_ word: String) -> Bool {
+        guard let first = word.unicodeScalars.first,
+              isASCIILetter(first) || "_./~".unicodeScalars.contains(first) else { return false }
+        return word.unicodeScalars.allSatisfy { isASCIILetter($0) || ("0"..."9").contains($0) || "_.+-/~".unicodeScalars.contains($0) }
+    }
+
+    private static func isASCIILetter(_ scalar: Unicode.Scalar) -> Bool {
+        ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar)
     }
 
     /// 看不见、或者会让看到的和实际的不一样的字符（第 10 步验证后定）：确认时显示的必须就是要跑的，有这些的不认成命令 ——
@@ -83,11 +156,12 @@ enum LauncherShellCommand {
     }
 
     /// 路径：含 `/`；或是 `~`、`.`、`..`、`~` 开头；或含一个后面还跟着字的 `.`（`README.md`、`.env`）。
-    /// 句末的标点（`door.`、`work...`）和纯数字（`3.5`）不算。
+    /// 以 `.` 结尾的（`U.S.`、`e.g.`、`i.e.`、句末的 `door.`，第 10 步验证后定）、句末别的标点（`work!`）和纯数字（`3.5`）不算。
     static func isPath(_ word: String) -> Bool {
         if word.contains("/") || word == "." || word == ".." || word.hasPrefix("~") { return true }
+        guard !word.hasSuffix(".") else { return false }
         var stripped = Substring(word)
-        while let last = stripped.last, ".,!?;:…".contains(last) { stripped = stripped.dropLast() }
+        while let last = stripped.last, ",!?;:…".contains(last) { stripped = stripped.dropLast() }
         guard stripped.contains(".") else { return false }
         return !stripped.allSatisfy { $0 == "." || ("0"..."9").contains($0) }
     }
