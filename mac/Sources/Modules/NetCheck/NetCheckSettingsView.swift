@@ -29,8 +29,7 @@ struct NetCheckSettingsView: View {
 
             Section("netcheck.settings.serviceSection") {
                 SecureField("netcheck.settings.apiKey", text: $apiKey)
-                    .onSubmit { keySaveFailed = !NetCheckKeychain.save(apiKey) }
-                    .onChange(of: apiKey) { _, value in keySaveFailed = !NetCheckKeychain.save(value) }
+                    .onSubmit { saveKey() }
                 if keySaveFailed {
                     Text("netcheck.settings.apiKeyFailed")
                         .font(.caption)
@@ -59,5 +58,12 @@ struct NetCheckSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // 回车或离开设置页时才写钥匙串，不是每敲一个字写一次
+        .onDisappear { saveKey() }
+    }
+
+    private func saveKey() {
+        guard apiKey != (NetCheckKeychain.load() ?? "") else { return }
+        keySaveFailed = !NetCheckKeychain.save(apiKey)
     }
 }

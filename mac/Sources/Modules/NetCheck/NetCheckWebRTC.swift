@@ -19,6 +19,9 @@ final class NetCheckWebRTC: NSObject {
     /// `WKWebView.navigationDelegate` 是弱引用，自己留着。
     private var loadWatcher: NetCheckLoadWatcher?
     private var waitingForLoad: [CheckedContinuation<Void, Never>] = []
+    /// 正在等的那次收集：脚本回调与 Swift 侧的超时谁先到谁收下，另一个作废。
+    private var pendingGather: CheckedContinuation<Any?, Error>?
+    private var gatherGeneration = 0
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -84,27 +87,43 @@ final class NetCheckWebRTC: NSObject {
         let value: Any?
         do {
             value = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in
-                webView.callAsyncJavaScript(Self.script, arguments: arguments, in: nil, in: .page) { result in
-                    switch result {
-                    case .success(let value):
-                        continuation.resume(returning: value)
-                    case .failure(let error):
-                        continuation.resume(throwing: error)
+                gatherGeneration += 1
+                let generation = gatherGeneration
+                pendingGather = continuation
+                // 兜底：WebView 被挂起（窗口在检测中途关了）时脚本的回调可能永远不来，别让检测一直停在「检测中」。
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.gatherTimeoutMs + 5000)) { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.finishGather(generation, .failure(NetCheckFailure(L("netcheck.error.webrtcTimeout"))))
+                    }
+                }
+                webView.callAsyncJavaScript(Self.script, arguments: arguments, in: nil, in: .page) { [weak self] result in
+                    MainActor.assumeIsolated {
+                        self?.finishGather(generation, result.map { Optional($0) })
                     }
                 }
             }
+        } catch let failure as NetCheckFailure {
+            return .failure(failure)
         } catch {
             return .failure(NetCheckFailure(L("netcheck.error.webrtc \(error.localizedDescription)")))
         }
         guard let dict = value as? [String: Any] else {
-            return .failure(NetCheckFailure(L("netcheck.error.webrtc \("no result")")))
+            return .failure(NetCheckFailure(L("netcheck.error.webrtcNoResult")))
         }
         if let ok = dict["ok"] as? Bool, ok {
             let lines = (dict["lines"] as? [Any] ?? []).compactMap { $0 as? String }
             return .success(lines)
         }
-        let why = dict["error"] as? String ?? "unknown"
+        guard let why = dict["error"] as? String, !why.isEmpty else {
+            return .failure(NetCheckFailure(L("netcheck.error.webrtcNoResult")))
+        }
         return .failure(NetCheckFailure(L("netcheck.error.webrtc \(why)")))
+    }
+
+    private func finishGather(_ generation: Int, _ result: Result<Any?, Error>) {
+        guard generation == gatherGeneration, let continuation = pendingGather else { return }
+        pendingGather = nil
+        continuation.resume(with: result)
     }
 
     func stop() {

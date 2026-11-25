@@ -142,6 +142,8 @@ enum NetCheckReason: Equatable {
     case noIPv6
     case ipv6IsReal(String)
     case ipv6Differs(String)
+    /// 有 IPv6 出口，但 IPv4 出口没测出来或有一边认不出 ASN：比不了
+    case ipv6CannotCompare(String)
     case ipv6Matches(String)
 
     case dnsServiceError(String)
@@ -450,6 +452,14 @@ enum NetCheckLogic {
         return NetCheckFinding(item: .exit, verdict: .notice, reason: .exitFlagged(info.describe, flags))
     }
 
+    /// 两个 ASN 是不是同一家：号码相同，或者在云厂商表里是同一家
+    /// （Google 的 15169 / 396982、AWS 的 16509 / 14618 常常一个出 IPv4、一个出 IPv6）。
+    static func sameNetwork(_ a: Int, _ b: Int) -> Bool {
+        if a == b { return true }
+        guard let x = knownHosting(a), let y = knownHosting(b) else { return false }
+        return x == y
+    }
+
     static func judgeIPv6(_ ipv6: Result<NetCheckIPInfo?, NetCheckFailure>,
                           ipv4: Result<NetCheckIPInfo, NetCheckFailure>,
                           real: NetCheckRealNetworks) -> NetCheckFinding {
@@ -462,7 +472,10 @@ enum NetCheckLogic {
         if real.contains(info.asn) {
             return NetCheckFinding(item: .ipv6, verdict: .leak, reason: .ipv6IsReal(info.describe))
         }
-        if case .success(let v4) = ipv4, let a = info.asn, let b = v4.asn, a != b {
+        guard case .success(let v4) = ipv4, let a = info.asn, let b = v4.asn else {
+            return NetCheckFinding(item: .ipv6, verdict: .unknown, reason: .ipv6CannotCompare(info.describe))
+        }
+        if !sameNetwork(a, b) {
             return NetCheckFinding(item: .ipv6, verdict: .leak, reason: .ipv6Differs(info.describe))
         }
         return NetCheckFinding(item: .ipv6, verdict: .ok, reason: .ipv6Matches(info.describe))
@@ -527,8 +540,22 @@ enum NetCheckLogic {
             return NetCheckFinding(item: .webrtc, verdict: .unknown, reason: .webrtcCannotCompare(publicAddresses))
         }
         let stray = publicAddresses.filter { address in !exits.contains { sameAddress($0, address) } }
-        if !stray.isEmpty {
-            return NetCheckFinding(item: .webrtc, verdict: .leak, reason: .webrtcLeak(stray))
+        // 同一族的出口没测出来（比如 IPv6 地址的归属没查到）：这个地址可能正是那个出口，比不了，不算泄露
+        var ipv4Failed = false
+        if case .failure = ipv4 { ipv4Failed = true }
+        var ipv6Failed = false
+        if case .failure = ipv6 { ipv6Failed = true }
+        func familyUnknown(_ address: String) -> Bool {
+            if ipv4Bytes(address) != nil { return ipv4Failed }
+            if ipv6Bytes(address) != nil { return ipv6Failed }
+            return false
+        }
+        if !stray.isEmpty && stray.allSatisfy(familyUnknown) {
+            return NetCheckFinding(item: .webrtc, verdict: .unknown, reason: .webrtcCannotCompare(stray))
+        }
+        let leaked = stray.filter { !familyUnknown($0) }
+        if !leaked.isEmpty {
+            return NetCheckFinding(item: .webrtc, verdict: .leak, reason: .webrtcLeak(leaked))
         }
         if !localAddresses.isEmpty {
             return NetCheckFinding(item: .webrtc, verdict: .notice, reason: .webrtcLocal(localAddresses))

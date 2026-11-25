@@ -164,6 +164,28 @@ final class NetCheckLogicTests: XCTestCase {
                        .noIPv6)
     }
 
+    func testIPv6FromTheSameCloudUnderAnotherASNIsNotALeak() {
+        var o = observations(info(anonGCP))
+        o.ipv6 = .success(NetCheckIPInfo(ip: "2600:1900:4000::1", asn: 396982, network: "Google LLC"))
+        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .ipv6)?.verdict, .ok)
+    }
+
+    func testIPv6ThatCannotBeComparedIsUnknown() {
+        var o = observations(info(anonGCP))
+        o.ipv4 = .failure(NetCheckFailure("down"))
+        o.ipv6 = .success(NetCheckIPInfo(ip: "2406:3003::1", asn: 4657))
+        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .ipv6)?.verdict, .unknown)
+    }
+
+    func testWebRTCAddressWhoseExitLookupFailedIsUnknown() {
+        var o = observations(info(anonGCP), webrtc: ["candidate:9 1 udp 1 2406:3003::1 5 typ srflx raddr :: rport 0"])
+        o.ipv6 = .failure(NetCheckFailure("x"))
+        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .webrtc)?.verdict, .unknown)
+        // 没有 IPv6 出口（不是没测出来）时网页却拿到了 IPv6：照样是泄露
+        o.ipv6 = .success(nil)
+        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .webrtc)?.verdict, .leak)
+    }
+
     func testTimezone() {
         let mismatch = finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks()), .timezone)
         XCTAssertEqual(mismatch?.reason, .timezoneMismatch(system: "Asia/Singapore", exit: "America/Los_Angeles"))

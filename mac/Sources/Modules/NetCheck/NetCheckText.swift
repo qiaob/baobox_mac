@@ -81,6 +81,7 @@ enum NetCheckText {
         case .ipv6IsReal(let ip): return L("netcheck.reason.ipv6IsReal \(ip)")
         case .ipv6Differs(let ip): return L("netcheck.reason.ipv6Differs \(ip)")
         case .ipv6Matches(let ip): return L("netcheck.reason.ipv6Matches \(ip)")
+        case .ipv6CannotCompare(let ip): return L("netcheck.reason.ipv6CannotCompare \(ip)")
         case .dnsServiceError(let why): return L("netcheck.reason.dnsServiceError \(why)")
         case .dnsNoResolvers: return L("netcheck.reason.dnsNoResolvers")
         case .dnsLeak(let servers): return L("netcheck.reason.dnsLeak \(list(servers))")

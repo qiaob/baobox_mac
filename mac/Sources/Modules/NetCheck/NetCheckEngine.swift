@@ -67,7 +67,8 @@ struct NetCheckEngine {
     func ipv6Exit() async -> Result<NetCheckIPInfo?, NetCheckFailure> {
         guard let body = try? await get(NetCheckSettings.ipv6Endpoint) else { return .success(nil) }
         let ip = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard ip.contains(":") else {
+        // 只认一个真正的 IPv6 地址：回了 IPv4（服务被换成了双栈的）或一页 HTML（门户页）都测不了
+        guard NetCheckLogic.ipv6Bytes(ip) != nil else {
             return .failure(NetCheckFailure(L("netcheck.error.notIPv6")))
         }
         return await lookup(ip).map { Optional($0) }
