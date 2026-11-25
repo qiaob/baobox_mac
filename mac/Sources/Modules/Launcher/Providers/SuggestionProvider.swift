@@ -23,6 +23,8 @@ struct LauncherSuggestion {
     /// 执行时记一次使用的键（兜底建议：`textaction/<id>`）；nil = 不记（对应建议固定在最前，不用排）。
     let usageKey: String?
     let action: LauncherSuggestionAction
+    /// 要按两次 ⏎（「在终端里运行」、取消一条提醒，PR 10）：第一次只换标题；nil = 按一次就执行。
+    var confirmation: LauncherConfirmation? = nil
 }
 
 /// 一次输入的全部建议。

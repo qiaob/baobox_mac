@@ -70,16 +70,20 @@ final class LauncherCommandProvider {
         return LauncherCommand(id: definition.id, title: title, symbolName: symbolName) { _ in action() }
     }
 
-    /// 命令表 → 面板条目；搜索键走缓存。
+    /// 命令表 → 面板条目；搜索键走缓存。有破坏性的命令（`destructive`）要按两次 ⏎：第一次标题换成「再按一次回车：<命令名>」。
     func items(from catalog: [LauncherCatalogCommand]) -> [LauncherItem] {
         let keys = keyCache.keys(for: catalog)
         return zip(catalog, keys).map { entry, searchKeys in
             let command = entry.command
             let candidate = LauncherCandidate(sourceID: Self.sourceID, entryID: command.id, searchKeys: searchKeys)
-            return LauncherItem(candidate: candidate,
-                                row: LauncherRow(id: candidate.key, title: command.title, source: entry.toolName,
-                                                 icon: .symbol(command.symbolName)),
-                                run: { command.run([:]) })
+            var item = LauncherItem(candidate: candidate,
+                                    row: LauncherRow(id: candidate.key, title: command.title, source: entry.toolName,
+                                                     icon: .symbol(command.symbolName)),
+                                    run: { command.run([:]) })
+            if command.destructive {
+                item.confirmation = LauncherConfirmation(verb: nil, object: command.title)
+            }
+            return item
         }
     }
 }

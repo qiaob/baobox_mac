@@ -81,6 +81,9 @@ final class LauncherPanelModel: ObservableObject {
     @Published private(set) var selectedIndex = 0
     /// 选中哪一行、这次输入以来用户手动选过没有（规则见 `LauncherSelectionState`）。
     private var selection = LauncherSelectionState()
+    /// 二次确认（PR 10）：哪一行在等第二次 ⏎；它原来的样子（复位时换回来）和换上的标题。
+    private var confirm = LauncherConfirmState()
+    private var armed: (original: LauncherRow, title: String)?
     /// 每换一批结果 +1：列表回到顶上。
     @Published private(set) var resultsVersion = 0
 
@@ -117,22 +120,36 @@ final class LauncherPanelModel: ObservableObject {
     /// `searching`：后台的结果还没回来，一行都没有时显示「正在查找」而不是「没有结果」。
     func setRows(_ rows: [LauncherRow], emptyInput: Bool, newInput: Bool = true, searching: Bool = false) {
         let scrollsToTop = selection.rowsChanged(from: self.rows.map(\.id), to: rows.map(\.id), newInput: newInput)
+        var rows = rows
+        if newInput {
+            disarm(restoring: false)
+        }
+        selectedIndex = selection.index
+        // 同一个输入、后台结果回来：在等第二次 ⏎ 的那一行还在、还选着 → 新的一批里也换上「再按一次回车…」；否则复位。
+        if let armed, let id = confirm.armedID {
+            if rows.indices.contains(selectedIndex), rows[selectedIndex].id == id {
+                self.armed = (rows[selectedIndex], armed.title)
+                rows[selectedIndex] = Self.retitled(rows[selectedIndex], armed.title)
+            } else {
+                disarm(restoring: false)
+            }
+        }
         self.rows = rows
         if rows.isEmpty {
             content = searching ? .searching : (emptyInput ? .hint : .noResults)
         } else {
             content = .results(rows.map(LauncherLayout.rowHeight(for:)))
         }
-        selectedIndex = selection.index
         if scrollsToTop { resultsVersion += 1 }
         resetHoverBaseline()
     }
 
-    /// ↑ ↓：到头不循环。算手动选过。
+    /// ↑ ↓：到头不循环。算手动选过。选中移开了在等第二次 ⏎ 的那一行就复位。
     func moveSelection(by delta: Int) {
         guard !rows.isEmpty else { return }
         selection.move(by: delta, rowCount: rows.count)
         selectedIndex = selection.index
+        selectionMoved()
         resetHoverBaseline()
     }
 
@@ -143,6 +160,60 @@ final class LauncherPanelModel: ObservableObject {
         hoverBaseline = location
         selection.hover(index, rowCount: rows.count)
         selectedIndex = selection.index
+        selectionMoved()
+    }
+
+    // MARK: 二次确认（PR 10）
+
+    /// 对第 `index` 行按了一次 ⏎ / ⌘N / 单击，而这一行要按两次（`LauncherConfirmation`）。
+    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、标题换成 `title`，等第二次。
+    func confirmPress(at index: Int, title: String) -> Bool {
+        guard rows.indices.contains(index) else { return false }
+        let id = rows[index].id
+        if confirm.press(id) {
+            disarm(restoring: true)
+            return true
+        }
+        // 之前在等的别的那一行换回原来的标题（`press` 已经改成等这一行了）。
+        if let previous = armed, let at = rows.firstIndex(where: { $0.id == previous.original.id }) {
+            rows[at] = previous.original
+        }
+        selection.choose(index, rowCount: rows.count)
+        selectedIndex = selection.index
+        armed = (rows[index], title)
+        rows[index] = Self.retitled(rows[index], title)
+        resetHoverBaseline()
+        return false
+    }
+
+    /// 面板收起：在等第二次 ⏎ 的那一行复位。
+    func disarm() {
+        disarm(restoring: true)
+    }
+
+    /// 选中的行变了：不是在等的那一行就复位（标题换回来）。
+    private func selectionMoved() {
+        let id = rows.indices.contains(selectedIndex) ? rows[selectedIndex].id : nil
+        guard confirm.selectionChanged(to: id) != nil else { return }
+        restoreArmedRow()
+        armed = nil
+    }
+
+    /// `restoring`：把那一行的标题换回来（列表马上整个换掉时不用）。
+    private func disarm(restoring: Bool) {
+        _ = confirm.reset()
+        if restoring { restoreArmedRow() }
+        armed = nil
+    }
+
+    private func restoreArmedRow() {
+        guard let armed, let at = rows.firstIndex(where: { $0.id == armed.original.id }) else { return }
+        rows[at] = armed.original
+    }
+
+    /// 换了标题的同一行（id、图标、右侧小字都不变）。
+    private static func retitled(_ row: LauncherRow, _ title: String) -> LauncherRow {
+        LauncherRow(id: row.id, title: title, source: row.source, icon: row.icon, subtitle: row.subtitle, style: row.style)
     }
 
     func resetHoverBaseline() {

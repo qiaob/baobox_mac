@@ -205,6 +205,8 @@ final class LauncherController {
             pendingShownLog = nil
             Self.log.notice("\(shown, privacy: .public); selection cancelled (panel hidden)")
         }
+        // 在等第二次 ⏎ 的行复位（PR 10）。
+        model.disarm()
         // 挂着的图片收起即丢（图片占内存）；输入框里的字那时是这张图的筛选词，也不留。
         if attachment != nil {
             attachment = nil
@@ -607,6 +609,11 @@ final class LauncherController {
             fill(contextItem)
             return
         }
+        // 要按两次 ⏎ 的行（PR 10）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
+        if let confirmation = engine.suggestion(forKey: id)?.confirmation ?? engine.item(forKey: id)?.confirmation,
+           !model.confirmPress(at: index, title: Self.confirmTitle(confirmation)) {
+            return
+        }
         if let instant = engine.instant(forKey: id) {
             copy(instant)
             return
@@ -729,6 +736,13 @@ final class LauncherController {
         hide()
         let toast = L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))")
         LauncherFocus.restore { Self.toast(toast) }
+    }
+
+    /// 二次确认时那一行的标题：「再按一次回车<做什么>：<对象>」（对象太长中间截断，开头结尾都在）；没有「做什么」的写「再按一次回车：<对象>」。
+    static func confirmTitle(_ confirmation: LauncherConfirmation) -> String {
+        let object = LauncherConfirmText.object(confirmation.object)
+        guard let verb = confirmation.verb else { return L("launcher.confirm.plain \(object)") }
+        return L("launcher.confirm.action \(verb) \(object)")
     }
 
     /// 回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。

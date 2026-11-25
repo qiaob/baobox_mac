@@ -64,6 +64,8 @@ struct LauncherItem {
     var imageFile: URL? = nil
     /// 只在打了来源前缀时出现（图片条目，§3.2）。
     var onlyWithPrefix = false
+    /// 要按两次 ⏎（模块声明的 destructive 命令，PR 10）：第一次只换标题；nil = 按一次就执行。
+    var confirmation: LauncherConfirmation? = nil
 }
 
 /// 「输入即出」的一行（计算结果、文本识别）：固定排在最前，不进排序、不记使用；⏎ 复制，⌘⏎ 插入前台 App。
