@@ -115,6 +115,8 @@ final class SelectionTranslateTool: ToolModule {
     /// 润色 60（一大段文字时提前；普通文字时排在兜底建议的第 9 位，用得多才露出来）。
     /// 翻译也用在图片里认出的文字上（§5.5）：挂着图片时出「翻译图里的文字」，档位 15（取字 10 之后、钉在屏幕上 20 之前），
     /// 快速入口先本机取字、再把认出的文字交过来。
+    /// 朗读（PR 10）：档位 65（靠后，润色之后）；按语种选嗓音，正在读时这一行是「停止朗读」，再选一次就停（`toggleSpeech`）。
+    /// 它不是动作条上的动作，不看动作条的开关。
     func launcherCommands() -> [LauncherCommand] {
         let visible = Set(SelectionActionStore.visible.map(\.id))
         let actions: [(SelectionBuiltinAction, LauncherSuggestionTraits)] = [
@@ -124,12 +126,21 @@ final class SelectionTranslateTool: ToolModule {
             (.summarize, LauncherSuggestionTraits(kinds: [.plainText, .longText], priority: 20, boostedKinds: [.longText])),
             (.polish, LauncherSuggestionTraits(kinds: [.plainText, .longText], priority: 60, boostedKinds: [.longText])),
         ]
-        return actions.filter { visible.contains($0.0.rawValue) }.map { builtin, traits in
+        var commands = actions.filter { visible.contains($0.0.rawValue) }.map { builtin, traits in
             LauncherCommand.textAction(id: "selectiontranslate.text.\(builtin.rawValue)", title: builtin.title,
                                        symbolName: builtin.symbolName, suggestion: traits) { text in
                 SelectionTranslateController.shared.run(actionID: builtin.rawValue, onText: text)
             }
         }
+        let speaking = SelectionTranslateController.shared.isSpeaking
+        commands.append(LauncherCommand.textAction(
+            id: "selectiontranslate.text.speak",
+            title: speaking ? L("selectiontranslate.launcher.stopSpeaking") : L("selectiontranslate.launcher.speak"),
+            symbolName: speaking ? "stop.circle" : "speaker.wave.2",
+            suggestion: LauncherSuggestionTraits(priority: 65)) { text in
+            SelectionTranslateController.shared.toggleSpeech(text)
+        })
+        return commands
     }
 
     func settingsTab() -> AnyView {

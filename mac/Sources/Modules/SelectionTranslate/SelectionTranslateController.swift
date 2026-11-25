@@ -407,6 +407,22 @@ final class SelectionTranslateController {
         synthesizer.stopSpeaking(at: .immediate)
     }
 
+    /// 普通朗读正在读（快速入口的「朗读」那一行据此写成「停止朗读」）。
+    var isSpeaking: Bool { synthesizer.isSpeaking }
+
+    /// 快速入口的「朗读」（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：正在读就停；否则按语种选嗓音读这段文字 ——
+    /// 语种检测同结果面板（偏向两个目标语言），嗓音同结果面板的朗读按钮（`speak`）。太长的只读开头（同取词的上限）。
+    func toggleSpeech(_ text: String) {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+            return
+        }
+        let text = String(text.prefix(Self.maxCharacters)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let preferred = [SelectionTranslateSettings.target, SelectionTranslateSettings.secondaryTarget]
+        speak(text, language: LanguageDetector.detect(text, preferred: preferred))
+    }
+
     // MARK: - 自动弹出（CGEventTap，只听左键按下 / 抬起）
 
     /// 按设置与权限装配 / 拆除事件 tap。tap 建不起来（无辅助功能权限）就静默降级。
