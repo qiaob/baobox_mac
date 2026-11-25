@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 /// - 没有：打开手机互传的窗口（会话随窗口开），回执「连上手机后再发一次」—— 现有代码没有「连上后自动发」。
 /// - 档位 50，和「存为片段」并列（图片动作里排在「保存成文件」40 之后）。
 /// 挂着的图片是内存里的字节时，先在后台写成临时文件（`临时目录/Baobox-PhoneTransfer/`，扩展名按图片本来的格式）再发：
-/// 手机互传只认文件（局域网模式是手机来取，文件要留着）。写在扩展里，不动 `PhoneTransferTool.swift`。
+/// 手机互传只认文件（局域网模式是手机来取，文件要留着）。这个目录在模块 `activate()` 时（后台）、`willTerminate()` 时清空，
+/// 发送过程中不删（第 10 步验证后定）。
 extension PhoneTransferTool {
     func launcherCommands() -> [LauncherCommand] {
         [
@@ -36,6 +37,25 @@ extension PhoneTransferTool {
 /// 快速入口交来的东西怎么发到手机。
 @MainActor
 enum PhoneTransferLauncherActions {
+    /// 挂着的图片写成的临时文件放这儿。
+    nonisolated static var temporaryDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("Baobox-PhoneTransfer", isDirectory: true)
+    }
+
+    /// 清空临时图片：启动时（会话还没开，没有在发的）在后台清，退出时（会话已经停了）同步清。
+    nonisolated static func clearTemporaryImages(inBackground: Bool) {
+        let directory = temporaryDirectory
+        let clear = {
+            guard FileManager.default.fileExists(atPath: directory.path) else { return }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        if inBackground {
+            DispatchQueue.global(qos: .utility).async(execute: clear)
+        } else {
+            clear()
+        }
+    }
+
     static func send(text: String) {
         guard isConnected() else { return }
         PhoneTransferSession.shared.send(text: text)
@@ -90,7 +110,7 @@ enum PhoneTransferLauncherActions {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Baobox-PhoneTransfer", isDirectory: true)
+        let directory = temporaryDirectory
         var url = directory.appendingPathComponent("Baobox \(formatter.string(from: Date())).\(ext)")
         var index = 2
         while FileManager.default.fileExists(atPath: url.path) {
