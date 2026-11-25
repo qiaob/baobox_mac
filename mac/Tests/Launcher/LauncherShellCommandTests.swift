@@ -85,8 +85,54 @@ final class LauncherShellCommandTests: XCTestCase {
             XCTAssertNil(LauncherShellCommand.detect(text), text.debugDescription)
         }
         XCTAssertEqual(LauncherShellCommand.detect("\tls -la\t"), "ls -la", "首尾的制表符是空白，去掉")
-        XCTAssertTrue(LauncherShellCommand.hasHiddenCharacters("a\u{200F}b"))
-        XCTAssertFalse(LauncherShellCommand.hasHiddenCharacters("git commit -m \"修复登录 🎉\""))
+        XCTAssertFalse(LauncherShellCommand.allowsEveryCharacter("a\u{200F}b"))
+    }
+
+    // MARK: - 允许名单（第 10 步复查后定）
+
+    /// 验证者的例子：宽字形、组合符号、双向重排、看不见的空格和格式符 —— 都不算命令。
+    func testCharactersOutsideTheAllowlistAreNeverCommands() {
+        let cases = [
+            "echo " + String(repeating: "\u{FDFD}", count: 20) + ";rm -rf ~",          // ﷽：一个字形十来列宽，把尾巴推出面板
+            "ls -la Z\u{0351}\u{0352}\u{0357}\u{035B}\u{0346}a\u{0300}\u{0301}l\u{0302}g\u{0303}o", // zalgo：组合符号往下画
+            "ls -la e\u{0301}.txt",                                                   // 组合的 é（不是预组合的）
+            "echo \u{05D0}>\u{05D1} -n",                                              // 希伯来字母：不用控制符也会重排
+            "cat \u{0645}\u{0631}\u{062D}\u{0628}\u{0627}.txt",                     // 阿拉伯字母
+            "rm\u{00A0}-rf /tmp/x",                                                    // NBSP
+            "ls\u{3000}-la",                                                          // 全角空格
+            "r\u{00AD}m -rf /tmp/x",                                                   // 软连字符
+            "ls -la a\u{FE0F}.txt",                                                    // 变体选择符
+            "ls -la \u{E0041}\u{E0042}",                                               // 标签字符
+            "git commit -m 'done \u{1F389}'",                                          // emoji
+            "echo 3\u{00D7}4 -n", "echo 8\u{00F7}2 -n",                                // × ÷ 不收
+            "cat \u{201C}a.txt\u{201D}",                                               // 弯引号
+            "$ ls\u{200B} -la",                                                        // `$ ` 开头的也查
+        ]
+        for text in cases {
+            XCTAssertNil(LauncherShellCommand.detect(text), text.unicodeScalars.map { String(format: "%04X", $0.value) }.joined(separator: " "))
+        }
+    }
+
+    /// 中文路径、日文文件名、韩文、带变音符的拉丁字母（预组合）、全角字符：照算。
+    func testAllowedScriptsStillMakeCommands() {
+        for text in ["cd ~/文档/项目", "cat ~/書類/メモ.txt", "cat café.txt", "cat ~/문서/a.txt", "cd 中文目录/子目录",
+                     "git commit -m \"修复登录：完成。\"", "cat ./ｆｉｌｅ.txt", "mv naïve.txt naive.txt", "$ cat 「说明」.md"] {
+            let expected = text.hasPrefix("$ ") ? String(text.dropFirst(2)) : text
+            XCTAssertEqual(LauncherShellCommand.detect(text), expected, text)
+        }
+    }
+
+    func testAllowlistRanges() {
+        func allowed(_ value: UInt32) -> Bool { Unicode.Scalar(value).map(LauncherShellCommand.isAllowed) ?? false }
+        for value: UInt32 in [0x20, 0x7E, 0xC0, 0xE9, 0x24F, 0x3001, 0x303F, 0x3041, 0x3096, 0x30A1, 0x30FA, 0x30FC,
+                              0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xAC00, 0xD7A3, 0xFF01, 0xFF5E] {
+            XCTAssertTrue(allowed(value), String(format: "U+%04X", value))
+        }
+        for value: UInt32 in [0x09, 0x0A, 0x1F, 0x7F, 0x85, 0xA0, 0xAD, 0xBF, 0xD7, 0xF7, 0x250, 0x0301, 0x05D0, 0x0627,
+                              0x200B, 0x200F, 0x202E, 0x2066, 0x3000, 0x3040, 0x3097, 0x30FB, 0x30FD, 0xFDFD, 0xFE0F,
+                              0xFEFF, 0xFF00, 0xFF5F, 0x1F389, 0xE0041] {
+            XCTAssertFalse(allowed(value), String(format: "U+%04X", value))
+        }
     }
 
     // MARK: - 第 10 步验证后定

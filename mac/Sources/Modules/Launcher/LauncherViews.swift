@@ -606,11 +606,14 @@ struct LauncherResultRow: View {
                     .foregroundStyle(selected ? Color.white : Color.primary)
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        // 每行的宽度是按「ASCII 1、其余 2」估的；万一估错（字体不同），缩小字号挤进去 ——
+                        // 不裁、不换行（行高是按行数算的），也不撑出面板。
                         Text(verbatim: line)
                             .font(.system(size: LauncherLayout.confirmCommandFontSize, design: .monospaced))
                             .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(height: LauncherLayout.confirmCommandLineHeight, alignment: .leading)
+                            .minimumScaleFactor(0.5)
+                            .frame(maxWidth: .infinity, minHeight: LauncherLayout.confirmCommandLineHeight,
+                                   maxHeight: LauncherLayout.confirmCommandLineHeight, alignment: .leading)
                             .foregroundStyle(selected ? Color.white : Color.primary)
                     }
                 }
