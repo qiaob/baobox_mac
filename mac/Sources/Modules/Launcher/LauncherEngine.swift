@@ -99,8 +99,11 @@ struct LauncherSearchOutcome {
     /// 控制器去搜（`LauncherFileProvider`；正在跑的就是它时不重发），搜完 `setFileResult`。
     var pendingFiles: LauncherFileSearchRequest? = nil
 
-    /// 一行都没有，因为「文字的去处」全关掉了（第 13 步）：消息那一行写「建议都关掉了，可以在设置里打开」，不写「没有结果」。
+    /// 一行都没有，因为「文字的去处」全关掉了（第 13 步）、或者挂着图片而「图片的去处」全关掉了（验证后定）：
+    /// 消息那一行写「建议都关掉了，可以在设置里打开」，不写「没有结果」。
     var suggestionsOff = false
+    /// 挂着图片（这次查的是图片的建议）：一行都没有时消息那一行不是空输入的提示文字（筛选词为空也一样）。
+    var hasAttachment = false
 
     /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
     var isPending: Bool { pendingPath != nil || pendingFiles != nil }
@@ -263,8 +266,15 @@ final class LauncherEngine {
             instantsByKey = Dictionary(suggestions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
-            return LauncherSearchOutcome(queryText: input.trimmingCharacters(in: .whitespacesAndNewlines),
-                                         rows: suggestions.rows, candidateCount: suggestions.rows.count, duration: duration)
+            var outcome = LauncherSearchOutcome(queryText: input.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                rows: suggestions.rows, candidateCount: suggestions.rows.count, duration: duration)
+            // 图片的去处全关（第 13 步验证后定）：同文字全关，消息那一行是「建议都关掉了」。
+            outcome.suggestionsOff = LauncherFeatureRules.showsImageSuggestionsOff(
+                rowCount: suggestions.rows.count, imageActionCount: imageActions.count,
+                imageTextActionCount: textActions.filter { $0.command.suggestion.imageTextPriority != nil }.count,
+                features: features)
+            outcome.hasAttachment = true
+            return outcome
         }
 
         // 放进来的文字（不是打字打进来的）按字面处理、不拆前缀；改动过就照常拆（§5.4）。

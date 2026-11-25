@@ -298,7 +298,8 @@ final class LauncherController {
         if outcome.duration > Self.slowQueryThreshold {
             Self.log.notice("slow query: \(outcome.duration * 1000, format: .fixed(precision: 2), privacy: .public) ms, \(outcome.candidateCount, privacy: .public) candidates")
         }
-        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty, newInput: !background,
+        // 挂着图片时一行都没有不是「输入为空」：不出空输入的提示文字（第 13 步验证后）。
+        model.setRows(outcome.rows, emptyInput: outcome.queryText.isEmpty && !outcome.hasAttachment, newInput: !background,
                       searching: outcome.isPending, suggestionsOff: outcome.suggestionsOff)
         requestBackgroundResults(outcome)
     }

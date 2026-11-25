@@ -365,6 +365,26 @@ final class LauncherFeaturesTests: XCTestCase {
                                                                 features: allTextOff), "空输入照旧显示提示")
     }
 
+    func testImageSuggestionsOffOnlyWhenEveryImageItemIsOff() {
+        let recognitionOff = off("image/recognition")
+        XCTAssertTrue(LauncherFeatureRules.showsImageSuggestionsOff(rowCount: 0, imageActionCount: 0, imageTextActionCount: 0,
+                                                                    features: recognitionOff), "全关")
+        XCTAssertFalse(LauncherFeatureRules.showsImageSuggestionsOff(rowCount: 0, imageActionCount: 0, imageTextActionCount: 0,
+                                                                     features: .allEnabled),
+                       "识别开着（图里没认出东西时也是一行都没有）：照旧「没有结果」")
+        XCTAssertFalse(LauncherFeatureRules.showsImageSuggestionsOff(rowCount: 0, imageActionCount: 1, imageTextActionCount: 0,
+                                                                     features: recognitionOff), "还有开着的图片动作（筛选词没对上）")
+        XCTAssertFalse(LauncherFeatureRules.showsImageSuggestionsOff(rowCount: 0, imageActionCount: 0, imageTextActionCount: 1,
+                                                                     features: recognitionOff), "「翻译图里的文字」还开着")
+        XCTAssertFalse(LauncherFeatureRules.showsImageSuggestionsOff(rowCount: 1, imageActionCount: 0, imageTextActionCount: 0,
+                                                                     features: recognitionOff), "有行时不提示")
+        // 「图里的文字」来自过滤后的文字动作：关掉翻译后带 `imageTextPriority` 的就没有了。
+        let texts = [text("selectiontranslate.text.translate", priority: 10, imageTextPriority: 15), text("clipboard.text.qrCode")]
+        let derived = off("action/selectiontranslate.text.translate").enabledActions(texts)
+            .filter { $0.command.suggestion.imageTextPriority != nil }
+        XCTAssertTrue(derived.isEmpty)
+    }
+
     // MARK: - 「带上你选中的文字」关着时不读
 
     private final class ReadCounter: @unchecked Sendable {

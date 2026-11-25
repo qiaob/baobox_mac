@@ -322,6 +322,14 @@ enum LauncherFeatureRules {
                                limitedBy: query.text.endIndex) != nil else { return false }
         return allTextSuggestionsOff(textActionCount: textActionCount, features: features)
     }
+
+    /// 图片版（验证后定）：挂着图片、一行都没有，而且「图片的去处」一项都没开着 —— 图片动作过滤后为 0（`imageActionCount`）、
+    /// 带 `imageTextPriority` 的文字动作过滤后为 0（`imageTextActionCount`，没有「<命令名>图里的文字」）、识别结果关着。
+    /// 这时消息那一行同文字全关：「建议都关掉了，可以在设置里打开」（不管有没有打筛选词：开着的一项都没有，打什么都出不来）。
+    static func showsImageSuggestionsOff(rowCount: Int, imageActionCount: Int, imageTextActionCount: Int,
+                                         features: LauncherFeatureSet) -> Bool {
+        rowCount == 0 && imageActionCount == 0 && imageTextActionCount == 0 && !features.isEnabled(.imageRecognition)
+    }
 }
 
 // MARK: - 读选区的开关
