@@ -51,7 +51,7 @@ BaoboxApp(@main, Settings scene)
 |---|---|---|
 | Screenshot | `screenshot` | 智能截图（窗口/区域/全屏）、标注、贴图、**长截屏（滚动拼接）**、**屏幕取字 OCR**、录屏、历史。ScreenCaptureKit；截图与取字每次先冻结整屏（按快捷键那一刻定格，菜单开着也截得到），见 `docs/scrolling-capture/`、`docs/screenshot-ocr/`、`docs/screen-draw/` |
 | ScreenDraw | `screendraw` | **屏幕标注画笔**：直接在屏幕上圈画（绘制 / 穿透两态），讲解演示用。模块壳 `ScreenDrawTool` 在 `Modules/Screenshot/`（共用标注引擎），快捷键 id 沿用 `screenshot.draw`。`docs/screen-draw/DESIGN.md` |
-| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码，见 `TextTools/`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
+| Clipboard | `clipboard` | 剪贴板历史、搜索、回填粘贴、收藏、隐私过滤（敏感内容开关）、落盘加密（AES-GCM + Keychain，见 `ClipboardCrypto`）、**预览区文本工具**（JWT/JSON/XML/时间/URL/Base64 识别 + 转换动作 + 二维码；识别器在 `Core/TextTools/`（快速入口也用），预览区专有的通用动作在模块的 `TextTools/CommonTextActions.swift`，`docs/clipboard-text-tools/`）、**文本片段**（= 手工创建的收藏条目 + 关键字展开，见 `SnippetExpander`，`docs/snippets/`） |
 | Caffeinate | `caffeinate` | 防休眠（IOPMAssertion），定时 |
 | FocusHealth | `focushealth` | **专注与健康**：专注计时（番茄钟，专注中勿扰）+ 健康提醒（喝水 / 站立 / 护眼 / 整段休息，可增删改）。提醒经桌面宠物呈现；强提醒 = 宠物走到屏幕中央变大陪你休息（轻松 / 标准 / 严格三档，标准起变暗并拦截键鼠），宠物关闭时回退全屏画面。避让开会（麦克风占用）/ 全屏 / 录屏，离开电脑算自然休息。**专注历史**（`history.jsonl` 只追加、留 400 天；设置页顶部「今天 · 本周 · 连续天数」、菜单一行「今天专注 N 分钟」，`docs/focus-health/HISTORY.md`）。`docs/focus-health/` |
 | WindowManager | `windowmanager` | 窗口贴边/四分屏/居中/跨屏、布局快照（AX 权限，多显示器） |
@@ -105,7 +105,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/netcheck/DESIGN.md` —— 网络泄露检测：五项检测（出口 / IPv6 / DNS / WebRTC / 时区）与两问总结的规则、请求顺序、WebRTC 探测（隐藏 WKWebView）、隐私边界；规格与 baobox_shared 的 `netcheck` 同一套。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。
-- `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `mac/Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
+- `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `mac/Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）；识别器（`TextFormatRecognizer` 们与注册表、开关）2026-11 下沉到 `mac/Sources/Core/TextTools/`，快速入口的文本识别也用它。
 
 > 已移除的模块：**QRCode**（并入剪贴板文本工具）、**ColorPicker 取色器**（issue #7，整体删除）。`docs/TECH_DESIGN.md` §7-A.1 仅作历史留档。
 

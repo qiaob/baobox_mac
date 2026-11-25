@@ -96,6 +96,7 @@ mac/Sources/Modules/SelectionTranslate/
   SelectionTranslateTool.swift        模块壳（菜单 / 快捷键 / 设置页）
   SelectionTranslateController.swift  状态机：触发、事件 tap、TTS、面板调度
   SelectionText.swift                 AX 取词 + 借剪贴板（「拷贝」菜单项 / 合成 ⌘C）
+mac/Sources/Core/SelectedTextReader.swift  AX 取词的两步（焦点元素、选中的文字），2026-11-25 下沉，快速入口呼出时也用（docs/launcher/TECH_DESIGN.md §8.4）
 mac/Sources/Core/PasteboardBorrow.swift  借剪贴板：快照 → 拷贝 → 读 → 还原，剪贴板历史据此跳过
   SelectionTranslatePanel.swift       浮层窗口与 SwiftUI 内容（含翻译会话）
   RegionTextPicker.swift              冻结屏框选 → OCR

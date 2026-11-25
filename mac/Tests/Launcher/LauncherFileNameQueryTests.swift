@@ -1,0 +1,195 @@
+import Foundation
+import XCTest
+
+/// 输入像文件名时名字正好是它的文件固定排第一（docs/launcher/TECH_DESIGN.md §6.4，PR 11）：
+/// 怎么算像文件名、请求里带上固定的名字、固定行的次序（已知文件 / 剪贴板里的路径在前、同等的新的在前、最多 3 行）。
+final class LauncherFileNameQueryTests: XCTestCase {
+
+    private let home = "/Users/me"
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func request(_ input: String, hasCalculation: Bool = false) -> LauncherFileSearchRequest? {
+        LauncherFilePolicy.request(for: LauncherQuery.parse(input), hasCalculation: hasCalculation)
+    }
+
+    private func hit(_ path: String, daysAgo: Double = 0, origins: LauncherFileOrigins = [.spotlight]) -> LauncherFileHit {
+        LauncherFileHit(path: path, modified: now.addingTimeInterval(-daysAgo * 86_400), origins: origins)
+    }
+
+    // MARK: - 像不像文件名
+
+    func testLooksLikeAFileName() {
+        for text in ["add-approval-hook.py", "TECH_DESIGN.md", "报告 final.pdf", "a.b", "archive.tar.gz", "Safari.app",
+                     "claude.ai", "main.cc", "github.com", "3.mp4", "IMG_1234.HEIC", "发票.jpg", "icon@2x.png", "x.markdown",
+                     "Localizable.xcstrings", "x.properties"] {
+            XCTAssertEqual(LauncherFileNameQuery.fileName(in: text), text, text)
+        }
+    }
+
+    func testDoesNotLookLikeAFileName() {
+        for text in ["v2.0", "3.14", "1.5", "1.2.3", "README", ".zshrc", "abc.", ".", "a.p-g", "a.waytoolongext", "a.12345678901",
+                     "https://example.com/a.md", "mailto:a@b.com", "docs/launcher/TECH_DESIGN.md", "a\tb.txt", "a\nb.txt",
+                     " a.txt", "a.txt ", "", "   .md", "foo:bar.txt", String(repeating: "x", count: 252) + ".txt"] {
+            XCTAssertNil(LauncherFileNameQuery.fileName(in: text), text)
+        }
+    }
+
+    // MARK: - 请求
+
+    func testFileNameQueriesCarryThePinnedName() {
+        XCTAssertEqual(request("add-approval-hook.py"), .nameContains(["add-approval-hook.py"], pinnedName: "add-approval-hook.py"))
+        XCTAssertEqual(request("f add-approval-hook.py"), .nameContains(["add-approval-hook.py"], pinnedName: "add-approval-hook.py"))
+        XCTAssertEqual(request("报告 final.pdf"), .nameContains(["报告", "final.pdf"], pinnedName: "报告 final.pdf"))
+        XCTAssertEqual(request("a.b"), .nameContains(["a.b"], pinnedName: "a.b"), "三个字符：不带前缀的长度门槛照样满足")
+        XCTAssertEqual(request("claude.ai"), .nameContains(["claude.ai"], pinnedName: "claude.ai"), "既像域名又像文件名：照样找")
+    }
+
+    func testOtherQueriesKeepTheOldRequest() {
+        XCTAssertEqual(request("TECH_DESIGN"), .nameContains(["TECH_DESIGN"]))
+        XCTAssertEqual(request("f v2.0"), .nameContains(["v2.0"]))
+        XCTAssertEqual(request("tech design"), .nameContains(["tech", "design"]))
+        XCTAssertNil(request("ab"))
+        XCTAssertNil(request("3.14", hasCalculation: true), "算式照旧不搜")
+        XCTAssertNil(request("c add-approval-hook.py"), "别的前缀不搜")
+        XCTAssertEqual(request("docs/launcher/TECH_DESIGN.md"),
+                       .exactName("TECH_DESIGN.md", pathSuffix: "docs/launcher/TECH_DESIGN.md"), "片段照旧")
+    }
+
+    // MARK: - 固定行
+
+    func testExactNamesArePinnedAndContainsMatchesAreRanked() {
+        let request = LauncherFileSearchRequest.nameContains(["add-approval-hook.py"], pinnedName: "add-approval-hook.py")
+        let results = LauncherFileFilter.process([
+            hit("/Users/me/a/old-add-approval-hook.py.bak"),
+            hit("/private/tmp/claude-501/p/s/scratchpad/add-approval-hook.py", origins: [.scanned]),
+            hit("/Users/me/b/ADD-APPROVAL-HOOK.PY", daysAgo: 2),
+        ], request: request, home: home)
+        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/b/ADD-APPROVAL-HOOK.PY",
+                                                  "/private/tmp/claude-501/p/s/scratchpad/add-approval-hook.py",
+                                                  "/Users/me/a/old-add-approval-hook.py.bak"],
+                       "Spotlight 的在前、只来自扫的目录的在后（哪怕它更新）")
+        XCTAssertEqual(results.map(\.pinned), [true, true, false], "名字不分大小写地等于它的才固定")
+        XCTAssertEqual(results.first?.tierScore, LauncherMatch.exactScore)
+    }
+
+    func testPinnedPrefersKnownAndClipboardOriginsThenRecency() {
+        let request = LauncherFileSearchRequest.nameContains(["notes.md"], pinnedName: "notes.md")
+        let results = LauncherFileFilter.process([
+            hit("/Users/me/newest/notes.md", daysAgo: 0, origins: [.spotlight]),
+            hit("/Users/me/scanned/notes.md", daysAgo: 1, origins: [.scanned]),
+            hit("/Users/me/claude/notes.md", daysAgo: 9, origins: [.known, .spotlight]),
+            hit("/Users/me/copied/notes.md", daysAgo: 5, origins: [.clipboard]),
+            hit("/Users/me/older/notes.md", daysAgo: 20, origins: [.spotlight]),
+        ], request: request, home: home)
+        XCTAssertEqual(results.filter(\.pinned).map(\.hit.path),
+                       ["/Users/me/copied/notes.md", "/Users/me/claude/notes.md", "/Users/me/newest/notes.md"],
+                       "已知文件、剪贴板里的路径先（同等的新的在前），再是别的里最新的；最多 3 行")
+        XCTAssertFalse(results.contains { $0.hit.path == "/Users/me/older/notes.md" }, "同名第 4 份起不出（也不进排序）")
+    }
+
+    func testPinnedDropsNoiseOnlyFromSpotlightAndScannedFolders() {
+        let request = LauncherFileSearchRequest.nameContains(["index.js"], pinnedName: "index.js")
+        let results = LauncherFileFilter.process([
+            hit("/Users/me/proj/node_modules/x/index.js", origins: [.spotlight]),
+            hit("/Users/me/proj/src/index.js", daysAgo: 3),
+            hit("/Users/me/other/node_modules/y/index.js", daysAgo: 9, origins: [.clipboard]),
+        ], request: request, home: home)
+        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/other/node_modules/y/index.js", "/Users/me/proj/src/index.js"],
+                       "复制过路径的不看目录规则（还排在前面）；只来自 Spotlight 的照旧去掉")
+    }
+
+    // MARK: - 明确碰过的不看目录规则
+
+    func testTouchedFilesSkipDirectoryRules() {
+        let request = LauncherFileSearchRequest.nameContains(["json"])
+        let kept = LauncherFileFilter.process([
+            hit("/Users/me/.claude/settings.json", origins: [.known]),
+            hit("/Users/me/Library/Application Support/Baobox/Launcher/usage.json", origins: [.clipboard]),
+            hit("/Users/me/proj/build/out.json", origins: [.known, .scanned]),
+            hit("/Users/me/repo/.github/data.json", origins: [.spotlight, .clipboard]),
+        ], request: request, home: home).map(\.hit.path)
+        XCTAssertEqual(Set(kept), ["/Users/me/.claude/settings.json",
+                                   "/Users/me/Library/Application Support/Baobox/Launcher/usage.json",
+                                   "/Users/me/proj/build/out.json", "/Users/me/repo/.github/data.json"],
+                       "隐藏目录、~/Library、build 都照出；同一个文件 Spotlight / 扫的目录也有时按明确碰过的算")
+        let dropped = LauncherFileFilter.process([
+            hit("/Users/me/.claude/a.json", origins: [.spotlight]),
+            hit("/Users/me/Library/Caches/b.json", origins: [.scanned]),
+            hit("/Users/me/proj/node_modules/c.json", origins: [.spotlight, .scanned]),
+        ], request: request, home: home)
+        XCTAssertEqual(dropped.count, 0, "只来自 Spotlight、自己扫的目录的照旧过滤")
+    }
+
+    func testTouchedAppBundlesStillDropped() {
+        let request = LauncherFileSearchRequest.nameContains(["tool"])
+        let paths = LauncherFileFilter.process([
+            hit("/Users/me/Apps/Tool.app", origins: [.known]),
+            hit("/Users/me/Apps/Tool.app/Contents/Resources/tool.json", origins: [.clipboard]),
+        ], request: request, home: home).map(\.hit.path)
+        XCTAssertEqual(paths, ["/Users/me/Apps/Tool.app/Contents/Resources/tool.json"], ".app 本身不出（App 来源有），包里明确碰过的文件照出")
+    }
+
+    func testTouchedFragmentsSkipDirectoryRules() {
+        let request = LauncherFileSearchRequest.exactName("settings.json", pathSuffix: ".claude/settings.json")
+        let results = LauncherFileFilter.process([hit("/Users/me/.claude/settings.json", origins: [.clipboard])],
+                                                 request: request, home: home)
+        XCTAssertEqual(results.map(\.pinned), [true])
+    }
+
+    func testPinnedTiersKeepProjectFilesAheadOfScannedCopies() {
+        // 验证者实测的 `main.swift`：扫的目录里各会话探针的副本更新，原来 3 行全是它们，项目里的找不到了。
+        let request = LauncherFileSearchRequest.nameContains(["main.swift"], pinnedName: "main.swift")
+        let pinned = LauncherFileFilter.process([
+            hit("/private/tmp/claude-501/a/probe/main.swift", daysAgo: 0, origins: [.scanned]),
+            hit("/private/tmp/claude-501/b/probe/main.swift", daysAgo: 0.1, origins: [.scanned]),
+            hit("/private/tmp/claude-501/c/probe/main.swift", daysAgo: 0.2, origins: [.scanned]),
+            hit("/Users/me/cmb/proj/Sources/main.swift", daysAgo: 30, origins: [.spotlight]),
+        ], request: request, home: home).filter(\.pinned).map(\.hit.path)
+        XCTAssertEqual(pinned, ["/Users/me/cmb/proj/Sources/main.swift", "/private/tmp/claude-501/a/probe/main.swift",
+                                "/private/tmp/claude-501/b/probe/main.swift"],
+                       "项目里的（Spotlight）在前，只来自扫的目录的副本在后，最多 3 行")
+        let onlyScanned = LauncherFileFilter.process([hit("/private/tmp/claude-501/x/scratchpad/hook.py", origins: [.scanned])],
+                                                     request: .nameContains(["hook.py"], pinnedName: "hook.py"), home: home)
+        XCTAssertEqual(onlyScanned.map(\.pinned), [true], "只有扫的目录里才有时照样排第一（用户最初那个例子）")
+    }
+
+    func testCopyTiers() {
+        XCTAssertEqual(LauncherFileFilter.copyTier([.known]), 0)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.clipboard, .scanned]), 0)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.spotlight]), 1)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.spotlight, .scanned]), 1, "同时来自 Spotlight 的不算只来自扫的目录")
+        XCTAssertEqual(LauncherFileFilter.copyTier([]), 1)
+        XCTAssertEqual(LauncherFileFilter.copyTier([.scanned]), 2)
+    }
+
+    func testNoPinnedNameMeansNothingIsPinned() {
+        let results = LauncherFileFilter.process([hit("/Users/me/a/notes.md")], request: .nameContains(["notes.md"]), home: home)
+        XCTAssertEqual(results.map(\.pinned), [false])
+    }
+
+    func testFragmentPinsUseTheSameOrder() {
+        let request = LauncherFileSearchRequest.exactName("TECH_DESIGN.md", pathSuffix: "launcher/TECH_DESIGN.md")
+        let results = LauncherFileFilter.process([
+            hit("/Users/me/w1/docs/launcher/TECH_DESIGN.md", daysAgo: 0),
+            hit("/Users/me/w2/docs/launcher/TECH_DESIGN.md", daysAgo: 3, origins: [.known]),
+            hit("/Users/me/w3/docs/meeting/TECH_DESIGN.md", daysAgo: 0),
+        ], request: request, home: home)
+        XCTAssertEqual(results.map(\.hit.path), ["/Users/me/w2/docs/launcher/TECH_DESIGN.md", "/Users/me/w1/docs/launcher/TECH_DESIGN.md"])
+        XCTAssertTrue(results.allSatisfy(\.pinned))
+    }
+
+    // MARK: - 副标题
+
+    func testDirectoryLabelShortensIdentifiers() {
+        let directory = "/private/tmp/claude-501/-Users-qiao-cmb/e0c00de7-8950-4479-8685-030e3982c98e/scratchpad"
+        let label = LauncherPathDisplay.directoryLabel(directory, home: home)
+        XCTAssertEqual(label, "/private/tmp/claude-501/-Users-qiao-cmb/e0c00de7…/scratchpad")
+        XCTAssertLessThanOrEqual(label.count, LauncherPathDisplay.maxDirectoryLabelLength)
+        XCTAssertEqual(LauncherPathDisplay.shorteningIdentifiers("/a/0123456789abcdef0123456789abcdef01234567/b"), "/a/01234567…/b",
+                       "git 哈希")
+        XCTAssertEqual(LauncherPathDisplay.shorteningIdentifiers("/a/baobox-launcher-file-sources/b"), "/a/baobox-launcher-file-sources/b",
+                       "普通的长名字（worktree 名）不缩")
+        XCTAssertEqual(LauncherPathDisplay.directoryLabel("/x/e0c00de7-8950-4479-8685-030e3982c98e", home: home),
+                       "/x/e0c00de7-8950-4479-8685-030e3982c98e", "不超长就不缩")
+    }
+}

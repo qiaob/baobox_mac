@@ -1,0 +1,419 @@
+import Foundation
+
+// 快速入口的查询（docs/launcher/TECH_DESIGN.md §5）：呼出时把各来源的条目装进来，之后每次输入变化：
+// `LauncherQuery.parse` 拆前缀 → 计算结果、文本识别（没打前缀时，固定在最前）→ `LauncherRanking.rank` 排序 → 换成面板的行。
+// 同步、只读内存，打字路径上不建搜索键、不碰磁盘。
+// 输入是路径时（§6.5）只出路径的行：要读磁盘，由控制器在后台查、查完交回来（`setPathResult`）；
+// 还没回来时，还在同一处打字就先显示上一个路径的行（否则显示「正在查找」），免得每打一个字列表收起又长出来。
+// 文件（§6.4）同样由控制器在后台搜、搜完交回来（`setFileResult`，几个来源先回来的先交，可能交几次）：交回的行和内存里的候选一起排序
+// （没打前缀时最多 5 行，权重最低，排在 App、命令之后）；固定的行 —— 带 `/` 的片段的确切命中、输入像文件名时名字正好是它的
+// （PR 11）—— 排在计算结果之后、所有建议和普通行之前；新的还没回来时，上一次的结果里名字仍包含现在每个词的先顶着。
+// 建议（§5.4，没打前缀、输入不是路径时）：对应建议（打开网址、写邮件、颜色、字数）插在计算结果之后、识别结果之前，
+// 兜底建议（文字动作、上网搜、搜文件）接在最后 —— 输入不为空时列表里总有事可做，「没有结果」只在连兜底建议都没有时出现。
+// 输入里挂着图片时（§5.5）只出这张图的建议（识别结果 + 图片动作），输入框里的字是筛选词；
+// 输入是一个图片文件的路径时，路径行后面接同一组图片动作。
+// 输入框为空时（§3.7）：「选中的 / 刚复制的」（⏎ 放进输入框）→ 各模块的情景建议 → 最常用的，共不超过 9 行。
+// 功能开关（第 13 步，§11「功能开关」）：设置里关掉的不出 —— 关掉的来源不装进来、前缀失效；路径、计算、识别、对应建议、
+// 最常用的在这里按 `features` 跳过；模块的动作在呼出收集时已经过滤。建议都关掉了、一行都没有时，消息那一行换成「建议都关掉了」。
+
+/// 行左边的图标。
+enum LauncherRowIcon: Equatable {
+    /// 文件的图标（App 用真实图标），值是路径。
+    case file(String)
+    /// SF Symbol（命令用所属工具的图标）。
+    case symbol(String)
+    /// 这个颜色的色块（颜色值的建议行，§5.4）。
+    case swatch(LauncherColor)
+    /// 图片的缩略图（剪贴板历史里的图片条目，§5.5）：行要显示时才在后台取，取到之前显示这个 SF Symbol。
+    case thumbnail(placeholderSymbol: String)
+}
+
+/// 行的样子。
+enum LauncherRowStyle: Equatable {
+    /// 普通的一行：图标 + 标题 + 右侧小字。
+    case standard
+    /// 计算结果：结果用大一号的字，下面一行小字是「理解成了什么」；`failed` = 出错（结果的位置是那句说明，⏎ 不做事）。
+    case calculation(interpretation: String, failed: Bool)
+    /// 「在终端里运行」上膛后（第 10 步验证后定）：标题是「再按一次回车运行：」，下面用等宽字把整条命令一行一行完整显示
+    /// （`LauncherConfirmText.commandLines` 换好的行，最多 6 行）。行高跟着行数变。
+    case confirmCommand(lines: [LauncherCommandLine])
+}
+
+/// 面板里的一行（只有显示用的值）。
+struct LauncherRow: Identifiable, Equatable {
+    /// 条目键 = 「来源 id/条目 id」；计算结果、文本识别的行是引擎给的固定 id。
+    let id: String
+    let title: String
+    /// 右侧小字：「App」/ 所属工具名 /「剪贴板」/ 计算结果的种类 / 识别结果的「徽章 · 行标签」。
+    let source: String
+    let icon: LauncherRowIcon
+    /// 标题后面的灰色小字（文件、文件夹行：所在目录）；nil = 没有。
+    var subtitle: String? = nil
+    var style: LauncherRowStyle = .standard
+}
+
+/// 一个来源交给引擎的条目：排序用的纯值 + 显示的行 + ⏎ 做什么。
+struct LauncherItem {
+    let candidate: LauncherCandidate
+    let row: LauncherRow
+    let run: @MainActor () -> Void
+    /// ⌘⏎ 做什么（文件、路径行：在访达里显示）；nil = 同 ⏎。
+    var alternate: (@MainActor () -> Void)? = nil
+    /// Tab 把输入框换成它（路径行：完整路径，文件夹末尾带 `/`）；nil = Tab 不做事。
+    var completion: String? = nil
+    /// 执行时记不记使用记录（路径行不记）。
+    var recordsUsage = true
+    /// 条目是一张图片（剪贴板历史里的图片）：行首缩略图从这里取，Tab 把它挂成输入里的附件（§5.5）。
+    var image: LauncherEntryImage? = nil
+    /// 路径行指向一个图片文件（§6.5）：后面接图片动作（取字、贴图……，图片从这个文件读）。
+    var imageFile: URL? = nil
+    /// 路径行是一个完整存在的路径（文件，或文件夹本身那一行；不是补全出来的）：后面接复制路径、在终端里打开、发到手机这些动作（§6.5，第 10 步）。
+    var pathTarget: LauncherPathTarget? = nil
+    /// 只在打了来源前缀时出现（图片条目，§3.2）。
+    var onlyWithPrefix = false
+    /// 要按两次 ⏎（模块声明的 destructive 命令，第 10 步）：第一次只换标题；nil = 按一次就执行。
+    var confirmation: LauncherConfirmation? = nil
+}
+
+/// 「输入即出」的一行（计算结果、文本识别）：固定排在最前，不进排序、不记使用；⏎ 复制，⌘⏎ 插入前台 App。
+struct LauncherInstant {
+    let row: LauncherRow
+    /// 复制 / 插入的文字；nil = 出错的结果（除以零），⏎ 不做事。
+    let copyText: String?
+}
+
+/// 一次查询的结果。
+struct LauncherSearchOutcome {
+    /// 拆掉前缀后的查询词（「这个输入选了谁」按它记）。
+    let queryText: String
+    let rows: [LauncherRow]
+    /// 这次参与排序的候选数。
+    let candidateCount: Int
+    /// 查询耗时（秒）。
+    let duration: TimeInterval
+    /// 输入是这个路径、它的结果还没查过或过期了：控制器在后台查（`LauncherPathProvider`），查完 `setPathResult`。
+    var pendingPath: LauncherPathInput? = nil
+    /// 这次输入要搜的文件；不搜为 nil（控制器停掉还没回来的那次）。
+    var fileRequest: LauncherFileSearchRequest? = nil
+    /// 要搜的文件结果还没搜过、过期了、或者只回来了一部分来源（`LauncherFileResultState.pending`）：
+    /// 控制器去搜（`LauncherFileProvider`；正在跑的就是它时不重发），搜完 `setFileResult`。
+    var pendingFiles: LauncherFileSearchRequest? = nil
+
+    /// 一行都没有，因为「文字的去处」全关掉了（第 13 步）、或者挂着图片而「图片的去处」全关掉了（验证后定）：
+    /// 消息那一行写「建议都关掉了，可以在设置里打开」，不写「没有结果」。
+    var suggestionsOff = false
+    /// 挂着图片（这次查的是图片的建议）：一行都没有时消息那一行不是空输入的提示文字（筛选词为空也一样）。
+    var hasAttachment = false
+
+    /// 有后台结果还没回来（显示的是上一次的行；一行都没有时面板显示「正在查找」）。
+    var isPending: Bool { pendingPath != nil || pendingFiles != nil }
+}
+
+@MainActor
+final class LauncherEngine {
+    /// 输入为空时最多显示几行「最常用的」。
+    static let emptyQueryLimit = 8
+    /// 没打前缀时这些来源最多出几行：剪贴板几千条，不限的话一个常见词就把 App 和命令挤下去（`c ` 前缀下不限）。
+    /// 文件同理：没打前缀时最多 5 行（`f ` 前缀下最多 `LauncherFileFilter.maxResults` 行）。
+    static let unscopedSourceLimits = ["clipboard": 5, LauncherFileProvider.sourceID: 5]
+    /// 没打前缀时只来自自己扫的目录的文件最多 2 行（还占文件的 5 行），同档排在别的文件后面（PR 11，§6.4）。
+    static let unscopedGroupLimits = [LauncherFileFilter.scannedOnlyGroup: LauncherFileFilter.unscopedScannedOnlyLimit]
+
+    private var allCandidates: [LauncherCandidate] = []
+    private var candidatesBySource: [String: [LauncherCandidate]] = [:]
+    private var itemsByKey: [String: LauncherItem] = [:]
+    private var prefixBySource: [String: String] = [:]
+    /// 这次输入的计算结果、识别结果，按行 id。每次查询换一批。
+    private var instantsByKey: [String: LauncherInstant] = [:]
+    /// 计算结果的语言（界面语言），呼出时取一次。
+    private var calcLocale = Locale(identifier: "en")
+    /// 各模块声明的文字动作（§5.4）：呼出时装进来，只作为「对当前输入的建议」出现。
+    var textActions: [LauncherCatalogCommand] = []
+    /// 这次输入的建议行（动作类），按行 id。每次查询换一批。
+    private var suggestionsByKey: [String: LauncherSuggestion] = [:]
+    /// 放进来的原文（⌘V、拖放、「选中的 / 刚复制的」放进输入框；控制器每次查询前设）。控制器保证：有值 = 输入框此刻还是它
+    /// （每次输入框变化时核对过）。于是按字面处理、不拆前缀，带换行的建议行用原文（§5.4）。引擎不再核对、不归一。
+    var placedText: LauncherPlacedText?
+    /// 各模块声明的图片动作（§5.5）：呼出时装进来，只在挂着图片 / 输入是图片文件的路径时出现。
+    var imageActions: [LauncherCatalogCommand] = []
+    /// 输入里挂着的图片（控制器每次查询前设）；nil = 没挂。
+    var attachment: LauncherAttachment?
+    /// 各模块声明的文件动作（§6.5，第 10 步）：呼出时装进来，只接在完整存在的文件的路径行后面。
+    var fileActions: [LauncherCatalogCommand] = []
+    /// 这次呼出读到的功能开关（第 13 步）：控制器呼出时、`load` 之前设，到收起为止不变。
+    var features = LauncherFeatureSet.allEnabled
+    /// 主目录：认路径时展开 `~`。
+    private let home: String
+    /// 最近一次查好的路径和它的行（输入变成别的路径后，新的回来之前先显示它）。
+    private var pathResult: (input: LauncherPathInput, items: [LauncherItem])?
+    /// 最近一次搜好的文件：固定在最前的（片段的确切命中、名字正好是输入的）和交给排序的；`complete` = 所有来源都回来了。
+    private var fileResult: (request: LauncherFileSearchRequest, pinned: [LauncherItem], ranked: [LauncherItem], complete: Bool)?
+    /// 这次显示的后台来的行（路径、文件），按行 id：执行、Tab 补全时按 id 找回来。
+    private var asyncItemsByKey: [String: LauncherItem] = [:]
+    /// 最近一次查询要搜的文件（不搜为 nil）。
+    private var lastFileRequest: LauncherFileSearchRequest?
+    /// 输入框为空时最前面的行（§3.7：「选中的 / 刚复制的」、情景建议）：控制器呼出时设、读到选区后再换。
+    var emptyState = LauncherEmptyState()
+    /// 这次显示出来的空状态的行，按行 id（执行、Tab、缩略图时找回来）；输入不为空时为空。
+    private var shownContext: [String: LauncherContextItem] = [:]
+    private var shownSituational: [String: LauncherItem] = [:]
+
+    init(home: String = NSHomeDirectory()) {
+        self.home = home
+    }
+
+    /// 装进这次呼出的全部条目。条目键重复的只留第一个。
+    /// `sourceIDs`：这一期有的来源；只有它们的前缀生效（`f ` 这类以后才有的来源前缀不拆，整段当查询词）。
+    /// 设置里关掉的来源前缀也不生效（`LauncherFeatureSet.prefixes`）：关掉文件后 `f readme` 整段当查询词。
+    func load(_ items: [LauncherItem], sourceIDs: Set<String>) {
+        var all: [LauncherCandidate] = []
+        var bySource: [String: [LauncherCandidate]] = [:]
+        var byKey: [String: LauncherItem] = [:]
+        all.reserveCapacity(items.count)
+        byKey.reserveCapacity(items.count)
+        for item in items where byKey[item.candidate.key] == nil {
+            byKey[item.candidate.key] = item
+            // 只在打了前缀时出现的（图片条目）不进「全部」，只进它自己的来源。
+            if !item.onlyWithPrefix { all.append(item.candidate) }
+            bySource[item.candidate.sourceID, default: []].append(item.candidate)
+        }
+        allCandidates = all
+        candidatesBySource = bySource
+        itemsByKey = byKey
+        prefixBySource = features.prefixes(LauncherQuery.defaultPrefixBySource, loadedSources: sourceIDs)
+        calcLocale = L10n.locale
+    }
+
+    /// 收起时调：放掉条目（和它们带的闭包）。
+    func clear() {
+        allCandidates = []
+        candidatesBySource = [:]
+        itemsByKey = [:]
+        instantsByKey = [:]
+        pathResult = nil
+        fileResult = nil
+        asyncItemsByKey = [:]
+        lastFileRequest = nil
+        textActions = []
+        suggestionsByKey = [:]
+        placedText = nil
+        imageActions = []
+        attachment = nil
+        emptyState = LauncherEmptyState()
+        shownContext = [:]
+        shownSituational = [:]
+        fileActions = []
+    }
+
+    func item(forKey key: String) -> LauncherItem? {
+        shownSituational[key] ?? itemsByKey[key] ?? asyncItemsByKey[key]
+    }
+
+    /// 空着时的「选中的 / 刚复制的」那一行（不是这类行为 nil）。
+    func contextItem(forKey key: String) -> LauncherContextItem? {
+        shownContext[key]
+    }
+
+    /// 后台查好了一个路径的行（`LauncherPathProvider`）。输入还是这个路径时，下一次 `search` 就用它们。
+    func setPathResult(_ items: [LauncherItem], for input: LauncherPathInput) {
+        pathResult = (input, items)
+    }
+
+    /// 后台搜好了文件（`LauncherFileProvider`；`complete == false` = 只回来了一部分来源）。输入要搜的还是这个时，下一次 `search` 就用它们。
+    func setFileResult(pinned: [LauncherItem], ranked: [LauncherItem], for request: LauncherFileSearchRequest,
+                       complete: Bool = true) {
+        fileResult = (request, pinned, ranked, complete)
+    }
+
+    /// 文件来源的表换了（扫完了、已知文件 / 剪贴板路径重建了）：最近一次输入正在搜文件时，手上的结果当成不完整
+    /// （先照旧显示，`LauncherFileResultState.expired`），返回这次要搜的请求；没在搜文件返回 nil。
+    func expireFileResults() -> LauncherFileSearchRequest? {
+        guard let lastFileRequest else { return nil }
+        fileResult?.complete = false
+        return lastFileRequest
+    }
+
+    /// 计算结果、识别结果的行（不是这类行为 nil）。
+    func instant(forKey key: String) -> LauncherInstant? {
+        instantsByKey[key]
+    }
+
+    /// 建议行里的动作行（打开网址、写邮件、兜底建议；不是这类行为 nil）。
+    func suggestion(forKey key: String) -> LauncherSuggestion? {
+        suggestionsByKey[key]
+    }
+
+    /// 查一次。输入是路径时只出路径的行。否则：没打前缀时先放计算结果，再放固定的文件行（片段的确切命中、名字正好是输入的），
+    /// 再放对应建议、识别结果；
+    /// 查询词为空时只给用过的（使用分 > 0）最多 8 行 —— 输入框为空（没打前缀）时前面还有「选中的 / 刚复制的」和情景建议，
+    /// 共不超过 9 行（`LauncherContextRules.layout`）；否则按排序取前 50 行（没打前缀时剪贴板、文件各最多 5 行）；
+    /// 最后接兜底建议（§5.4）。
+    func search(_ input: String, records: LauncherUsageRecords, now: Date) -> LauncherSearchOutcome {
+        let start = DispatchTime.now().uptimeNanoseconds
+        lastFileRequest = nil
+        shownContext = [:]
+        shownSituational = [:]
+
+        // 挂着图片（§5.5）：只出这张图的建议，输入框里的字是筛选词（不拆前缀、不认路径、不算、不搜）。
+        if let attachment {
+            pathResult = nil
+            fileResult = nil
+            asyncItemsByKey = [:]
+            let suggestions = LauncherImageSuggestionProvider.suggestions(
+                image: attachment.image, recognition: attachment.recognition, filter: input,
+                imageActions: imageActions, textActions: textActions,
+                showsRecognition: features.isEnabled(.imageRecognition), records: records, now: now)
+            instantsByKey = Dictionary(suggestions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+            var outcome = LauncherSearchOutcome(queryText: input.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                rows: suggestions.rows, candidateCount: suggestions.rows.count, duration: duration)
+            // 图片的去处全关（第 13 步验证后定）：同文字全关，消息那一行是「建议都关掉了」。
+            outcome.suggestionsOff = LauncherFeatureRules.showsImageSuggestionsOff(
+                rowCount: suggestions.rows.count, imageActionCount: imageActions.count,
+                imageTextActionCount: textActions.filter { $0.command.suggestion.imageTextPriority != nil }.count,
+                features: features)
+            outcome.hasAttachment = true
+            return outcome
+        }
+
+        // 放进来的文字（不是打字打进来的）按字面处理、不拆前缀；改动过就照常拆（§5.4）。
+        let query = LauncherQuery.parse(input, prefixBySource: prefixBySource, literal: placedText != nil)
+
+        // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
+        // 设置里关掉了「路径」：按普通文字处理（仍有文字的建议）。
+        if query.isUnscoped, features.isEnabled(.path), let path = LauncherPathInput.parse(query.text, home: home) {
+            instantsByKey = [:]
+            suggestionsByKey = [:]
+            fileResult = nil
+            // 还在同一处打字时先顶着上一次的行；换到别处的路径就先空着（显示「正在查找」）。
+            let items = pathResult.map { $0.input == path || path.continues($0.input) ? $0.items : [] } ?? []
+            asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var rows = items.map(\.row)
+            var actions: [LauncherSuggestion] = []
+            // 完整存在的路径（第 10 步，§6.5）：路径行（文件夹是它本身那一行）后面、文件夹内容之前接最多 3 行动作。
+            if let target = items.first?.pathTarget {
+                let pathActions = LauncherPathActionProvider.rows(for: target, fileActions: fileActions, features: features)
+                rows.insert(contentsOf: pathActions.rows, at: min(1, rows.count))
+                instantsByKey = Dictionary(pathActions.instants.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                actions += pathActions.actions
+            }
+            // 指向一个图片文件（§5.5）：再接图片动作（不先取字；「图里的文字」回车时才取）。上面已经有同一件事的文件动作的
+            // 图片动作（`skipsImageFiles`：「把图片发到手机」）不出。
+            if items.count == 1, let file = items.first?.imageFile {
+                let suggestions = LauncherImageSuggestionProvider.suggestions(
+                    image: .file(file), recognition: nil, filter: "",
+                    imageActions: imageActions.filter { !$0.command.suggestion.skipsImageFiles }, textActions: textActions,
+                    records: records, now: now)
+                actions += suggestions.actions
+                rows += suggestions.rows
+            }
+            suggestionsByKey = Dictionary(actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+            return LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: items.count,
+                                         duration: duration, pendingPath: pathResult?.input == path ? nil : path)
+        }
+        pathResult = nil
+        asyncItemsByKey = [:]
+
+        var instants: [LauncherInstant] = []
+        if LauncherInstantPolicy.runsCalculator(query, features: features),
+           let calculation = LauncherCalculatorProvider.instant(for: query.text, now: now, locale: calcLocale) {
+            instants.append(calculation)
+        }
+        let calculationCount = instants.count
+        if LauncherInstantPolicy.runsTextRecognition(query, hasCalculation: !instants.isEmpty, features: features) {
+            instants.append(contentsOf: LauncherTextFormatProvider.instants(for: query.text))
+        }
+        // 建议（§5.4）：对应建议排在计算结果之后、识别结果之前，兜底建议排在最后。
+        let suggestions = LauncherSuggestionProvider.suggestions(
+            for: query, textActions: textActions, hasCalculation: calculationCount > 0,
+            hasRecognition: instants.count > calculationCount, placed: placedText, features: features,
+            records: records, now: now)
+        instantsByKey = Dictionary((instants + suggestions.instants).map { ($0.row.id, $0) },
+                                   uniquingKeysWith: { first, _ in first })
+        suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        let fileRequest = LauncherFilePolicy.request(for: query, hasCalculation: instants.first?.row.id == LauncherCalculatorProvider.rowID,
+                                                     features: features)
+        lastFileRequest = fileRequest
+        let files = currentFiles(for: fileRequest)
+        asyncItemsByKey = Dictionary((files.pinned + files.ranked).map { ($0.row.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+
+        var pool: [LauncherCandidate]
+        if let sourceIDs = query.sourceIDs {
+            pool = sourceIDs.flatMap { candidatesBySource[$0] ?? [] }
+        } else {
+            pool = allCandidates
+        }
+        if query.sourceIDs?.contains(LauncherFileProvider.sourceID) ?? true {
+            pool += files.ranked.map(\.candidate)
+        }
+        let ranked: [LauncherRankedItem]
+        if query.text.isEmpty {
+            // 多取几条：和情景建议重复的要让出来（§3.7），上限在下面按空状态的规则截。
+            ranked = LauncherRanking.rank(pool, query: "", records: records, now: now,
+                                          limit: Self.emptyQueryLimit + LauncherContextRules.maxSituational)
+                .items.filter { $0.usageScore > 0 }
+        } else {
+            ranked = LauncherRanking.rank(pool, query: query.text, records: records, now: now,
+                                          sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:],
+                                          groupLimits: query.isUnscoped ? Self.unscopedGroupLimits : [:]).items
+        }
+        // 最前面：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒（第 10 步；和计算结果不会同时有）。
+        var rows: [LauncherRow] = suggestions.top.map(\.row)
+        rows += instants.prefix(calculationCount).map(\.row)
+        // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。
+        rows += files.pinned.map(\.row)
+        rows += suggestions.leadingRows
+        rows += instants.dropFirst(calculationCount).map(\.row)
+        var rankedKeys = ranked.map(\.key)
+        if query.text.isEmpty {
+            if query.isUnscoped {
+                // 输入框为空（§3.7）：「选中的 / 刚复制的」→ 情景建议 → 最常用的，共不超过 9 行。
+                // 「最常用的」关着（第 13 步）：只出「选中的 / 刚复制的」和情景建议（它们的开关在 `LauncherContextProvider` 里看）。
+                let layout = LauncherContextRules.layout(context: emptyState.context.map(\.row.id),
+                                                         situational: emptyState.situational.map(\.candidate.key),
+                                                         mostUsed: features.isEnabled(.frequent) ? rankedKeys : [])
+                shownContext = Dictionary(emptyState.context.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
+                    .filter { layout.context.contains($0.key) }
+                shownSituational = Dictionary(emptyState.situational.map { ($0.candidate.key, $0) },
+                                              uniquingKeysWith: { first, _ in first })
+                    .filter { layout.situational.contains($0.key) }
+                rows += layout.context.compactMap { shownContext[$0]?.row }
+                rows += layout.situational.compactMap { shownSituational[$0]?.row }
+                rankedKeys = layout.mostUsed
+            } else {
+                rankedKeys = Array(rankedKeys.prefix(Self.emptyQueryLimit))
+            }
+        }
+        rows += rankedKeys.compactMap { item(forKey: $0)?.row }
+        rows += suggestions.trailing.map(\.row)
+        let duration = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        // 结果不完整（只回来了一部分来源）也算还要搜：改错字（R → R' → R）时 R 的搜索已经被顶掉了，不重发 Spotlight 就再也不来。
+        let state = fileResult.map { LauncherFileResultState(request: $0.request, complete: $0.complete) }
+        var outcome = LauncherSearchOutcome(queryText: query.text, rows: rows, candidateCount: pool.count, duration: duration,
+                                            fileRequest: fileRequest,
+                                            pendingFiles: LauncherFileResultState.pending(for: fileRequest, have: state))
+        outcome.suggestionsOff = LauncherFeatureRules.showsSuggestionsOff(query: query, rowCount: rows.count,
+                                                                          textActionCount: textActions.count, features: features)
+        return outcome
+    }
+
+    /// 这次输入能用的文件行：搜好的正是这个请求 → 用它（不完整也先用）；还没回来 → 上一次「名字包含」的结果里
+    /// 仍匹配的先顶着（固定行只在名字仍正好是现在的输入时顶着，片段的确切命中不顶）；不搜文件 → 没有，并放掉上一次的。
+    private func currentFiles(for request: LauncherFileSearchRequest?) -> (pinned: [LauncherItem], ranked: [LauncherItem]) {
+        guard let request else {
+            fileResult = nil
+            return ([], [])
+        }
+        guard let fileResult else { return ([], []) }
+        if fileResult.request == request { return (fileResult.pinned, fileResult.ranked) }
+        let pinned = request.pinnedName.map { name in
+            fileResult.pinned.filter { $0.row.title.caseInsensitiveCompare(name) == .orderedSame }
+        } ?? []
+        let stale = fileResult.ranked.filter { LauncherFileFilter.stillMatches(name: $0.row.title, request: request) }
+        return (pinned, stale)
+    }
+}

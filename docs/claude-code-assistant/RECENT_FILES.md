@@ -14,6 +14,10 @@
 既有的「今日改动」审计只覆盖当天、按项目聚合、入口在中心窗口，不满足「随手唤起 → 搜索/筛选 →
 一键打开」的场景。故在快速续接面板内加文件模式。
 
+> 2026-11-24 起，最近文件也交给快速入口按文件名搜（`ClaudeCodeTool.launcherKnownFiles()`，见 `../launcher/TECH_DESIGN.md` §3.4、§6.4）：
+> 行里写「Claude Code · 项目名」，输入的正好是它的名字时它排在同名文件的前面；Claude Code 的临时目录 `/private/tmp/claude-<uid>`
+> （会话的 scratchpad）也由快速入口自己扫。
+
 ## 2. 数据来源与现实约束
 
 数据源同 TECH_DESIGN §2.2：`~/.claude/projects/<munged 路径>/<sessionId>.jsonl`，逐行 JSON、

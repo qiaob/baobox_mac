@@ -1,10 +1,13 @@
 import AppKit
 import CryptoKit
 
-/// 对任何文本条目都出现的动作（格式无关），排在格式专属动作之后。
+/// 对任何文本条目都出现的动作（格式无关），排在格式专属动作之后。剪贴板预览区专有，
+/// 识别器本身在 `Core/TextTools/`（快速入口也用）。
 @MainActor
 enum CommonTextActions {
+    /// 总开关关了一个都没有；各通用动作的独立开关在下面逐个判断。
     static func all(for text: String) -> [FormatAction] {
+        guard TextToolSettings.isMasterEnabled else { return [] }
         var actions: [FormatAction] = []
         if TextToolSettings.isEnabled(TextToolSettings.encodeMenuID) { actions.append(encodeMenu()) }
         if TextToolSettings.isEnabled(TextToolSettings.qrCodeID) { actions.append(qrCode(for: text)) }

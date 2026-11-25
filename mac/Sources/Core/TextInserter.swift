@@ -37,8 +37,10 @@ enum TextInserter {
 
     /// `target` 为 nil = 此刻的前台 App。`copyOnFailure` 为 false 时插不进去只返回 `.copied(原因)`、不动剪贴板
     /// （连续听写攒到结束一次复制，docs/dictation/TECH_DESIGN.md §3.1）。
+    /// `checkKeyboardBeforePaste`：走粘贴那条路之前先看系统键盘焦点（只有快速入口的 ⌘⏎ 插入传 true，
+    /// docs/launcher/TECH_DESIGN.md §4）；不传时和以前完全一样。
     static func insert(_ text: String, into target: NSRunningApplication? = nil, mode: Mode = .auto,
-                       copyOnFailure: Bool = true) async -> Result {
+                       copyOnFailure: Bool = true, checkKeyboardBeforePaste: Bool = false) async -> Result {
         guard !text.isEmpty else { return .ax }
         func fail(_ reason: TextInsertionPolicy.CopyReason) -> Result {
             copyOnFailure ? copy(text, reason: reason) : .copied(reason)
@@ -70,13 +72,13 @@ enum TextInserter {
         case .copy(let reason):
             return fail(reason)
         case .paste:
-            return await paste(text, copyOnFailure: copyOnFailure)
+            return await paste(text, into: app, copyOnFailure: copyOnFailure, checkKeyboard: checkKeyboardBeforePaste)
         case .accessibility:
             if let element = probe?.element, await writeViaAccessibility(text, into: element) {
                 return .ax
             }
             log.notice("accessibility write did not take in \(bundle, privacy: .public), pasting instead")
-            return await paste(text, copyOnFailure: copyOnFailure)
+            return await paste(text, into: app, copyOnFailure: copyOnFailure, checkKeyboard: checkKeyboardBeforePaste)
         }
     }
 
@@ -119,7 +121,19 @@ enum TextInserter {
         return .copied(reason)
     }
 
-    private static func paste(_ text: String, copyOnFailure: Bool) async -> Result {
+    private static func paste(_ text: String, into app: NSRunningApplication, copyOnFailure: Bool,
+                              checkKeyboard: Bool) async -> Result {
+        // 调用方要求（快速入口的 ⌘⏎ 插入）：发 ⌘V 前先看系统键盘焦点（docs/launcher/TECH_DESIGN.md §4）。
+        // 在第三个 App 那里（别的启动器留下的借焦点）就不粘 —— 会粘进那个 App；复制给用户再回执。不复制时不回执（回执说的是「已复制」）。
+        if checkKeyboard {
+            let check = await LauncherFocus.checkKeyboardBeforePaste(target: app)
+            if check != .clear {
+                guard copyOnFailure else { return .copied(.keyboardElsewhere) }
+                let result = copy(text, reason: .keyboardElsewhere)
+                LauncherFocus.postBlockedReceipt(check)
+                return result
+            }
+        }
         // 划词翻译正借着剪贴板（一秒内就还原）：等它还完再粘。抢着写的话，它一还原就把我们的文字盖掉了。
         for _ in 0..<20 where PasteboardBorrow.isActive {
             try? await Task.sleep(nanoseconds: 50_000_000)

@@ -53,6 +53,23 @@ protocol ToolModule: AnyObject {
     /// 这个模块替框架承担的呈现角色，默认没有（目前只有桌面宠物交出通知呈现端、浮窗挂靠点与休息画面主角）。框架在调任何模块的 `activate()` 之前
     /// 收集一次、装进 `PresentationHub`，与注册顺序无关，之后不再收集。见 docs/notify-core/DESIGN.md §3.3。
     func presentationRoles() -> PresentationRoles
+    /// 快速入口里能搜到、能执行的命令，默认没有：带参数的命令和没有快捷键的动作（有快捷键的动作快速入口自动收，
+    /// 不用在这里重复；id 相同时这里的覆盖自动生成的那条）。见 docs/launcher/TECH_DESIGN.md §3.1。每次现建（文案跟着当前语言）。
+    func launcherCommands() -> [LauncherCommand]
+    /// 交给快速入口搜索的数据来源，默认没有（剪贴板历史、文本片段、会议、会话）。见 docs/launcher/TECH_DESIGN.md §3.2。
+    func launcherSources() -> [any LauncherSearchable]
+    /// 快速入口要自己扫的目录（Spotlight 不建索引的地方，绝对路径），默认没有。快速入口在后台遍历、只记文件名和路径在内存里；
+    /// 不存在的目录由它在后台跳过，这里不用先查（零磁盘 IO）。见 docs/launcher/TECH_DESIGN.md §6.4「来源 B」。
+    func launcherFileRoots() -> [String]
+    /// 交给快速入口按名字搜的已知文件，默认没有（Claude Code 会话写过的文件）。只读内存；面板呼出时取一次。
+    /// 见 docs/launcher/TECH_DESIGN.md §6.4「来源 C」。
+    func launcherKnownFiles() -> [LauncherKnownFile]
+    /// 快速入口空着的时候（呼出后还没打字）此刻值得提一句的动作，默认没有：正在专注 →「暂停专注」，防休眠开着 →「关闭防休眠」。
+    /// 每次呼出调一次；只读内存、零磁盘 IO、不阻塞。命令 id 也是使用记录的键（`commands/<id>`），和对应的命令用同一个 id。
+    /// 开关类快捷键动作可以直接用 `HotkeyDefinition.launcherStateCommand(symbolName:priority:)`。
+    /// 次序看 `suggestion.priority`（按紧急程度，小的在前，不写是 50；各模块的档位见次序表），快速入口排好后取前 4 条。
+    /// 见 docs/launcher/TECH_DESIGN.md §5.6。
+    func launcherContextSuggestions() -> [LauncherCommand]
 }
 
 extension ToolModule {
@@ -60,5 +77,10 @@ extension ToolModule {
     func statusMenuHeaderItems() -> [NSMenuItem] { [] }
     func aiFeatures() -> [AIFeatureDefinition] { [] }
     func presentationRoles() -> PresentationRoles { PresentationRoles() }
+    func launcherCommands() -> [LauncherCommand] { [] }
+    func launcherSources() -> [any LauncherSearchable] { [] }
+    func launcherFileRoots() -> [String] { [] }
+    func launcherKnownFiles() -> [LauncherKnownFile] { [] }
+    func launcherContextSuggestions() -> [LauncherCommand] { [] }
     var settingsAction: (@MainActor () -> Void)? { nil }
 }

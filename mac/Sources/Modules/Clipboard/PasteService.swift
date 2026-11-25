@@ -1,19 +1,32 @@
 import AppKit
 import Carbon.HIToolbox
+import os
 
 /// 回填粘贴服务。
 enum PasteService {
+    /// 日志只记 bundle id、布尔值、毫秒数和走了哪条路，不记粘贴的内容；只有从快速入口来的粘贴记 —— 剪贴板面板、全局快捷键两条老路
+    /// 不读辅助功能的键盘焦点、不多记日志，和以前一样。
+    private static let log = Logger(subsystem: "com.baobox.app", category: "clipboard")
+
     /// - Parameter overrideText: 非 nil 时粘贴它而不是 `item.text`（预览区里做过转换）。
     ///   转换结果只在内存里，历史条目本身不变。
+    /// - Parameter target: 粘贴到哪个 App。取的顺序（`LauncherPasteTarget`）：传入的 → 剪贴板面板唤起时记下的前台 App →
+    ///   快速入口正在执行的动作的目标（`LauncherFocus.actionContext`：剪贴板条目、「纯文本粘贴上一条」这类命令从快速入口执行时）。
+    ///   都没有 = 粘给此刻的前台 App（全局快捷键触发时就是它）。快速入口的上下文进门就同步读走，后面的异步步骤只用读走的值。
     @MainActor
     static func paste(_ item: ClipboardItem, plainText: Bool,
                       overrideText: String? = nil,
+                      target explicitTarget: NSRunningApplication? = nil,
                       store: ClipboardStore, monitor: ClipboardMonitor) {
+        let began = ProcessInfo.processInfo.systemUptime
+        // 0) 是不是快速入口的动作：只在动作闭包同步执行时看得到，进门就读走（全局快捷键、剪贴板面板来的这里是 nil）。
+        let launcherAction = LauncherFocus.actionContext
         // 1) 忽略本次回填产生的 pasteboard 变更
         monitor.ignoreNextChange = true
         guard writeToPasteboard(item, plainText: plainText, overrideText: overrideText) else {
             // 图片缓存文件已丢失：此时剪贴板已被 clearContents 清空，
             // 继续合成 ⌘V 会"粘贴出空气"，必须就地报错停下。
+            if launcherAction != nil { log.notice("paste: image file is missing, stopped") }
             ClipboardPanelController.current?.hide()
             showBlockedAlert(title: L("clipboard.paste.blockedTitle"),
                              message: L("clipboard.paste.blockedMessage"))
@@ -22,11 +35,22 @@ enum PasteService {
 
         // 2) 关闭面板前先取出唤起时记录的前台 App —— 那才是真正的粘贴目标。
         //    面板拿过焦点，此刻的 frontmostApplication 已经不可靠。
-        let target = ClipboardPanelController.current?.previousApp
+        let choice = LauncherPasteTarget.choose(explicit: explicitTarget,
+                                                clipboardPanel: ClipboardPanelController.current?.previousApp,
+                                                inLauncherAction: launcherAction != nil,
+                                                launcher: launcherAction?.target)
+        let target = choice.app
+        // 从快速入口执行的（剪贴板条目、「纯文本粘贴上一条」这类命令）：发 ⌘V 前看键盘，粘不出去时要给一句回执。
+        let fromLauncher = choice.fromLauncher
         ClipboardPanelController.current?.hide()
 
         // 3) 已授权辅助功能 → 切回目标 App 并合成 ⌘V；否则明确告知降级为仅复制。
-        guard Permissions.hasAccessibility else {
+        let hasAccessibility = Permissions.hasAccessibility
+        if fromLauncher {
+            log.notice("paste: target \(LauncherFocus.bundleID(target), privacy: .public) from \(choice.source.rawValue, privacy: .public), accessibility \(hasAccessibility, privacy: .public), front \(LauncherFocus.bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public)")
+        }
+        guard hasAccessibility else {
+            if fromLauncher { log.notice("paste: no accessibility permission, copied only (explaining in an alert)") }
             // 不能只调 promptAccessibility()：AX 系统授权弹窗每次启动只出现一次，
             // 之后再调用毫无反应 —— 用户按 ⏎ 后面板关闭、没有粘贴、没有任何提示，
             // 观感就是"卡死了"。改为自己弹说明框，把降级行为讲清楚并给授权入口。
@@ -47,14 +71,36 @@ enum PasteService {
         // 那会打给"此刻碰巧在前台"的任意 App，把内容粘进无关窗口。
         let myPID = ProcessInfo.processInfo.processIdentifier
         if let target, target.processIdentifier != myPID {
+            if fromLauncher { log.notice("paste: activating the target, then ⌘V") }
             target.activate()
         } else if NSWorkspace.shared.frontmostApplication?.processIdentifier == myPID {
-            return // 目标是自己或未知，仅保留复制结果
+            // 目标是自己或未知，仅保留复制结果。从快速入口来的说一句（别的途径保持原样）。
+            if fromLauncher {
+                log.notice("paste: no target and Baobox is frontmost, copied only")
+                NotifyCenter.shared.post(Notice(source: "clipboard", level: .ambient, title: L("clipboard.paste.copiedNotPasted"),
+                                                icon: "doc.on.clipboard", isUserFeedback: true))
+            }
+            return
+        } else if fromLauncher {
+            log.notice("paste: no target, ⌘V into the frontmost app")
         }
         // 留 0.12s 给目标 App 完成激活，之后再等物理修饰键松开。
+        let pending = PendingPaste(target: target, fromLauncher: fromLauncher, began: began)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            pasteAfterModifiersReleased(deadline: Date().addingTimeInterval(0.5))
+            MainActor.assumeIsolated {
+                pasteAfterModifiersReleased(pending, deadline: Date().addingTimeInterval(0.5),
+                                            waitStarted: ProcessInfo.processInfo.systemUptime)
+            }
         }
+    }
+
+    /// 一次还没发出 ⌘V 的粘贴。
+    private struct PendingPaste {
+        let target: NSRunningApplication?
+        /// 从快速入口执行的：发 ⌘V 前先看系统键盘焦点在哪儿（`LauncherFocus.checkKeyboardBeforePaste`）。
+        let fromLauncher: Bool
+        /// 进入 `paste` 的时刻（uptime）。
+        let began: TimeInterval
     }
 
     @MainActor
@@ -72,14 +118,36 @@ enum PasteService {
     /// 快捷键触发后立刻发事件时，用户几乎必然还按着 ⌘⇧ / ⌘⌥，硬件修饰键状态会叠加到
     /// 接收端 —— 目标 App 实际收到的是 ⌘⇧V / ⌘⌥V（在多数 App 里是「粘贴并匹配样式」
     /// 或干脆无动作），表现为「粘贴出来的不对」或「按了没反应」。
-    private static func pasteAfterModifiersReleased(deadline: Date) {
+    /// 从快速入口执行的，修饰键松开后先看系统键盘焦点：在第三个 App 那里就不发 ⌘V（内容已在剪贴板上，回执已发）。
+    /// 从快速入口来的，发出那一刻记一行日志：前台 App、系统键盘焦点所在 App（读得到的话）、从进入 `paste` 起多少毫秒、等修饰键用了多久。
+    @MainActor
+    private static func pasteAfterModifiersReleased(_ pending: PendingPaste, deadline: Date, waitStarted: TimeInterval) {
         let held: NSEvent.ModifierFlags = [.command, .option, .shift, .control]
-        if NSEvent.modifierFlags.intersection(held).isEmpty || Date() >= deadline {
+        let released = NSEvent.modifierFlags.intersection(held).isEmpty
+        guard released || Date() >= deadline else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                MainActor.assumeIsolated {
+                    pasteAfterModifiersReleased(pending, deadline: deadline, waitStarted: waitStarted)
+                }
+            }
+            return
+        }
+        // 剪贴板面板、全局快捷键：和以前一样直接发，不读辅助功能、不记日志。
+        guard pending.fromLauncher else {
             simulateCommandV()
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-            pasteAfterModifiersReleased(deadline: deadline)
+        let modifiersWaited = (ProcessInfo.processInfo.systemUptime - waitStarted) * 1000
+        LauncherFocus.checkKeyboardBeforePaste(target: pending.target) { check in
+            if check == .clear {
+                let now = ProcessInfo.processInfo.systemUptime
+                log.notice("paste: posting ⌘V; front \(LauncherFocus.bundleID(NSWorkspace.shared.frontmostApplication), privacy: .public), \((now - pending.began) * 1000, format: .fixed(precision: 0), privacy: .public) ms since paste began, modifiers waited \(modifiersWaited, format: .fixed(precision: 0), privacy: .public) ms\(released ? "" : " (timed out, still held)", privacy: .public)")
+                simulateCommandV()
+            } else {
+                // 内容在进门时已经写进剪贴板：说清原因，让用户自己 ⌘V。
+                log.notice("paste: not posting ⌘V (\(String(describing: check), privacy: .public)); left on the clipboard")
+                LauncherFocus.postBlockedReceipt(check)
+            }
         }
     }
 
