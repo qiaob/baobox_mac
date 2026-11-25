@@ -1,6 +1,6 @@
 import Foundation
 
-// 快速入口的一次性提醒（docs/launcher/TECH_DESIGN.md §5.6）：输入「20 分钟后提醒我取快递」回车设好，到点经通知内核提醒。
+// 快速入口的一次性提醒（docs/launcher/TECH_DESIGN.md §5.4「一次性提醒」，第 10 步）：输入「20 分钟后提醒我取快递」回车设好，到点经通知内核提醒。
 // 这里是纯模型和规则：提醒本身、`reminders.json` 的读写格式（解码全程容错）、哪些到点了、晚了多久、标题里写「今天 / 明天 / 日期」、
 // 什么输入算「列出提醒」。当前时间、日历由调用方传入，不读写磁盘。落盘、计时、发通知在 App 侧（`LauncherReminderCenter`）。
 // 只依赖 Foundation，进 BaoboxTests。

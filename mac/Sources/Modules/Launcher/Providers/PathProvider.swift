@@ -131,7 +131,7 @@ final class LauncherPathProvider {
                                             isDirectory: entry.isDirectory, isPackage: entry.isPackage,
                                             completion: completion, recordsUsage: false)
         }
-        // 完整存在的路径（文件，或文件夹本身那一行）带上 `pathTarget`：引擎在它后面接复制路径、在终端里打开这些动作（PR 10）。
+        // 完整存在的路径（文件，或文件夹本身那一行）带上 `pathTarget`：引擎在它后面接复制路径、在终端里打开这些动作（第 10 步）。
         func target(path: String, entry: LauncherPathEntry) -> LauncherPathTarget {
             LauncherPathTarget(path: path, isDirectory: entry.isDirectory, isPackage: entry.isPackage)
         }

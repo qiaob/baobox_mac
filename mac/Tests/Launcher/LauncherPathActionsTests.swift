@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 路径行的动作与文件动作（docs/launcher/TECH_DESIGN.md §6.5「路径行的动作」，PR 10）。
+/// 路径行的动作与文件动作（docs/launcher/TECH_DESIGN.md §6.5「路径行的动作」，第 10 步）。
 @MainActor
 final class LauncherPathActionsTests: XCTestCase {
 

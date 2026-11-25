@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 输入分类的两个新标记（像命令、带时间的句子）和它们在建议计划里的位置（docs/launcher/TECH_DESIGN.md §5.4、§5.6，PR 10）。
+/// 输入分类的两个新标记（像命令、带时间的句子）和它们在建议计划里的位置（docs/launcher/TECH_DESIGN.md §5.4「像命令」「带时间的句子」，第 10 步）。
 final class LauncherCommandReminderPlanTests: XCTestCase {
 
     private var clock: LauncherCalcContext { LauncherCalcTestSupport.context() }

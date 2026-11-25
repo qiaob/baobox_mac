@@ -1,6 +1,6 @@
 import Foundation
 
-/// Claude Code 助手给快速入口的文字动作「交给 Claude Code」（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：在偏好终端里开一个
+/// Claude Code 助手给快速入口的文字动作「交给 Claude Code」（docs/launcher/TECH_DESIGN.md §5.4，第 10 步）：在偏好终端里开一个
 /// 新的 claude 会话，把输入框里的文字（粘贴的多行原文保住换行）作为第一条消息 —— `'<claude>' '<文字>'`，文字经 `Shell.quote`
 /// （`LauncherShellHandoff.promptLine`），是一个参数，不会被 shell 展开或执行。
 /// - 目录：最近一次会话所在的项目目录（会话索引的内存缓存 `ClaudeSessionIndex.shared.sessions`，新→旧；零磁盘 IO），

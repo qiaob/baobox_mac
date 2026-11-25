@@ -23,7 +23,7 @@ struct LauncherSuggestion {
     /// 执行时记一次使用的键（兜底建议：`textaction/<id>`）；nil = 不记（对应建议固定在最前，不用排）。
     let usageKey: String?
     let action: LauncherSuggestionAction
-    /// 要按两次 ⏎（「在终端里运行」、取消一条提醒，PR 10）：第一次只换标题；nil = 按一次就执行。
+    /// 要按两次 ⏎（「在终端里运行」、取消一条提醒，第 10 步）：第一次只换标题；nil = 按一次就执行。
     var confirmation: LauncherConfirmation? = nil
 }
 
@@ -45,7 +45,7 @@ struct LauncherSuggestions {
     var leading: [Leading] = []
     /// 排在普通结果之后的兜底建议。
     var trailing: [LauncherSuggestion] = []
-    /// 排在所有行之前的（计算结果那个位置，PR 10）：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒。
+    /// 排在所有行之前的（计算结果那个位置，第 10 步）：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒。
     var top: [LauncherSuggestion] = []
 
     var leadingRows: [LauncherRow] { leading.map(\.row) }
@@ -74,7 +74,7 @@ enum LauncherSuggestionProvider {
     static func suggestions(for query: LauncherQuery, textActions: [LauncherCatalogCommand],
                             hasCalculation: Bool, hasRecognition: Bool, placed: LauncherPlacedText? = nil,
                             records: LauncherUsageRecords, now: Date) -> LauncherSuggestions {
-        // 认「带时间的句子」用的「现在」、日历、时区（PR 10）：日历和时区跟系统，同计算引擎。
+        // 认「带时间的句子」用的「现在」、日历、时区（第 10 步）：日历和时区跟系统，同计算引擎。
         let clock = LauncherCalcContext(now: now, calendar: .current, timeZone: .current, locale: L10n.locale)
         let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition,
                                                  placed: placed, clock: clock)
@@ -85,7 +85,7 @@ enum LauncherSuggestionProvider {
         }
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {
-            // 对这段文字适用的文字动作：类别对得上，模块的 `appliesTo` 也说行（PR 10）。先看类别 —— `appliesTo` 可能要跑一遍正则。
+            // 对这段文字适用的文字动作：类别对得上，模块的 `appliesTo` 也说行（第 10 步）。先看类别 —— `appliesTo` 可能要跑一遍正则。
             let actions = textActions.filter { entry in
                 entry.command.isTextAction && !entry.command.suggestion.kinds.isDisjoint(with: kinds)
                     && entry.command.applies(to: plan.text)
@@ -104,7 +104,7 @@ enum LauncherSuggestionProvider {
         return suggestions
     }
 
-    // MARK: - 提醒（PR 10，§5.6）
+    // MARK: - 提醒（第 10 步，§5.4「一次性提醒」）
 
     /// 带时间的句子：「14:35 提醒我：取快递」（今天以外的带日期），右侧「提醒」；⏎ 设好，回执「已设好：今天 14:35 提醒你取快递」。
     private static func topRow(_ suggestion: LauncherLeadingSuggestion, now: Date) -> LauncherSuggestion? {
@@ -193,7 +193,7 @@ enum LauncherSuggestionProvider {
                                   source: L("launcher.suggest.source.wordCount"), icon: .symbol("number"))
             return [.instant(LauncherInstant(row: row, copyText: String(stats.words)))]
         case .runInTerminal(let command):
-            // 像命令（PR 10）：在偏好终端里跑这一行（`$ ` 已去掉）。要按两次 ⏎，第二次之前标题写着完整的命令。
+            // 像命令（第 10 步）：在偏好终端里跑这一行（`$ ` 已去掉）。要按两次 ⏎，第二次之前标题写着完整的命令。
             let row = LauncherRow(id: "suggest/terminal",
                                   title: L("launcher.suggest.runInTerminal \(LauncherSuggestionText.quote(command))"),
                                   source: L("launcher.suggest.source.terminal"), icon: .symbol("terminal"))

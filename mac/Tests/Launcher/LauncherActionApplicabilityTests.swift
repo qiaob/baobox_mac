@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 
 /// 文字动作的适用性判断（`LauncherCommand.appliesTo`）与「排在对应建议后面」的文字动作（`traits.leading`）
-/// （docs/launcher/TECH_DESIGN.md §5.4「适用性判断」，PR 10）。
+/// （docs/launcher/TECH_DESIGN.md §5.4「适用性判断」，第 10 步）。
 @MainActor
 final class LauncherActionApplicabilityTests: XCTestCase {
 
@@ -78,6 +78,80 @@ final class LauncherActionApplicabilityTests: XCTestCase {
             XCTAssertTrue(MeetingLinkParser.links(in: url).isEmpty, url)
         }
         XCTAssertNotEqual(LauncherInputClassifier.classify("明天的会 https://zoom.us/j/123").kinds, [.url], "一段话不是网址")
+    }
+
+    // MARK: - 第 10 步之后的默认次序（文档 §5.4 的表）
+
+    /// 和各模块的声明、注册顺序一样（剪贴板 → Claude Code → Codex → 会议 → 划词助手 → 手机互传，最后是快速入口自己的两条），
+    /// Claude Code、Codex 都装了。
+    private let allActions: [LauncherSuggestionCandidate] = [
+        LauncherSuggestionCandidate(id: "clipboard.text.saveSnippet", traits: LauncherSuggestionTraits(priority: 50)),
+        LauncherSuggestionCandidate(id: "clipboard.text.pinCard", traits: LauncherSuggestionTraits(priority: 50)),
+        LauncherSuggestionCandidate(id: "clipboard.text.qrCode",
+                                    traits: LauncherSuggestionTraits(priority: 50, boostedKinds: [.url])),
+        LauncherSuggestionCandidate(id: "claudecode.text.handOff",
+                                    traits: LauncherSuggestionTraits(priority: 55, boostedKinds: [.longText])),
+        LauncherSuggestionCandidate(id: "aitools.text.handOff", traits: LauncherSuggestionTraits(priority: 56)),
+        LauncherSuggestionCandidate(id: "meeting.text.joinAndRecord",
+                                    traits: LauncherSuggestionTraits(kinds: [.url], priority: 10, leading: true)),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.translate", traits: LauncherSuggestionTraits(priority: 10)),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.learn",
+                                    traits: LauncherSuggestionTraits(kinds: [.word], priority: 10, boostedKinds: [.word])),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.explain", traits: LauncherSuggestionTraits(priority: 20)),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.summarize",
+                                    traits: LauncherSuggestionTraits(kinds: [.plainText, .longText], priority: 20,
+                                                                     boostedKinds: [.longText])),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.polish",
+                                    traits: LauncherSuggestionTraits(kinds: [.plainText, .longText], priority: 60,
+                                                                     boostedKinds: [.longText])),
+        LauncherSuggestionCandidate(id: "selectiontranslate.text.speak", traits: LauncherSuggestionTraits(priority: 65)),
+        LauncherSuggestionCandidate(id: "phonetransfer.text.send", traits: LauncherSuggestionTraits(priority: 50)),
+        LauncherSuggestionRanking.webSearch,
+        LauncherSuggestionRanking.findFiles,
+    ]
+
+    private func defaultOrder(_ kinds: Set<LauncherTextKind>, limit: Int = LauncherSuggestionRanking.maxRows) -> [String] {
+        LauncherSuggestionRanking.order(allActions, kinds: kinds, records: LauncherUsageRecords(), now: now, limit: limit)
+            .map { allActions[$0].id }
+    }
+
+    func testPlainTextKeepsTheApprovedEightAndTheNewOnesFollow() {
+        XCTAssertEqual(defaultOrder([.plainText], limit: 20), [
+            "selectiontranslate.text.translate", "selectiontranslate.text.explain", "selectiontranslate.text.summarize",
+            "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+            "clipboard.text.qrCode",
+            // 第 9 行以后：8 行的上限之内不出，用得多才露出来。
+            "phonetransfer.text.send", "claudecode.text.handOff", "aitools.text.handOff", "selectiontranslate.text.polish",
+            "selectiontranslate.text.speak",
+        ])
+    }
+
+    func testLongTextPutsClaudeCodeSecond() {
+        XCTAssertEqual(defaultOrder([.longText]), [
+            "selectiontranslate.text.summarize", "claudecode.text.handOff", "selectiontranslate.text.polish",
+            "selectiontranslate.text.translate", "selectiontranslate.text.explain", "launcher.webSearch", "launcher.findFiles",
+            "clipboard.text.saveSnippet",
+        ])
+    }
+
+    func testURLGetsSendToPhoneEighthAndTheMeetingActionStaysOut() {
+        XCTAssertEqual(defaultOrder([.url]), [
+            "clipboard.text.qrCode", "selectiontranslate.text.translate", "selectiontranslate.text.explain",
+            "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+            "phonetransfer.text.send",
+        ])
+        XCTAssertEqual(LauncherSuggestionRanking.leadingOrder(allActions, kinds: [.url]).map { allActions[$0].id },
+                       ["meeting.text.joinAndRecord"])
+    }
+
+    func testCommandLeavesSevenRankedRowsAfterRunInTerminal() {
+        let plan = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("git status"), hasCalculation: false,
+                                                 hasRecognition: false)
+        XCTAssertEqual(plan.fallbackLeading, [.runInTerminal("git status")])
+        XCTAssertEqual(defaultOrder(plan.fallbackKinds ?? [], limit: plan.rankedFallbackLimit), [
+            "selectiontranslate.text.translate", "selectiontranslate.text.explain", "selectiontranslate.text.summarize",
+            "launcher.webSearch", "launcher.findFiles", "clipboard.text.saveSnippet", "clipboard.text.pinCard",
+        ])
     }
 
     func testSameTierKeepsTheDeclarationOrder() {

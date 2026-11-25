@@ -37,7 +37,7 @@ enum LauncherInputClassifier {
 
     /// 分类。优先级：路径（不出建议）> 网址 > 邮箱 > 颜色 > 英文单词 / 短语 > 一大段文字 > 其余。
     /// 有歧义的网址（可能是文件名）按普通文字算，但带上 `url`、标上 `isAmbiguousURL`。
-    /// 不是网址、邮箱、颜色时再看两个标记（PR 10）：像一条命令（`command`，这时按普通文字算：`git status` 不当成英文短语）、
+    /// 不是网址、邮箱、颜色时再看两个标记（第 10 步）：像一条命令（`command`，这时按普通文字算：`git status` 不当成英文短语）、
     /// 带时间的句子（`reminder`，只在给了 `clock` 时认：要按「现在」算出时刻，已经过去的不算）。
     static func classify(_ input: String, clock: LauncherCalcContext? = nil) -> LauncherInputClassification {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)

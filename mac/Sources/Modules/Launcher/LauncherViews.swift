@@ -81,7 +81,7 @@ final class LauncherPanelModel: ObservableObject {
     @Published private(set) var selectedIndex = 0
     /// 选中哪一行、这次输入以来用户手动选过没有（规则见 `LauncherSelectionState`）。
     private var selection = LauncherSelectionState()
-    /// 二次确认（PR 10）：哪一行在等第二次 ⏎；它原来的样子（复位时换回来）和换上的标题。
+    /// 二次确认（第 10 步）：哪一行在等第二次 ⏎；它原来的样子（复位时换回来）和换上的标题。
     private var confirm = LauncherConfirmState()
     private var armed: (original: LauncherRow, title: String)?
     /// 每换一批结果 +1：列表回到顶上。
@@ -163,7 +163,7 @@ final class LauncherPanelModel: ObservableObject {
         selectionMoved()
     }
 
-    // MARK: 二次确认（PR 10）
+    // MARK: 二次确认（第 10 步）
 
     /// 对第 `index` 行按了一次 ⏎ / ⌘N / 单击，而这一行要按两次（`LauncherConfirmation`）。
     /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、标题换成 `title`，等第二次。

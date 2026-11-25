@@ -50,7 +50,7 @@ struct LauncherSelectionState: Equatable, Sendable {
         isManual = true
     }
 
-    /// 用户明确点名了第 `row` 行（二次确认的第一次 ⏎ / ⌘N / 单击，PR 10）：选中它，算手动选过 ——
+    /// 用户明确点名了第 `row` 行（二次确认的第一次 ⏎ / ⌘N / 单击，第 10 步）：选中它，算手动选过 ——
     /// 后台结果回来时选中留在它上面，第二次 ⏎ 执行的还是它。
     mutating func choose(_ row: Int, rowCount: Int) {
         guard (0..<rowCount).contains(row) else { return }

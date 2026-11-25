@@ -1,6 +1,6 @@
 import Foundation
 
-/// Codex 助手给快速入口的文字动作「交给 Codex」（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：和「交给 Claude Code」同样简单 ——
+/// Codex 助手给快速入口的文字动作「交给 Codex」（docs/launcher/TECH_DESIGN.md §5.4，第 10 步）：和「交给 Claude Code」同样简单 ——
 /// 在偏好终端里开一个新的 codex 会话，文字作为第一条消息（`'<codex>' '<文字>'`，`LauncherShellHandoff.promptLine`）。
 /// 目录：最近一次会话的项目目录（`CodexSessionIndex.shared.sessions`，内存缓存、新→旧），标题「交给 Codex（<项目名>）」；
 /// 拿不到时用主目录。没装 Codex（`CodexEnv.isInstalled`，同菜单）不声明（约定 7）。

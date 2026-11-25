@@ -410,7 +410,7 @@ final class SelectionTranslateController {
     /// 普通朗读正在读（快速入口的「朗读」那一行据此写成「停止朗读」）。
     var isSpeaking: Bool { synthesizer.isSpeaking }
 
-    /// 快速入口的「朗读」（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：正在读就停；否则按语种选嗓音读这段文字 ——
+    /// 快速入口的「朗读」（docs/launcher/TECH_DESIGN.md §5.4，第 10 步）：正在读就停；否则按语种选嗓音读这段文字 ——
     /// 语种检测同结果面板（偏向两个目标语言），嗓音同结果面板的朗读按钮（`speak`）。太长的只读开头（同取词的上限）。
     func toggleSpeech(_ text: String) {
         if synthesizer.isSpeaking {

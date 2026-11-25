@@ -1,6 +1,6 @@
 import Foundation
 
-// 把快速入口里的文字交给终端（docs/launcher/TECH_DESIGN.md §5.4「在终端里运行」「交给 Claude Code」，PR 10）：
+// 把快速入口里的文字交给终端（docs/launcher/TECH_DESIGN.md §5.4「在终端里运行」「交给 Claude Code」，第 10 步）：
 // 拼成写进一次性脚本（`TerminalLauncher.run`）的那一行。文字一律经 `Shell.quote`（单引号包裹，里面的 `$`、反引号、`\`、
 // 换行都原样，不展开）再拼进命令 —— 交给 claude 的是一个参数，不会被 shell 拆开、展开或执行。
 // 快速入口自己（在终端里运行、在终端里打开文件夹）和 Claude Code / Codex 助手共用。只依赖 Foundation，进 BaoboxTests。

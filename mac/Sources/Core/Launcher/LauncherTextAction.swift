@@ -5,7 +5,7 @@ import Foundation
 // 各模块声明的文字动作按自己适用哪几类决定出不出、排在哪。只依赖 Foundation，进 BaoboxTests。
 
 /// 输入的类别。基本类别一段输入只属于其中一类（优先级：网址 > 邮箱 > 颜色 > 英文单词 > 一大段文字 > 其余）；
-/// 「像命令」「带时间的句子」是额外的标记，和普通文字 / 一大段文字同时成立（PR 10）。用集合表示，动作声明「适用哪几类」。
+/// 「像命令」「带时间的句子」是额外的标记，和普通文字 / 一大段文字同时成立（第 10 步）。用集合表示，动作声明「适用哪几类」。
 enum LauncherTextKind: String, CaseIterable, Sendable {
     /// 网址、域名（`https://…`、`example.com/path`、`localhost:8080`、`192.168.1.1:3000`）。
     case url
@@ -28,7 +28,7 @@ enum LauncherTextKind: String, CaseIterable, Sendable {
 /// 一条文字动作作为建议时的属性：对哪些输入适用、默认排在哪。不是文字动作的命令用不到它。
 ///
 /// 优先级是档位，小的在前；快速入口自己的两条是「上网搜」30、「搜文件名」40。现在各模块用的档位：
-/// 10 翻译 / 学习，20 解释 / 总结，50 存为片段 / 钉成贴卡 / 二维码，60 润色（PR 10 起的见 docs/launcher/TECH_DESIGN.md §5.4 的表）。
+/// 10 翻译 / 学习，20 解释 / 总结，50 存为片段 / 钉成贴卡 / 二维码，60 润色（第 10 步 起的见 docs/launcher/TECH_DESIGN.md §5.4 的表）。
 /// 同一档里用得多的在前，用得很多（7 次以上）的能往前挪三档；输入属于 `boostedKinds` 时直接排到所有档位前面。
 struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 对这几类输入适用（默认：任何文字）。
@@ -46,10 +46,10 @@ struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 不然每执行一次就多一个永远用不上的键，还把会话 id 写进使用记录文件。文字 / 图片动作不看它。
     var recordsUsage: Bool
     /// 文字动作：适用时不进兜底建议，排在最前的对应建议后面（网址的「打开」后面紧接着），不看使用记录、只按档位排 ——
-    /// 只给很确定的输入用（「是会议链接」→「入会并开始会议记录」，配合 `LauncherCommand.appliesTo`）。PR 10。
+    /// 只给很确定的输入用（「是会议链接」→「入会并开始会议记录」，配合 `LauncherCommand.appliesTo`）。第 10 步。
     var leading = false
     /// 图片动作：只用在挂着的图片上，图片文件的路径行后面不出 —— 那里已经有做同一件事的文件动作
-    /// （「把图片发到手机」↔ 路径行的「发到手机」，docs/launcher/TECH_DESIGN.md §6.5）。PR 10。
+    /// （「把图片发到手机」↔ 路径行的「发到手机」，docs/launcher/TECH_DESIGN.md §6.5）。第 10 步。
     var skipsImageFiles = false
 
     init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,

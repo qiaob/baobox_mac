@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 把文字交给终端时拼的那一行（docs/launcher/TECH_DESIGN.md §5.4，PR 10）：文字经 `Shell.quote` 后作为一个参数原样到达，
+/// 把文字交给终端时拼的那一行（docs/launcher/TECH_DESIGN.md §5.4，第 10 步）：文字经 `Shell.quote` 后作为一个参数原样到达，
 /// 不被拆开、展开、执行；「在终端里运行」和自己在 zsh 里敲那一行一样。这里真的交给 `/bin/zsh -c` 跑一遍（只 printf，没有副作用）。
 final class LauncherShellHandoffTests: XCTestCase {
 

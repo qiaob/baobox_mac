@@ -2,7 +2,7 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// 手机互传给快速入口的动作「发到手机」（docs/launcher/TECH_DESIGN.md §5.4、§6.5，PR 10）：文字动作（输入框里的文字）、
+/// 手机互传给快速入口的动作「发到手机」（docs/launcher/TECH_DESIGN.md §5.4、§6.5，第 10 步）：文字动作（输入框里的文字）、
 /// 图片动作（挂着的图片）、文件动作（输入是一个存在的文件的路径，接在路径行后面）。
 /// - 有手机连着（`PhoneTransferSession.canSend`：窗口开着、局域网有设备 / 公网已连上）：直接发，回执一句。
 /// - 没有：打开手机互传的窗口（会话随窗口开），回执「连上手机后再发一次」—— 现有代码没有「连上后自动发」。

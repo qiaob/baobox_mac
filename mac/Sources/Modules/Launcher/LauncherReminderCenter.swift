@@ -1,7 +1,7 @@
 import AppKit
 import os
 
-// 快速入口的一次性提醒（docs/launcher/TECH_DESIGN.md §5.6，PR 10）：输入「20 分钟后提醒我取快递」，最前面一行「14:35 提醒我：取快递」，
+// 快速入口的一次性提醒（docs/launcher/TECH_DESIGN.md §5.4「一次性提醒」，第 10 步）：输入「20 分钟后提醒我取快递」，最前面一行「14:35 提醒我：取快递」，
 // ⏎ 设好；到点经通知内核发一条 alert（宠物开着是宠物气泡，否则系统通知）。输入「提醒」/「reminders」列出还没到点的，⏎ 两次取消。
 // - 存储：`~/Library/Application Support/Baobox/Launcher/reminders.json`（格式与解码容错在 `Logic/LauncherReminders.swift`）。
 //   启动时在后台读回；读回前设的、取消的先记着，读完按顺序补上（不会被盘上的盖掉，也不会用空表盖盘）。每次改动在后台原子写；

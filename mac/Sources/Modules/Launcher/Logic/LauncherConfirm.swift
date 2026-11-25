@@ -1,6 +1,6 @@
 import Foundation
 
-// 二次确认（docs/launcher/TECH_DESIGN.md §4「按两次回车」，PR 10）：要按两次 ⏎ 的行 —— 模块声明的 `LauncherCommand.destructive`
+// 二次确认（docs/launcher/TECH_DESIGN.md §4「按两次回车」，第 10 步）：要按两次 ⏎ 的行 —— 模块声明的 `LauncherCommand.destructive`
 // 命令、「在终端里运行」、取消一条提醒 —— 第一次 ⏎ 不执行，那一行的标题换成「再按一次回车<做什么>：<对象>」，再按才执行。
 // 选中移开、输入改了、面板收起就复位；⌘1–⌘9、单击这样的行同样只算第一次。
 // 这里是纯值（哪一行在等、对象怎么截断），进 BaoboxTests；换标题在面板模型（`LauncherPanelModel`），按键在控制器。

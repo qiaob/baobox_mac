@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 一次性提醒的模型和规则（docs/launcher/TECH_DESIGN.md §5.6）：`reminders.json` 的读写容错、到点、晚了多久、哪一天。
+/// 一次性提醒的模型和规则（docs/launcher/TECH_DESIGN.md §5.4「一次性提醒」，第 10 步）：`reminders.json` 的读写容错、到点、晚了多久、哪一天。
 final class LauncherRemindersTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)

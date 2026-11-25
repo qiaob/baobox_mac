@@ -62,11 +62,11 @@ struct LauncherItem {
     var image: LauncherEntryImage? = nil
     /// 路径行指向一个图片文件（§6.5）：后面接图片动作（取字、贴图……，图片从这个文件读）。
     var imageFile: URL? = nil
-    /// 路径行是一个完整存在的路径（文件，或文件夹本身那一行；不是补全出来的）：后面接复制路径、在终端里打开、发到手机这些动作（§6.5，PR 10）。
+    /// 路径行是一个完整存在的路径（文件，或文件夹本身那一行；不是补全出来的）：后面接复制路径、在终端里打开、发到手机这些动作（§6.5，第 10 步）。
     var pathTarget: LauncherPathTarget? = nil
     /// 只在打了来源前缀时出现（图片条目，§3.2）。
     var onlyWithPrefix = false
-    /// 要按两次 ⏎（模块声明的 destructive 命令，PR 10）：第一次只换标题；nil = 按一次就执行。
+    /// 要按两次 ⏎（模块声明的 destructive 命令，第 10 步）：第一次只换标题；nil = 按一次就执行。
     var confirmation: LauncherConfirmation? = nil
 }
 
@@ -127,7 +127,7 @@ final class LauncherEngine {
     var imageActions: [LauncherCatalogCommand] = []
     /// 输入里挂着的图片（控制器每次查询前设）；nil = 没挂。
     var attachment: LauncherAttachment?
-    /// 各模块声明的文件动作（§6.5，PR 10）：呼出时装进来，只接在完整存在的文件的路径行后面。
+    /// 各模块声明的文件动作（§6.5，第 10 步）：呼出时装进来，只接在完整存在的文件的路径行后面。
     var fileActions: [LauncherCatalogCommand] = []
     /// 主目录：认路径时展开 `~`。
     private let home: String
@@ -268,7 +268,7 @@ final class LauncherEngine {
             asyncItemsByKey = Dictionary(items.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })
             var rows = items.map(\.row)
             var actions: [LauncherSuggestion] = []
-            // 完整存在的路径（PR 10，§6.5）：路径行（文件夹是它本身那一行）后面、文件夹内容之前接最多 3 行动作。
+            // 完整存在的路径（第 10 步，§6.5）：路径行（文件夹是它本身那一行）后面、文件夹内容之前接最多 3 行动作。
             if let target = items.first?.pathTarget {
                 let pathActions = LauncherPathActionProvider.rows(for: target, fileActions: fileActions)
                 rows.insert(contentsOf: pathActions.rows, at: min(1, rows.count))
@@ -336,7 +336,7 @@ final class LauncherEngine {
                                           sourceLimits: query.isUnscoped ? Self.unscopedSourceLimits : [:],
                                           groupLimits: query.isUnscoped ? Self.unscopedGroupLimits : [:]).items
         }
-        // 最前面：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒（PR 10；和计算结果不会同时有）。
+        // 最前面：带时间的句子的「到时提醒我」、输入「提醒」时还没到点的提醒（第 10 步；和计算结果不会同时有）。
         var rows: [LauncherRow] = suggestions.top.map(\.row)
         rows += instants.prefix(calculationCount).map(\.row)
         // 固定的文件行（PR 11）：输入是个文件名、找到了名字正好是它的文件 → 排在剪贴板、App、命令和所有建议之前，⏎ 就是打开。

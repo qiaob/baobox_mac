@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 带时间的句子（docs/launcher/TECH_DESIGN.md §5.6）：「现在」写死成 2026-11-23（周一）10:00 Asia/Shanghai。
+/// 带时间的句子（docs/launcher/TECH_DESIGN.md §5.4「一次性提醒」，第 10 步）：「现在」写死成 2026-11-23（周一）10:00 Asia/Shanghai。
 final class LauncherReminderParserTests: XCTestCase {
 
     private var calendar: Calendar {

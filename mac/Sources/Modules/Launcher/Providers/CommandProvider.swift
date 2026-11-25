@@ -60,7 +60,7 @@ final class LauncherCommandProvider {
         return LauncherCommandCatalog.imageActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
     }
 
-    /// 此刻各模块声明的文件动作（呼出时调一次）：只在输入是一个存在的文件的路径时接在路径行后面（§6.5，PR 10）。
+    /// 此刻各模块声明的文件动作（呼出时调一次）：只在输入是一个存在的文件的路径时接在路径行后面（§6.5，第 10 步）。
     func fileActions() -> [LauncherCatalogCommand] {
         guard let registry else { return [] }
         let declared = registry.tools.flatMap { tool in

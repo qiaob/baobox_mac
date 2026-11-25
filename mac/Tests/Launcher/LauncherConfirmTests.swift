@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 二次确认（docs/launcher/TECH_DESIGN.md §4「按两次回车」，PR 10）：哪一行在等第二次 ⏎、什么时候复位、标题里的对象怎么截断。
+/// 二次确认（docs/launcher/TECH_DESIGN.md §4「按两次回车」，第 10 步）：哪一行在等第二次 ⏎、什么时候复位、标题里的对象怎么截断。
 final class LauncherConfirmTests: XCTestCase {
 
     // MARK: - 按两次

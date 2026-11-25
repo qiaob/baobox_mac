@@ -83,7 +83,7 @@ final class LauncherController {
         apps.start()
         usage.load()
         fileSources.activate()
-        // 一次性提醒（PR 10）：后台读回、补响过了点的、定下一条的计时器。
+        // 一次性提醒（第 10 步）：后台读回、补响过了点的、定下一条的计时器。
         LauncherReminderCenter.shared.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstPrewarmDelay) { [weak self] in
             MainActor.assumeIsolated { self?.prewarm() }
@@ -209,7 +209,7 @@ final class LauncherController {
             pendingShownLog = nil
             Self.log.notice("\(shown, privacy: .public); selection cancelled (panel hidden)")
         }
-        // 在等第二次 ⏎ 的行复位（PR 10）。
+        // 在等第二次 ⏎ 的行复位（第 10 步）。
         model.disarm()
         // 挂着的图片收起即丢（图片占内存）；输入框里的字那时是这张图的筛选词，也不留。
         if attachment != nil {
@@ -613,7 +613,7 @@ final class LauncherController {
             fill(contextItem)
             return
         }
-        // 要按两次 ⏎ 的行（PR 10）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
+        // 要按两次 ⏎ 的行（第 10 步）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
         if let confirmation = engine.suggestion(forKey: id)?.confirmation ?? engine.item(forKey: id)?.confirmation,
            !model.confirmPress(at: index, title: Self.confirmTitle(confirmation)) {
             return

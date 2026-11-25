@@ -17,9 +17,9 @@ enum LauncherLeadingSuggestion: Equatable, Sendable {
     case color(LauncherColor)
     /// 一大段文字的字数，⏎ 复制字数。
     case wordCount(LauncherTextStats)
-    /// 像命令（PR 10）：「在终端里运行」，排在兜底建议第一条，要按两次 ⏎。值是要跑的命令（`$ ` 已去掉）。
+    /// 像命令（第 10 步）：「在终端里运行」，排在兜底建议第一条，要按两次 ⏎。值是要跑的命令（`$ ` 已去掉）。
     case runInTerminal(String)
-    /// 带时间的句子（PR 10）：「14:35 提醒我：取快递」，排在最前（计算结果那个位置）。
+    /// 带时间的句子（第 10 步）：「14:35 提醒我：取快递」，排在最前（计算结果那个位置）。
     case reminder(LauncherReminderDraft)
 }
 
@@ -32,9 +32,9 @@ struct LauncherSuggestionPlan: Equatable, Sendable {
     let fallbackKinds: Set<LauncherTextKind>?
     /// 排在兜底建议最前面的（在翻译前面）：「在终端里运行」、有歧义的网址（`claude.ai`、`Safari.app`）的「打开」放这里，不排最前。
     var fallbackLeading: [LauncherLeadingSuggestion] = []
-    /// 排在所有建议、固定的文件行之前的（计算结果那个位置；两者不会同时有）：带时间的句子的「到时提醒我」（PR 10）。
+    /// 排在所有建议、固定的文件行之前的（计算结果那个位置；两者不会同时有）：带时间的句子的「到时提醒我」（第 10 步）。
     var top: [LauncherLeadingSuggestion] = []
-    /// 输入是「提醒」/「reminders」：列出还没到点的提醒（每条一行，⏎ 取消，PR 10）。
+    /// 输入是「提醒」/「reminders」：列出还没到点的提醒（每条一行，⏎ 取消，第 10 步）。
     var showsReminders = false
 
     static let none = LauncherSuggestionPlan(text: "", leading: [], fallbackKinds: nil)
@@ -60,7 +60,7 @@ enum LauncherSuggestionPolicy {
     /// - `placed`：放进来的原文（⌘V、拖放、「选中的 / 刚复制的」），控制器已经核对过输入框里的文字还是它（空白归一后相等，
     ///   `LauncherPlacedText.matches`；一改动就不再交进来）。带换行的按原文分类、算字数、交给动作 —— 多行的原文算一大段文字；
     ///   单行的和输入框里的一样。这里只读它放进来时算好的 `suggestionText`，不再归一。
-    /// - 像命令（PR 10）：兜底建议第一条是「在终端里运行」（占一个名额）。带时间的句子：最前面一行「到时提醒我」。
+    /// - 像命令（第 10 步）：兜底建议第一条是「在终端里运行」（占一个名额）。带时间的句子：最前面一行「到时提醒我」。
     ///   有计算结果时这两样都不出。输入是「提醒」/「reminders」时 `showsReminders`。分类读的同上：单行的放进来的文字就是输入框里的，
     ///   照常认；带换行的原文不是一条命令。
     /// - `clock`：认「带时间的句子」用的「现在」、日历、时区；nil = 不认。
