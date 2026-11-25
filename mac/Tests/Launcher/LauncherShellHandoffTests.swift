@@ -25,11 +25,16 @@ final class LauncherShellHandoffTests: XCTestCase {
         "\t制表符\r\n回车换行",
     ]
 
-    /// 用 zsh 跑一段脚本，取 stdout。
-    private func zsh(_ script: String) throws -> String {
+    /// 用 zsh 跑一段脚本，取 stdout。`home`：换掉 HOME（看 `cd ~` 落到哪）。
+    private func zsh(_ script: String, home: String? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-f", "-c", script]
+        if let home {
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = home
+            process.environment = environment
+        }
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -88,6 +93,40 @@ final class LauncherShellHandoffTests: XCTestCase {
                 XCTAssertFalse(line.contains(where: \.isNewline), line)
             }
         }
+    }
+
+    /// 整段只是一个 ASCII 词（可能是子命令名）不交给 Claude Code / Codex（第 10 步验证后定）。
+    func testSingleASCIIWordsAreNotHandedOver() {
+        for text in ["update", "logout", "login", "mcp", "config", "  doctor  ", "v2", "foo-bar_baz", "UPDATE", "-x", "--help"] {
+            XCTAssertFalse(LauncherShellHandoff.canHandOff(text), text)
+        }
+        for text in ["update the docs", "修一下", "update？", "fix: crash", "-x y", "a.b", "it's", "update\nthis"] {
+            XCTAssertTrue(LauncherShellHandoff.canHandOff(text), text.debugDescription)
+        }
+        XCTAssertFalse(LauncherShellHandoff.canHandOff(""))
+        XCTAssertFalse(LauncherShellHandoff.canHandOff(String(repeating: "a", count: LauncherShellHandoff.maxPromptBytes + 1)))
+        XCTAssertTrue(LauncherShellHandoff.canHandOff(String(repeating: "a", count: 300)), "长文字不当成子命令名")
+    }
+
+    /// 项目目录不在了就落到主目录再跑；在就进去（第 10 步验证后定）。
+    func testMissingDirectoryFallsBackToHome() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("handoff-\(UUID().uuidString)", isDirectory: true)
+        let project = base.appendingPathComponent("my project's dir", isDirectory: true)
+        let home = base.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        // `pwd -P` 给的是 /private/var/…，Foundation 解析软链给的是 /var/…：比结尾。
+        XCTAssertTrue(try zsh(LauncherShellHandoff.inDirectory(project.path, "pwd -P"), home: home.path)
+            .hasSuffix(base.lastPathComponent + "/my project's dir\n"))
+        let gone = base.appendingPathComponent("deleted", isDirectory: true).path
+        XCTAssertTrue(try zsh(LauncherShellHandoff.inDirectory(gone, "pwd -P"), home: home.path)
+            .hasSuffix(base.lastPathComponent + "/home\n"), "不在就落到主目录")
+        let fake = "fakeclaude() { printf '%d|%s' $# \"$1\"; }; "
+        XCTAssertEqual(try zsh(fake + LauncherShellHandoff.inDirectory(gone, LauncherShellHandoff.promptLine(binary: "fakeclaude",
+                                                                                                          prompt: "a; b")),
+                               home: home.path), "1|a; b", "命令照常跑、文字照原样")
+        XCTAssertEqual(try zsh(LauncherShellHandoff.inDirectory(gone, "echo ok"), home: home.path), "ok\n", "cd 失败的话不出声")
     }
 
     func testInteractiveShellStaysOpen() {

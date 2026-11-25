@@ -424,7 +424,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 快速入口 | `launcher.webSearch` | 上网搜 | 全部 | 30 | — | 默认浏览器打开 Google 搜索（`LauncherWebSearch`，引擎是一张表，以后设置里增删） |
 | 快速入口 | `launcher.findFiles` | 搜文件名含「…」的文件 | 全部 | 40 | — | 把输入框换成 `f <文字>`，面板不收，接着就是只搜文件（§6.4） |
 | 手机互传（第 10 步） | `phonetransfer.text.send` | 发到手机 | 全部 | 50 | — | 有手机连着（`PhoneTransferSession.canSend`）直接 `send(text:)`、回执「已发到手机」；没有就打开手机互传的窗口、回执「连上手机后再发一次」（现有代码没有「连上后自动发」）。挂着的图片是字节时先写成 `$TMPDIR/Baobox-PhoneTransfer/` 下的临时文件再发；模块 `activate()` 时在后台、`willTerminate()` 时清空这个目录（验证后加） |
-| Claude Code（第 10 步） | `claudecode.text.handOff` | 交给 Claude Code（<项目名>） | 全部（`appliesTo`：不超过 20 万字节） | 55 | 一大段文字 | 在偏好终端里 `'<claude>' '<文字>'`（`LauncherShellHandoff.promptLine`），目录是最近一次会话的项目目录（`ClaudeSessionIndex.shared.sessions.first`，内存缓存），拿不到用主目录、标题不写项目；没装不声明 |
+| Claude Code（第 10 步） | `claudecode.text.handOff` | 交给 Claude Code（<项目名>） | 全部（`appliesTo`：不超过 20 万字节、不是单个 ASCII 词，`LauncherShellHandoff.canHandOff`） | 55 | 一大段文字 | 在偏好终端里 `'<claude>' '<文字>'`（`LauncherShellHandoff.promptLine`），目录是最近一次会话的项目目录（`ClaudeSessionIndex.shared.sessions.first`，内存缓存），拿不到用主目录、标题不写项目；目录不在了脚本里落到主目录（`inDirectory`）；没装不声明 |
 | Codex 助手（第 10 步） | `aitools.text.handOff` | 交给 Codex（<项目名>） | 同上 | 56 | — | 同上，`'<codex>' '<文字>'`，目录取 `CodexSessionIndex`；不提前（两个都提前的话一大段文字的兜底里存为片段就挤出去了） |
 | 会议（第 10 步） | `meeting.text.joinAndRecord` | 入会并开始会议记录 | 网址（`appliesTo`：`MeetingLinkParser` 认得），`leading` | 10 | — | `MeetingActions.joinAndRecord(link:)`：链接正是日历上眼下这一场 / 下一场的 → 现有的 `joinAndRecord(event)`（绑上那一场）；否则打开链接 + `start(type: .online)`，已经在记就只入会 |
 | 划词助手（第 10 步） | `selectiontranslate.text.speak` | 朗读（正在读时「停止朗读」） | 全部 | 65 | — | `SelectionTranslateController.toggleSpeech`：正在读就停；否则语种检测（同结果面板，偏向两个目标语言）选嗓音，`speak(_:language:)`；最多读前 8000 个字符 |

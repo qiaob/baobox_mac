@@ -199,7 +199,8 @@ enum LauncherSuggestionProvider {
                                   source: L("launcher.suggest.source.terminal"), icon: .symbol("terminal"))
             let suggestion = LauncherSuggestion(
                 row: row, usageKey: nil,
-                action: .run { TerminalLauncher.run(command: LauncherShellHandoff.runLine(command), in: nil) },
+                // 显式在主目录跑（第 10 步验证后定）。
+                action: .run { TerminalLauncher.run(command: LauncherShellHandoff.runLine(command), in: NSHomeDirectory()) },
                 confirmation: LauncherConfirmation(verb: L("launcher.confirm.verb.run"), object: command, showsWholeObject: true))
             return [.action(suggestion)]
         case .reminder:

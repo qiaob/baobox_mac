@@ -8,7 +8,8 @@ import Foundation
 /// - 没装 Claude Code（`ClaudeEnv.isInstalled`，同菜单）不声明 —— 约定 7「未安装即降级」；也免得第一次访问会话索引时
 ///   在主线程同步读它的缓存文件（装了的话 `activate()` 早就读过了）。
 /// - 档位 55（靠后：存为片段那一档之后、润色之前）；一大段文字（含粘贴的多行原文）时提到最前那一组。
-///   超过命令行能带的长度（`LauncherShellHandoff.fitsCommandLine`）不出。
+///   超过命令行能带的长度、或者整段只是一个 ASCII 词（`update` 会被当成子命令）不出（`LauncherShellHandoff.canHandOff`）。
+/// - 项目目录不在了（删了、搬了）就在主目录开：`cd '<目录>' 2>/dev/null || cd ~; …`（`LauncherShellHandoff.inDirectory`）。
 /// 写在扩展里，不动 `ClaudeCodeTool.swift`。
 extension ClaudeCodeTool {
     func launcherCommands() -> [LauncherCommand] {
@@ -21,9 +22,10 @@ extension ClaudeCodeTool {
             .textAction(id: "claudecode.text.handOff", title: title, symbolName: "bubble.left.and.bubble.right",
                         suggestion: LauncherSuggestionTraits(priority: 55, boostedKinds: [.longText]),
                         hint: "交给 Claude Code 的第一条消息",
-                        appliesTo: { LauncherShellHandoff.fitsCommandLine($0) }) { text in
+                        appliesTo: { LauncherShellHandoff.canHandOff($0) }) { text in
                 let binary = ClaudeEnv.findClaudeBinary() ?? "claude"
-                TerminalLauncher.run(command: LauncherShellHandoff.promptLine(binary: binary, prompt: text), in: directory)
+                let line = LauncherShellHandoff.promptLine(binary: binary, prompt: text)
+                TerminalLauncher.run(command: LauncherShellHandoff.inDirectory(directory, line), in: nil)
             },
         ]
     }

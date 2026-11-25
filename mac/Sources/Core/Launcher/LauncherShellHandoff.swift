@@ -31,6 +31,29 @@ enum LauncherShellHandoff {
         !text.isEmpty && text.utf8.count <= maxPromptBytes
     }
 
+    /// 「交给 Claude Code / Codex」适不适用（打字时调，`appliesTo`）：能整段交给命令行，而且不是单个 ASCII 词 ——
+    /// `claude 'update'`、`codex 'logout'` 会被当成子命令（commander 在 `--` 之后的第一个词仍可能被当成子命令，不靠 `--`，
+    /// 第 10 步验证后定）。单个词不会长，长文字不用整段看。
+    static func canHandOff(_ text: String) -> Bool {
+        guard fitsCommandLine(text) else { return false }
+        guard text.utf8.count <= 256 else { return true }
+        return !isSingleASCIIWord(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// 只有 ASCII 字母、数字、`-`、`_` 的一个词（可能是哪个命令行工具的子命令名）。
+    static func isSingleASCIIWord(_ text: String) -> Bool {
+        !text.isEmpty && text.unicodeScalars.allSatisfy { scalar in
+            ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar) || ("0"..."9").contains(scalar)
+                || scalar == "-" || scalar == "_"
+        }
+    }
+
+    /// 在 `directory` 里跑 `command`；目录不在了（项目删了、搬了）就在主目录跑：`cd '<目录>' 2>/dev/null || cd ~; <命令>`。
+    /// 目录在不在由脚本自己看，不在主线程查盘（第 10 步验证后定）。
+    static func inDirectory(_ directory: String, _ command: String) -> String {
+        "cd \(Shell.quote(directory)) 2>/dev/null || cd ~; " + command
+    }
+
     /// 项目目录的显示名（最后一段）；空的、只有 `/` 的为 nil。
     static func projectName(_ path: String) -> String? {
         let name = (path as NSString).lastPathComponent
