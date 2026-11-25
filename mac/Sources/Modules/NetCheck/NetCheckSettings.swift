@@ -1,9 +1,8 @@
 import Foundation
 import Security
 
-/// 网络泄露检测的设置。ipapi.is 的 key 在钥匙串，其余在 UserDefaults。见 docs/netcheck/DESIGN.md §4.3。
+/// 网络检测的设置。ipapi.is 的 key 在钥匙串，其余在 UserDefaults。见 docs/netcheck/DESIGN.md §4.3、SPEED.md §2.3。
 enum NetCheckSettings {
-    static let realNetworksKey = "netcheck.realNetworks"
     static let dnsProbesKey = "netcheck.dnsProbes"
     static let stunServerKey = "netcheck.stunServer"
 
@@ -17,11 +16,6 @@ enum NetCheckSettings {
     static let dnsEndpoint = "https://bash.ws"
     static let dnsHost = "bash.ws"
 
-    static var realNetworks: String {
-        get { UserDefaults.standard.string(forKey: realNetworksKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: realNetworksKey) }
-    }
-
     static var dnsProbes: Int {
         let value = UserDefaults.standard.object(forKey: dnsProbesKey) as? Int ?? defaultDNSProbes
         return min(max(value, dnsProbesRange.lowerBound), dnsProbesRange.upperBound)
@@ -30,13 +24,6 @@ enum NetCheckSettings {
     static var stunServer: String {
         let value = (UserDefaults.standard.string(forKey: stunServerKey) ?? "").trimmingCharacters(in: .whitespaces)
         return value.isEmpty ? defaultSTUNServer : value
-    }
-
-    /// 把一个 ASN 加进真实网络（已经有就不加）。
-    static func addRealNetwork(_ asn: Int) {
-        guard !NetCheckRealNetworks(parsing: realNetworks).contains(asn) else { return }
-        let current = realNetworks.trimmingCharacters(in: .whitespacesAndNewlines)
-        realNetworks = current.isEmpty ? "AS\(asn)" : "\(current), AS\(asn)"
     }
 
     // MARK: 菜单栏实时网速（docs/netcheck/SPEED.md §2.3）

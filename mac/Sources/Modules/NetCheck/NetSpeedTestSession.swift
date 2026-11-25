@@ -1,7 +1,7 @@
 import Foundation
 
 /// 测速的状态：进行中的阶段与这一刻的数、上次结果。只在用户点了才测（docs/netcheck/SPEED.md §1.5），
-/// 结果只在内存里：窗口重开还在，退出 Baobox 就没了。同一时刻只跑一次，和泄露检测不并行。
+/// 结果只在内存里：窗口重开还在，退出 Baobox 就没了。同一时刻只跑一次，和 IP 检测不并行。
 @MainActor
 final class NetSpeedTestSession: ObservableObject {
     static let shared = NetSpeedTestSession()
@@ -28,7 +28,7 @@ final class NetSpeedTestSession: ObservableObject {
         return min(1, before + weights[phase.rawValue] * min(1, max(0, phaseFraction)))
     }
 
-    /// 开始一次。已经在测、或泄露检测正在跑时不起（两者不并行）。
+    /// 开始一次。已经在测、或 IP 检测正在跑时不起（两者不并行）。
     func start() {
         guard !running, !NetCheckSession.shared.running else { return }
         runID += 1

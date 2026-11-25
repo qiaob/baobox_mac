@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// 网络检测的设置：菜单栏网速（开关、显示方式）、测速的说明；泄露检测的真实网络、ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
+/// 网络检测的设置：菜单栏网速（开关、显示方式）、测速的说明；IP 检测用的 ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
 struct NetCheckSettingsView: View {
-    @AppStorage(NetCheckSettings.realNetworksKey) private var realNetworks = ""
     @AppStorage(NetCheckSettings.dnsProbesKey) private var dnsProbes = NetCheckSettings.defaultDNSProbes
     @AppStorage(NetCheckSettings.stunServerKey) private var stunServer = ""
     @AppStorage(NetCheckSettings.liveSpeedEnabledKey) private var liveSpeedEnabled = false
@@ -37,15 +36,6 @@ struct NetCheckSettingsView: View {
 
             Section("netcheck.settings.speedSection") {
                 Text("netcheck.settings.speedHelp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Section("netcheck.settings.realSection") {
-                TextField("netcheck.settings.real", text: $realNetworks,
-                          prompt: Text(verbatim: "AS4657, AS9506"))
-                Text("netcheck.settings.realHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

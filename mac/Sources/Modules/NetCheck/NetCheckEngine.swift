@@ -1,6 +1,6 @@
 import Foundation
 
-/// 网络泄露检测的网络部分：IPv4 / IPv6 出口、DNS 探测、系统时区。WebRTC 在 `NetCheckWebRTC`。
+/// IP 检测的网络部分：IPv4 / IPv6 出口、DNS 探测、系统时区。WebRTC 在 `NetCheckWebRTC`。
 /// 全部 async，阻塞的系统解析器调用放在后台队列。见 docs/netcheck/DESIGN.md §4.1。
 struct NetCheckEngine {
     let apiKey: String
@@ -74,7 +74,7 @@ struct NetCheckEngine {
         return await lookup(ip).map { Optional($0) }
     }
 
-    /// DNS 泄露：拿 id → 系统解析器解析一串带 id 的域名 → 取结果。
+    /// DNS：拿 id → 系统解析器解析一串带 id 的域名 → 取结果。
     func dnsLeak() async -> Result<NetCheckDNSResult, NetCheckFailure> {
         do {
             let id = try await get("\(NetCheckSettings.dnsEndpoint)/id").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// 网络检测模块壳：泄露检测（docs/netcheck/DESIGN.md）+ 测速与菜单栏实时网速（docs/netcheck/SPEED.md）。
-/// 菜单里放上次的结论与两行总结、上次测速；检测和测速都在窗口里跑（WebRTC 的 WebView 要挂在窗口上）。只在用户点了才测。
+/// 网络检测模块壳：IP 检测（docs/netcheck/COMPARE.md、DESIGN.md）+ 测速与菜单栏实时网速（docs/netcheck/SPEED.md）。
+/// 菜单里放上次检测的结论、上次测速；检测和测速都在窗口里跑（WebRTC 的 WebView 要挂在窗口上）。只在用户点了才测。
 @MainActor
 final class NetCheckTool: ToolModule {
     let id = "netcheck"
@@ -16,22 +16,17 @@ final class NetCheckTool: ToolModule {
         if session.running {
             items.append(NSMenuItem(title: L("netcheck.window.running"), action: nil, keyEquivalent: ""))
         } else if let outcome = session.outcome {
-            let ago = NetCheckText.relative(outcome.at)
-            items.append(NSMenuItem(title: L("netcheck.menu.status \(NetCheckText.headline(outcome.overall)) \(ago)"),
-                                    action: nil, keyEquivalent: ""))
-            for summary in outcome.summary {
-                items.append(NSMenuItem(title: NetCheckText.line(summary), action: nil, keyEquivalent: ""))
-            }
+            items.append(NSMenuItem(title: NetCheckText.menuLine(outcome), action: nil, keyEquivalent: ""))
         } else {
             items.append(NSMenuItem(title: L("netcheck.menu.never"), action: nil, keyEquivalent: ""))
         }
         items.append(.separator())
         if session.running || NetSpeedTestSession.shared.running {
-            // action 为 nil 的项由 NSMenu 自动置灰（测速和泄露检测不并行）
+            // action 为 nil 的项由 NSMenu 自动置灰（测速和 IP 检测不并行）
             items.append(NSMenuItem(title: L("netcheck.menu.run"), action: nil, keyEquivalent: ""))
         } else {
             items.append(ClosureMenuItem(title: L("netcheck.menu.run")) {
-                NetCheckWindowController.shared.show(page: .leak, start: true)
+                NetCheckWindowController.shared.show(page: .ip, start: true)
             })
         }
         items.append(ClosureMenuItem(title: L("netcheck.menu.open")) {
@@ -51,7 +46,7 @@ final class NetCheckTool: ToolModule {
         return items
     }
 
-    /// 「测速」：打开窗口到测速页并开始。正在测时是一行置灰的「正在测速…」，泄露检测正在跑时置灰。
+    /// 「测速」：打开窗口到测速页并开始。正在测时是一行置灰的「正在测速…」，IP 检测正在跑时置灰。
     /// 菜单栏网速那个状态项的小菜单也用它。
     static func speedTestMenuItem() -> NSMenuItem {
         if NetSpeedTestSession.shared.running {
@@ -67,7 +62,7 @@ final class NetCheckTool: ToolModule {
 
     func hotkeys() -> [HotkeyDefinition] { [] }
 
-    /// 快速入口：测速、泄露检测（打开窗口到那一页并开始）、菜单栏网速的开关。不加快捷键（约定 6）。
+    /// 快速入口：测速、IP 检测（打开窗口到那一页并开始）、菜单栏网速的开关。不加快捷键（约定 6）。
     func launcherCommands() -> [LauncherCommand] {
         let liveOn = NetCheckSettings.liveSpeedEnabled
         return [
@@ -75,9 +70,9 @@ final class NetCheckTool: ToolModule {
                             keywords: ["speedtest", "speed test", "网速", "测网速"], symbolName: "speedometer") { _ in
                 NetCheckWindowController.shared.show(page: .speed, start: true)
             },
-            LauncherCommand(id: "netcheck.leakCheck", title: L("netcheck.leak.title"),
-                            keywords: ["leak", "ip", "泄露", "vpn"], symbolName: "shield.lefthalf.filled") { _ in
-                NetCheckWindowController.shared.show(page: .leak, start: true)
+            LauncherCommand(id: "netcheck.ipCheck", title: L("netcheck.ip.title"),
+                            keywords: ["ip", "出口", "泄露", "leak", "vpn", "dns"], symbolName: "shield.lefthalf.filled") { _ in
+                NetCheckWindowController.shared.show(page: .ip, start: true)
             },
             LauncherCommand(id: "netcheck.liveSpeed", title: liveOn ? L("netcheck.live.hide") : L("netcheck.menu.liveSpeed"),
                             keywords: ["网速", "菜单栏", "menu bar", "network speed"], symbolName: "arrow.up.arrow.down") { _ in
