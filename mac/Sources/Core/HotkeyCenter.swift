@@ -86,17 +86,22 @@ final class HotkeyCenter: ObservableObject {
         observeMenuTrackingIfNeeded()
     }
 
+    /// 快捷键的动作都包在 `LauncherFocus.runOutsideAction` 里：快速入口的动作闭包里同步弹了模态框（嵌套 runloop）时，
+    /// 这里会在那段时间里同步执行，不包的话动作会读到快速入口的目标（docs/launcher/TECH_DESIGN.md §4「焦点」）。
+    /// 快速入口自己执行命令是直接调 `definition.action`，不经过这里。
     @MainActor
     private func handle(carbonID: UInt32, released: Bool) {
         guard let id = idByCarbonID[carbonID], let reg = registrations[id] else { return }
-        if released {
-            // 松开：只有按住类的定义关心，不收菜单（按下时已经收过）。
-            reg.def.onRelease?()
-            return
+        LauncherFocus.runOutsideAction {
+            if released {
+                // 松开：只有按住类的定义关心，不收菜单（按下时已经收过）。
+                reg.def.onRelease?()
+                return
+            }
+            // 先收起可能正打开的状态栏菜单，再执行动作，避免菜单与动作窗口并存、抢占事件。
+            onWillFireAction?()
+            reg.def.action()
         }
-        // 先收起可能正打开的状态栏菜单，再执行动作，避免菜单与动作窗口并存、抢占事件。
-        onWillFireAction?()
-        reg.def.action()
     }
 
     // MARK: - 菜单跟踪期热键补捉（CGEventTap）
@@ -190,10 +195,13 @@ final class HotkeyCenter: ObservableObject {
                       combo.keyCode == keyCode, combo.carbonModifiers == carbon else { continue }
                 if isRepeat { return true }
                 Self.log.notice("hotkey \(reg.def.id, privacy: .public) fired while a menu was open")
-                onBeforeFire?()      // 收菜单前：截图先抓含菜单整屏快照
-                trackingMenu?.cancelTrackingWithoutAnimation()  // 收起正开着的菜单（下拉框、右键菜单…）
-                onWillFireAction?()  // 收起状态栏菜单
-                reg.def.action()
+                // 同 `handle`：快速入口动作的上下文在这里读不到。
+                LauncherFocus.runOutsideAction {
+                    onBeforeFire?()      // 收菜单前：截图先抓含菜单整屏快照
+                    trackingMenu?.cancelTrackingWithoutAnimation()  // 收起正开着的菜单（下拉框、右键菜单…）
+                    onWillFireAction?()  // 收起状态栏菜单
+                    reg.def.action()
+                }
                 return true
             }
             return false
@@ -214,15 +222,21 @@ final class HotkeyCenter: ObservableObject {
         _ = performRegister(def: def, combo: combo)
     }
 
+    /// 某个快捷键的键位在设置里变了（录了新的 / 恢复默认，不论成功与否）。`object` = 快捷键 id。主线程发出。
+    /// 只用来让依赖键位的界面重算（快速入口设置页的冲突提示），不参与注册和冲突判断。
+    static let comboDidChangeNotification = Notification.Name("com.baobox.hotkey.comboDidChange")
+
     @discardableResult
     func update(id: String, to combo: KeyCombo) -> Bool {
         // 用户可能刚在系统设置里改过键位，重新读一次系统保留表再判定。
         refreshSystemReserved()
+        defer { NotificationCenter.default.post(name: Self.comboDidChangeNotification, object: id) }
         return reregister(id: id, to: combo, persist: true)
     }
 
     func resetToDefault(id: String) {
         guard let existing = registrations[id] else { return }
+        defer { NotificationCenter.default.post(name: Self.comboDidChangeNotification, object: id) }
         guard let defaultCombo = existing.def.defaultCombo else {
             // 默认即"未绑定"：注销现有热键并清掉持久化。
             if let ref = existing.hotKeyRef {

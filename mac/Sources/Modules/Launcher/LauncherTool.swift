@@ -7,7 +7,8 @@ import SwiftUI
 /// ⌘Space 被系统的 Spotlight 占着时注册不上、快捷键页标冲突：在系统设置里关掉 Spotlight 的快捷键后恢复默认即可（docs/launcher/TECH_DESIGN.md §9）。
 @MainActor
 final class LauncherTool: ToolModule {
-    static let toggleHotkeyID = "launcher.toggle"
+    /// 定义在 Core（`LauncherHotkeyID`）：Core 里查快速入口快捷键的地方也用它，只写一处。
+    static let toggleHotkeyID = LauncherHotkeyID.toggle
 
     let id = "launcher"
     let name = L("launcher.name")
