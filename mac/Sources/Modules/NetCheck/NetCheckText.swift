@@ -43,12 +43,14 @@ enum NetCheckText {
         return L("netcheck.conclusion.mismatches \(aspects.map { title($0) }.joined(separator: L("netcheck.separator")))")
     }
 
-    /// 相对时间（「3 分钟前」），跟着 App 语言。
+    /// 相对时间（「3 分钟前」），跟着 App 语言。不到 5 秒写「刚刚」（基底会写成「0秒后」）。
     static func relative(_ date: Date) -> String {
+        let now = Date()
+        if NetCheckTime.isJustNow(date, now: now) { return L("netcheck.time.justNow") }
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = L10n.locale
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 
     /// 一格里的字。

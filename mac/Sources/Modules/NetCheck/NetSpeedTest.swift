@@ -181,16 +181,29 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         latencyStarted = Self.now()
         emit(.phase(.latency))
         pingIndex = 0
+        // 整段的总期限：到点还在等的那个请求取消，用已经测到的
+        queue.asyncAfter(deadline: .now() + NetSpeedPlan.latencyDeadline) { [weak self] in
+            self?.latencyDeadlinePassed()
+        }
         sendPing()
     }
 
     private func sendPing() {
         guard let session = latencySession,
-              let request = request(NetSpeedPlan.downloadURL(bytes: 0), timeout: 5) else {
+              let timeout = NetSpeedPlan.pingTimeout(elapsed: Self.now() - latencyStarted),
+              let request = request(NetSpeedPlan.downloadURL(bytes: 0), timeout: timeout) else {
             finishLatency()
             return
         }
         track(session.dataTask(with: request), .ping(pingIndex))
+    }
+
+    private func latencyDeadlinePassed() {
+        guard !done, phase == .latency else { return }
+        for (id, info) in tasks {
+            if case .ping = info.kind { live[id]?.cancel() }
+        }
+        finishLatency()
     }
 
     private func pingCompleted(_ info: TaskInfo, index: Int, error: Error?) {
@@ -295,7 +308,8 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         ticker?.cancel()
         ticker = nil
         let outcome: Result<Double, NetSpeedFailure>
-        if let rate = current.result(at: Self.now()) {
+        // 所有流都失败了才结束的：没测出来（不给假速度）；时间到 / 流量上限到、还有流活着才给数
+        if let rate = current.outcome(at: Self.now(), streamsAlive: aliveStreams) {
             outcome = .success(rate)
         } else {
             outcome = .failure(phaseFailure ?? NetSpeedFailure(L("netcheck.speed.error.noData")))

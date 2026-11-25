@@ -291,6 +291,43 @@ final class NetSpeedLogicTests: XCTestCase {
         XCTAssertEqual(meter.result(at: 1.75) ?? 0, 1_000 / 1.75, accuracy: 0.001)
     }
 
+    func testAllStreamsFailedGivesNoNumber() {
+        // 每条流传 1 MB 就断（独立验证的假服务）：0.09 秒就结束，不给数
+        var meter = NetSpeedMeter(start: 0, cap: NetSpeedPlan.downloadCap)
+        meter.add(4_000_000)
+        XCTAssertNotNil(meter.result(at: 0.09), "只看字节会算出一个假速度")
+        XCTAssertNil(meter.outcome(at: 0.09, streamsAlive: 0))
+        // 起速段之后才全断也一样
+        var later = NetSpeedMeter(start: 0, cap: NetSpeedPlan.downloadCap)
+        var t = 0.0
+        while t < 5 {
+            t += 0.25
+            later.add(1_000_000)
+            later.tick(at: t)
+        }
+        XCTAssertNil(later.outcome(at: 5, streamsAlive: 0))
+        // 时间到、还有流活着：给数（中途停顿过的话数自然偏低）
+        XCTAssertEqual(later.outcome(at: 5, streamsAlive: 1) ?? 0, 4_000_000, accuracy: 1)
+    }
+
+    func testPingTimeoutStaysInsideTheDeadline() {
+        XCTAssertEqual(NetSpeedPlan.pingTimeout(elapsed: 0), 5)
+        XCTAssertEqual(NetSpeedPlan.pingTimeout(elapsed: 4.9), 5)
+        XCTAssertEqual(NetSpeedPlan.pingTimeout(elapsed: 7) ?? 0, 3, accuracy: 1e-9)
+        XCTAssertEqual(NetSpeedPlan.pingTimeout(elapsed: 9.85) ?? 0, 0.15, accuracy: 1e-9)
+        XCTAssertNil(NetSpeedPlan.pingTimeout(elapsed: 9.95))
+        XCTAssertNil(NetSpeedPlan.pingTimeout(elapsed: 12))
+    }
+
+    func testJustNow() {
+        let now = Date()
+        XCTAssertTrue(NetCheckTime.isJustNow(now, now: now))
+        XCTAssertTrue(NetCheckTime.isJustNow(now.addingTimeInterval(-4.9), now: now))
+        XCTAssertTrue(NetCheckTime.isJustNow(now.addingTimeInterval(2), now: now), "时间在将来也写「刚刚」，不写「…后」")
+        XCTAssertFalse(NetCheckTime.isJustNow(now.addingTimeInterval(-5), now: now))
+        XCTAssertFalse(NetCheckTime.isJustNow(now.addingTimeInterval(-180), now: now))
+    }
+
     func testMeterNothingReceived() {
         var meter = NetSpeedMeter(start: 0, cap: 1_000)
         meter.tick(at: 2)

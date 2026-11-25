@@ -129,9 +129,17 @@ enum NetSpeedPlan {
     static let uploadURL = "https://speed.cloudflare.com/__up"
     static func downloadURL(bytes: Int) -> String { "https://speed.cloudflare.com/__down?bytes=\(bytes)" }
 
-    /// 延迟：先 1 个热连接（不计），再连续 10 个 `bytes=0`。整段最多 10 秒。
+    /// 延迟：先 1 个热连接（不计），再连续 10 个 `bytes=0`。整段最多 10 秒，单个请求最多 5 秒。
     static let pingCount = 10
     static let latencyDeadline: TimeInterval = 10
+    static let pingTimeout: TimeInterval = 5
+
+    /// 下一个延迟请求的超时：5 秒和这一段剩下的时间取小的；剩下不到 0.1 秒就不再发（nil）。
+    static func pingTimeout(elapsed: TimeInterval) -> TimeInterval? {
+        let remaining = latencyDeadline - elapsed
+        guard remaining >= 0.1 else { return nil }
+        return min(pingTimeout, remaining)
+    }
     /// 下载、上传各 4 条并行的流。
     static let streams = 4
     /// 每段 6 秒，前 1.5 秒算起速不计、后 4.5 秒计（2026-11-25 从 8 秒减下来：一次 300–600 MB 偏多）。
@@ -211,6 +219,13 @@ struct NetSpeedMeter {
         let elapsed = now - start
         guard elapsed > 0, total > 0 else { return nil }
         return Double(total) / elapsed
+    }
+
+    /// 这一段的结果（字节 / 秒），nil = 没测出来：**所有流都失败了才结束的**（`streamsAlive == 0`），不管什么时候，都不给数
+    /// （独立验证用假服务实测过：每条流传 1 MB 就断，0.09 秒结束却显示 393.9 Mbps）。时间到或流量上限到、还有流活着时才给数。
+    func outcome(at now: TimeInterval, streamsAlive: Int) -> Double? {
+        guard streamsAlive > 0 else { return nil }
+        return result(at: now)
     }
 
     /// 结果（字节 / 秒）：起速段之后收到的字节 ÷ 之后的时间。起速段还没过完、或之后不到 0.5 秒就停了（流量上限先到），
@@ -444,5 +459,14 @@ enum NetTrafficMath {
         return NetTrafficRate(down: Double(received) / interval, up: Double(sent) / interval,
                               totalDown: new.is32Bit ? nil : new.totalReceived,
                               totalUp: new.is32Bit ? nil : new.totalSent)
+    }
+}
+
+// MARK: - 相对时间
+
+enum NetCheckTime {
+    /// 「刚刚」：不到 5 秒，或者时间在将来（时钟差一点）——不会出现「0 秒后」这种写法。
+    static func isJustNow(_ date: Date, now: Date) -> Bool {
+        now.timeIntervalSince(date) < 5
     }
 }
