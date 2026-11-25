@@ -260,6 +260,12 @@ final class NetSpeedLogicTests: XCTestCase {
     func testPlanCaps() {
         XCTAssertEqual(NetSpeedPlan.downloadCap, 500 * 1024 * 1024)
         XCTAssertEqual(NetSpeedPlan.uploadCap, 300 * 1024 * 1024)
+        // 一到上限就停（收发回调里看 reachedCap，不等定时器）
+        var capped = NetSpeedMeter(start: 0, cap: 1_000)
+        capped.add(999)
+        XCTAssertFalse(capped.reachedCap)
+        capped.add(1)
+        XCTAssertTrue(capped.reachedCap)
         // 上限先到就停：下载 500 MB 到了，时间还没到也算完
         var meter = NetSpeedMeter(start: 0, cap: NetSpeedPlan.downloadCap)
         meter.add(NetSpeedPlan.downloadCap)

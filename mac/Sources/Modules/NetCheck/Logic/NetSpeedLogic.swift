@@ -199,9 +199,12 @@ struct NetSpeedMeter {
         }
     }
 
+    /// 流量上限到了：收发字节的回调里一到就结束这一段（不等下一次 0.25 秒的定时器，免得多出「速率 × 0.25 秒」）。
+    var reachedCap: Bool { total >= cap }
+
     /// 时间到了，或者流量上限到了。
     func isFinished(at now: TimeInterval) -> Bool {
-        now - start >= duration || total >= cap
+        now - start >= duration || reachedCap
     }
 
     /// 这一段的进度（0…1）：时间和流量哪个走得快按哪个。

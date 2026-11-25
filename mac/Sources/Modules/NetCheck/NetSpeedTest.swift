@@ -382,6 +382,7 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
             guard info.generation == generation, phase == .download else { return }
             meter?.add(Int64(data.count))
             bytesUsed += Int64(data.count)
+            if meter?.reachedCap == true { finishBandwidth() }
         case .ping:
             break
         }
@@ -393,6 +394,7 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
               info.generation == generation, phase == .upload else { return }
         meter?.add(bytesSent)
         bytesUsed += max(0, bytesSent)
+        if meter?.reachedCap == true { finishBandwidth() }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
