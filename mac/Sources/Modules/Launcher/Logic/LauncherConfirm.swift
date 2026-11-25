@@ -68,16 +68,55 @@ struct LauncherConfirmState: Equatable, Sendable {
     }
 }
 
+/// 完整显示时的一行（第 10 步复查后定）：原文 + 画出来的记号。记号不属于命令：各行的 `text` 拼回去和命令一字不差。
+struct LauncherCommandLine: Equatable, Sendable {
+    /// 这一行的原文。
+    let text: String
+    /// 被折断的行（不是最后一行）：行末画续行记号 `↩`。
+    var continues = false
+    /// 这一行的第一个字符是折断处的空格：画成 `␣`（不然看不出那里有个空格）。
+    var marksLeadingSpace = false
+    /// 这一行的最后一个字符是折断处的空格：画成 `␣`。
+    var marksTrailingSpace = false
+
+    /// 去掉要画成 `␣` 的首尾空格后的中间那段（视图把记号画在两边）。
+    var middle: String {
+        var characters = Substring(text)
+        if marksLeadingSpace, !characters.isEmpty { characters = characters.dropFirst() }
+        if marksTrailingSpace, !characters.isEmpty { characters = characters.dropLast() }
+        return String(characters)
+    }
+}
+
 enum LauncherConfirmText {
     /// 完整显示时每行最多这么宽（ASCII 字符算 1，其余算 2）。视图（`LauncherResultRow`）用 12 号等宽字画这些行，
     /// 12 号的等宽字一个 ASCII 字符约 7.2 点宽，64 个约 461 点，放得进标题那一栏（约 520 点，右边还有来源小字和 ⌘1）。
     static let commandColumns = 64
+    /// 每行留给记号（`␣`、`↩`）的列数。
+    static let markerColumns = 2
+    /// 每行命令本身最多占几列（第 10 步复查后定：64 列里留 2 列给记号）。
+    static var contentColumns: Int { commandColumns - markerColumns }
     /// 完整显示最多几行；放不下的命令不出「在终端里运行」（太长的命令没法靠眼睛确认，用户自己贴进终端）。
     static let maxCommandLines = 6
 
     /// 完整显示时的行：按 `columns` 宽硬换行（不按词断开、一个字符都不省，空格也照原样留着 —— 看到的就是要跑的），
-    /// 超过 `maxLines` 行为 nil。空文字为 nil。宽度算法同 `width`。调用方保证文字里没有换行和控制字符（「像命令」不认这些）。
-    static func commandLines(_ text: String, columns: Int = commandColumns, maxLines: Int = maxCommandLines) -> [String]? {
+    /// 超过 `maxLines` 行为 nil。空文字为 nil。宽度算法同 `width`。调用方保证文字里只有允许名单里的字符（「像命令」的规则）。
+    /// 折断处标出来：不是最后一行的 `continues`；折断处两侧的空格（上一行最后一个、下一行第一个字符）`marks…Space`。
+    static func commandLines(_ text: String, columns: Int = contentColumns,
+                             maxLines: Int = maxCommandLines) -> [LauncherCommandLine]? {
+        guard let raw = wrappedLines(text, columns: columns, maxLines: maxLines) else { return nil }
+        return raw.enumerated().map { index, line in
+            var result = LauncherCommandLine(text: line)
+            result.continues = index < raw.count - 1
+            result.marksLeadingSpace = index > 0 && line.first == " "
+            // 只有一个字符的一行两头是同一个空格：只标一次。
+            result.marksTrailingSpace = result.continues && line.last == " " && !(result.marksLeadingSpace && line.count == 1)
+            return result
+        }
+    }
+
+    /// 只按宽度硬换行（不标记号）。
+    private static func wrappedLines(_ text: String, columns: Int, maxLines: Int) -> [String]? {
         guard !text.isEmpty, columns >= 2, maxLines >= 1 else { return nil }
         var lines: [String] = []
         var line = ""

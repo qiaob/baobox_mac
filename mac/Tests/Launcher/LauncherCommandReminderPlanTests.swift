@@ -61,7 +61,7 @@ final class LauncherCommandReminderPlanTests: XCTestCase {
 
     /// 完整显示放不下 6 行的命令不出「在终端里运行」（第 10 步验证后定）。
     func testCommandsTooLongToShowWholeGetNoRunRow() {
-        let fits = "curl -fsSL " + String(repeating: "a", count: LauncherConfirmText.commandColumns * 6 - 11)
+        let fits = "curl -fsSL " + String(repeating: "a", count: LauncherConfirmText.contentColumns * 6 - 11)
         XCTAssertEqual(LauncherConfirmText.commandLines(fits)?.count, 6)
         XCTAssertEqual(plan(fits).fallbackLeading, [.runInTerminal(fits)], "正好 6 行")
         let tooLong = fits + "b"

