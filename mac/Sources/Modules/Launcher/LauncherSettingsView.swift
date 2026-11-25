@@ -118,7 +118,7 @@ struct LauncherSettingsView: View {
             Button(enablesAll ? "launcher.settings.features.enableAll" : "launcher.settings.features.disableAll") {
                 update(features.setting(section.ids, enabled: enablesAll))
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.link)
             .font(.caption)
         }
     }

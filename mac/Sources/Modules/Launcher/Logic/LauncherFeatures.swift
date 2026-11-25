@@ -132,7 +132,7 @@ enum LauncherBuiltInFeature: String, CaseIterable, Sendable {
         case .runInTerminal: return "terminal"
         case .webSearch: return "magnifyingglass"
         case .fileName: return "doc.text.magnifyingglass"
-        case .imageRecognition: return "text.viewfinder"
+        case .imageRecognition: return "qrcode.viewfinder"
         case .openInTerminal: return "terminal"
         case .copyPath: return "doc.on.doc"
         case .selection: return "character.cursor.ibeam"
