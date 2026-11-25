@@ -147,4 +147,84 @@ enum NetCheckText {
         lines.append(L("netcheck.note.gps"))
         return lines.joined(separator: "\n")
     }
+
+    // MARK: - 测速（docs/netcheck/SPEED.md §1.3）
+
+    static func title(_ phase: NetSpeedPhase) -> String {
+        switch phase {
+        case .latency: return L("netcheck.speed.phase.latency")
+        case .download: return L("netcheck.speed.phase.download")
+        case .upload: return L("netcheck.speed.phase.upload")
+        }
+    }
+
+    /// `93 Mbps`（单位不翻译）。
+    static func mbps(_ bytesPerSecond: Double) -> String {
+        "\(NetSpeedFormat.mbps(bytesPerSecond)) Mbps"
+    }
+
+    /// `12 ms`。
+    static func milliseconds(_ seconds: TimeInterval) -> String {
+        "\(NetSpeedFormat.milliseconds(seconds)) ms"
+    }
+
+    /// 抖动那行小字；只测到一次时没有。
+    static func jitter(_ latency: NetSpeedLatencyResult) -> String? {
+        latency.jitter.map { L("netcheck.speed.jitter \(milliseconds($0))") }
+    }
+
+    /// 「经 Frankfurt (FRA) · 出口 Example Broadband (AS64500)」；`/meta` 没拿到时 nil（不显示那一行）。
+    static func via(_ server: NetSpeedServer?) -> String? {
+        switch (server?.node, server?.exit) {
+        case (let node?, let exit?): return L("netcheck.speed.via \(node) \(exit)")
+        case (let node?, nil): return L("netcheck.speed.viaNode \(node)")
+        case (nil, let exit?): return L("netcheck.speed.viaExit \(exit)")
+        case (nil, nil): return nil
+        }
+    }
+
+    static func used(_ result: NetSpeedResult) -> String {
+        L("netcheck.speed.used \(NetSpeedFormat.amount(Double(result.bytesUsed)))")
+    }
+
+    /// 二级菜单里的一行：「上次测速：↓ 93 Mbps ↑ 21 Mbps · 12 ms · 3 分钟前」，没测出来的写「—」。
+    static func menuLine(_ result: NetSpeedResult) -> String {
+        let dash = "—"
+        let down = (try? result.download.get()).map { mbps($0) } ?? dash
+        let up = (try? result.upload.get()).map { mbps($0) } ?? dash
+        let ping = (try? result.latency.get()).map { milliseconds($0.median) } ?? dash
+        return L("netcheck.menu.lastSpeed \(down) \(up) \(ping) \(relative(result.at))")
+    }
+
+    /// 一项结果的一行：`93 Mbps（11.1 MB/s）` / `12 ms（抖动 1.3 ms）` / `没测出来：…`。
+    static func reportValue(_ phase: NetSpeedPhase, _ result: NetSpeedResult) -> String {
+        switch phase {
+        case .latency:
+            switch result.latency {
+            case .success(let latency):
+                guard let jitter = jitter(latency) else { return milliseconds(latency.median) }
+                return L("netcheck.speed.report.detail \(milliseconds(latency.median)) \(jitter)")
+            case .failure(let why):
+                return L("netcheck.speed.failedBecause \(why.message)")
+            }
+        case .download, .upload:
+            switch phase == .download ? result.download : result.upload {
+            case .success(let rate):
+                return L("netcheck.speed.report.detail \(mbps(rate)) \(NetSpeedFormat.rate(rate))")
+            case .failure(let why):
+                return L("netcheck.speed.failedBecause \(why.message)")
+            }
+        }
+    }
+
+    /// 「复制结果」的纯文本。
+    static func speedReport(_ result: NetSpeedResult) -> String {
+        var lines = [L("netcheck.speed.report.title \(result.at.formatted(date: .abbreviated, time: .shortened))")]
+        for phase in [NetSpeedPhase.download, .upload, .latency] {
+            lines.append(L("netcheck.speed.report.line \(title(phase)) \(reportValue(phase, result))"))
+        }
+        if let via = via(result.server) { lines.append(via) }
+        lines.append(used(result))
+        return lines.joined(separator: "\n")
+    }
 }

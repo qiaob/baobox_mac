@@ -38,6 +38,22 @@ enum NetCheckSettings {
         let current = realNetworks.trimmingCharacters(in: .whitespacesAndNewlines)
         realNetworks = current.isEmpty ? "AS\(asn)" : "\(current), AS\(asn)"
     }
+
+    // MARK: 菜单栏实时网速（docs/netcheck/SPEED.md §2.3）
+
+    static let liveSpeedEnabledKey = "netcheck.liveSpeed.enabled"
+    static let liveSpeedModeKey = "netcheck.liveSpeed.mode"
+
+    /// 默认关：菜单栏的位置紧张，更新后不该给所有人多出一个状态项。
+    static var liveSpeedEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: liveSpeedEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: liveSpeedEnabledKey) }
+    }
+
+    static var liveSpeedMode: NetSpeedDisplayMode {
+        get { NetSpeedDisplayMode(rawValue: UserDefaults.standard.string(forKey: liveSpeedModeKey) ?? "") ?? .down }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: liveSpeedModeKey) }
+    }
 }
 
 /// ipapi.is 的 key：存钥匙串（照 `AIKeychain` 的做法），不进 UserDefaults、不写日志。

@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// 网络泄露检测的设置：真实网络、ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
+/// 网络检测的设置：菜单栏网速（开关、显示方式）、测速的说明；泄露检测的真实网络、ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
 struct NetCheckSettingsView: View {
     @AppStorage(NetCheckSettings.realNetworksKey) private var realNetworks = ""
     @AppStorage(NetCheckSettings.dnsProbesKey) private var dnsProbes = NetCheckSettings.defaultDNSProbes
     @AppStorage(NetCheckSettings.stunServerKey) private var stunServer = ""
+    @AppStorage(NetCheckSettings.liveSpeedEnabledKey) private var liveSpeedEnabled = false
+    @AppStorage(NetCheckSettings.liveSpeedModeKey) private var liveSpeedMode = NetSpeedDisplayMode.down.rawValue
     @State private var apiKey = NetCheckKeychain.load() ?? ""
     @State private var keySaveFailed = false
 
@@ -16,6 +18,28 @@ struct NetCheckSettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("netcheck.settings.open") { NetCheckWindowController.shared.show() }
+            }
+
+            Section("netcheck.settings.liveSection") {
+                Toggle("netcheck.settings.liveToggle", isOn: $liveSpeedEnabled)
+                    .onChange(of: liveSpeedEnabled) { _, _ in NetSpeedStatusItem.shared.apply() }
+                Picker("netcheck.settings.liveMode", selection: $liveSpeedMode) {
+                    Text("netcheck.settings.liveMode.down").tag(NetSpeedDisplayMode.down.rawValue)
+                    Text("netcheck.settings.liveMode.both").tag(NetSpeedDisplayMode.both.rawValue)
+                }
+                .disabled(!liveSpeedEnabled)
+                .onChange(of: liveSpeedMode) { _, _ in NetSpeedStatusItem.shared.apply() }
+                Text("netcheck.settings.liveHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("netcheck.settings.speedSection") {
+                Text("netcheck.settings.speedHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("netcheck.settings.realSection") {
