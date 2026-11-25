@@ -100,8 +100,17 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
     /// 立刻查的来源最多等它们凑齐这么久（秒），到点先交已经回来的。
     static let defaultFirstBatchDeadline: TimeInterval = 0.05
 
+    /// 防抖的计时：过 `delay` 秒在 `queue` 上执行 `work`。App 里就是 `asyncAfter`；只为测试能手动触发而可换
+    /// （不和真实时间赛跑，机器忙也不会误判），行为不变。
+    typealias DebounceScheduler = @Sendable (_ delay: TimeInterval, _ queue: DispatchQueue,
+                                             _ work: @escaping @Sendable () -> Void) -> Void
+    static let asyncAfterScheduler: DebounceScheduler = { delay, queue, work in
+        queue.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     let sources: [Source]
     let firstBatchDeadline: TimeInterval
+    private let scheduleDebounce: DebounceScheduler
     private let queue = DispatchQueue(label: "com.baobox.app.launcher.filemerge", qos: .userInitiated)
 
     // 以下只在 `queue` 上读写。
@@ -123,9 +132,11 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
     private var awaitingRequery: Set<Int> = []
     private var requeryDeadlinePassed = false
 
-    init(sources: [Source], firstBatchDeadline: TimeInterval = LauncherMergedFileSearch.defaultFirstBatchDeadline) {
+    init(sources: [Source], firstBatchDeadline: TimeInterval = LauncherMergedFileSearch.defaultFirstBatchDeadline,
+         scheduleDebounce: @escaping DebounceScheduler = LauncherMergedFileSearch.asyncAfterScheduler) {
         self.sources = sources
         self.firstBatchDeadline = firstBatchDeadline
+        self.scheduleDebounce = scheduleDebounce
     }
 
     func search(_ request: LauncherFileSearchRequest, completion: @escaping @Sendable (LauncherFileSearchBatch) -> Void) {
@@ -146,7 +157,7 @@ final class LauncherMergedFileSearch: LauncherFileSearching, @unchecked Sendable
             }
             for (index, source) in sources.enumerated() {
                 if source.delay > 0 {
-                    queue.asyncAfter(deadline: .now() + source.delay) { [weak self] in
+                    scheduleDebounce(source.delay, queue) { [weak self] in
                         // 等的这段时间里又有了新的查询（或取消了）：这次不查了。
                         guard let self, ticket == self.generation else { return }
                         start(source, index: index, request: request, ticket: ticket, round: nil, completion: completion)

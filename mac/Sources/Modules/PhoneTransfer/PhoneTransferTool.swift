@@ -45,10 +45,13 @@ final class PhoneTransferTool: ToolModule {
     }
 
     func activate() {
-        // 无后台服务：会话在打开窗口时才启动。
+        // 无后台服务：会话在打开窗口时才启动。快速入口「把图片发到手机」上次留下的临时图片在后台清掉。
+        PhoneTransferLauncherActions.clearTemporaryImages(inBackground: true)
     }
 
     func willTerminate() {
         PhoneTransferSession.shared.stop()
+        // 会话停了、不会再有人来取：快速入口发图片时写的临时文件也清掉。
+        PhoneTransferLauncherActions.clearTemporaryImages(inBackground: false)
     }
 }

@@ -46,7 +46,8 @@ enum LauncherCalcDates {
         "年底": .endOfYear, "end of year": .endOfYear, "end of the year": .endOfYear,
     ]
 
-    private static let weekdayAnchors: [String: Anchor] = {
+    /// 星期几的写法（「周五」「下周五」「星期五」「friday」「next friday」…）。提醒的句型也用（`LauncherReminderParser`）。
+    static let weekdayAnchors: [String: Anchor] = {
         var table: [String: Anchor] = [:]
         let zhDays: [(String, Int)] = [("一", 1), ("二", 2), ("三", 3), ("四", 4), ("五", 5), ("六", 6), ("日", 7), ("天", 7)]
         let zhPrefixes: [(String, Int)] = [("下", 1), ("下个", 1), ("本", 0), ("这", 0), ("这个", 0), ("上", -1), ("上个", -1)]
@@ -250,6 +251,11 @@ enum LauncherCalcDates {
             date = try add(offset.amount, offset.unit, to: date, cal)
         }
         return date
+    }
+
+    /// 一个锚点落在哪一天（当天 0 点，按 `cal`）；日子不存在、超出 1…9999 年为 nil。提醒的句型也用（`LauncherReminderParser`）。
+    static func day(of anchor: Anchor, calendar cal: Calendar, now: Date) -> Date? {
+        try? resolve(Expr(anchor: anchor, offsets: []), cal, now: now)
     }
 
     private static func literal(year: Int, month: Int, day: Int, _ cal: Calendar) throws -> Date {

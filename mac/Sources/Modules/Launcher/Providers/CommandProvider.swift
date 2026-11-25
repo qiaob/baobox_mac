@@ -60,6 +60,15 @@ final class LauncherCommandProvider {
         return LauncherCommandCatalog.imageActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
     }
 
+    /// 此刻各模块声明的文件动作（呼出时调一次）：只在输入是一个存在的文件的路径时接在路径行后面（§6.5，第 10 步）。
+    func fileActions() -> [LauncherCatalogCommand] {
+        guard let registry else { return [] }
+        let declared = registry.tools.flatMap { tool in
+            tool.launcherCommands().map { LauncherCatalogCommand(command: $0, toolID: tool.id, toolName: tool.name) }
+        }
+        return LauncherCommandCatalog.fileActions(declared: declared, excludedIDs: [LauncherTool.toggleHotkeyID])
+    }
+
     /// 快捷键动作 → 无参数命令。开关类动作此刻有 `stateTitle` 就用它当标题（「关闭防休眠」）。
     static func command(from definition: HotkeyDefinition, symbolName: String) -> LauncherCommand {
         var title = definition.title
@@ -70,16 +79,20 @@ final class LauncherCommandProvider {
         return LauncherCommand(id: definition.id, title: title, symbolName: symbolName) { _ in action() }
     }
 
-    /// 命令表 → 面板条目；搜索键走缓存。
+    /// 命令表 → 面板条目；搜索键走缓存。有破坏性的命令（`destructive`）要按两次 ⏎：第一次标题换成「再按一次回车：<命令名>」。
     func items(from catalog: [LauncherCatalogCommand]) -> [LauncherItem] {
         let keys = keyCache.keys(for: catalog)
         return zip(catalog, keys).map { entry, searchKeys in
             let command = entry.command
             let candidate = LauncherCandidate(sourceID: Self.sourceID, entryID: command.id, searchKeys: searchKeys)
-            return LauncherItem(candidate: candidate,
-                                row: LauncherRow(id: candidate.key, title: command.title, source: entry.toolName,
-                                                 icon: .symbol(command.symbolName)),
-                                run: { command.run([:]) })
+            var item = LauncherItem(candidate: candidate,
+                                    row: LauncherRow(id: candidate.key, title: command.title, source: entry.toolName,
+                                                     icon: .symbol(command.symbolName)),
+                                    run: { command.run([:]) })
+            if command.destructive {
+                item.confirmation = LauncherConfirmation(verb: nil, object: command.title)
+            }
+            return item
         }
     }
 }

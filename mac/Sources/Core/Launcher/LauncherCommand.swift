@@ -18,6 +18,8 @@ struct LauncherParameter {
         case clipboardRef
         /// 一张图片（输入里挂着的附件、贴进来的图片文件），值见 `LauncherImage`（docs/launcher/TECH_DESIGN.md §5.5）。
         case image
+        /// 一个文件（输入是一个存在的文件的路径），值见 `LauncherArgument.file`（docs/launcher/TECH_DESIGN.md §6.5「路径行的动作」，第 10 步）。
+        case file
     }
 
     /// 模型输出里的键，也是 `run` 收到的字典里的键，如 "duration"。
@@ -40,6 +42,8 @@ enum LauncherArgument: Equatable, Sendable {
     case clipboardRef
     /// 一张图片：内存里的编码字节或磁盘上的图片文件（`LauncherImage`）。
     case image(LauncherImage)
+    /// 一个存在的文件（`file://` 网址）。
+    case file(URL)
 }
 
 /// 一条命令。`run` 只调模块已有的方法，不新增能力（§3.1）。
@@ -60,6 +64,10 @@ struct LauncherCommand {
     /// 其余命令不看它（docs/launcher/TECH_DESIGN.md §5.4、§5.5）。
     /// 例外：模块在 `launcherContextSuggestions()` 里交的情景建议也只看 `priority` —— 空着时按它排（小的在前，§5.6）。
     var suggestion = LauncherSuggestionTraits()
+    /// 文字动作对这段文字适不适用（第 10 步，docs/launcher/TECH_DESIGN.md §5.4「适用性判断」）：类别（`suggestion.kinds`）
+    /// 之外再细一层，比如「是会议链接」「不超过命令行的长度上限」。nil = 适用。类别对得上才调；打字时每次按键都可能调：
+    /// 只能看这段文字和内存里的状态，不读盘、不联网、不阻塞。
+    var appliesTo: (@MainActor (String) -> Bool)? = nil
     /// 执行。字典的键是 `LauncherParameter.name`；没给的可选参数不在字典里。
     let run: @MainActor ([String: LauncherArgument]) -> Void
 }

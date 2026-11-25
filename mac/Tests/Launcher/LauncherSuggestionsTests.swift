@@ -155,10 +155,11 @@ final class LauncherSuggestionsTests: XCTestCase {
             .map { candidates[$0].id.components(separatedBy: ".").last ?? "" }
     }
 
+    /// 最多 12 行（第 10 步从 8 行放宽）：用户认可的那张清单排前 8 行，润色第 9 行（滚一下 / ↓ 看得到）。
     func testPlainTextOrderIsTheApprovedList() {
         XCTAssertEqual(order([.plainText]),
-                       ["translate", "explain", "summarize", "webSearch", "findFiles", "saveSnippet", "pinCard", "qrCode"],
-                       "润色排第 9，不出")
+                       ["translate", "explain", "summarize", "webSearch", "findFiles", "saveSnippet", "pinCard", "qrCode",
+                        "polish"])
     }
 
     func testWordPutsLearnFirstAndSkipsSummaryAndPolish() {
@@ -168,7 +169,8 @@ final class LauncherSuggestionsTests: XCTestCase {
 
     func testLongTextPutsSummaryAndPolishFirst() {
         XCTAssertEqual(order([.longText]),
-                       ["summarize", "polish", "translate", "explain", "webSearch", "findFiles", "saveSnippet", "pinCard"])
+                       ["summarize", "polish", "translate", "explain", "webSearch", "findFiles", "saveSnippet", "pinCard",
+                        "qrCode"])
     }
 
     func testURLPutsQRCodeFirst() {
@@ -208,21 +210,24 @@ final class LauncherSuggestionsTests: XCTestCase {
         // 润色用了 7 次（使用分 300）：60 − 30 = 30，和上网搜同分，原来的优先级小的（上网搜）在前。
         let used = records([("selectiontranslate.text.polish", 7, 0)])
         XCTAssertEqual(order([.plainText], records: used),
-                       ["translate", "explain", "summarize", "webSearch", "polish", "findFiles", "saveSnippet", "pinCard"])
+                       ["translate", "explain", "summarize", "webSearch", "polish", "findFiles", "saveSnippet", "pinCard",
+                        "qrCode"])
     }
 
     func testUsedOnceOnlyReordersWithinATier() {
         // 二维码用过一次（100 分 → 往前挪 10）：50 − 10 = 40，和搜文件同分，搜文件在前；但已经在存为片段、钉成贴卡前面。
         let used = records([("clipboard.text.qrCode", 1, 0)])
         XCTAssertEqual(order([.plainText], records: used),
-                       ["translate", "explain", "summarize", "webSearch", "findFiles", "qrCode", "saveSnippet", "pinCard"])
+                       ["translate", "explain", "summarize", "webSearch", "findFiles", "qrCode", "saveSnippet", "pinCard",
+                        "polish"])
     }
 
     func testUsageDecays() {
         // 钉成贴卡用了 7 次、但是 28 天前：300 × 0.25 = 75 → 往前挪 7.5，排在存为片段前面、搜文件后面。
         let used = records([("clipboard.text.pinCard", 7, 28)])
         XCTAssertEqual(order([.plainText], records: used),
-                       ["translate", "explain", "summarize", "webSearch", "findFiles", "pinCard", "saveSnippet", "qrCode"])
+                       ["translate", "explain", "summarize", "webSearch", "findFiles", "pinCard", "saveSnippet", "qrCode",
+                        "polish"])
     }
 
     func testUsageCanBeatABoost() {

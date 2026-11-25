@@ -16,9 +16,9 @@ struct LauncherCatalogCommand {
 enum LauncherCommandCatalog {
 
     /// 合并两组命令（普通的搜索结果用）。规则：
-    /// 1. 先过滤：id 为空、id 在 `excludedIDs` 里的不要；文字动作（恰好一个必填文字参数，`LauncherCommand.isTextAction`）
-    ///    和图片动作（恰好一个必填图片参数，`isImageAction`）一律不要 —— 它们只作为「对当前输入的建议」出现
-    ///    （`textActions`、`imageActions`），没有文字 / 图片可给时执行不了；
+    /// 1. 先过滤：id 为空、id 在 `excludedIDs` 里的不要；文字动作（恰好一个必填文字参数，`LauncherCommand.isTextAction`）、
+    ///    图片动作（恰好一个必填图片参数，`isImageAction`）和文件动作（恰好一个必填文件参数，`isFileAction`，第 10 步）一律不要 ——
+    ///    它们只作为「对当前输入的建议」出现（`textActions`、`imageActions`、`fileActions`），没有文字 / 图片 / 文件可给时执行不了；
     ///    `includesParameterized` 为 false 时其余带参数的（`parameters` 非空）也不要 —— 一期面板只能执行无参数命令。
     /// 2. 同一组里 id 重复的只留第一条。
     /// 3. 自动的在前、保持传入顺序；声明的和某条自动的 id 相同时，在那条的位置上替换它；
@@ -30,7 +30,7 @@ enum LauncherCommandCatalog {
         func keeps(_ entry: LauncherCatalogCommand) -> Bool {
             let id = entry.command.id
             guard !id.isEmpty, !excludedIDs.contains(id), !entry.command.isTextAction,
-                  !entry.command.isImageAction else { return false }
+                  !entry.command.isImageAction, !entry.command.isFileAction else { return false }
             return includesParameterized || entry.command.parameters.isEmpty
         }
         let automatic = firstOfEachID(automatic.filter(keeps))
@@ -66,6 +66,14 @@ enum LauncherCommandCatalog {
     static func imageActions(declared: [LauncherCatalogCommand], excludedIDs: Set<String> = []) -> [LauncherCatalogCommand] {
         firstOfEachID(declared.filter { entry in
             !entry.command.id.isEmpty && !excludedIDs.contains(entry.command.id) && entry.command.isImageAction
+        })
+    }
+
+    /// 文件动作（docs/launcher/TECH_DESIGN.md §6.5「路径行的动作」，第 10 步）：模块声明的命令里恰好一个必填文件参数的那些，
+    /// 只在输入是一个存在的文件的路径时接在路径行后面。规则同 `textActions`。
+    static func fileActions(declared: [LauncherCatalogCommand], excludedIDs: Set<String> = []) -> [LauncherCatalogCommand] {
+        firstOfEachID(declared.filter { entry in
+            !entry.command.id.isEmpty && !excludedIDs.contains(entry.command.id) && entry.command.isFileAction
         })
     }
 

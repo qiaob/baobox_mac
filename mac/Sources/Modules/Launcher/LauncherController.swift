@@ -70,7 +70,12 @@ final class LauncherController {
         fileSources = LauncherFileSources(registry: registry)
         files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
-        model.onRun = { [weak self] index in self?.run(at: index) }
+        model.onRun = { [weak self] index in self?.run(at: index, source: .click) }
+        // 上膛后完整显示命令的那一行变高 / 复位变回来：窗口跟着改高度（顶边不动）。
+        model.onHeightChange = { [weak self] in
+            guard let self else { return }
+            self.panel.setHeight(self.model.panelHeight)
+        }
         model.iconForFile = { [weak self] path in self?.apps.icon(forPath: path) }
         model.thumbnailForRow = { [weak self] id in self?.thumbnail(forRow: id) }
         thumbnails.onLoaded = { [weak self] in self?.model.thumbnailsChanged() }
@@ -83,6 +88,8 @@ final class LauncherController {
         apps.start()
         usage.load()
         fileSources.activate()
+        // 一次性提醒（第 10 步）：后台读回、补响过了点的、定下一条的计时器。
+        LauncherReminderCenter.shared.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstPrewarmDelay) { [weak self] in
             MainActor.assumeIsolated { self?.prewarm() }
         }
@@ -101,6 +108,7 @@ final class LauncherController {
     /// 模块 willTerminate：同步写掉没落盘的使用记录。
     func willTerminate() {
         usage.flush()
+        LauncherReminderCenter.shared.flush()
         LauncherFocus.cancel(reason: "quitting")
         apps.stop()
         paths.cancel()
@@ -140,6 +148,7 @@ final class LauncherController {
         baseItems = commands.items() + apps.items
         engine.textActions = commands.textActions()
         engine.imageActions = commands.imageActions()
+        engine.fileActions = commands.fileActions()
         // 剪贴板、片段：取一次条目（只读内存），缺的搜索键最新的 200 条现在建，其余后台建、建完刷新一次列表。
         let entriesStart = DispatchTime.now().uptimeNanoseconds
         let report = entries.beginSession()
@@ -205,6 +214,8 @@ final class LauncherController {
             pendingShownLog = nil
             Self.log.notice("\(shown, privacy: .public); selection cancelled (panel hidden)")
         }
+        // 在等第二次 ⏎ 的行复位（第 10 步）。
+        model.disarm()
         // 挂着的图片收起即丢（图片占内存）；输入框里的字那时是这张图的筛选词，也不留。
         if attachment != nil {
             attachment = nil
@@ -348,6 +359,8 @@ final class LauncherController {
             model.moveSelection(by: 1)
             return true
         case 0x24, 0x4C: // Return / 小键盘 Enter；⌘⏎ 在计算结果、识别结果上 = 插入前台 App，文件 / 路径行上 = 在访达里显示，其余行同 ⏎
+            // 按住 ⏎ 的自动重复一律不算（第 10 步验证后定）：不会连续执行，也不会把「按两次」的行一口气确认掉。
+            if event.isARepeat { return true }
             if flags.contains(.command) {
                 insertOrRun(at: model.selectedIndex)
             } else {
@@ -376,7 +389,8 @@ final class LauncherController {
             // ⌘1…⌘9：直接执行第 N 行。
             if flags.contains(.command), flags.isDisjoint(with: [.control, .option]),
                let slot = Self.digitKeyCodes.firstIndex(of: event.keyCode) {
-                run(at: slot)
+                // 按住 ⌘N 的自动重复同 ⏎，不算。
+                if !event.isARepeat { run(at: slot) }
                 return true
             }
             return false
@@ -600,11 +614,17 @@ final class LauncherController {
 
     // MARK: - 执行
 
-    private func run(at index: Int) {
+    /// `source`：⏎ / ⌘N 是按键，单击是点击 —— 要按两次的行上，上膛后双击间隔之内的点击不算确认。
+    private func run(at index: Int, source: LauncherConfirmSource = .key) {
         guard model.rows.indices.contains(index) else { return }
         let id = model.rows[index].id
         if let contextItem = engine.contextItem(forKey: id) {
             fill(contextItem)
+            return
+        }
+        // 要按两次 ⏎ 的行（第 10 步）：第一次（含 ⌘N、单击）只选中它、标题换成「再按一次回车…」，再按才往下走。
+        if let confirmation = engine.suggestion(forKey: id)?.confirmation ?? engine.item(forKey: id)?.confirmation,
+           !model.confirmPress(at: index, look: Self.armedLook(confirmation), source: source) {
             return
         }
         if let instant = engine.instant(forKey: id) {
@@ -729,6 +749,24 @@ final class LauncherController {
         hide()
         let toast = L("launcher.toast.copied \(LauncherConversions.singleLine(text, maxLength: 40))")
         LauncherFocus.restore { Self.toast(toast) }
+    }
+
+    /// 二次确认时那一行的样子。完整显示的（「在终端里运行」）：标题「再按一次回车运行：」，下面用等宽字把整条命令换行显示；
+    /// 其余的只换标题（`confirmTitle`）。
+    static func armedLook(_ confirmation: LauncherConfirmation) -> LauncherArmedLook {
+        if confirmation.showsWholeObject, let verb = confirmation.verb,
+           let lines = LauncherConfirmText.commandLines(confirmation.object) {
+            let title = L("launcher.confirm.action \(verb) \("")").trimmingCharacters(in: .whitespaces)
+            return LauncherArmedLook(title: title, style: .confirmCommand(lines: lines))
+        }
+        return LauncherArmedLook(title: confirmTitle(confirmation))
+    }
+
+    /// 二次确认时那一行的标题：「再按一次回车<做什么>：<对象>」（对象太长中间截断，开头结尾都在）；没有「做什么」的写「再按一次回车：<对象>」。
+    static func confirmTitle(_ confirmation: LauncherConfirmation) -> String {
+        let object = LauncherConfirmText.object(confirmation.object)
+        guard let verb = confirmation.verb else { return L("launcher.confirm.plain \(object)") }
+        return L("launcher.confirm.action \(verb) \(object)")
     }
 
     /// 回执（同防休眠开关的回执：宠物开着是宠物气泡，否则系统通知；勿扰时照常显示）。

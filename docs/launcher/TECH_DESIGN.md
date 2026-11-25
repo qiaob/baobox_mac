@@ -36,6 +36,9 @@ mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些�
   LauncherImageAction.swift                交给图片动作的图 LauncherImage（编码字节 / 文件路径）、`imageAction(…)`（纯 Foundation，§5.5）
   LauncherKnownFile.swift                  模块交给文件搜索的已知文件（路径、时间、说明）（纯 Foundation，§3.4、§6.4，PR 11）
   LauncherSelectedTextSteps.swift          读选中文字的步骤与顺序（AX 调用由 Core/SelectedTextReader 注入；带时限时先读范围，§8.4，第 9 步）
+  LauncherFileAction.swift                 文件动作：恰好一个必填 `.file` 参数的命令、`fileAction(…)`（纯 Foundation，§6.5「路径行的动作」，第 10 步）
+  LauncherShellHandoff.swift               把文字交给终端时拼的那一行：`eval '<命令>'`、`'<claude>' '<文字>'`、在文件夹里开交互 shell
+                                           （`Shell.quote`，纯 Foundation，§5.4「在终端里运行」「交给 Claude Code」，第 10 步）
 
 mac/Sources/Core/LauncherImageLoader.swift  LauncherImage → 像素尺寸 / 缩略图 / 整图（ImageIO，后台调；快速入口和截图模块共用，§5.5）
 mac/Sources/Core/SelectedTextReader.swift   只走辅助功能读一个 App 焦点元素里选中的文字，可带总时限（第 9 步从划词助手下沉，两边共用，§8.4）
@@ -49,14 +52,21 @@ mac/Sources/Modules/Clipboard/
 
 mac/Sources/Modules/ClaudeCode/
   ClaudeLauncherFiles.swift                `ClaudeCodeTool` 的扩展：要扫的临时目录 `/private/tmp/claude-<uid>`、最近文件交给文件搜索（§3.4、§6.4，PR 11）
+  ClaudeLauncherCommands.swift             `ClaudeCodeTool` 的扩展：文字动作「交给 Claude Code（<项目名>）」（§5.4，第 10 步）
+
+mac/Sources/Modules/AITools/CodexLauncherCommands.swift          `AIToolsTool` 的扩展：文字动作「交给 Codex」（§5.4，第 10 步）
+mac/Sources/Modules/Meeting/MeetingLauncherCommands.swift        `MeetingTool` 的扩展：会议链接的「入会并开始会议记录」（§5.4，第 10 步）
+mac/Sources/Modules/PhoneTransfer/PhoneTransferLauncherCommands.swift
+                                           `PhoneTransferTool` 的扩展：文字 / 图片 / 文件动作「发到手机」（§5.4、§6.5，第 10 步）
 
 mac/Sources/Modules/Screenshot/
   ScreenshotTool.swift                     launcherCommands()：图片动作「取字 / 钉在屏幕上 / 预览 / 保存成文件」（§5.5）
   ScreenshotResultHandler.swift            presentPreviewOnly（不记历史的预览窗）、saveFromLauncher（存 PNG + 回执）（§5.5）
 
 mac/Sources/Modules/SelectionTranslate/
-  SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4；翻译也用在图里的文字上，§5.5）
-  SelectionTranslateController.swift       run(actionID:onText:)：对交来的文字直接出结果面板（§5.4）
+  SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4；翻译也用在图里的文字上，§5.5）、
+                                           「朗读」（第 10 步）
+  SelectionTranslateController.swift       run(actionID:onText:)：对交来的文字直接出结果面板（§5.4）；toggleSpeech：朗读 / 停止（第 10 步）
   SelectionText.swift                      取词的辅助功能两步（焦点元素、选中的文字）改调 Core 的 SelectedTextReader（不设时限，行为不变，§8.4）
 
 mac/Sources/Modules/{Screenshot,Caffeinate,FocusHealth,Meeting,ClaudeCode}/
@@ -70,6 +80,8 @@ mac/Sources/Modules/Launcher/
   LauncherSuggestionViews.swift            建议行的色块（§5.4）、挂着的图片标签、图片条目的缩略图（§5.5）
   LauncherEngine.swift                     装进各来源的条目、拆前缀、排序、换成行（LauncherItem / LauncherRow）
   LauncherUsagePersistence.swift           使用记录落盘（LauncherUsageStore，§5.3）
+  LauncherReminderCenter.swift             一次性提醒：`reminders.json` 读写、到最近一条的计时器、唤醒 / 改时间后对表、到点发 alert；
+                                           「什么时候」的写法 LauncherReminderText（§5.4「一次性提醒」，第 10 步）
   LauncherAI.swift                         意图解析、问答、算式翻译的调用与提示词
   LauncherSettingsView.swift               设置页
   LauncherSpotlightHotkey.swift            ⌘Space 是否空出来的检测与自动绑定
@@ -89,6 +101,7 @@ mac/Sources/Modules/Launcher/
                                            什么时候建表（PR 11，§6.4）
     SuggestionProvider.swift               LauncherSuggestionProvider：建议行 —— 对应建议、兜底建议（§5.4）
     ImageSuggestionProvider.swift          LauncherRecognition（一次后台取字）、LauncherAttachment、挂着图片时的建议行（§5.5）
+    PathActionProvider.swift               路径行后面的动作行：复制路径、在终端里打开、模块声明的文件动作（§6.5，第 10 步）
     PasteboardReader.swift                 LauncherPasteboardReader：⌘V / 放下时读剪贴板的快照与图片字节（§5.5）
     ThumbnailProvider.swift                LauncherThumbnailProvider：图片条目的缩略图，后台取、NSCache（§5.5）
     ContextProvider.swift                  LauncherContextProvider：空着时的「选中的 / 刚复制的」两行（后台读选区、取剪贴板最新一条）、
@@ -121,6 +134,11 @@ mac/Sources/Modules/Launcher/
     LauncherImageSuggestions.swift         挂着图片时的建议：图片动作的排序、打字筛选、二维码与识别出的文字怎么换成行（§5.5）
     LauncherContext.swift                  空着时的规则：「刚复制」的 5 分钟窗口、两行去重、标题、各类行怎么拼（≤ 9 行）；
                                            读选区的流程 LauncherSelectionFetcher（后台、80 ms、超时、作废）（§8.4、§5.6，第 9 步）
+    LauncherShellCommand.swift             输入像不像一条终端命令（§5.4「像命令」，第 10 步）
+    LauncherReminderParser.swift           带时间的句子 → 到点时刻 + 事由（§5.4「带时间的句子」，第 10 步）
+    LauncherReminders.swift                一次性提醒的模型、`reminders.json` 的格式与容错、到点 / 晚了多久 / 哪一天（§5.4「一次性提醒」，第 10 步）
+    LauncherConfirm.swift                  二次确认：哪一行在等第二次 ⏎、标题里的对象怎么中间截断（§4「按两次回车」，第 10 步）
+    LauncherPathActions.swift              路径行后面出哪几行动作（§6.5「路径行的动作」，第 10 步）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -137,7 +155,7 @@ mac/Tests/Launcher*Tests.swift             对应上面 Logic/ 的单元测试 +
 ```swift
 // Core/Launcher/LauncherCommand.swift
 struct LauncherParameter {
-    enum Kind { case duration, number, text, choice([String]), clipboardRef, image }   // image：PR 8，§5.5
+    enum Kind { case duration, number, text, choice([String]), clipboardRef, image, file }   // image：PR 8，§5.5；file：第 10 步，§6.5
     let name: String            // 模型输出里的键，如 "duration"
     let kind: Kind
     let required: Bool
@@ -150,7 +168,8 @@ struct LauncherCommand {
     let keywords: [String]      // 额外的搜索词和同义说法（「别睡」「保持唤醒」）
     let symbolName: String
     let parameters: [LauncherParameter]
-    let destructive: Bool       // true = 要按两次 ⏎
+    let destructive: Bool       // true = 要按两次 ⏎（第 10 步起真的生效，§4「按两次回车」）
+    var appliesTo: (@MainActor (String) -> Bool)?   // 文字动作对这段文字适不适用（第 10 步，§5.4「适用性判断」）；nil = 适用
     let run: @MainActor ([String: LauncherArgument]) -> Void
 }
 ```
@@ -167,6 +186,7 @@ struct LauncherCommand {
 - 不收：快速入口自己的 `launcher.toggle`；带 `onRelease` 的快捷键（按住说话靠「按下 + 松开」，单次执行没意义）；id 为空的；一期面板只执行无参数命令，`parameters` 非空的先不收（`includesParameterized` 以后打开）。
 - **文字动作**（PR 7，2026-11-24）：`parameters` 恰好是一个必填 `.text` 参数的命令（`LauncherCommand.isTextAction`）。它们**永远不进** `merge` 出的普通命令表（`includesParameterized` 打开了也不进：没有文字可给时执行不了），由 `LauncherCommandCatalog.textActions(declared:)` 另收一张表，只作为「对当前输入的建议」排在列表最后；`LauncherCommand.suggestion` 写它适用哪几类输入、默认档位、哪几类时提前。详见 §5.4。
 - **图片动作**（PR 8，2026-11-24）：`parameters` 恰好是一个必填 `.image` 参数的命令（`isImageAction`），同文字动作一样**永远不进** `merge` 出的普通命令表，由 `LauncherCommandCatalog.imageActions(declared:)` 另收一张表，只在输入里挂着图片、或输入是图片文件的路径时作为建议出现。详见 §5.5。
+- **文件动作**（第 10 步，2026-11-25）：`parameters` 恰好是一个必填 `.file` 参数的命令（`isFileAction`，`fileAction(id:title:symbolName:suggestion:run:)` 造，`run` 收到 `file://` 网址），同样**永远不进** `merge` 出的普通命令表，由 `LauncherCommandCatalog.fileActions(declared:)` 另收一张表，只接在完整存在的文件的路径行后面。详见 §6.5「路径行的动作」。
 - **先过滤再合并**：同一组里 id 重复只留第一条；自动的保持注册顺序，声明的同 id 时在原位替换，其余声明的接在后面。被过滤掉的声明（带参数）不会顶掉同 id 的自动那条 —— 快捷键动作本来就能无参数执行。
 - 每条命令的搜索文字：标题（第一个，排序同分时看它的长度）、关键词、「工具名 标题」拼成的一段。工具名不单独做一个键：单独的话输入工具名时这个工具的每条命令都「完全相等」，会压过真正叫这个名字的那一行；拼起来以后是开头匹配、按标题长短排，`截图 区域` 这样连着写也能中。
 - 搜索键缓存（`LauncherCommandKeyCache`）：按命令 id 记「搜索文字 → 搜索键」，文字没变就复用，变了（「开关防休眠」↔「关闭防休眠」）才重建，这次没出现的 id 从缓存删掉。打字路径上不建键。
@@ -294,6 +314,11 @@ Codex 助手没有现成的文件清单，不交。用户自己加目录：设�
 - 挂着图片（PR 8，§5.5）：放大镜和输入框之间一个圆角小标签（缩略图约 28pt 高、最宽 56pt，右边小字是像素尺寸「2560×1440」），输入框跟着变窄，占位文字换成「要拿这张图做什么？打字筛选」。图片条目行首是缩略图（26 × 26 圆角，按比例铺满后裁），取到之前是 `photo` 图标。
 - 点外面收起（PR 8 改）：右键照旧立刻收；左键等松开再决定 —— 在别的 App 里按住拖东西过来时那一下按下也是「点外面」，松开时鼠标在面板上就不收（每 30 ms 看一次 `NSEvent.pressedMouseButtons`）。普通单击只是晚了按住的那一下。
 
+- 按两次回车（第 10 步，2026-11-25；`Logic/LauncherConfirm.swift` + 面板模型 + 控制器）：有破坏性的行 —— 模块声明的 `LauncherCommand.destructive` 命令（从第 1 步就有这个字段，一直没人实现）、「在终端里运行」、取消一条提醒（§5.4）—— 带一个 `LauncherConfirmation`（做什么 + 对象，挂在 `LauncherItem` / `LauncherSuggestion` 上）。第一次 ⏎ 不执行：选中那一行、算手动选过（`LauncherSelectionState.choose`，后台结果回来时选中留在它上面），标题换成「再按一次回车<做什么>：<对象>」（`launcher.confirm.action %@ %@`；没有「做什么」的模块命令是「再按一次回车：<命令名>」），对象压成一行、超过 48 个宽度单位（ASCII 算 1、其余算 2）时中间截断成「开头…结尾」，开头多半、结尾少半（`LauncherConfirmText.object`）。再按 ⏎ 才执行。复位：选中移开（↑ ↓、悬停换行、后台刷新后选中的不是它）、输入改了（含挂上 / 去掉图片）、面板收起。⌘1–⌘9、单击这样的行同样只算第一次（会把选中挪到那一行）；⌘⏎ 落到 ⏎ 的也一样。行高、图标、右侧小字都不变，只换标题；状态在面板模型里（`confirmPress(at:title:)`、`disarm()`），一批新行进来时还选着它就把新的那一行也换上。
+  - 验证后定（2026-11-25）：⏎ 和 ⌘1–⌘9 的自动重复事件（`NSEvent.isARepeat`）一律忽略，对所有行都这样（按住 ⏎ 不会连续执行）。鼠标点一下上膛；上膛后 `NSEvent.doubleClickInterval` 之内的再一次点击什么都不做（双击不会一口气确认）；键盘的两次分开的按键不设间隔。这一下算「执行 / 上膛 / 不算」由纯逻辑判断（`LauncherConfirmState.press`，传入上膛时刻、现在、来源），有单元测试。
+  - **完整显示**（只给「在终端里运行」）：确认时显示的必须是将要执行的全部内容。上膛后那一行变高，第一行是「再按一次回车运行：」，下面用等宽字把整条命令按每行固定宽度（`LauncherConfirmText.commandColumns`，ASCII 算 1、其余算 2，视图用同一个常量）硬换行、完整显示，最多 6 行（`maxCommandLines`）；放不下 6 行的命令不出「在终端里运行」那一行。别的要按两次的行（取消提醒）仍是一行、中间截断。行高随行数变（`LauncherRowStyle.confirmCommand`），面板高度、选中行滚到可见、第 9 行露一半都照每行的实际高度算。
+  - 复查后再定（第二轮）：每行内容最多 62 列（`contentColumns`，留 2 列给记号），6 行上限按 62 列算。被折断的行行末画续行记号 `↩`，折断处两侧的空格画成 `␣`，都用次要色、只是画出来的（纯逻辑 `LauncherCommandLine` 给每行的原文和「续行」「首 / 尾空格要标出」，各行原文拼回去和命令一字不差）—— `rm -rf /tmp/…-old ~ /Library/…` 在 `~` 后的空格处折行时，看得出那里是个空格，不会读成 `~/Library/…`。宽度估错时那一行缩小字号挤进去（`minimumScaleFactor(0.2)`：估宽是上限，0.2 倍容得下 5 倍的误差），不出省略号、不撑出面板。那几行按英文排版（`typesettingLanguage`），免得中文界面在汉字和 ASCII 之间自动加空隙、看着像多了空格。
+
 面板里的按钮、菜单自己画（`.borderless` 非当前 App 的窗口里，系统控件会按「非活动窗口」发灰，划词助手 #95 踩过，沿用 `SelectionButtons.swift` 的做法或把它下沉到 Core）。PR 4 的选中高亮（强调色底、白字）、命令图标底都由 SwiftUI 自己画。
 
 ## 5. 查询管线
@@ -383,7 +408,8 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 **文字动作（框架机制）**。快速入口不认识划词助手、剪贴板（§1 约束 3），所以用参数化命令：
 
 - 模块在 `launcherCommands()` 里用 `LauncherCommand.textAction(id:title:symbolName:suggestion:run:)` 声明，它造一条只有一个必填 `.text` 参数（键 `text`）的命令，`run` 直接收到那段文字。命令表规则见 §3.1：文字动作不进普通搜索，另收一张表；呼出时 `LauncherCommandProvider.textActions()` 收一次交给引擎。
-- `LauncherSuggestionTraits`（`Core/Launcher/LauncherTextAction.swift`，纯 Foundation，有默认值，不影响别的命令）：`kinds`（适用哪几类输入，默认全部）、`priority`（档位，小的在前，默认 50）、`boostedKinds`（输入属于这几类时提到所有档位前面）；PR 8 加 `imageTextPriority`（默认 nil；有值时这条文字动作也用在图里认出的文字上，§5.5）。
+- `LauncherSuggestionTraits`（`Core/Launcher/LauncherTextAction.swift`，纯 Foundation，有默认值，不影响别的命令）：`kinds`（适用哪几类输入，默认全部）、`priority`（档位，小的在前，默认 50）、`boostedKinds`（输入属于这几类时提到所有档位前面）；PR 8 加 `imageTextPriority`（默认 nil；有值时这条文字动作也用在图里认出的文字上，§5.5）；第 10 步加 `leading`（默认 false，见下面「适用性判断」）和 `skipsImageFiles`（图片动作用，§6.5「路径行的动作」）。
+- **适用性判断**（第 10 步，2026-11-25）：「某条动作只在特定输入下出现」原来只靠 `kinds`。会议链接这类条件光靠类别不够，所以 `LauncherCommand` 多一个可选的 `appliesTo: (@MainActor (String) -> Bool)?`（`textAction(…, appliesTo:)` 传进来；`applies(to:)` 没写就是 true，现有声明不受影响）。`LauncherSuggestionProvider` 先看类别、对得上才调它（它可能要跑一遍正则）；只能看这段文字和内存里的状态，不读盘、不联网、不阻塞。现在用它的：会议链接（`MeetingLinkParser` 认得）、交给 Claude Code / Codex（不超过命令行能带的 20 万字节，`LauncherShellHandoff.fitsCommandLine`）。`traits.leading` 的文字动作适用时不进兜底建议，紧跟在对应建议后面（`LauncherSuggestionRanking.leadingOrder`：按档位、再按声明顺序，不看使用记录，不占兜底的名额；标题就是命令名，输入在上一行已经写着），`order` 不收它们。
 - 现在声明的：
 
 | 模块 | id | 标题 | 适用 | 档位 | 提前 | 执行 |
@@ -398,6 +424,13 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 划词助手 | `selectiontranslate.text.polish` | 润色 | 普通文字、一大段文字 | 60 | 一大段文字 | 同上 |
 | 快速入口 | `launcher.webSearch` | 上网搜 | 全部 | 30 | — | 默认浏览器打开 Google 搜索（`LauncherWebSearch`，引擎是一张表，以后设置里增删） |
 | 快速入口 | `launcher.findFiles` | 搜文件名含「…」的文件 | 全部 | 40 | — | 把输入框换成 `f <文字>`，面板不收，接着就是只搜文件（§6.4） |
+| 手机互传（第 10 步） | `phonetransfer.text.send` | 发到手机 | 全部 | 50 | — | 有手机连着（`PhoneTransferSession.canSend`）直接 `send(text:)`、回执「已发到手机」；没有就打开手机互传的窗口、回执「连上手机后再发一次」（现有代码没有「连上后自动发」）。挂着的图片是字节时先写成 `$TMPDIR/Baobox-PhoneTransfer/` 下的临时文件再发；模块 `activate()` 时在后台、`willTerminate()` 时清空这个目录（验证后加） |
+| Claude Code（第 10 步） | `claudecode.text.handOff` | 交给 Claude Code（<项目名>） | 全部（`appliesTo`：不超过 20 万字节、不是单个 ASCII 词，`LauncherShellHandoff.canHandOff`） | 55 | 一大段文字 | 在偏好终端里 `'<claude>' '<文字>'`（`LauncherShellHandoff.promptLine`），目录是最近一次会话的项目目录（`ClaudeSessionIndex.shared.sessions.first`，内存缓存），拿不到用主目录、标题不写项目；目录不在了脚本里落到主目录（`inDirectory`）；没装不声明 |
+| Codex 助手（第 10 步） | `aitools.text.handOff` | 交给 Codex（<项目名>） | 同上 | 56 | — | 同上，`'<codex>' '<文字>'`，目录取 `CodexSessionIndex`；不提前（两个都提前的话一大段文字的兜底里存为片段就挤出去了） |
+| 会议（第 10 步） | `meeting.text.joinAndRecord` | 入会并开始会议记录 | 网址（`appliesTo`：`MeetingLinkParser` 认得），`leading` | 10 | — | `MeetingActions.joinAndRecord(link:)`：链接正是日历上眼下这一场 / 下一场的 → 现有的 `joinAndRecord(event)`（绑上那一场）；否则打开链接 + `start(type: .online)`，已经在记就只入会 |
+| 划词助手（第 10 步） | `selectiontranslate.text.speak` | 朗读（正在读时「停止朗读」） | 全部 | 65 | — | `SelectionTranslateController.toggleSpeech`：正在读就停；否则语种检测（同结果面板，偏向两个目标语言）选嗓音，`speak(_:language:)`；最多读前 8000 个字符 |
+| 快速入口（第 10 步） | —（`fallbackLeading`） | 在终端里运行「…」 | 像命令 | 兜底第一条 | — | `TerminalLauncher.run(command: "eval '<命令>'", in: nil)`（`LauncherShellHandoff.runLine`）；**按两次回车**（§4） |
+| 快速入口（第 10 步） | —（`top`） | 14:35 提醒我：<事由> | 带时间的句子 | 最前面 | — | 设好一条提醒，回执「已设好：今天 14:35 提醒你<事由>」（见下面「一次性提醒」） |
 
   划词助手只声明动作条上打开的动作（翻译永远在），和动作条一致。id 用 `….text.<动作>`，不和快捷键 id（`selectiontranslate.translateSelection` 等）重名 —— 重名的话照 §3.1 的规则也不会顶掉快捷键那条，但分开更清楚。
 - **划词助手的新入口** `run(actionID:onText:)`：只换掉取词这一步 —— 文字是交来的，不读选区、不借剪贴板、不要辅助功能权限，`SelectionTextResult.route = .provided`；之后照常 `present(…, phase: .result(id))`，会话、浮层、结果缓存、⏎ 复制都是原来那一套。没有选区锚点：结果面板水平居中于鼠标所在屏幕的可见区域，顶边在可见区域从上往下 1/5 处（同快速入口面板的顶边）；内容变高、切换动作时重新摆，还是居中、顶边不动（`SelectionCenteredSlot`，`Modules/SelectionTranslate/SelectionPanelPlacement.swift`，进 BaoboxTests）。原来是「锚点取那条线中点、结果面板贴在锚点下方」，用户看到面板在「中间偏右上」：SwiftUI 第一次排版前报一次 0 × 0，面板先被缩成 1 点宽摆在中线上，宿主视图（`NSHostingView` 默认的 sizingOptions）再按内容撑回 400 宽、左上角不动，于是从中线往右长（离屏探针复现）。居中这一格不理 0 × 0，判断「用户拖过」时差 1 点以内不算（系统给窗口原点取整）；拖过之后马上切换动作也不拉回居中（`phaseDidChange` 清摆放位置之前先看一次有没有被拖过）。贴选区的那条路没改（按代码它也会收到那次 0 × 0，结果面板应当同样从选区中线往右长，没在真机上看；要不要一起修另说）。`editTarget` 为 nil，所以改写类结果的主按钮是「复制」，没有「替换」。「选中后弹动作条」「直达快捷键」两条路径没动。
@@ -413,6 +446,15 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 6. **一大段文字**：80 个字符起。输入框是单行的 `NSTextField`，粘进来的换行会被换成空格（探针实测：`"a\nb\r\nc"` 粘进去得到 `"a b  c"`），所以输入框里的文字只能按长度认；带换行的原文（见下面「粘贴的原文」）也算。数到第 80 个字符就停，几 MB 的粘贴不用整段数。
 7. 其余 → **普通文字**。
 
+再加两个标记（第 10 步，`LauncherTextKind.command` / `.reminder`，和基本类别同时成立；路径 > 网址 > 邮箱 > 颜色仍然优先，是这几类时不看这两个标记；有计算结果时这两类都不出）：
+
+- **像命令**（`Logic/LauncherShellCommand.swift`）：单行、不超过 2000 字节。`$ ` 开头的都算（去掉 `$ `，后面只有一个词也算）；否则第一个词在常见命令表里（git、npm、npx、pnpm、yarn、brew、cd、ls、cat、curl、wget、ssh、scp、docker、kubectl、make、python、python3、pip、node、swift、xcodebuild、open、sudo、rm、mv、cp、mkdir、chmod、grep、find、tail、ps、kill、export；大小写要一致）、后面还有参数，而且后面至少有一个词形如选项（`-x`、`--xx`，连字符后面紧跟字母数字）、路径（含 `/`，或 `~`、`.`、`..`，或含一个后面还跟着字的 `.`；句末标点和纯数字不算）、赋值（`a=b`），或是这个命令的常见子命令（git、npm / pnpm / yarn、docker、kubectl、brew 各一小组）；`sudo` 看它后面那条命令。单独一个词不算。像命令时基本类别按**普通文字**算 —— `git status` 不当成英文短语（不提前「学习」）、长命令不出字数。放进来的文字（⌘V、拖放、「选中的 / 刚复制的」放进输入框，第 9 步起按字面处理、不拆前缀）照常认：贴进一条命令同样出「在终端里运行」；带换行的原文不是一条命令（单行才算）。
+  验证后加（2026-11-25）：文字里有控制字符（去首尾空白后剩下的 C0 控制符、NUL、DEL、C1）、双向控制符（U+202A–202E、U+2066–2069、U+061C）、零宽字符（U+200B–200F、U+FEFF）的不认成命令 —— 确认时看到的就是要跑的。`$ ` 后面第一个词要像命令名（以字母、`_`、`.`、`/`、`~` 开头，只含字母数字和 `_ . + - / ~`），「$ 5 off your first order」不算。以 `.` 结尾的词不算路径证据（`U.S.`、`e.g.`、`i.e.`；`.`、`..` 本身照算）。没有任何选项形状的词时，只要有一个不在引号里的词（含 `/` 的拆开看）是英文虚词（the、a、an、and、or、is、are、was、be、to、of、on、in、for、with、my、your、you、i、it、this、that、me、we、not、sure）就不算命令；子命令位置上、是该命令列出的子命令的那个词不查（`npm i lodash` 仍算，`npm i love you` 不算）。`make` 加一组常见目标（build、install、test、clean、all、run、dev、lint）；`ssh` / `scp` 后面有含 `@` 的词算证据。`echo hello`、`ssh host` 仍不认。完整显示放不下 6 行的命令不出「在终端里运行」（§4「按两次回车」）。
+  复查后再定（第二轮，取代上面的拒绝名单）：认成命令的文字（含 `$ ` 开头的）去首尾空白后**每个 Unicode 标量**都要在允许名单里（`LauncherShellCommand.isAllowed`）：U+0020–007E、U+00C0–024F（去掉 ×、÷）、U+3001–3002、U+3007、U+3008–300B、U+3010–3011、U+3014–3017、U+3041–3096、U+30A1–30FA、U+30FC、U+3400–4DBF、U+4E00–9FFF、U+AC00–D7A3、全角数字和字母（U+FF10–FF19、FF21–FF3A、FF41–FF5A）和 ！（ ）, : ; ? 七个全角标点（第三轮复查收窄：去掉了 CJK 标点段里的声调组合符号 U+302A–302F，和会冒充 shell 引号 / 注释 / 转义的 ＂＃＇＼｀〝〞「」『』 等；第四轮加回 〇）；组合符号、emoji、控制符、格式符、别的空格、别的文字系统一律不收。表里每个标量都独立成字、在等宽字体下实际宽度都不超过「ASCII 1、其余 2」；估宽和折行都按 Unicode 标量（`LauncherConfirmText.width`），单元测试逐个标量查表里没有 Mn / Mc / Me / Cf / Cc / Zs（空格除外）/ Cn / Co / Cs，也没有 Grapheme_Extend、Default_Ignorable_Code_Point 的。含 `/` 的词不再拆开查虚词表；它算路径证据的前提是拆开后的各段不全是虚词或空串（以 `/`、`./`、`../`、`~` 开头的照算）：`cd my/project`、`cp a.txt to/` 是命令，`cat and/or dog` 不是。
+- **带时间的句子**（`Logic/LauncherReminderParser.swift`）：不超过 120 个字符、单行；能解析出一个将来的时间点和一段事由。句子开头是时间（前面可以有「提醒我」「remind me (to)」「在」），后面是事由；英文还认事由在前、`in 20 minutes` 在最后。相对：`N 分钟后 / N 小时后 / N 个半小时后 / 半小时后 / 一刻钟后 / 三刻钟后 / 过 N 分钟`、`in 20 minutes / in an hour / in half an hour`；绝对：`[今天|明天|后天|大后天|今晚|明早|明晚|周五|下周五|星期五|tomorrow|tonight|friday|next friday…] [凌晨|早上|上午|中午|下午|傍晚|晚上] [at] 钟点`，钟点 `三点 / 三点半 / 三点一刻 / 三点十五(分) / 3点05 / 15:30 / 3pm / 3:30 pm`，`at` 后面单独一个数也算。没写上午下午时 1–6 点当下午、7–11 点先当上午（已经过了再当晚上）、写成 `15:30` 的不猜；没写「下 / 本」的星期几已经过去就是下一周的。中文数字 0–99（一二两三…十、零五）。已经过去的、认不出时间的、没有事由的不算；事由以「的」开头的也不算（「12点的会议纪要」「10:30 的航班」是在说一样东西，而这一行排在最前，误认了 ⏎ 就错了）。结果是一个 `Date`（「现在」、日历、时区由调用方传入：App 里跟系统，测试里写死 2026-11-23 10:00 上海）和去掉了时间、「提醒我」、首尾标点的事由。放进来的一句话同样认。
+  验证后加（2026-11-25）：钟点是「中文数字 + 点」、而且句子里没有别的时间信号时**不算提醒**（「一点也不好玩」「两点之间直线最短」）。别的时间信号：日子词（今天、明天、后天、今晚、周几…）、时段词（上午、下午、晚上、凌晨、中午、早上、夜里…）、「提醒 / 叫我」、点后面紧跟「钟 / 半 / 一刻 / 三刻 / N 分 / 整」。阿拉伯数字的钟点（`3点开会`、`15:30`、`3pm`）不受限制。取舍：「三点开会」不再认（写「下午三点开会」或「3点开会」）—— 这一行排第一且默认选中，误判比漏判糟。「N 点多」（三点多、3点多）不算。「晚上 / 今晚 / 夜里 + 1–5 点」是那一晚之后的凌晨：所指那天的次日那个钟点（「明天晚上一点」= 后天 01:00）；没有日子词或写的是今天 / 今晚、而且现在还没到今天的那个钟点（00:30 说「晚上1点」）→ 今天那个钟点；同「晚上12点 = 次日 0 点」。时间后面紧跟「前 / 之前 / 以前」→ 照那个时刻，事由去掉这个词（「下午3点前交报告」→ 15:00「交报告」）。时间段（「3点到5点」「3点-5点」「3点至5点」「15:00~17:00」）→ 按开始时刻，事由去掉后一个时刻和连接词。「明天6点起床」按 18:00（1–6 点没写时段当下午）不改：行上写着具体时刻。
+  复查后再定（第二轮）：钟点后面紧跟「了」不算（「3 点了，该走了」；「了解」不算）；「N 点钟方向」「N 点方向」不算；「前」后面接成前台、前后、前面、前门、前方、前端、前排、前往、前进、前提、前辈、前任的不当「在这之前」；句末的「提醒我 / 叫我」不进事由；「N 点」后面直接跟分钟数（≥ 10，或带零：「三点十五」「三点零五」）也认、也算时间信号，「三点一线」不认。
+
 **粘贴的原文**（2026-11-24 审后加，`Logic/LauncherPastedText.swift`）：输入框把换行压成空格，交给翻译、总结、存为片段时段落就没了。所以 `LauncherController.performEditShortcut` 在 ⌘V（`LauncherFieldHandle.perform(.paste)`）之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（第 9 步起单行的也记，叫 `placedText`，和输入一起保留 60 秒）。输入框每次变化时核对一次（见下面「核对放在哪」）：输入框里的文字和原文**把空白归一后相等**（连续的空格、制表符、换行都换成一个空格、去首尾空白；单行输入框把 `\n` 换成一个空格、`\r\n` 换成两个，归一后都一样）才用原文 —— 分类、字数、交给动作都用它，多行的原文算一大段文字；不相等（改了一个字、粘在已有文字后面）就作废，控制器在文字变化时清掉它。读剪贴板只在按 ⌘V 那一下，不在打字路径上；右键菜单里的「粘贴」不记（少见，退回框里那一行）。
 
 **放进来的按字面处理**（第 9 步验证后加，2026-11-25）：放进来的文字开头碰巧像来源前缀时会被拆成前缀 ——「A quick fix for the build」只搜 App、「> quoted reply line」只搜命令、「c is a language」只搜剪贴板、「F the rest」只搜文件，翻译、总结这些建议就不出了。规则：**不是打字打进来的内容，一律按字面处理、不拆前缀**。范围是「选中的 / 刚复制的」放进输入框（§8.4）、⌘V 粘贴、拖放的文字。做法是把上面的原文推广到单行：这三条路放进来的文字不管有没有换行都记下来（`LauncherPlacedText`，全是空白的不记），输入框里的文字在空白归一后还是它时，整段当查询词、不拆前缀（路径照样认，`/…`、`~/…` 放进来仍走路径行）。用户一改动（多打、删一个字）就作废，之后照常拆前缀 —— 手打的 `f readme` 不受影响，粘贴进来再改成别的也恢复正常规则。纯函数，单元测试覆盖上面四个例子放进来不拆、出兜底建议，手打照旧拆，末尾多打 / 删一个字恢复拆前缀。
@@ -423,7 +465,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 查询不再核对、不归一：控制器保证「`placedText` 有值 = 输入框此刻还是它」，引擎只交一个布尔值给 `LauncherQuery.parse(_:literal:)`，建议的 `LauncherSuggestionPolicy.plan(placed:)` 只读算好的 `suggestionText`。原来 `parse(_:placed:)` 里的双重核对去掉了。单元测试数调用次数、不靠计时（起初按「归一一次的耗时」比差值，机器忙时偶发失败，复查后改）：`LauncherPastedText.normalized` 在 DEBUG 编译里带一个调用计数，1 MB 原文放进来时各归一一次，之后核对输入框、拆前缀、出哪些建议一次都不调；核对返回读了输入框几个字（`LauncherPlacedText.check`），守住「短了一个字也不读」「开头不同读到第一个字就停」。实测（2026-11-25，M3，`swiftc -O` 探针，单行、词之间一个空格）：1 MB —— 每次查询里放进来的原文多花 0 ms（拆前缀 < 0.01 ms，出哪些建议有没有原文都是 18.9 ms；原来两边各归一一遍是 72 ms）；只在放进来时归一一次 44 ms、第一次改动核对一次 34 ms（输入框变短时比长度就知道，不看内容），之后不再有。5 MB：222 ms / 175 ms，每次查询同样 0 ms。
 - 不变式靠「改输入框的入口都经过那次核对」：打字（编辑器回调 → `textChanged` → `adoptText`）、Tab 补全和建议行改写成 `f <文字>`（`replaceText` 后 `textChanged`）。放进来的三条路 ——「选中的 / 刚复制的」、拖放（`replaceInput`）、⌘V（交给输入框粘贴）—— 都只经控制器的 `place(_:_:)`：记下原文（`LauncherPlacement.begin`，待定）→ 改输入框（有回调时 `adoptText` 当场核对，待定的优先）→ **无条件落定**（`settle`：不管改没改成、有没有回调，对着此刻的输入框核对，对不上就作废；输入框没变时先前那段照旧）。原文只在 `place` 里记，记完一定落定，绕不过去（复查找到的漏洞：输入框不在编辑时 ⌘V 什么都不做、也没有回调，原来只记不核对，手打的 `f readme` 下一次查询就被当成放进来的；`LauncherPlacement` 是纯逻辑，单元测试覆盖这条路和「贴同样的字」「粘贴没成时先前那段照旧」）。其余入口：贴进文件（`insertFile` 先丢掉、再 `replaceInput`）、挂上图片（`attach` 先丢掉再清空）、Esc 去掉图片连筛选词一起清（`adoptText("")`）、重新呼出（超过 60 秒连文字一起清空；60 秒内文字原样放回，还是核对过的那段）、收起时挂着图片（文字和原文一起清空）。
 
-**出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 8 行里的一个名额，其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。
+**出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 12 行里的一个名额（第 10 步前是 8 行），其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。像命令 → 「在终端里运行」放在兜底建议最前面（同有歧义的网址，`fallbackLeading`，占一个名额）。带时间的句子 → 「到时提醒我」放在所有行的最前面（`plan.top`，计算结果那个位置，两者不会同时有）。输入是「提醒」/「reminders」/「reminder」→ `showsReminders`，还没到点的提醒每条一行，也在最前面。
 
 **对应建议**（固定排在最前，计算结果之后、识别结果之前）：
 
@@ -436,24 +478,45 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 颜色、字数两种是「复制行」，走 `LauncherInstant`（和计算结果、识别结果同一张表，不记使用）；网址、邮箱是动作行（`LauncherSuggestion`，不记使用）。
 
-**兜底建议**（排在普通结果之后，最多 8 行，`LauncherSuggestionRanking.order`）：
+**兜底建议**（排在普通结果之后，最多 12 行，`LauncherSuggestionRanking.order`；排在兜底组第一条的「打开 https://…」「在终端里运行」算在里面）：
 
 - 适用：`traits.kinds` 和这次输入的类别有交集。
 - 排序键 = 档位（输入属于 `boostedKinds` 时当成 0）− min(30, 使用分 ÷ 10)，小的在前；同分看原来的档位，再看声明顺序（模块注册顺序、模块里写的顺序）。使用分是 §5.3 那一套（键 `textaction/<id>`，用 1 次 100、7 次以上 300，两周减半），所以用过一两次的只在同一档里往前，用得很多的能往前挪三档；单词时一直用翻译不用学习，翻译会排到学习前面。
-- 8 行的由来：普通文字时正好放下用户认可的那张清单（翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码），没有别的结果时面板不用滚动（最多 8.5 行）。默认次序（没有使用记录时）：
+- 行数：原来是 8 行 —— 普通文字时正好放下用户认可的那张清单（翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码），没有别的结果时面板不用滚动。第 10 步加了发到手机、交给 Claude Code / Codex、朗读，8 行时它们在普通文字下都排第 9 行以后、永远看不到也就永远没人用，所以放宽到 **12 行**（设计者 2026-11-25 定）。面板本来就是最多显示 8.5 行、超出滚动，第 9 行露一半，往下滚或按 ↓ 就看得到，面板外观没改；那张清单仍是默认的前 8 行。超过 12 行的照旧不出，用过会往前挪。默认次序（没有使用记录时）：
 
-| 输入 | 兜底建议 |
+| 输入 | 兜底建议（第 10 步之后；Claude Code、Codex 都装了，`LauncherActionApplicabilityTests` 钉着） |
 |---|---|
-| 普通文字 / 有计算结果 | 翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码（润色第 9，不出） |
-| 英文单词 | 学习、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 |
-| 一大段文字 | 总结、润色、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡（二维码第 9） |
-| 网址 | 二维码、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡 |
-| 邮箱 / 颜色 | 翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 |
+| 普通文字 / 有计算结果 / 带时间的句子 | 翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡、二维码 ‖ 发到手机、交给 Claude Code、交给 Codex、润色（朗读第 13，不出；没装 Codex 时朗读第 12） |
+| 英文单词 | 学习、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码 ‖ 发到手机、交给 Claude Code、交给 Codex、朗读 |
+| 一大段文字（含粘贴的多行原文） | 总结、交给 Claude Code、润色、翻译、解释、上网搜、搜文件、存为片段 ‖ 钉成贴卡、二维码、发到手机、交给 Codex（朗读第 13） |
+| 像命令 | 在终端里运行、翻译、解释、总结、上网搜、搜文件、存为片段、钉成贴卡 ‖ 二维码、发到手机、交给 Claude Code、交给 Codex |
+| 网址 | 二维码、翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、发到手机 ‖ 交给 Claude Code、交给 Codex、朗读（会议链接时「入会并开始会议记录」不在这里，紧跟在「打开」后面） |
+| 邮箱 / 颜色 | 翻译、解释、上网搜、搜文件、存为片段、钉成贴卡、二维码、发到手机 ‖ 交给 Claude Code、交给 Codex、朗读 |
+
+  「‖」前是兜底组的前 8 行（上面没有别的行时不用滚动就看得到），后面的要往下滚或按 ↓。同一档（50）里的次序是模块注册顺序：剪贴板（存为片段、钉成贴卡、二维码）注册在手机互传前面，所以发到手机排在它们后面。
 
 - 行：标题 =「命令名「引用」」（`launcher.suggest.action %@ %@`；引用压成一行、最多 24 个字符，超出末尾加省略号），右侧是所属工具名（划词助手 / 剪贴板）或「网页」「文件」，图标是命令自己的 SF Symbol；行 id = `textaction/<id>`。
 - 执行（`LauncherController.runSuggestion`）：先记一次使用（`recordUse(key: "textaction/<id>", input: "")`，不记「这个输入选了谁」—— 那是给排序里的普通行用的）；改输入的（搜文件）调输入框的 `replaceText`（走编辑器 `insertText`，能撤销）、面板不收；其余同命令：收起面板、`LauncherFocus.restore(then:)` 等焦点回到原来的 App 再执行（§4「焦点」），交给动作的是输入框里上屏的文字（去首尾空白）。⌘⏎ 同 ⏎。颜色、字数这类复制行走 `LauncherInstant` 的现成路径（复制 / 插入同样先还焦点）。
 
-**接进引擎**（`LauncherEngine.search`，只加接入点）：行的次序 = 计算结果 → 固定的文件行（§6.4 的 `files.pinned`：片段的确切命中、名字正好是输入的文件；PR 11 起挪到对应建议前面）→ 对应建议 → 识别结果 → 排好序的普通行（含文件）→ 兜底建议；输入是路径时提前返回，不出任何建议。`LauncherSuggestionProvider`（App 侧，带 `L()` 文案和执行闭包）每次输入算一次；复制行并进 `instantsByKey`，动作行进 `suggestionsByKey`（`engine.suggestion(forKey:)`）。「让 AI 来办」提前的旧规则（`shouldPromoteAIRow`）现在没有界面用它，二期把「让 AI 来办」加进兜底建议时再接。
+**接进引擎**（`LauncherEngine.search`，只加接入点）：行的次序 = 最前面的（第 10 步：到时提醒我、待响的提醒，`suggestions.top`）→ 计算结果 → 固定的文件行（§6.4 的 `files.pinned`：片段的确切命中、名字正好是输入的文件；PR 11 起挪到对应建议前面）→ 对应建议（第 10 步起后面紧跟 `leading` 的文字动作）→ 识别结果 → 排好序的普通行（含文件）→ 兜底建议；输入是路径时提前返回，不出任何建议。`LauncherSuggestionProvider`（App 侧，带 `L()` 文案和执行闭包）每次输入算一次；复制行并进 `instantsByKey`，动作行进 `suggestionsByKey`（`engine.suggestion(forKey:)`）。「让 AI 来办」提前的旧规则（`shouldPromoteAIRow`）现在没有界面用它，二期把「让 AI 来办」加进兜底建议时再接。
+
+**交给终端的那一行**（第 10 步，`Core/Launcher/LauncherShellHandoff.swift`）：都经 `TerminalLauncher.run`（偏好终端、一次性 `.command` 脚本），文字一律经 `Shell.quote`（单引号包裹，`'` 写成 `'\''`，`$`、反引号、`\`、换行原样）再拼进命令：
+
+- 在终端里运行：`eval '<命令>'`。命令就是贴进来、按了两次回车确认过的那一行，原样交给 shell（和自己在终端里敲一样）；包一层引号的好处是脚本里永远只有这一行，命令里的引号没配对也只是这一行报错。目录显式传主目录（验证后定）。
+- 交给 Claude Code / Codex：`'<可执行文件>' '<文字>'`，文字是一个参数（新会话的第一条消息，换行保住）；以 `-` 开头时前面加 `--`（免得被当成选项）。超过 20 万字节不出（macOS 一条命令的参数加环境变量合计 1 MB）。验证后加（2026-11-25）：文字去首尾空白后是单个 ASCII 词（只有字母、数字、`-`、`_`：`update`、`logout`）时不出这两行 —— commander 在 `--` 之后的第一个词仍可能被当成子命令，不靠 `--`；文字里的 NUL 去掉。项目目录不存在时落到主目录再跑：命令写成 `cd '<目录>' 2>/dev/null || cd ~; '<可执行文件>' '<文字>'`（不在主线程查盘，`LauncherShellHandoff.inDirectory`）。
+- 在终端里打开文件夹（§6.5）：在那个目录里 `exec "${SHELL:-/bin/zsh}" -l`，停在交互的登录 shell 里（光 `cd` 的话脚本跑完就退出了）。
+- 单元测试（`LauncherShellHandoffTests`）真的交给 `/bin/zsh -f -c` 跑：单引号、反斜杠、换行、`$()`、反引号、`$变量`、`!`、`*`、以 `-` 开头、中文、emoji 的文字原样作为一个参数到达；`runLine(命令)` 的输出和直接跑那条命令一样。
+- 已知限制（`TerminalLauncher` 的老问题，这一步不改）：脚本是 `#!/bin/zsh` 的非交互 shell，不读 `.zshrc`，用户在那里加的 PATH、别名、nvm / pyenv 这类环境不生效；从访达 / 启动台起的 Baobox 自己的 PATH 也很短。所以「在终端里运行」跑 `npm`、`kubectl` 这类装在自定义目录里的命令可能找不到；交给 Claude Code 用的是探测到的完整路径，不受影响。
+- 已知限制（规则到此为止，第二轮复查后不再调）：「像命令」是保守的规则，`grep the file.txt` 这种参数里正好有英文虚词的命令认不出（前面加 `$ ` 就认），命令里有允许名单以外的字符（emoji、别的文字系统、弯引号、「」『』）也不认 —— `$ ` 前缀也绕不过，用户自己贴进终端；提醒的规则认不全口语说法（「三点开会」要写成「下午三点开会」或「3点开会」，「十点读书」这类以钟点开头的短语如果后面带着「提醒」会被认成提醒，「三点十五个人」会被认成 15:15 的提醒），行上写着具体时刻，用户回车前看得到。
+
+**一次性提醒**（第 10 步，2026-11-25；需求 §3.4、§3.11；纯模型 `Logic/LauncherReminders.swift`，App 侧 `LauncherReminderCenter.swift`）：
+
+- 行：带时间的句子 → 最前面「14:35 提醒我：取快递」（`launcher.reminder.row %@ %@`；今天只写时刻，明天 / 后天写「明天 14:35」，再往后写日期「11月28日 14:35」，跨年带年份；时刻 24 小时制；事由压成一行、最多 60 个字符），右侧「提醒」，图标 `alarm`，行 id `reminder/new`，不记使用。⏎ = `LauncherReminderCenter.add`，回执「已设好：今天 14:35 提醒你取快递」（这里今天也写「今天」）。时刻是打字那一刻算的（「20 分钟后」从那时算），行上写着具体时刻，所见即所设。
+- 到点：`NotifyCenter.shared.post` 一条 `alert`（sticky：宠物开着是宠物气泡，否则系统通知），标题「提醒：取快递」；晚了一分钟以上（关机、睡眠中、App 没开着）补响时正文写「晚了 12 分钟（原定 14:35）」（不到一小时按分钟、不到一天按小时、再久按天）。`dedupeKey` = `launcher.reminder.<id>`，来源 `launcher`。
+- 存储：`~/Library/Application Support/Baobox/Launcher/reminders.json`，`{"version":1,"reminders":[{"id","date","text","created"}]}`，时间写 1970 年起的秒数。`activate()` 时在后台串行队列读；读完之前设的、取消的先记着，读完按顺序补到读出来的表上（不会被盘上的盖掉，也不会用空表盖盘）；读完马上补响过了点的。每次改动（设、取消、响掉）在同一个后台队列原子写一次，不防抖；`willTerminate` 时等还在写的那次写完。解码全程容错（顶层不对 → 空表；单条缺字段、类型不对、事由是空的、id 重复 → 跳过那一条），不是合法 JSON 时改名成 `reminders.json.bad` 留底。写盘失败 `StorageWriteFailure.report(L("storage.what.launcherReminders"), …)`。最多 200 条（再多删最晚的），事由最多 200 个字符。
+- 计时：一个到最近一条为止的 `Timer`（`.common` 模式，容差 1 秒），到点时响掉所有到点了的、再定下一条。系统睡眠时计时器不走，所以监听 `NSWorkspace.didWakeNotification` 和 `NSSystemClockDidChange`：醒来、改了系统时间就补响过了点的、重排计时器。
+- 管理：输入「提醒」/「reminders」/「reminder」（不分大小写）时，每条还没到点的一行（「14:35 取快递」，右侧「提醒」，行 id `reminder/<id>`），⏎ = 取消，**按两次**（§4），第一次标题「再按一次回车取消提醒：14:35 取快递」；回执「已取消提醒：取快递」。不做新窗口。打字时只读内存里的 `pending`。取消时那一条已经响过了（列表是呼出时的样子）：回执「这条提醒已经响过了」（验证后加）。
+- 日志（category `launcher`）只记条数、秒数、布尔：`reminder set, due in … s`、`reminders loaded: … on disk`、`reminder fired (late)`、`reminders recheck (wake / clock changed)`，不记事由。
 
 **实测**（2026-11-24，M3，`swiftc -O` 探针，137 个 App + 400 条剪贴板 + 假的命令表）：带建议的一次查询中位数 0.1–0.5 ms（最慢的一次 2.4 ms）；建议这一块对 125 个字的一段话 0.15 ms。粘进 18.75 万字时整次查询 18.7 ms，其中建议约 2.5 ms（字数统计要整段数一遍），其余是原来的匹配（和建议无关，PR 4 起就是这样）。
 
@@ -795,6 +858,19 @@ extension HotkeyDefinition {
 - 线程：每次输入变成一个新路径，在全局并发队列上查一次（某个路径卡住 —— 比如断开的网络盘 —— 也不挡后面的输入），带序号，过期的丢掉；查完回主线程换成行，控制器刷新列表。
 - 新的结果回来之前：输入还在同一处（同一个上一级目录里改最后一段、往深里打、往回删，`LauncherPathInput.continues`）就先显示上一次的行，列表不会每打一个字就收起再长出来；贴了别处的路径就先显示「正在查找…」，免得这时按回车打开另一个目录里的东西。
 
+**路径行的动作**（第 10 步，2026-11-25；规则 `Logic/LauncherPathActions.swift`，行 `Providers/PathActionProvider.swift`）：路径是一个**完整存在**的文件或文件夹（`.item` / `.directory`，不是 `.completions` 补全出来的）时，那一行（文件夹是它本身那一行）带一个 `LauncherItem.pathTarget`，引擎在它后面、文件夹内容之前接最多 3 行：
+
+| 路径 | 动作行 | 右侧 | ⏎ |
+|---|---|---|---|
+| 文件夹 | 在终端里打开 | 终端 | `TerminalLauncher.run(command: exec "${SHELL:-/bin/zsh}" -l, in: 路径)`：偏好终端里一个停在那个目录的交互 shell |
+| 文件夹 / 文件 / 包 | 复制路径 | 快速入口 | 复制完整的绝对路径（`LauncherInstant`，同计算结果：⏎ 复制并回执、⌘⏎ 插入原来的 App） |
+| 文件（不是文件夹、不是包） | 模块声明的文件动作（现在只有手机互传的「发到手机」），按档位、同档按声明顺序 | 所属工具名 | `run([file: .file(网址)])` |
+
+- 文件动作的声明办法：照图片动作，加一种「恰好一个必填 `.file` 参数」的命令（`LauncherCommand.fileAction`，`Core/Launcher/LauncherFileAction.swift`；`LauncherArgument.file(URL)`）。比「给图片动作加一个也接受任意文件的标记」改动小：图片动作的参数类型、排序、筛选都不用动。命令表规则见 §3.1。
+- `.app` 这类包：路径行把它当一个文件（不进去），但模块的文件动作只收真正的文件（手机互传发不了一个包），所以只有复制路径。
+- 图片文件：先是这几行，再是图片动作（§5.5）。图片动作里标了 `skipsImageFiles` 的（「把图片发到手机」：上面已经有做同一件事的「发到手机」）在路径行后面不出，挂着的图片照出。
+- 都不记使用（同路径行），也不读盘：是不是文件夹、是不是包，路径那一行在后台查过了。文件搜索结果里的文件行（不是路径输入）不加这些。新的路径结果回来之前顶着的上一次的行（§6.5「新的结果回来之前」）连同它的动作行一起顶着 —— 动作对的是那一行写着的路径。
+
 **按键**：⏎ 打开（`NSWorkspace.open`：文件用默认 App、文件夹在访达里打开；`.app` 照 App 来源的做法启动）；⌘⏎ 在访达里显示；**Tab 补全**：输入框换成选中行的完整路径，文件夹末尾带 `/`（于是立刻列出它里面的内容）。用户写的是 `~` 开头就保持 `~/…`，否则写完整路径 —— 跟着用户自己的写法走；引号、`file://`、转义在补全后都没了。走字段编辑器的 `insertText`（和打字一样回调文字变化、能 ⌘Z 撤销，光标在末尾）。Tab 只在路径行上补全，其余时候照旧先吃掉。路径行不记使用记录。
 
 **实测**（2026-11-24，M3，探针，`-O`）：
@@ -1061,7 +1137,7 @@ UserDefaults 前缀 `launcher.`：
 | 7 | 放进任何东西都有建议（2026-11-24 加，用户试用时说「我预期的是我放入任何东西，都能给我一些建议」）：输入分类；文字动作（`LauncherCommand.suggestion`，划词助手、剪贴板声明，划词助手加 `run(actionID:onText:)`）；对应建议（网址、邮箱、颜色、字数）与兜底建议（§5.4） | 真机：网址、邮箱、颜色、单词、长文本、随便什么字、算式各试一次；划词助手结果面板的位置、只给复制 |
 | 8 | 图片与文件（2026-11-24 加，用户问「现在是不是不能输入图片」）：图片动作（`.image` 参数，截图声明取字 / 钉在屏幕上 / 预览 / 保存成文件，划词助手的翻译也用在图里的文字上）；⌘V / 拖放先归类（文件 / 图片 / 文字）；输入里挂一张图片（缩略图标签、后台取一次字、识别结果 + 图片动作、打字筛选、⌫ / Esc 去掉）；贴进文件 = 路径，图片文件的路径行后接图片动作；剪贴板历史里的图片（`c ` 前缀、缩略图、Tab 挂成附件）（§5.5） | 真机：⌘V 贴截图 / 网页图片 / 表格一段 / 访达文件、拖进访达文件和浏览器图片、`c 图片`、各动作走一遍 |
 | 9 | 空着时给建议（2026-11-24 设计、11-25 实现，`STEP-9-CONTEXT.md`）：呼出时带上选中的文字和刚复制的内容，⏎ / Tab 放进输入框（§8.4）；各模块声明的情景建议（§5.6）；设置页两行开关。原来排在这一步的系统设置页、系统命令、各模块补带参数的命令不在这一步 | 真机：在浏览器、编辑器、终端、微信里选字呼出；复制文字 / 图片后呼出；专注、防休眠、录屏、会议记录中、下一场会议快开始、Claude Code 在等时呼出；日志里的选区耗时和呼出延迟（§10 验证 5） |
-| 10 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
+| 10 | 给放进来的东西多几个去处（2026-11-24 设计、11-25 实现，`STEP-10-ACTIONS.md`）：输入分类加「像命令」「带时间的句子」（§5.4）；文字动作的适用性判断（`appliesTo`、`leading`）；按两次回车（§4，`destructive` 从此生效）；在终端里运行、一次性提醒（存储、计时、列表里取消，§5.4）；朗读（划词助手）、交给 Claude Code / Codex、发到手机（文字 / 图片 / 文件）、会议链接的入会并开始会议记录；路径行的动作（复制路径、在终端里打开、发到手机，§6.5）。原来排在这一步的设置页、⌘Space 引导与自动绑定、本地化、使用手册不在这一步 | 真机：`git status` 按两次回车跑一次；「2 分钟后提醒我喝水」等它响、睡眠唤醒后补响；输入「提醒」取消一条；长报错交给 Claude Code（看目录和第一条消息）；连着 / 没连着手机各发一次文字、图片、文件；粘一个 Zoom / 腾讯会议链接入会；文件夹在终端里打开 |
 | 11 | 文件优先与更多文件来源（2026-11-24 加，用户输入 `add-approval-hook.py` 只得到剪贴板和建议、`f add-approval-hook.py` 是「没有结果」：「我如果输入一个文件，第一优先级应该是打开文件吧」）：输入像文件名时名字正好是它的文件固定排第一（⏎ 打开）；文件搜索合并四个来源 —— Spotlight、自己扫的目录（`ToolModule.launcherFileRoots()`，默认 Claude Code 的临时目录）、各模块已知的文件（`launcherKnownFiles()`，Claude Code 的最近文件）、剪贴板里出现过的路径；先回来的先出、按规范路径去重（§3.4、§6.4） | 真机：输入一个 Claude Code 临时目录里的文件名（带 / 不带 `f `）、复制过路径的文件名、Claude Code 写过的文件名、同名多份；日志里各来源的耗时 |
 
 > 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 9、10（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」「图片与文件」后顺延），和用户一起做（2026-11-25：第 9 步改成了「空着时给建议」，系统设置页不在里面，验证 6 跟着它往后挪）；验证 5 要辅助功能权限，只能在装好的 Baobox 里测 —— 第 9 步起呼出时就读选区，日志里记着每次的结果和耗时，第 9 步装上后看真机日志（§10 验证 5）。PR 1–3 是纯逻辑，不依赖这些结论。

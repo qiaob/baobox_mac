@@ -8,8 +8,8 @@ import Foundation
 struct LauncherInputClassification: Equatable, Sendable {
     /// 去首尾空白后的输入。
     let text: String
-    /// 属于哪一类（目前最多一类，见 `LauncherTextKind`）；空 = 不出任何建议（空输入、路径）。
-    let kinds: Set<LauncherTextKind>
+    /// 属于哪一类（基本类别一类，可能再加「像命令」/「带时间的句子」的标记，见 `LauncherTextKind`）；空 = 不出任何建议（空输入、路径）。
+    var kinds: Set<LauncherTextKind>
     /// 以 `/` 或 `~` 开头：路径的事归路径那一路（文件 / 路径行），这里不出任何建议。
     var isPath = false
     /// 是网址时，打开用的地址（没写 scheme 的已补上：域名补 `https://`，localhost 和 IP 补 `http://`）。
@@ -21,6 +21,10 @@ struct LauncherInputClassification: Equatable, Sendable {
     var email: String?
     /// 是颜色时，解析出的颜色。
     var color: LauncherColor?
+    /// 像一条终端命令时，要跑的命令（`$ ` 已去掉，`LauncherShellCommand`）。
+    var command: String?
+    /// 是带时间的句子时，解析出的提醒（`LauncherReminderParser`；分类时给了「现在」才认）。
+    var reminder: LauncherReminderDraft?
 }
 
 enum LauncherInputClassifier {
@@ -33,7 +37,9 @@ enum LauncherInputClassifier {
 
     /// 分类。优先级：路径（不出建议）> 网址 > 邮箱 > 颜色 > 英文单词 / 短语 > 一大段文字 > 其余。
     /// 有歧义的网址（可能是文件名）按普通文字算，但带上 `url`、标上 `isAmbiguousURL`。
-    static func classify(_ input: String) -> LauncherInputClassification {
+    /// 不是网址、邮箱、颜色时再看两个标记（第 10 步）：像一条命令（`command`，这时按普通文字算：`git status` 不当成英文短语）、
+    /// 带时间的句子（`reminder`，只在给了 `clock` 时认：要按「现在」算出时刻，已经过去的不算）。
+    static func classify(_ input: String, clock: LauncherCalcContext? = nil) -> LauncherInputClassification {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return LauncherInputClassification(text: "", kinds: []) }
         if text.hasPrefix("/") || text.hasPrefix("~") {
@@ -49,13 +55,23 @@ enum LauncherInputClassifier {
         if let color = LauncherColor.parse(text) {
             return LauncherInputClassification(text: text, kinds: [.color], color: color)
         }
-        if isWordLike(text) {
-            return LauncherInputClassification(text: text, kinds: [.word])
+        if let command = LauncherShellCommand.detect(text) {
+            return LauncherInputClassification(text: text, kinds: [.plainText, .command], command: command)
         }
-        if isLong(text) {
-            return LauncherInputClassification(text: text, kinds: [.longText])
+        var result = LauncherInputClassification(text: text, kinds: [baseKind(text)])
+        if let clock, text.utf8.count <= LauncherReminderParser.maxLength * 4,
+           let reminder = LauncherReminderParser.parse(text, context: clock) {
+            result.kinds.insert(.reminder)
+            result.reminder = reminder
         }
-        return LauncherInputClassification(text: text, kinds: [.plainText])
+        return result
+    }
+
+    /// 英文单词 / 短语、一大段文字、其余。
+    private static func baseKind(_ text: String) -> LauncherTextKind {
+        if isWordLike(text) { return .word }
+        if isLong(text) { return .longText }
+        return .plainText
     }
 
     /// 1–3 个英文词：每个词以英文字母开头，只含英文字母、连字符、撇号（' 或 ’），词之间是空格；最多 40 个字符。

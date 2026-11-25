@@ -22,12 +22,24 @@ enum LauncherLayout {
     static let messageHeight: CGFloat = 40
     /// 面板最下面那行不可选的小字提示（快捷键和别的启动器撞了，§9），含上面的分隔线。
     static let noticeHeight: CGFloat = 30
+    /// 「在终端里运行」上膛后完整显示命令：每行命令的高度（12 号等宽字），和标题那一行、上下留白加起来是行高。
+    static let confirmCommandLineHeight: CGFloat = 16
+    /// 完整显示的命令用的字号：和 `LauncherConfirmText.commandColumns`（每行最多几个 ASCII 字符宽）一起定，改一个要看另一个。
+    static let confirmCommandFontSize: CGFloat = 12
+    /// 完整显示的一行放不下时最多缩到这么小（估宽是上限，正常用不到；只为估错时不出省略号）。
+    static let confirmCommandMinimumScale: CGFloat = 0.2
+
+    /// 上膛后完整显示 `lines` 行命令的那一行有多高：上下留白 + 标题 + 每行命令。1 行 54、3 行 86、6 行 134。
+    static func confirmCommandRowHeight(lines: Int) -> CGFloat {
+        38 + CGFloat(max(1, lines)) * confirmCommandLineHeight
+    }
 
     /// 一行的高度。
     static func rowHeight(for row: LauncherRow) -> CGFloat {
         switch row.style {
         case .standard: return rowHeight
         case .calculation: return calculationRowHeight
+        case .confirmCommand(let lines): return confirmCommandRowHeight(lines: lines.count)
         }
     }
 
@@ -52,9 +64,11 @@ enum LauncherLayout {
         }
     }
 
-    /// 结果最多时的高度（定位时保证这么高也放得下）：第一行是计算结果、后面一长串，最下面还有一行提示。
+    /// 结果最多时的高度（定位时保证这么高也放得下）：最高的那一行（计算结果，或上膛后完整显示 6 行的命令 —— 两者不会同时有）、
+    /// 后面一长串，最下面还有一行提示。
     static var maxHeight: CGFloat {
-        height(for: .results([calculationRowHeight] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
+        let tallest = max(calculationRowHeight, confirmCommandRowHeight(lines: LauncherConfirmText.maxCommandLines))
+        return height(for: .results([tallest] + Array(repeating: rowHeight, count: Int(maxVisibleRows) + 1)))
             + noticeHeight
     }
 }
@@ -73,6 +87,12 @@ enum LauncherPanelContent: Equatable {
 
 // MARK: - 状态
 
+/// 要按两次的行上膛后的样子：换上的标题；`style` 不是 nil 时连样式一起换（「在终端里运行」完整显示命令，第 10 步验证后定）。
+struct LauncherArmedLook: Equatable {
+    let title: String
+    var style: LauncherRowStyle? = nil
+}
+
 /// 面板的显示状态。只在主线程改；控制器负责搜索和执行，这里只记显示和选中。
 @MainActor
 final class LauncherPanelModel: ObservableObject {
@@ -81,6 +101,13 @@ final class LauncherPanelModel: ObservableObject {
     @Published private(set) var selectedIndex = 0
     /// 选中哪一行、这次输入以来用户手动选过没有（规则见 `LauncherSelectionState`）。
     private var selection = LauncherSelectionState()
+    /// 二次确认（第 10 步）：哪一行在等第二次 ⏎；它原来的样子（复位时换回来）和换上的标题。
+    private var confirm = LauncherConfirmState()
+    private var armed: (original: LauncherRow, look: LauncherArmedLook)?
+    /// 行高变了（上膛后完整显示命令的那一行变高 / 复位变回来）：控制器据此改窗口高度。
+    var onHeightChange: () -> Void = {}
+    /// 每 +1 一次：把选中的那一行整个滚进可见范围（上膛后那一行变高，下半截可能在外面）。
+    @Published private(set) var revealSelectedVersion = 0
     /// 每换一批结果 +1：列表回到顶上。
     @Published private(set) var resultsVersion = 0
 
@@ -117,22 +144,36 @@ final class LauncherPanelModel: ObservableObject {
     /// `searching`：后台的结果还没回来，一行都没有时显示「正在查找」而不是「没有结果」。
     func setRows(_ rows: [LauncherRow], emptyInput: Bool, newInput: Bool = true, searching: Bool = false) {
         let scrollsToTop = selection.rowsChanged(from: self.rows.map(\.id), to: rows.map(\.id), newInput: newInput)
+        var rows = rows
+        if newInput {
+            disarm(restoring: false)
+        }
+        selectedIndex = selection.index
+        // 同一个输入、后台结果回来：在等第二次 ⏎ 的那一行还在、还选着 → 新的一批里也换上「再按一次回车…」；否则复位。
+        if let armed, let id = confirm.armedID {
+            if rows.indices.contains(selectedIndex), rows[selectedIndex].id == id {
+                self.armed = (rows[selectedIndex], armed.look)
+                rows[selectedIndex] = Self.armedRow(rows[selectedIndex], armed.look)
+            } else {
+                disarm(restoring: false)
+            }
+        }
         self.rows = rows
         if rows.isEmpty {
             content = searching ? .searching : (emptyInput ? .hint : .noResults)
         } else {
             content = .results(rows.map(LauncherLayout.rowHeight(for:)))
         }
-        selectedIndex = selection.index
         if scrollsToTop { resultsVersion += 1 }
         resetHoverBaseline()
     }
 
-    /// ↑ ↓：到头不循环。算手动选过。
+    /// ↑ ↓：到头不循环。算手动选过。选中移开了在等第二次 ⏎ 的那一行就复位。
     func moveSelection(by delta: Int) {
         guard !rows.isEmpty else { return }
         selection.move(by: delta, rowCount: rows.count)
         selectedIndex = selection.index
+        selectionMoved()
         resetHoverBaseline()
     }
 
@@ -143,6 +184,81 @@ final class LauncherPanelModel: ObservableObject {
         hoverBaseline = location
         selection.hover(index, rowCount: rows.count)
         selectedIndex = selection.index
+        selectionMoved()
+    }
+
+    // MARK: 二次确认（第 10 步）
+
+    /// 对第 `index` 行按了一次 ⏎ / ⌘N / 单击，而这一行要按两次（`LauncherConfirmation`）。
+    /// true = 它已经在等第二次了：执行。false = 这一下只是选中它（算手动选过）、换成上膛后的样子（`look`），等第二次；
+    /// 或者是上膛后双击间隔之内的又一次点击，什么都不做（`LauncherConfirmState.press`）。
+    func confirmPress(at index: Int, look: LauncherArmedLook, source: LauncherConfirmSource = .key,
+                      now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                      doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) -> Bool {
+        guard rows.indices.contains(index) else { return false }
+        let id = rows[index].id
+        switch confirm.press(id, source: source, now: now, doubleClickInterval: doubleClickInterval) {
+        case .run:
+            disarm(restoring: true)
+            return true
+        case .ignored:
+            return false
+        case .armed:
+            break
+        }
+        // 之前在等的别的那一行换回原来的标题（`press` 已经改成等这一行了）。
+        if let previous = armed, let at = rows.firstIndex(where: { $0.id == previous.original.id }) {
+            rows[at] = previous.original
+        }
+        selection.choose(index, rowCount: rows.count)
+        selectedIndex = selection.index
+        armed = (rows[index], look)
+        rows[index] = Self.armedRow(rows[index], look)
+        rowHeightsChanged()
+        revealSelectedVersion += 1
+        resetHoverBaseline()
+        return false
+    }
+
+    /// 面板收起：在等第二次 ⏎ 的那一行复位。
+    func disarm() {
+        disarm(restoring: true)
+    }
+
+    /// 选中的行变了：不是在等的那一行就复位（标题换回来）。
+    private func selectionMoved() {
+        let id = rows.indices.contains(selectedIndex) ? rows[selectedIndex].id : nil
+        guard confirm.selectionChanged(to: id) != nil else { return }
+        restoreArmedRow()
+        armed = nil
+    }
+
+    /// `restoring`：把那一行的标题换回来（列表马上整个换掉时不用）。
+    private func disarm(restoring: Bool) {
+        _ = confirm.reset()
+        if restoring { restoreArmedRow() }
+        armed = nil
+    }
+
+    private func restoreArmedRow() {
+        guard let armed, let at = rows.firstIndex(where: { $0.id == armed.original.id }) else { return }
+        rows[at] = armed.original
+        rowHeightsChanged()
+    }
+
+    /// 某一行的高度可能变了：重算内容高度，告诉控制器改窗口高度。
+    private func rowHeightsChanged() {
+        guard !rows.isEmpty else { return }
+        let heights = rows.map(LauncherLayout.rowHeight(for:))
+        guard content != .results(heights) else { return }
+        content = .results(heights)
+        onHeightChange()
+    }
+
+    /// 上膛后的同一行（id、图标、右侧小字都不变）：换标题；完整显示命令的换成等宽的多行样式。
+    private static func armedRow(_ row: LauncherRow, _ look: LauncherArmedLook) -> LauncherRow {
+        LauncherRow(id: row.id, title: look.title, source: row.source, icon: row.icon, subtitle: row.subtitle,
+                    style: look.style ?? row.style)
     }
 
     func resetHoverBaseline() {
@@ -410,6 +526,10 @@ struct LauncherPanelView: View {
                 guard model.rows.indices.contains(index) else { return }
                 proxy.scrollTo(model.rows[index].id)
             }
+            .onChange(of: model.revealSelectedVersion) { _, _ in
+                guard model.rows.indices.contains(model.selectedIndex) else { return }
+                proxy.scrollTo(model.rows[model.selectedIndex].id)
+            }
             .onChange(of: model.resultsVersion) { _, _ in
                 if let first = model.rows.first { proxy.scrollTo(first.id, anchor: .top) }
             }
@@ -479,6 +599,31 @@ struct LauncherResultRow: View {
                         .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
                 }
             }
+        case .confirmCommand(let lines):
+            // 上膛后完整显示整条命令（第 10 步验证后定）：确认时看到的就是要跑的，一个字符都不省。
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: row.title)
+                    .font(.system(size: 14))
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? Color.white : Color.primary)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        // 每行的宽度是按标量「ASCII 1、其余 2」估的，是实际宽度的上限（允许名单的前提）；万一估错
+                        // （字体不同），缩小字号挤进去 —— 不换行（行高是按行数算的）、不撑出面板，也不出省略号：
+                        // 最小缩到 0.2 倍，容得下 5 倍的误差。
+                        commandLineText(line)
+                            .font(.system(size: LauncherLayout.confirmCommandFontSize, design: .monospaced))
+                            .lineLimit(1)
+                            .minimumScaleFactor(LauncherLayout.confirmCommandMinimumScale)
+                            // 中文界面下系统会在汉字和 ASCII 之间自动加空隙（「文档 / 项目资料」像多了空格）；按英文排版就没有，
+                            // 汉字照常显示。确认区要的是「一字不差」的观感（第 10 步第三轮复查）。
+                            .typesettingLanguage(Locale.Language(identifier: "en"))
+                            .frame(maxWidth: .infinity, minHeight: LauncherLayout.confirmCommandLineHeight,
+                                   maxHeight: LauncherLayout.confirmCommandLineHeight, alignment: .leading)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                    }
+                }
+            }
         case .calculation(let interpretation, let failed):
             VStack(alignment: .leading, spacing: 2) {
                 // 出错时这里是一句说明（「不能除以零」），不是结果：字小一号、用次要色，别让人当成答案。
@@ -494,6 +639,19 @@ struct LauncherResultRow: View {
                 }
             }
         }
+    }
+
+    /// 完整显示的一行：原文用主色；折断处的空格画成 `␣`、行末续行画 `↩`，都用次要色 —— 只是画出来的，不属于命令
+    /// （第 10 步复查后定：在空格处折行时看得出那里有个空格）。
+    private func commandLineText(_ line: LauncherCommandLine) -> Text {
+        let main = selected ? Color.white : Color.primary
+        let mark = selected ? Color.white.opacity(0.55) : Color.secondary
+        var text = Text(verbatim: "")
+        if line.marksLeadingSpace { text = text + Text(verbatim: "␣").foregroundStyle(mark) }
+        text = text + Text(verbatim: line.middle).foregroundStyle(main)
+        if line.marksTrailingSpace { text = text + Text(verbatim: "␣").foregroundStyle(mark) }
+        if line.continues { text = text + Text(verbatim: "↩").foregroundStyle(mark) }
+        return text
     }
 
     @ViewBuilder
