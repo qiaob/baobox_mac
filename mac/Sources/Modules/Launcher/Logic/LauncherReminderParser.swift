@@ -46,8 +46,11 @@ enum LauncherReminderParser {
         return nil
     }
 
+    /// 事由是空的不算；以「的」开头的也不算 —— 「12点的会议纪要」「10:30 的航班」是在说一样东西，不是要设提醒
+    /// （提醒那一行排在最前，误认了 ⏎ 就不是用户要的那一行）。
     private static func draft(date: Date, event: String) -> LauncherReminderDraft? {
-        event.isEmpty ? nil : LauncherReminderDraft(date: date, text: event)
+        guard !event.isEmpty, !event.hasPrefix("的") else { return nil }
+        return LauncherReminderDraft(date: date, text: event)
     }
 
     // MARK: - 相对时间

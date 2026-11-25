@@ -138,6 +138,14 @@ final class LauncherReminderParserTests: XCTestCase {
         }
     }
 
+    /// 时间后面跟「的」：说的是一样东西（「12点的会议纪要」），不是事由。
+    func testTimeThatDescribesAThingIsRejected() {
+        for text in ["12点的会议纪要", "10:30 的航班", "明天下午三点的会", "今晚八点的电影票"] {
+            XCTAssertNil(parse(text), text)
+        }
+        assertReminder("明天下午三点开会的材料", date(11, 24, 15, 0), "开会的材料")
+    }
+
     func testInvalidClocksAreRejected() {
         for text in ["三点五开会", "上午13点开会", "25点开会", "明天下午三点60分开会", "1.5点开会", "中午五点吃饭",
                      "in 0 minutes x", "10000 小时后 x"] {
