@@ -168,6 +168,8 @@ targets:
   # - Core/CLIFormat.swift：Claude Code / Codex 助手共用的展示格式化（费用、token、倒计时、相对时间、星期名；同上类 2）
   # - Core/CLIVersion.swift：本机 CLI 的 --version 与 npm 上的最新版（同上类 9；npm 那半在测试里用 URLProtocol 桩）
   # - Core/Translation/OfflineServerPID.swift：本地模型推理进程的 PID 文件（读、列、核对进程名；#187，同目录其余文件不进来）
+  # - Core/Launcher：快速入口的命令模型与可搜索来源协议，别的模块实现它们（docs/launcher/TECH_DESIGN.md §2、§3）
+  # - Modules/Launcher/Logic：快速入口的纯逻辑：前缀解析，以后的匹配打分、排序、使用记录、计算引擎（docs/launcher/TECH_DESIGN.md §2）
   BaoboxTests:
     type: bundle.unit-test
     platform: macOS
@@ -193,6 +195,8 @@ targets:
       - path: Sources/Core/CLIVersion.swift
       - path: Sources/Core/Translation/OfflineServerPID.swift
       - path: Sources/Modules/NetCapture/Logic
+      - path: Sources/Core/Launcher
+      - path: Sources/Modules/Launcher/Logic
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

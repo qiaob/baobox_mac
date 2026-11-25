@@ -53,6 +53,11 @@ protocol ToolModule: AnyObject {
     /// 这个模块替框架承担的呈现角色，默认没有（目前只有桌面宠物交出通知呈现端、浮窗挂靠点与休息画面主角）。框架在调任何模块的 `activate()` 之前
     /// 收集一次、装进 `PresentationHub`，与注册顺序无关，之后不再收集。见 docs/notify-core/DESIGN.md §3.3。
     func presentationRoles() -> PresentationRoles
+    /// 快速入口里能搜到、能执行的命令，默认没有：带参数的命令和没有快捷键的动作（有快捷键的动作快速入口自动收，
+    /// 不用在这里重复；id 相同时这里的覆盖自动生成的那条）。见 docs/launcher/TECH_DESIGN.md §3.1。每次现建（文案跟着当前语言）。
+    func launcherCommands() -> [LauncherCommand]
+    /// 交给快速入口搜索的数据来源，默认没有（剪贴板历史、文本片段、会议、会话）。见 docs/launcher/TECH_DESIGN.md §3.2。
+    func launcherSources() -> [any LauncherSearchable]
 }
 
 extension ToolModule {
@@ -60,5 +65,7 @@ extension ToolModule {
     func statusMenuHeaderItems() -> [NSMenuItem] { [] }
     func aiFeatures() -> [AIFeatureDefinition] { [] }
     func presentationRoles() -> PresentationRoles { PresentationRoles() }
+    func launcherCommands() -> [LauncherCommand] { [] }
+    func launcherSources() -> [any LauncherSearchable] { [] }
     var settingsAction: (@MainActor () -> Void)? { nil }
 }
