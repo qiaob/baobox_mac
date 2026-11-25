@@ -141,32 +141,102 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "other", code: -1009)))
     }
 
-    // MARK: 并发、有总期限
+    // MARK: IPv6：代理 CONNECT 失败、IPv4 也没测出来
 
-    func testParallelWaitsForAllWhenTheyAreQuick() async {
-        let started = Date()
-        let done = await NetCheckParallel.run((0..<10).map { _ in { Thread.sleep(forTimeInterval: 0.05) } }, deadline: 5)
-        XCTAssertEqual(done, 10)
-        // 并发：十个 0.05 秒的活远不到 0.5 秒
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.45)
+    func testIPv6ProxyConnectFailureMeansNoIPv6() {
+        // 开着 Clash / Surge 且关了 IPv6：代理 CONNECT 失败（kCFErrorDomainCFNetwork 310），直接给或包在 underlying 里
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(NSError(domain: "kCFErrorDomainCFNetwork", code: 310)))
+        let wrapped = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown,
+                              userInfo: [NSUnderlyingErrorKey: NSError(domain: "kCFErrorDomainCFNetwork", code: 310)])
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(wrapped))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "kCFErrorDomainCFNetwork", code: 311)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "other", code: 310)))
     }
 
-    func testParallelStopsWaitingAtTheDeadline() async {
+    func testIPv6ResolutionDependsOnIPv4() {
+        let reason = NetCheckFailure("连不上 api6.ipify.org")
+        // IPv4 测出来了：立刻失败 = 没有
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.absent(reason), ipv4Measured: true), .success(nil))
+        // IPv4 自己都没测出来（整机断网、DNS 全坏）：一律没测出来
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.absent(reason), ipv4Measured: false), .failure(reason))
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.failed(reason), ipv4Measured: true), .failure(reason))
+        let info = NetCheckIPInfo(ip: "2406:da18::7", asn: 45102)
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.found(info), ipv4Measured: false), .success(info))
+    }
+
+    // MARK: 并发、有总期限
+
+    /// 等上一批卡住的活都返回（测试之间不串）。
+    private func waitUntilIdle(file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(5)
+        while NetCheckParallel.isBusy, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(NetCheckParallel.isBusy, "上一批的活没返回", file: file, line: line)
+    }
+
+    func testParallelWaitsForAllWhenTheyAreQuick() async {
+        await waitUntilIdle()
         let started = Date()
+        let outcome = await NetCheckParallel.run((0..<10).map { _ in { Thread.sleep(forTimeInterval: 0.05) } }, deadline: 5)
+        XCTAssertEqual(outcome, .finished(10))
+        // 并发（8 个一批）：十个 0.05 秒的活远不到 0.5 秒
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.45)
+        XCTAssertFalse(NetCheckParallel.isBusy)
+    }
+
+    func testParallelStopsWaitingAtTheDeadlineAndRefusesWhileStuck() async {
+        await waitUntilIdle()
+        let gate = DispatchSemaphore(value: 0)
         let jobs: [@Sendable () -> Void] = [
             { Thread.sleep(forTimeInterval: 0.01) },
             { Thread.sleep(forTimeInterval: 0.01) },
-            { Thread.sleep(forTimeInterval: 3) },
+            { gate.wait() },
+            { gate.wait() },
         ]
-        let done = await NetCheckParallel.run(jobs, deadline: 0.3)
+        let started = Date()
+        let outcome = await NetCheckParallel.run(jobs, deadline: 0.3)
         let elapsed = Date().timeIntervalSince(started)
-        XCTAssertEqual(done, 2, "到点只算已经回来的")
+        XCTAssertEqual(outcome, .finished(2), "到点只算已经回来的")
         XCTAssertGreaterThanOrEqual(elapsed, 0.29)
         XCTAssertLessThan(elapsed, 2, "没回来的不等")
+        // 上一批还卡着：这一批不发
+        XCTAssertTrue(NetCheckParallel.isBusy)
+        let refused = await NetCheckParallel.run([{ }], deadline: 1)
+        XCTAssertEqual(refused, .busy)
+        // 卡住的返回之后又能发了
+        gate.signal()
+        gate.signal()
+        await waitUntilIdle()
+        let again = await NetCheckParallel.run([{ }], deadline: 1)
+        XCTAssertEqual(again, .finished(1))
+    }
+
+    func testParallelRunsAtMostEightAtATime() async {
+        await waitUntilIdle()
+        final class Counter: @unchecked Sendable {
+            let lock = NSLock()
+            var running = 0
+            var peak = 0
+            func enter() { lock.lock(); running += 1; peak = max(peak, running); lock.unlock() }
+            func leave() { lock.lock(); running -= 1; lock.unlock() }
+        }
+        let counter = Counter()
+        let jobs: [@Sendable () -> Void] = (0..<24).map { _ in
+            {
+                counter.enter()
+                Thread.sleep(forTimeInterval: 0.03)
+                counter.leave()
+            }
+        }
+        let outcome = await NetCheckParallel.run(jobs, deadline: 5)
+        XCTAssertEqual(outcome, .finished(24))
+        XCTAssertLessThanOrEqual(counter.peak, NetCheckParallel.maxConcurrent)
+        XCTAssertGreaterThan(counter.peak, 1, "确实是并发的")
     }
 
     func testParallelWithNothingToDo() async {
-        let done = await NetCheckParallel.run([], deadline: 10)
-        XCTAssertEqual(done, 0)
+        let outcome = await NetCheckParallel.run([], deadline: 10)
+        XCTAssertEqual(outcome, .finished(0))
     }
 }

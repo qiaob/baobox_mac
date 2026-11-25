@@ -65,10 +65,14 @@ Modules/NetCheck/
    没有 `is_datacenter` 等判定，`asn` 是 `"AS15169 Google LLC"` 字符串）与带 key 的（`asn` / `location` 是对象）。
    没有机房判定时退回内置的云厂商 ASN 表（只用来打「机房」小标签和判断「同一家」）
 2. `GET https://api6.ipify.org`：只有 AAAA 记录。连接立刻失败（没有 IPv6 路由、找不到 / 连不上；没有 IPv6 的 Mac 上
-   URLSession 0.02 秒就报 -1009）= 没有；超时、TLS 出错、服务回错 = 没测出来，格子里写原因（`NetCheckLogic.meansNoIPv6`）。
+   URLSession 0.02 秒就报 -1009；走系统代理时代理 CONNECT 失败 `kCFErrorDomainCFNetwork` 310 也算）= 没有；超时、TLS 出错、
+   服务回错 = 没测出来，格子里写原因（`NetCheckLogic.meansNoIPv6`）。IPv4 那一行自己都没测出来时（整机断网、DNS 全坏），
+   IPv6 的失败一律算没测出来（`NetCheckLogic.resolveIPv6`）。
    连上了再 `?q=<v6>` 查归属
 3. DNS：`GET https://bash.ws/id` 拿 id（只收字母数字）→ `getaddrinfo("<i>.<id>.bash.ws")` × N 在后台**并发**发出
-   （走系统解析器，正是要测的那条路），整段最多等 10 秒，到点用已经回来的继续、没回来的不等（`NetCheckParallel`）
+   （走系统解析器，正是要测的那条路），专用队列最多 8 个同时，整段最多等 10 秒，到点用已经回来的继续、没回来的不等
+   （`NetCheckParallel`；期限定时器在自己的串行队列上）。上一次检测的探测还有没返回的时，这一次不发新的，DNS 那一行写
+   「没测出来：上一次的 DNS 探测还没返回」——DNS 卡住时连点几次「立即检测」不会把线程越堆越多
    → `GET https://bash.ws/dnsleak/test/<id>?json=2`，只收 `dns` 与 `error` 记录。
    回 `error`（一台解析器都没来）那一行写「没测出来」
 4. WebRTC（见 4.2）；拿到的公网地址和 IPv4 / IPv6 那一行都不同时，`?q=<地址>` 另查归属，最多 3 个，查不到就只显示地址

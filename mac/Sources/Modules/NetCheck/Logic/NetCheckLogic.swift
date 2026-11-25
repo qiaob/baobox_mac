@@ -311,31 +311,92 @@ enum NetCheckLogic {
 
     /// IPv6 探测失败时是「没有 IPv6」还是「没测出来」：连接立刻失败（没有 IPv6 路由、找不到 / 连不上这个只有 AAAA 记录的服务）
     /// 算没有；超时、TLS 出错、服务回错这些算没测出来。没有 IPv6 的 Mac 上 URLSession 0.02 秒就报 -1009
-    /// （notConnectedToInternet，2026-11-25 实测），所以它也算「没有」。
+    /// （notConnectedToInternet，2026-11-25 实测），所以它也算「没有」。走系统代理时代理 CONNECT 失败
+    /// （`kCFErrorDomainCFNetwork` 310，直接给或者包在 `NSUnderlyingErrorKey` 里）也算没有：开着 Clash / Surge 且关了
+    /// IPv6 时会一直落在这里，对这些用户「这条路上没有 IPv6」就是实情。
     static func meansNoIPv6(_ error: Error) -> Bool {
-        guard let urlError = error as? URLError else { return false }
-        switch urlError.code {
-        case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
-            return true
-        default:
-            return false
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+                return true
+            default:
+                break
+            }
+        }
+        return isProxyConnectFailure(error as NSError)
+    }
+
+    /// `kCFErrorDomainCFNetwork` 310（kCFErrorHTTPSProxyConnectionFailure），本身或往下几层的 underlying error。
+    private static func isProxyConnectFailure(_ error: NSError, depth: Int = 0) -> Bool {
+        if error.domain == "kCFErrorDomainCFNetwork", error.code == 310 { return true }
+        guard depth < 4, let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+        return isProxyConnectFailure(underlying, depth: depth + 1)
+    }
+
+    /// IPv6 那一行的结果：`probe` 是引擎的探测，`ipv4Measured` 是 IPv4 那一行测出来了没有。
+    /// IPv4 自己都没测出来（整机断网、DNS 全坏）时，IPv6 的失败一律算「没测出来」，不写「没有」。
+    static func resolveIPv6(_ probe: NetCheckIPv6Probe, ipv4Measured: Bool) -> Result<NetCheckIPInfo?, NetCheckFailure> {
+        switch probe {
+        case .found(let info): return .success(info)
+        case .failed(let why): return .failure(why)
+        case .absent(let why): return ipv4Measured ? .success(nil) : .failure(why)
         }
     }
 
 }
 
+// MARK: - IPv6 探测
+
+/// 引擎对 IPv6 的探测结果，最终是「有 / 没有 / 没测出来」要看 IPv4 那一行（`NetCheckLogic.resolveIPv6`）。
+enum NetCheckIPv6Probe {
+    case found(NetCheckIPInfo)
+    /// 连接立刻失败（`meansNoIPv6`）；带上万一要写成「没测出来」时的原因
+    case absent(NetCheckFailure)
+    case failed(NetCheckFailure)
+}
+
 // MARK: - 并发、有总期限
 
-/// 一批会阻塞的活（系统解析器）并发跑，整批最多等 `deadline` 秒：都做完或到点就返回，没做完的留在后台自己结束、不等。
-/// 不在主线程等。返回按时做完了几个。
+/// 一批会阻塞的活（系统解析器）在专用队列上并发跑（最多 8 个同时跑，不往全局队列上堆），整批最多等 `deadline` 秒：
+/// 都做完或到点就返回，没做完的留在后台自己结束、不等。期限定时器在自己的串行队列上，全局线程池被占满时也排得上。
+/// 上一批还有没返回的时候不再发新的（`.busy`）：DNS 卡住时连点两次「立即检测」，不至于把线程越堆越多。不在主线程等。
 enum NetCheckParallel {
+    enum Outcome: Equatable {
+        /// 按时做完了几个
+        case finished(Int)
+        /// 上一批还有没返回的，这一批没发
+        case busy
+    }
+
+    static let maxConcurrent = 8
+
+    private static let workQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.baobox.netcheck.probes"
+        queue.maxConcurrentOperationCount = maxConcurrent
+        queue.qualityOfService = .utility
+        return queue
+    }()
+
+    private static let timerQueue = DispatchQueue(label: "com.baobox.netcheck.probes.deadline")
+
+    private static let lock = NSLock()
+    private static var outstanding = 0
+
+    /// 上一批还有没返回的活。
+    static var isBusy: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return outstanding > 0
+    }
+
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
-        private var continuation: CheckedContinuation<Int, Never>?
+        private var continuation: CheckedContinuation<Outcome, Never>?
         private var done = 0
         private let total: Int
 
-        init(_ continuation: CheckedContinuation<Int, Never>, total: Int) {
+        init(_ continuation: CheckedContinuation<Outcome, Never>, total: Int) {
             self.continuation = continuation
             self.total = total
         }
@@ -347,7 +408,7 @@ enum NetCheckParallel {
             if resume != nil { continuation = nil }
             let count = done
             lock.unlock()
-            resume?.resume(returning: count)
+            resume?.resume(returning: .finished(count))
         }
 
         func deadlinePassed() {
@@ -356,21 +417,38 @@ enum NetCheckParallel {
             continuation = nil
             let count = done
             lock.unlock()
-            resume?.resume(returning: count)
+            resume?.resume(returning: .finished(count))
         }
     }
 
-    static func run(_ jobs: [@Sendable () -> Void], deadline: TimeInterval) async -> Int {
-        guard !jobs.isEmpty else { return 0 }
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
+    /// 占位：上一批都返回了才占得到（不在 async 函数里直接拿锁）。
+    private static func reserve(_ count: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard outstanding == 0 else { return false }
+        outstanding = count
+        return true
+    }
+
+    private static func release() {
+        lock.lock()
+        outstanding -= 1
+        lock.unlock()
+    }
+
+    static func run(_ jobs: [@Sendable () -> Void], deadline: TimeInterval) async -> Outcome {
+        guard !jobs.isEmpty else { return .finished(0) }
+        guard reserve(jobs.count) else { return .busy }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
             let state = State(continuation, total: jobs.count)
             for job in jobs {
-                DispatchQueue.global(qos: .utility).async {
+                workQueue.addOperation {
                     job()
+                    release()
                     state.finishedOne()
                 }
             }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(0, deadline)) {
+            timerQueue.asyncAfter(deadline: .now() + max(0, deadline)) {
                 state.deadlinePassed()
             }
         }

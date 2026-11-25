@@ -34,7 +34,9 @@ final class NetCheckSession: ObservableObject {
             async let dns = engine.dnsLeak()
             let rtc = await probe.gather(stun: stun)
             let v4 = await ipv4
-            let v6 = await ipv6
+            var ipv4Measured = false
+            if case .success = v4 { ipv4Measured = true }
+            let v6 = NetCheckLogic.resolveIPv6(await ipv6, ipv4Measured: ipv4Measured)
             // 网页拿到的地址和 IPv4 / IPv6 那一行都不同时，另查归属（最多 3 个；查不到就只显示地址）
             var lookups: [String: NetCheckIPInfo] = [:]
             for address in NetCheckCompare.addressesToLookUp(rtc, ipv4: v4, ipv6: v6) {

@@ -80,26 +80,32 @@ struct NetCheckEngine {
         }
     }
 
-    /// IPv6：连得上纯 IPv6 的服务就有。连接立刻失败（没有 IPv6 路由、找不到 / 连不上）= 没有；
-    /// 超时、服务回错 = 没测出来（`NetCheckLogic.meansNoIPv6`）。
-    func ipv6Exit() async -> Result<NetCheckIPInfo?, NetCheckFailure> {
+    /// IPv6：连得上纯 IPv6 的服务就有。连接立刻失败（没有 IPv6 路由、找不到 / 连不上、代理 CONNECT 失败）= 没有；
+    /// 超时、服务回错 = 没测出来（`NetCheckLogic.meansNoIPv6`）。最后算不算「没有」还要看 IPv4 那一行
+    /// （`NetCheckLogic.resolveIPv6`）：IPv4 自己都没测出来时一律算没测出来。
+    func ipv6Exit() async -> NetCheckIPv6Probe {
         let body: String
         do {
             body = try await fetch(NetCheckSettings.ipv6Endpoint)
         } catch {
-            if NetCheckLogic.meansNoIPv6(error) { return .success(nil) }
-            return .failure(Self.failure(error, NetCheckSettings.ipv6Endpoint))
+            let failure = Self.failure(error, NetCheckSettings.ipv6Endpoint)
+            return NetCheckLogic.meansNoIPv6(error) ? .absent(failure) : .failed(failure)
         }
         let ip = body.trimmingCharacters(in: .whitespacesAndNewlines)
         // 只认一个真正的 IPv6 地址：回了 IPv4（服务被换成了双栈的）或一页 HTML（门户页）都测不了
         guard NetCheckLogic.ipv6Bytes(ip) != nil else {
-            return .failure(NetCheckFailure(L("netcheck.error.notIPv6")))
+            return .failed(NetCheckFailure(L("netcheck.error.notIPv6")))
         }
-        return await lookup(ip).map { Optional($0) }
+        switch await lookup(ip) {
+        case .success(let info): return .found(info)
+        case .failure(let why): return .failed(why)
+        }
     }
 
     /// DNS：拿 id → 系统解析器解析一串带 id 的域名 → 取结果。
     func dnsLeak() async -> Result<NetCheckDNSResult, NetCheckFailure> {
+        // 上一次检测的探测还卡着没返回：这一次不再发新的（不往后台堆线程）
+        guard !NetCheckParallel.isBusy else { return .failure(NetCheckFailure(L("netcheck.error.dnsBusy"))) }
         do {
             let id = try await get("\(NetCheckSettings.dnsEndpoint)/id").trimmingCharacters(in: .whitespacesAndNewlines)
             // id 要拼进域名：只收字母数字，别让一个异常回包把任意文字塞进 DNS 查询
@@ -107,7 +113,7 @@ struct NetCheckEngine {
                 return .failure(NetCheckFailure(L("netcheck.error.badID")))
             }
             let hosts = (1...dnsProbes).map { "\($0).\(id).\(NetCheckSettings.dnsHost)" }
-            await Self.resolve(hosts)
+            guard await Self.resolve(hosts) else { return .failure(NetCheckFailure(L("netcheck.error.dnsBusy"))) }
             let body = try await get("\(NetCheckSettings.dnsEndpoint)/dnsleak/test/\(id)?json=2")
             guard let result = NetCheckLogic.parseBashWS(body) else {
                 return .failure(NetCheckFailure(L("netcheck.error.bashwsUnreadable")))
@@ -120,9 +126,9 @@ struct NetCheckEngine {
         }
     }
 
-    /// 用系统解析器（getaddrinfo → mDNSResponder）并发解析，整段最多等 10 秒：到点就去取结果，没回来的不等
-    /// （它们在后台自己结束）。结果不要紧，要的是查询发出去了。
-    private static func resolve(_ hosts: [String]) async {
+    /// 用系统解析器（getaddrinfo → mDNSResponder）并发解析（最多 8 个同时），整段最多等 10 秒：到点就去取结果，没回来的不等
+    /// （它们在后台自己结束）。结果不要紧，要的是查询发出去了。上一次的还没返回完时不发，返回 false。
+    private static func resolve(_ hosts: [String]) async -> Bool {
         let jobs: [@Sendable () -> Void] = hosts.map { host in
             {
                 var result: UnsafeMutablePointer<addrinfo>?
@@ -131,7 +137,7 @@ struct NetCheckEngine {
                 }
             }
         }
-        _ = await NetCheckParallel.run(jobs, deadline: NetCheckSettings.dnsProbeDeadline)
+        return await NetCheckParallel.run(jobs, deadline: NetCheckSettings.dnsProbeDeadline) != .busy
     }
 
     static var systemTimezone: String? {

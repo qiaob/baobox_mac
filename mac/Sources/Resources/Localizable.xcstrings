@@ -2,6 +2,7 @@
   "sourceLanguage" : "en",
   "strings" : {
     "netcheck.error.badID" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "bash.ws returned an invalid test id" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "拿到的测试 id 不对" } } } },
+    "netcheck.error.dnsBusy" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "the previous check's DNS probes haven't come back yet" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "上一次的 DNS 探测还没返回" } } } },
     "netcheck.error.badURL %@" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Invalid address %@" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "地址不对：%@" } } } },
     "netcheck.error.bashwsUnreadable" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not read the DNS test service's reply" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "DNS 检测服务的回包看不懂" } } } },
     "netcheck.error.ipapiUnreadable" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not read the IP lookup service's reply" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "IP 归属服务的回包看不懂" } } } },
