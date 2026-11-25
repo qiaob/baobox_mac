@@ -182,6 +182,10 @@ enum LauncherReminderParser {
         let sawAt = text.takeWord(["at"], at: &j) != nil
         text.skipSpaces(&j)
         guard let clock = clockTime(text, at: &j, bareHourAllowed: sawAt) else { return nil }
+        // 「3 点了，该走了」：钟点后面跟「了」说的是现在几点，不是要设提醒（第 10 步复查后定；「了解」不算）。
+        var afterClock = j
+        text.skipSpaces(&afterClock)
+        if text.has("了", at: afterClock), !text.has("了解", at: afterClock) { return nil }
         // 「一点也不好玩」「两点之间直线最短」：中文数字 + 点、又没有别的时间信号的不算（第 10 步验证后定 ——
         // 这一行排第一且默认选中，误判比漏判糟；代价是「三点开会」要写成「下午三点开会」或「3点开会」）。
         if clock.chineseDian, !clock.firmSuffix, !sawDay, period == nil, !asksForReminder { return nil }
@@ -192,10 +196,15 @@ enum LauncherReminderParser {
             text.skipSpaces(&afterRange)
             if clockTime(text, at: &afterRange, bareHourAllowed: false) != nil { j = afterRange }
         }
-        // 「下午3点前交报告」：照那个时刻提醒，「前 / 之前 / 以前」不进事由。
+        // 「下午3点前交报告」：照那个时刻提醒，「前 / 之前 / 以前」不进事由。「前台、前往……」开头的「前」是事由的一部分
+        // （「下午3点前台见」，第 10 步复查后定）。
         var beforeWord = j
         text.skipSpaces(&beforeWord)
-        if text.takeAny(["之前", "以前", "前"], at: &beforeWord) != nil { j = beforeWord }
+        if text.takeAny(["之前", "以前"], at: &beforeWord) != nil {
+            j = beforeWord
+        } else if !wordsStartingWithQian.contains(where: { text.has($0, at: beforeWord) }), text.take("前", at: &beforeWord) {
+            j = beforeWord
+        }
         let today: Bool
         if case .offset(0) = day { today = true } else { today = false }
         guard let hours = candidateHours(clock, period: period, today: today),
@@ -211,6 +220,10 @@ enum LauncherReminderParser {
         }
         return nil
     }
+
+    /// 以「前」开头的词：钟点后面接着这些时，「前」不是「在这之前」。
+    private static let wordsStartingWithQian = ["前台", "前后", "前面", "前门", "前方", "前端", "前排", "前往", "前进", "前提",
+                                                "前辈", "前任"]
 
     private static func dayStart(_ day: Day, now: Date, cal: Calendar) -> Date? {
         switch day {
@@ -241,7 +254,8 @@ enum LauncherReminderParser {
         var colon = false
         /// 钟点是「中文数字 + 点」（「三点」「两点」，不是「3点」）：要有别的时间信号才算提醒。
         var chineseDian = false
-        /// 点后面紧跟「钟 / 半 / 一刻 / 三刻 / N 分 / 整」：本身就是时间信号。
+        /// 点后面紧跟「钟 / 半 / 一刻 / 三刻 / N 分 / 整」，或不写「分」的分钟数（≥ 10 或带零：「三点十五」「三点零五」）：
+        /// 本身就是时间信号。
         var firmSuffix = false
     }
 
@@ -281,6 +295,10 @@ enum LauncherReminderParser {
                 return clock
             }
             let sawZhong = text.take("钟", at: &afterNumber)
+            // 「三点钟方向」「三点方向」说的是方位（第 10 步复查后定）。
+            var direction = afterNumber
+            text.skipSpaces(&direction)
+            if text.has("方向", at: direction) { return nil }
             var m = afterNumber
             text.skipSpaces(&m)
             if text.take("半", at: &m) {
@@ -306,10 +324,11 @@ enum LauncherReminderParser {
                 var end = digitsEnd
                 text.skipSpaces(&end)
                 let unit = text.take("分", at: &end)
-                // 「三点十五」「3 点 05」「三点零五」「三点五分」认；「三点五」（是 3:05 还是 3:50？）不认。
+                // 「三点十五」「3 点 05」「三点零五」「三点五分」认；「三点五」（是 3:05 还是 3:50？）「三点一线」不认。
                 guard unit || leadingZero || minute >= 10 || digitCount >= 2 else { return nil }
                 j = unit ? end : digitsEnd
-                return clock(minute, unit || sawZhong)
+                // 不写「分」的 ≥ 10 或带零的分钟数也是时间信号（第 10 步复查后定：「三点十五开会」认）。
+                return clock(minute, unit || sawZhong || leadingZero || minute >= 10)
             }
             j = afterNumber
             return clock(0, sawZhong)
@@ -470,14 +489,18 @@ private struct ReminderText {
         return nil
     }
 
-    /// `[from, to)` 之间的事由：去掉开头的「提醒我」这类和标点，去首尾空白和标点。
+    /// `[from, to)` 之间的事由：去掉开头的「提醒我」这类和标点、句末的「提醒我 / 叫我」（「三点开会提醒我」→「开会」，
+    /// 第 10 步复查后定），去首尾空白和标点。
     func event(from start: Int, to end: Int) -> String {
         var i = start
         skipFillers(&i)
         guard i < end else { return "" }
-        let slice = String(original[i..<end])
         let trim = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "，,、。.！!？?：:；;~～—"))
-        return slice.trimmingCharacters(in: trim)
+        var result = String(original[i..<end]).trimmingCharacters(in: trim)
+        if let suffix = ["提醒我", "叫我"].first(where: { result.hasSuffix($0) }) {
+            result = String(result.dropLast(suffix.count)).trimmingCharacters(in: trim)
+        }
+        return result
     }
 
     // MARK: 数

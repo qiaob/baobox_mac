@@ -162,8 +162,7 @@ final class LauncherReminderParserTests: XCTestCase {
 
     /// 中文数字 + 点、又没有别的时间信号：不是提醒（「一点也不好玩」）。代价是「三点开会」不再认。
     func testChineseNumeralClockNeedsAnotherSignal() {
-        for text in ["一点也不好玩", "两点之间直线最短", "三点开会", "八点开会", "十二点吃饭", "两点一线的生活", "三点十五开会",
-                     "三点零五开会"] {
+        for text in ["一点也不好玩", "两点之间直线最短", "三点开会", "八点开会", "十二点吃饭", "两点一线的生活"] {
             XCTAssertNil(parse(text), text)
         }
         // 别的时间信号：日子词、时段词、提醒 / 叫我、点后面的钟 / 半 / 一刻 / 三刻 / N 分 / 整。
@@ -241,6 +240,60 @@ final class LauncherReminderParserTests: XCTestCase {
         assertReminder("3点到公司", date(11, 23, 15, 0), "到公司")
         // 现有规则：没写时段的 1–6 点当下午（行上写着具体时刻，用户看得到）。
         assertReminder("明天6点起床", date(11, 24, 18, 0), "起床")
+    }
+
+    // MARK: - 第 10 步复查后定
+
+    /// 钟点后面跟「了」：说的是现在几点。
+    func testClockFollowedByLeIsNotAReminder() {
+        for text in ["3 点了，该走了", "3点了", "下午三点了", "明天三点了", "三点钟了提醒我", "15:30了"] {
+            XCTAssertNil(parse(text), text)
+        }
+        assertReminder("明天三点了解进度", date(11, 24, 15, 0), "了解进度")
+    }
+
+    /// 「N 点钟方向」是方位。
+    func testClockDirectionIsNotAReminder() {
+        for text in ["三点钟方向有敌人", "3点钟方向", "下午三点钟方向", "提醒我三点方向有车"] {
+            XCTAssertNil(parse(text), text)
+        }
+    }
+
+    /// 「前台、前往……」开头的「前」留在事由里；「前 / 之前 / 以前」照旧去掉。
+    func testQianStartingAWordStaysInTheEvent() {
+        assertReminder("下午3点前台见", date(11, 23, 15, 0), "前台见")
+        assertReminder("明天上午十点前往机场", date(11, 24, 10, 0), "前往机场")
+        assertReminder("3点前面集合", date(11, 23, 15, 0), "前面集合")
+        assertReminder("下午3点前门接人", date(11, 23, 15, 0), "前门接人")
+        assertReminder("下午3点前端评审", date(11, 23, 15, 0), "前端评审")
+        for word in ["前后", "前方", "前排", "前进", "前提", "前辈", "前任"] {
+            XCTAssertEqual(parse("下午3点\(word)x")?.text, "\(word)x", word)
+        }
+        assertReminder("下午3点前交报告", date(11, 23, 15, 0), "交报告")
+        assertReminder("下午3点 前 交报告", date(11, 23, 15, 0), "交报告")
+        assertReminder("3点以前交报告", date(11, 23, 15, 0), "交报告")
+        assertReminder("明天下午三点之前交报告", date(11, 24, 15, 0), "交报告")
+    }
+
+    /// 句末的「提醒我 / 叫我」不进事由（这句有「提醒」，中文数字的钟点也算有信号）。
+    func testTrailingAskIsDroppedFromTheEvent() {
+        assertReminder("三点开会提醒我", date(11, 23, 15, 0), "开会")
+        assertReminder("明天下午三点开会叫我", date(11, 24, 15, 0), "开会")
+        assertReminder("三点开会，提醒我", date(11, 23, 15, 0), "开会")
+        assertReminder("20分钟后取快递提醒我", date(11, 23, 10, 20), "取快递")
+        XCTAssertNil(parse("三点提醒我"), "去掉以后事由是空的")
+    }
+
+    /// 「N 点」后面直接跟分钟数、不写「分」：≥ 10 或带零的认，并且算时间信号。
+    func testMinutesWithoutFen() {
+        assertReminder("三点十五开会", date(11, 23, 15, 15), "开会")
+        assertReminder("3点15开会", date(11, 23, 15, 15), "开会")
+        assertReminder("三点零五出发", date(11, 23, 15, 5), "出发")
+        assertReminder("三点五十出发", date(11, 23, 15, 50), "出发")
+        assertReminder("3 点 05 出发", date(11, 23, 15, 5), "出发")
+        for text in ["三点一线", "三点一线的生活", "三点五开会"] {
+            XCTAssertNil(parse(text), text)
+        }
     }
 
     func testOtherTimeZone() {
