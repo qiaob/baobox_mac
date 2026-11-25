@@ -37,4 +37,14 @@ final class CLIJSONLTests: XCTestCase {
         XCTAssertEqual(CLISessionPaths.projectName(fromPath: "/Users/me/工作/小工具"), "小工具")
         XCTAssertEqual(CLISessionPaths.projectName(fromPath: "/"), "/")
     }
+
+    func testProjectNameWithoutFileSystemMatchesForRealPaths() {
+        let paths = ["/Users/me/work/app", "/Users/me/work/app/", "/Users/me/工作/小工具", "/", "/private/tmp/claude-501/x y",
+                     "/Users/me/does-not-exist/deep/proj"]
+        for path in paths {
+            XCTAssertEqual(CLISessionPaths.projectNameWithoutFileSystem(fromPath: path),
+                           CLISessionPaths.projectName(fromPath: path), path)
+        }
+        XCTAssertEqual(CLISessionPaths.projectNameWithoutFileSystem(fromPath: ""), "", "空路径原样返回")
+    }
 }

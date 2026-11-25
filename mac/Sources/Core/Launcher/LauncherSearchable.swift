@@ -50,6 +50,9 @@ struct LauncherEntry {
     /// true = 只在打了来源前缀时出现（`c 图片`），不带前缀的搜索里不出 —— 图片条目的标题都差不多（「图片 · 微信」），
     /// 搜 App 名时混进来只是噪音。
     var onlyWithPrefix = false
+    /// 条目的完整文字（`searchText` 是截断过的）：快速入口把「刚复制的」放进输入框时取（docs/launcher/TECH_DESIGN.md §8.4）。
+    /// 只读内存、零磁盘 IO，用到时才调；nil = 不交（图片、没有文字的条目）。
+    var fullText: (@MainActor () -> String?)? = nil
     /// ⏎ 的主动作。
     let primary: @MainActor () -> Void
 }

@@ -104,6 +104,19 @@ final class LauncherEntryProvider {
         }
     }
 
+    /// 这次会话里这个来源最新的条目（按时间；没有时间的不算）：「刚复制的」从剪贴板历史里取（§8.4）。
+    func latestEntry(sourceID: String) -> LauncherEntry? {
+        var latest: LauncherEntry?
+        for source in session ?? [] where source.sourceID == sourceID {
+            for entry in source.entries {
+                guard let date = entry.date else { continue }
+                if let current = latest?.date, current >= date { continue }
+                latest = entry
+            }
+        }
+        return latest
+    }
+
     /// 面板收起：放掉这次的条目，空闲时再补一次键（会话中新复制的、来源里新加的）。
     func endSession() {
         session = nil

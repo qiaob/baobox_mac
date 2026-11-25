@@ -66,12 +66,12 @@ struct LauncherSuggestions {
 @MainActor
 enum LauncherSuggestionProvider {
 
-    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次）；`pasted`：按 ⌘V 时记下的带换行的原文。
+    /// 这次输入的建议。`textActions`：各模块声明的文字动作（呼出时收一次）；`placed`：放进来的原文（控制器核对过，输入框还是它）。
     static func suggestions(for query: LauncherQuery, textActions: [LauncherCatalogCommand],
-                            hasCalculation: Bool, hasRecognition: Bool, pasted: String? = nil,
+                            hasCalculation: Bool, hasRecognition: Bool, placed: LauncherPlacedText? = nil,
                             records: LauncherUsageRecords, now: Date) -> LauncherSuggestions {
         let plan = LauncherSuggestionPolicy.plan(for: query, hasCalculation: hasCalculation, hasRecognition: hasRecognition,
-                                                 pasted: pasted)
+                                                 placed: placed)
         var suggestions = LauncherSuggestions()
         suggestions.leading = plan.leading.flatMap { leadingRows($0, text: plan.text) }
         if let kinds = plan.fallbackKinds {

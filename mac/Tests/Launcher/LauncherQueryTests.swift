@@ -12,6 +12,12 @@ final class LauncherQueryTests: XCTestCase {
         LauncherQuery(sourceID: sourceID, text: text)
     }
 
+    /// 放进来 `placed` 后输入框里是 `input`：控制器核对（`LauncherPlacedText`）+ 查询（`parse(_:literal:)`）。
+    private func parse(_ input: String, placed: String?) -> LauncherQuery {
+        let verified = placed.flatMap(LauncherPlacedText.init)?.still(in: input)
+        return LauncherQuery.parse(input, literal: verified != nil)
+    }
+
     // MARK: - 没有前缀
 
     func testNoPrefixKeepsWholeInputTrimmed() {
@@ -159,5 +165,49 @@ final class LauncherQueryTests: XCTestCase {
         for _ in 0..<20 {
             XCTAssertEqual(LauncherQuery.parse("w Xcode", prefixBySource: table), query("apps", "Xcode"))
         }
+    }
+
+    // MARK: - 放进来的文字按字面处理（第 9 步验证后加，TECH_DESIGN.md §5.4）
+
+    /// 验证者给的四个例子：开头碰巧是来源前缀（`a ` `> ` `c ` `f `）的一段文字。
+    private static let placedExamples = ["A quick fix for the build", "> quoted reply line", "c is a language", "F the rest"]
+
+    func testPlacedTextIsTakenLiterallyAndGetsFallbackSuggestions() {
+        for text in Self.placedExamples {
+            let placed = parse(text, placed: text)
+            XCTAssertEqual(placed, query(nil, text), "\(text)：放进来的不拆前缀")
+            let plan = LauncherSuggestionPolicy.plan(for: placed, hasCalculation: false, hasRecognition: false,
+                                                     placed: LauncherPlacedText(text))
+            XCTAssertNotNil(plan.fallbackKinds, "\(text)：兜底建议照常出（翻译、总结……）")
+            XCTAssertEqual(plan.text, text)
+        }
+    }
+
+    func testTypedTextStillSplitsThePrefix() {
+        XCTAssertEqual(parse("A quick fix for the build"), query("apps", "quick fix for the build"))
+        XCTAssertEqual(parse("> quoted reply line"), query("commands", "quoted reply line"))
+        XCTAssertEqual(parse("c is a language"), query("clipboard", "is a language"))
+        XCTAssertEqual(parse("F the rest"), query("files", "the rest"))
+        for text in Self.placedExamples {
+            let plan = LauncherSuggestionPolicy.plan(for: parse(text), hasCalculation: false, hasRecognition: false)
+            XCTAssertNil(plan.fallbackKinds, "\(text)：手打的是只搜一类，不出兜底建议（同原来）")
+        }
+    }
+
+    func testEditingThePlacedTextBringsPrefixesBack() {
+        for text in Self.placedExamples {
+            XCTAssertNotNil(parse(text + "s", placed: text).sourceID, "\(text)：末尾多打一个字就照常拆前缀")
+            XCTAssertNotNil(parse(String(text.dropLast()), placed: text).sourceID, "\(text)：删一个字也是")
+        }
+        XCTAssertEqual(parse("f readme", placed: "c is a language"), query("files", "readme"),
+                       "框里已经不是放进来的那段：照常")
+        XCTAssertEqual(parse("f readme", placed: nil), query("files", "readme"))
+    }
+
+    func testPlacedTextMatchesAfterWhitespaceIsFolded() {
+        // 带换行的原文放进单行输入框：换行变空格、首尾空白去掉，仍算同一段。
+        XCTAssertEqual(parse("c first line second line", placed: "  c first line\nsecond line\n"),
+                       query(nil, "c first line second line"))
+        XCTAssertEqual(parse("a  b", placed: "a b"), query(nil, "a  b"), "空白多少不算改动")
     }
 }

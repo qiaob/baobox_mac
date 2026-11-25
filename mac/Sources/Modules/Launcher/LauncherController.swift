@@ -14,6 +14,8 @@ import os
 // 挂上那一下在后台取一次字；挂着时列表里只有这张图的建议，输入框里的字是筛选词；⌫（输入框为空时）/ Esc 去掉，收起即丢。
 // 访达里复制的文件 → 输入框换成它的路径（走路径行；图片文件的路径行后面接图片动作）。拖到面板上放下的同样处理。
 // 剪贴板历史里的图片条目（`c ` 前缀下）：行首缩略图在后台取（`LauncherThumbnailProvider`），⏎ 粘贴，Tab 挂成附件。
+// 输入框为空时（§3.7，`LauncherContextProvider`）：最前面是「选中的」（呼出前那个 App 里选中的文字，后台读、80 ms 封顶，
+// 读到了再补上那一行）和「刚复制的」（剪贴板最新一条，5 分钟内），⏎ / Tab 放进输入框；接着是各模块的情景建议。
 
 @MainActor
 final class LauncherController {
@@ -37,6 +39,7 @@ final class LauncherController {
     private let thumbnails = LauncherThumbnailProvider()
     private let commands: LauncherCommandProvider
     private let entries: LauncherEntryProvider
+    private let context: LauncherContextProvider
     private let usage = LauncherUsageStore()
     private let engine = LauncherEngine()
     private let model = LauncherPanelModel()
@@ -46,18 +49,24 @@ final class LauncherController {
     private var text = ""
     /// 拆掉前缀后的查询词：执行时记「这个输入选了谁」用（和排序时查的是同一个）。
     private var queryText = ""
-    /// 按 ⌘V 时剪贴板里带换行的原文（输入框只有一行，换行被换成了空格）：输入框里的文字还是它时，
-    /// 建议行用它（交给翻译、总结、存为片段，算字数，§5.4）；一改动就作废。和输入一起保留 60 秒。
-    private var pastedText: String?
+    /// 放进来的原文：⌘V 粘贴、拖放、「选中的 / 刚复制的」放进输入框的文字（单行的也记）。输入框里的文字在空白归一后
+    /// 还是它时：按字面处理、不拆前缀（「c is a language」放进来不是只搜剪贴板）；带换行的建议行用原文（输入框只有一行，
+    /// 换行被换成了空格；交给翻译、总结、存为片段，算字数，§5.4）。一改动就作废，之后照常拆前缀。和输入一起保留 60 秒。
+    /// 不变式：`placement.current` 有值 = `text` 还是它。`text` 只在 `adoptText` 里换（每次核对一次）或和它一起清空；
+    /// 原文只在 `place(_:_:)` 里记，记完紧跟改输入框和一次落定（`settle`），绕不过去。引擎据此不再核对、不归一。
+    private var placement = LauncherPlacement()
     private var hiddenAt: Date?
     /// 输入里挂着的图片（§5.5）。只有一张，收起即丢。
     private var attachment: LauncherAttachment?
     /// 这次呼出的命令和 App 条目（后台建好剪贴板的搜索键后，和条目一起重新装进引擎）。
     private var baseItems: [LauncherItem] = []
+    /// 呼出那条日志（`panel shown in … ms`）在等选区读完：读了多久、读到什么写进同一条（不读时立刻写）。
+    private var pendingShownLog: String?
 
     init(registry: ToolRegistry?) {
         commands = LauncherCommandProvider(registry: registry)
         entries = LauncherEntryProvider(registry: registry)
+        context = LauncherContextProvider(registry: registry)
         fileSources = LauncherFileSources(registry: registry)
         files = LauncherFileProvider(backend: fileSources.backend)
         model.onTextChange = { [weak self] text in self?.textChanged(text) }
@@ -115,10 +124,14 @@ final class LauncherController {
     func show(startedAt start: DispatchTime = .now()) {
         guard !panel.isVisible else { return }
         // 必须在面板拿焦点之前记：收起后要把焦点还给它，粘贴 / 插入也以它为目标。
-        LauncherFocus.capture()
+        let capturedPID = LauncherFocus.capture()
+        // 「选中的」（§8.4）：同一刻、面板拿焦点之前开始读它里面选中的文字 —— 后台读、80 ms 封顶，读到了再补上那一行，不拖慢面板出现。
+        let selectionStatus = context.beginSelectionRead(pid: capturedPID) { [weak self] read in
+            self?.selectionRead(read, startedAt: start)
+        }
         if let hiddenAt, Date().timeIntervalSince(hiddenAt) >= Self.keepInputInterval {
             text = ""
-            pastedText = nil
+            placement.clear()
         }
         // 快捷键确实和正在运行的 Raycast 撞了（§9）：列表最下面一行小字提示；换了快捷键 / 退出那个 App 后下次呼出就没了。
         let conflict = LauncherHotkeyConflictCheck.confirmedConflictName()
@@ -134,6 +147,10 @@ final class LauncherController {
         let entriesMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - entriesStart) / 1_000_000
         // 文件来源（§6.4）：已知文件、剪贴板里的路径在后台建表；自己扫的目录距上次超过 30 秒就后台重扫。
         fileSources.panelShown(clipboardTexts: entries.sessionTexts(sourceIDs: LauncherFileSources.clipboardSourceIDs))
+        // 空着时的行（§3.7）：「刚复制的」从刚取到的剪贴板条目里拿；情景建议向各模块收一次（只读内存）。
+        let contextReport = context.prepare(
+            latestClipboard: entries.latestEntry(sourceID: LauncherContextProvider.clipboardSourceID), now: Date())
+        engine.emptyState = context.emptyState
         loadEngine(entryItems: entryItems)
         refresh()
         panel.show(LauncherPanelView(model: model), height: model.panelHeight,
@@ -146,19 +163,54 @@ final class LauncherController {
         model.resetHoverBaseline()
 
         let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-        Self.log.notice("panel shown in \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms, \(self.model.rows.count, privacy: .public) rows; entries \(entriesMilliseconds, format: .fixed(precision: 1), privacy: .public) ms (\(report.entries, privacy: .public) entries, \(report.built, privacy: .public) keys built, \(report.pending, privacy: .public) pending)")
+        let shown = String(format: "panel shown in %.1f ms, %ld rows; entries %.1f ms (%ld entries, %ld keys built, %ld pending); situational %ld in %.2f ms; recent copy %@",
+                           milliseconds, model.rows.count, entriesMilliseconds, report.entries, report.built, report.pending,
+                           contextReport.situational, contextReport.situationalMilliseconds, contextReport.clipboard)
+        // 选区还在读：读完（或收起）时再写，读了多久、读到什么在同一条里。
+        if selectionStatus == LauncherContextProvider.readingStatus {
+            pendingShownLog = shown
+        } else {
+            pendingShownLog = nil
+            Self.log.notice("\(shown, privacy: .public); selection \(selectionStatus, privacy: .public)")
+        }
+    }
+
+    /// 选区读完了（`LauncherSelectionFetcher` 保证每次呼出只来一次，收起后不来）：补写呼出那条日志；读到了文字、
+    /// 输入框还空着就刷新一次，最前面出「选中的」（后台刷新，选中规则见 `LauncherSelectionState`：没手动选过就选中它）。
+    /// 日志只记字数和耗时，不记内容。
+    private func selectionRead(_ read: LauncherSelectionRead, startedAt start: DispatchTime) {
+        let sinceHotkey = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        let selection = String(format: "selection %@ in %.1f ms (%.1f ms after the hotkey)",
+                               read.outcome.logLabel, read.milliseconds, sinceHotkey)
+        if let shown = pendingShownLog {
+            pendingShownLog = nil
+            Self.log.notice("\(shown, privacy: .public); \(selection, privacy: .public)")
+        } else {
+            Self.log.notice("\(selection, privacy: .public)")
+        }
+        guard panel.isVisible, case .text = read.outcome else { return }
+        engine.emptyState = context.emptyState
+        guard attachment == nil, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        refresh(background: true)
+        panel.setHeight(model.panelHeight)
     }
 
     func hide() {
         guard panel.isVisible else { return }
         panel.hide()
         hiddenAt = Date()
+        // 选区还没读完就收起了：不要它，呼出那条日志照写。
+        context.endSession()
+        if let shown = pendingShownLog {
+            pendingShownLog = nil
+            Self.log.notice("\(shown, privacy: .public); selection cancelled (panel hidden)")
+        }
         // 挂着的图片收起即丢（图片占内存）；输入框里的字那时是这张图的筛选词，也不留。
         if attachment != nil {
             attachment = nil
             model.attachment = nil
             text = ""
-            pastedText = nil
+            placement.clear()
         }
         paths.cancel()
         files.cancel()
@@ -184,19 +236,41 @@ final class LauncherController {
     // MARK: - 查询
 
     private func textChanged(_ newText: String) {
-        guard panel.isVisible, newText != text else { return }
-        text = newText
-        if let pastedText, LauncherPastedText.original(pastedText, matching: newText) == nil {
-            self.pastedText = nil
-        }
+        guard panel.isVisible, adoptText(newText) else { return }
         refresh()
         panel.setHeight(model.panelHeight)
+    }
+
+    /// 输入框里的文字换成了 `newText`（打字的回调、程序换文字都走这里）：记下，并核对放进来的原文还算不算数 ——
+    /// 正在放进来的那段优先；不再是它就丢掉（之后照常拆前缀）。核对先比长度、只归一输入框这一边（`LauncherPlacedText.matches`），
+    /// 放进来的原文丢掉以后再打字就什么都不核对。返回文字变没变。
+    @discardableResult
+    private func adoptText(_ newText: String) -> Bool {
+        guard newText != text else { return false }
+        text = newText
+        placement.fieldChanged(to: newText)
+        return true
+    }
+
+    /// 把一段放进来的文字换进输入框（⌘V、拖放、「选中的 / 刚复制的」都走这里）：记下原文（`pasted`，nil / 全是空白不记）→
+    /// `change` 改输入框（有文字变化的回调时 `adoptText` 当场核对）→ 落定：不管改没改成、有没有回调，都对着此刻的输入框核对一次，
+    /// 对不上就作废（输入框不在编辑时 ⌘V 什么都不做、也没有回调 —— 不落定的话手打的 `f readme` 会被当成放进来的）。
+    /// 落定后原文变了（贴的正好是框里原来的字）就再查一次。
+    @discardableResult
+    private func place<Result>(_ pasted: String?, _ change: () -> Result) -> Result {
+        placement.begin(pasted)
+        let result = change()
+        if placement.settle(fieldText: text), panel.isVisible {
+            refresh()
+            panel.setHeight(model.panelHeight)
+        }
+        return result
     }
 
     /// 查一次、换上新的行。`background`：同一个输入、后台结果回来了（文件、路径、搜索键、识别结果）—— 选中规则见
     /// `LauncherSelectionState`（没手动选过 → 第一行；手动选过 → 留在他选的那一行）；false = 输入变了，选中第一行。
     private func refresh(background: Bool = false) {
-        engine.pastedText = pastedText
+        engine.placedText = placement.current
         engine.attachment = attachment
         let outcome = engine.search(text, records: usage.records, now: Date())
         queryText = outcome.queryText
@@ -324,19 +398,33 @@ final class LauncherController {
         case ("z", true): edit = .redo
         default: return nil
         }
-        if edit == .paste, let handled = pasteSpecial(from: .general) {
-            Self.log.notice("edit shortcut v handled as a non-text paste: \(handled, privacy: .public)")
-            return handled
+        let handled: Bool
+        if edit == .paste {
+            switch pasteSpecial(from: .general) {
+            case .handled(let done):
+                Self.log.notice("edit shortcut v handled as a non-text paste: \(done, privacy: .public)")
+                return done
+            case .pasteText(let pasted):
+                // 文字交还给输入框粘贴：原文记下、粘贴、落定（输入框不在编辑、粘贴没成时也落定，`place`）。
+                handled = place(pasted) { model.field.perform(.paste) }
+            }
+        } else {
+            handled = model.field.perform(edit)
         }
-        let handled = model.field.perform(edit)
         Self.log.notice("edit shortcut \(key, privacy: .public) handled: \(handled, privacy: .public)")
         return handled
     }
 
+    /// ⌘V 这一下怎么处理：自己处理完了（文件、图片），或交还给输入框粘贴文字（带上剪贴板里的文字，记成放进来的原文）。
+    private enum PasteHandling {
+        case handled(Bool)
+        case pasteText(String?)
+    }
+
     /// ⌘V：先看剪贴板里是什么（只在按 ⌘V 这一下读，不在打字路径上），各走各的（§5.5）：
-    /// 文件 → 输入框换成它的路径；图片 → 挂成附件（不往输入框里粘）；文字 → 记下带换行的原文，交还给输入框照常粘贴。
-    /// 返回 nil = 交给输入框粘贴文字。
-    private func pasteSpecial(from pasteboard: NSPasteboard) -> Bool? {
+    /// 文件 → 输入框换成它的路径；图片 → 挂成附件（不往输入框里粘）；文字 → 交还给输入框照常粘贴，
+    /// 调用方经 `place` 记下原文（按字面处理，带换行的建议用它）并落定。
+    private func pasteSpecial(from pasteboard: NSPasteboard) -> PasteHandling {
         let snapshot = LauncherPasteboardReader.snapshot(pasteboard)
         let kind = LauncherPasteClassifier.classify(snapshot)
         Self.log.notice("paste: \(Self.label(kind), privacy: .public) (\(snapshot.types.count, privacy: .public) types)")
@@ -344,17 +432,14 @@ final class LauncherController {
         case .image:
             if let data = LauncherPasteboardReader.imageData(pasteboard) {
                 attach(.data(data))
-                return true
+                return .handled(true)
             }
-            notePaste(snapshot.string)
-            return nil
+            return .pasteText(snapshot.string)
         case .file(let url):
-            if insertFile(url) { return true }
-            notePaste(snapshot.string)
-            return nil
+            if insertFile(url) { return .handled(true) }
+            return .pasteText(snapshot.string)
         case .text, .nothing:
-            notePaste(snapshot.string)
-            return nil
+            return .pasteText(snapshot.string)
         }
     }
 
@@ -364,7 +449,7 @@ final class LauncherController {
         guard let path = LauncherPastedFile.fieldText(for: url, home: NSHomeDirectory()) else { return false }
         attachment = nil
         model.attachment = nil
-        pastedText = nil
+        placement.clear()
         replaceInput(with: path)
         return true
     }
@@ -373,7 +458,7 @@ final class LauncherController {
     /// 输入框不在编辑、或文字和原来一样时不回调，所以这里自己记下文字、再查一次。
     private func replaceInput(with newText: String) {
         model.field.replaceText(newText)
-        text = newText
+        adoptText(newText)
         refresh()
         panel.setHeight(model.panelHeight)
     }
@@ -400,9 +485,8 @@ final class LauncherController {
             guard let string = snapshot.string else { return false }
             attachment = nil
             model.attachment = nil
-            // 输入框只有一行：换行换成空格放进去，带换行的原文记下（同 ⌘V）。
-            notePaste(string)
-            replaceInput(with: string.components(separatedBy: .newlines).joined(separator: " "))
+            // 输入框只有一行：换行换成空格放进去，原文记下（同 ⌘V：按字面处理、不拆前缀，带换行的建议用原文）。
+            place(string) { replaceInput(with: string.components(separatedBy: .newlines).joined(separator: " ")) }
             handled = true
         case .nothing:
             handled = false
@@ -424,11 +508,6 @@ final class LauncherController {
         }
     }
 
-    /// 粘贴的文字带换行就记成「这次输入的原文」（输入框会把换行压成空格）；没有文字或只有一行时清掉上一次记的。
-    private func notePaste(_ pasted: String?) {
-        pastedText = pasted.flatMap { LauncherPastedText.isWorthKeeping($0) ? $0 : nil }
-    }
-
     // MARK: - 挂着的图片（§5.5）
 
     /// 挂上一张图（再挂一张就换掉）：输入框清空（之后打的字是筛这张图的建议），后台出缩略图、取一次字。
@@ -437,7 +516,7 @@ final class LauncherController {
         recognition.onFinish = { [weak self] finished in self?.recognitionFinished(finished) }
         attachment = LauncherAttachment(image: image, recognition: recognition)
         model.attachment = LauncherAttachmentChip()
-        pastedText = nil
+        placement.clear()
         if !text.isEmpty {
             text = ""
             model.field.replaceText("")
@@ -468,7 +547,7 @@ final class LauncherController {
 
     /// 图片条目行首的缩略图（缓存里没有就去后台取，先返回 nil）。
     private func thumbnail(forRow id: String) -> NSImage? {
-        guard let image = engine.item(forKey: id)?.image else { return nil }
+        guard let image = engine.item(forKey: id)?.image ?? engine.contextItem(forKey: id)?.image else { return nil }
         return thumbnails.thumbnail(for: image)
     }
 
@@ -478,7 +557,7 @@ final class LauncherController {
         attachment = nil
         model.attachment = nil
         if clearingText, !text.isEmpty {
-            text = ""
+            adoptText("")
             model.field.replaceText("")
         }
         refresh()
@@ -524,6 +603,10 @@ final class LauncherController {
     private func run(at index: Int) {
         guard model.rows.indices.contains(index) else { return }
         let id = model.rows[index].id
+        if let contextItem = engine.contextItem(forKey: id) {
+            fill(contextItem)
+            return
+        }
         if let instant = engine.instant(forKey: id) {
             copy(instant)
             return
@@ -548,7 +631,13 @@ final class LauncherController {
     /// Tab：选中的是路径行时，把输入框换成它的完整路径（文件夹末尾带 `/`，于是立刻列出它里面的内容）；
     /// 选中的是图片条目（剪贴板历史里的图片）时，把这张图挂成附件 —— 于是出取字、贴图这些建议（§5.5）。
     private func complete(at index: Int) {
-        guard model.rows.indices.contains(index), let item = engine.item(forKey: model.rows[index].id) else { return }
+        guard model.rows.indices.contains(index) else { return }
+        // 「选中的 / 刚复制的」：Tab 同 ⏎，放进输入框。
+        if let contextItem = engine.contextItem(forKey: model.rows[index].id) {
+            fill(contextItem)
+            return
+        }
+        guard let item = engine.item(forKey: model.rows[index].id) else { return }
         if let image = item.image {
             attach(entryImage: image)
             return
@@ -557,6 +646,23 @@ final class LauncherController {
         model.field.replaceText(completion)
         // 编辑器换文字时已经回调过一次；输入框不在编辑时没有回调，这里补上（同样的文字不会再查）。
         textChanged(completion)
+    }
+
+    /// 「选中的 / 刚复制的」放进输入框（§3.7，⏎ / Tab / ⌘⏎ / ⌘N / 单击都是它）：文字去掉首尾空白后填进去 ——
+    /// 输入框只有一行，换行换成空格放进去、原文记下（同 ⌘V，经 `place`）：按字面处理、不拆前缀（「A quick fix…」不是只搜 App），
+    /// 于是建议照常出、交给动作的是原文；
+    /// 图片挂成附件（字节在后台取）。输入框不再为空，这两行就没了。不记使用记录。
+    private func fill(_ item: LauncherContextItem) {
+        switch item.fill {
+        case .text(let original):
+            let text = original.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            Self.log.notice("context row \(item.row.id, privacy: .public) put into the field (\(text.count, privacy: .public) characters)")
+            place(text) { replaceInput(with: text.components(separatedBy: .newlines).joined(separator: " ")) }
+        case .image(let image):
+            Self.log.notice("context row \(item.row.id, privacy: .public) attached as an image")
+            attach(entryImage: image)
+        }
     }
 
     /// 建议行（§5.4）：兜底建议记一次使用（`textaction/<id>`；不记「这个输入选了谁」，那是给排序里的普通行用的）。

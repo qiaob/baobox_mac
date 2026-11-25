@@ -68,11 +68,15 @@ enum LauncherFocus {
     }
 
     /// 必须在面板拿焦点之前调。还在等上一次的焦点（收起后不到半秒又呼出）就作废那次，那个动作不再执行。
-    static func capture() {
+    /// 返回记下的 App 的 pid（是 Baobox 自己时为 nil）：快速入口在同一刻用它读那个 App 里选中的文字（§8.4）。
+    /// 只给 pid、不给 App 本身 —— 目标仍然只能在动作闭包里经 `actionContext` 读到。
+    @discardableResult
+    static func capture() -> pid_t? {
         cancel(reason: "launcher shown again")
         let app = NSWorkspace.shared.frontmostApplication
         previousApp = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : app
         log.notice("captured front app \(bundleID(previousApp), privacy: .public); NSApp.isActive \(NSApp.isActive, privacy: .public)")
+        return previousApp?.processIdentifier
     }
 
     /// Esc / 再按一次快捷键收起：把焦点还给呼出前的 App，不等。它已经退出、或当时前台是 Baobox 自己时什么都不做。

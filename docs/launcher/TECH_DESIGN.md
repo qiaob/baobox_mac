@@ -35,8 +35,11 @@ mac/Sources/Core/Launcher/                 框架侧：别的模块实现这些�
   LauncherTextAction.swift                 输入的类别 LauncherTextKind、文字动作的建议属性 LauncherSuggestionTraits、`textAction(…)`（纯 Foundation，§5.4）
   LauncherImageAction.swift                交给图片动作的图 LauncherImage（编码字节 / 文件路径）、`imageAction(…)`（纯 Foundation，§5.5）
   LauncherKnownFile.swift                  模块交给文件搜索的已知文件（路径、时间、说明）（纯 Foundation，§3.4、§6.4，PR 11）
+  LauncherSelectedTextSteps.swift          读选中文字的步骤与顺序（AX 调用由 Core/SelectedTextReader 注入；带时限时先读范围，§8.4，第 9 步）
 
 mac/Sources/Core/LauncherImageLoader.swift  LauncherImage → 像素尺寸 / 缩略图 / 整图（ImageIO，后台调；快速入口和截图模块共用，§5.5）
+mac/Sources/Core/SelectedTextReader.swift   只走辅助功能读一个 App 焦点元素里选中的文字，可带总时限（第 9 步从划词助手下沉，两边共用，§8.4）
+mac/Sources/Core/LauncherStateCommand.swift HotkeyDefinition.launcherStateCommand：开关类快捷键动作此刻的 stateTitle → 一条情景建议（§5.6）
 
 mac/Sources/Core/TextTools/                文本格式识别器（PR 5 从剪贴板模块下沉，剪贴板预览区与快速入口共用，§6.3）
 
@@ -54,6 +57,10 @@ mac/Sources/Modules/Screenshot/
 mac/Sources/Modules/SelectionTranslate/
   SelectionTranslateTool.swift             launcherCommands()：文字动作「翻译 / 学习 / 解释 / 总结 / 润色」（§5.4；翻译也用在图里的文字上，§5.5）
   SelectionTranslateController.swift       run(actionID:onText:)：对交来的文字直接出结果面板（§5.4）
+  SelectionText.swift                      取词的辅助功能两步（焦点元素、选中的文字）改调 Core 的 SelectedTextReader（不设时限，行为不变，§8.4）
+
+mac/Sources/Modules/{Screenshot,Caffeinate,FocusHealth,Meeting,ClaudeCode}/
+  …LauncherContext.swift                   各模块 launcherContextSuggestions() 的扩展：空着时的情景建议（§5.6，第 9 步；不动各模块的 …Tool.swift）
 
 mac/Sources/Modules/Launcher/
   LauncherTool.swift                       模块壳：菜单一行、快捷键、设置 Tab、aiFeatures
@@ -84,6 +91,8 @@ mac/Sources/Modules/Launcher/
     ImageSuggestionProvider.swift          LauncherRecognition（一次后台取字）、LauncherAttachment、挂着图片时的建议行（§5.5）
     PasteboardReader.swift                 LauncherPasteboardReader：⌘V / 放下时读剪贴板的快照与图片字节（§5.5）
     ThumbnailProvider.swift                LauncherThumbnailProvider：图片条目的缩略图，后台取、NSCache（§5.5）
+    ContextProvider.swift                  LauncherContextProvider：空着时的「选中的 / 刚复制的」两行（后台读选区、取剪贴板最新一条）、
+                                           收各模块的情景建议；两个开关 LauncherContextSettings（§8.4、§5.6，第 9 步）
     WindowProvider.swift                   窗口列表（二期）
     WebSearchProvider.swift                搜索引擎列表的设置（二期；「上网搜（Google）」PR 7 起是兜底建议的一行，在 SuggestionProvider 里）
   Logic/                                   纯 Foundation，全部进 BaoboxTests
@@ -106,9 +115,12 @@ mac/Sources/Modules/Launcher/
     LauncherInputClassifier.swift          输入分类：网址 / 邮箱 / 颜色 / 英文单词 / 一大段文字 / 其余（§5.4）
     LauncherColor.swift                    颜色值的解析与 HEX / RGB / HSL 三种写法（§5.4）
     LauncherSuggestions.swift              建议的规则：出哪些、兜底建议怎么排、字数、标题里的引用、搜索引擎表（§5.4）
-    LauncherPastedText.swift               粘贴时记下的带换行的原文：值不值得记、输入框里的文字还是不是它（§5.4）
+    LauncherPastedText.swift               粘贴 / 放进来时记下的原文：带换行的值不值得用、空白归一的规则；LauncherPlacedText =
+                                           放进来那一刻算好的原文（归一一次），之后只核对输入框这一边（§5.4）
     LauncherPasteboardContent.swift        ⌘V / 拖放的东西归哪一类（文件 / 图片 / 文字）、贴进文件时换进输入框的路径（§5.5）
     LauncherImageSuggestions.swift         挂着图片时的建议：图片动作的排序、打字筛选、二维码与识别出的文字怎么换成行（§5.5）
+    LauncherContext.swift                  空着时的规则：「刚复制」的 5 分钟窗口、两行去重、标题、各类行怎么拼（≤ 9 行）；
+                                           读选区的流程 LauncherSelectionFetcher（后台、80 ms、超时、作废）（§8.4、§5.6，第 9 步）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -191,6 +203,7 @@ struct LauncherEntry {
     let actions: [LauncherEntryAction]               // ⌘K 里的其余动作
     var image: LauncherEntryImage?                   // 条目是一张图片：缓存键 + 「怎么取字节」（PR 8，§5.5）
     var onlyWithPrefix: Bool                         // 只在打了来源前缀时出现（图片条目，PR 8）
+    var fullText: (@MainActor () -> String?)?        // 完整文字，懒取、只读内存：「刚复制的」放进输入框时用（第 9 步，§8.4）
 }
 
 @MainActor
@@ -294,12 +307,12 @@ Codex 助手没有现成的文件清单，不交。用户自己加目录：设�
 
 App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`（排序用的 `LauncherCandidate` + 显示用的 `LauncherRow` + ⏎ 的闭包），引擎按条目键去重后装进来，收起时放掉；每次输入变化在主线程同步跑一次上面的管线。
 
-- 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只有这次呼出装进来的来源（`apps`、`commands`、`files`（PR 6），以及各模块交来的 `clipboard`、`snippets`）的前缀生效；`s ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜会话」得到一片空。
+- 前缀：命令的出厂前缀是 `>`（同编辑器的命令面板，和字母前缀一样后面要跟空格）。只认打字打进来的：⌘V、拖放、「选中的 / 刚复制的」放进来的文字没改动过时按字面处理、不拆前缀（§5.4「放进来的按字面处理」）。只有这次呼出装进来的来源（`apps`、`commands`、`files`（PR 6），以及各模块交来的 `clipboard`、`snippets`）的前缀生效；`s ` 这类来源还没上线的前缀不拆，整段当查询词，免得「只搜会话」得到一片空。
 - 输入是路径（PR 6，§6.5）：没打前缀、输入以 `/` 或 `~` 开头时只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音），也不算、不识别、不搜文件。路径要读磁盘：引擎在结果里给出 `pendingPath`，控制器交给 `LauncherPathProvider` 在后台查，查完 `setPathResult` 再查一次（同剪贴板后台建完键的那条路，选中规则见 §4「选中行」）。
 - 文件（PR 6，§6.4）：引擎按 `LauncherFilePolicy` 定这次要不要搜、搜什么（`fileRequest`），手上的结果不是这个请求的就给出 `pendingFiles`，控制器交给 `LauncherFileProvider`（四个来源合并：内存里的来源立刻查、Spotlight 80 ms 防抖（PR 11）；后台过滤排序），每回来一批 `setFileResult` 再查一次（手上没有这个请求的**完整**结果就算还要搜（`LauncherFileResultState.pending`），控制器只在正在跑的不是它时才发（`shouldStart`），PR 11 验证后改）。文件行和内存里的候选一起排序（`presetMatchScore` = 匹配的档，权重 0.6）；固定行 —— `目录/文件名` 片段的确切命中，以及输入像文件名时名字正好是它的文件（PR 11）—— 排在计算结果之后、所有建议和普通行之前（PR 11 前片段命中排在识别结果之后）。文件结果回来是后台刷新，选中按 §4「选中行」的统一规则：这次输入以来没手动选过就在第一行（固定行一来就选中它，⏎ 就是打开它），手动选过就留在他选的那一行。新结果回来之前，上一次「名字包含」的结果里名字仍包含现在每个词的先顶着（`LauncherFileFilter.stillMatches`），列表不会每打一个字就收起再长出来。一个前缀可以管几个来源（`LauncherQuery.defaultSourceGroups`）：`c ` = 剪贴板 + 片段（片段没有自己的前缀）。
 - 计算结果、文本识别（PR 5）：没打来源前缀时，引擎先算（§7）、再识别（§6.3），结果固定排在最前（计算结果第一），不经过排序，后面接排好序的普通行。它们不记使用；⏎ 复制，⌘⏎ 插入前台 App（§7）。
 - 剪贴板最多 5 行（PR 5）：没打前缀时剪贴板最多出 5 行（`LauncherEngine.unscopedSourceLimits`，排序的 `sourceLimits` 参数：超出的跳过、由后面的行补上），免得一个常见词把 App 和命令挤下去；`c ` 前缀下不限。片段不限。文件同理（PR 6）：没打前缀时最多 5 行，`f ` 前缀下最多 30 行（`LauncherFileFilter.maxResults`）。
-- 查询词为空（含只打了前缀）：只给用过的（使用分 > 0）最多 8 行；一行都没有就显示一行提示。查询词不为空：没打前缀、输入也不是路径时列表里总有建议（§5.4，PR 7）；「没有结果」只在连兜底建议都没有时出现 —— 不足 2 个字符、或者打了来源前缀而那一类一个没中。
+- 查询词为空：只打了前缀时只给用过的（使用分 > 0）最多 8 行；输入框为空（没打前缀、没挂图片）时前面先放「选中的 / 刚复制的」（§8.4）和情景建议（§5.6），再接用过的，共不超过 9 行（第 9 步）；一行都没有就显示一行提示。查询词不为空：没打前缀、输入也不是路径时列表里总有建议（§5.4，PR 7）；「没有结果」只在连兜底建议都没有时出现 —— 不足 2 个字符、或者打了来源前缀而那一类一个没中。
 - 执行：先记使用（`recordUse` + `recordChoice`，输入用拆掉前缀后的查询词 —— 排序时查「上次选了谁」用的也是它；路径行不记，`LauncherItem.recordsUsage`），收起面板，等焦点回到呼出前的 App 再执行（`LauncherFocus.restore(then:)`，§4「焦点」：很多命令作用于前台 App / 当前窗口，要等面板让开）。⌘⏎ 在文件、路径行上是在访达里显示（`LauncherItem.alternate`），Tab 在路径行上是补全（`LauncherItem.completion`，§6.5），其余行照旧。 建议行的执行见 §5.4。
 - 挂着图片（PR 8，§5.5）：引擎在拆前缀之前就返回 —— 只出这张图的建议，输入框里的字是筛选词，不认路径、不算、不识别、不搜文件。
 
@@ -400,7 +413,15 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 6. **一大段文字**：80 个字符起。输入框是单行的 `NSTextField`，粘进来的换行会被换成空格（探针实测：`"a\nb\r\nc"` 粘进去得到 `"a b  c"`），所以输入框里的文字只能按长度认；带换行的原文（见下面「粘贴的原文」）也算。数到第 80 个字符就停，几 MB 的粘贴不用整段数。
 7. 其余 → **普通文字**。
 
-**粘贴的原文**（2026-11-24 审后加，`Logic/LauncherPastedText.swift`）：输入框把换行压成空格，交给翻译、总结、存为片段时段落就没了。所以 `LauncherController.performEditShortcut` 在 ⌘V（`LauncherFieldHandle.perform(.paste)`）之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（`pastedText`，和输入一起保留 60 秒）。每次用之前核对：输入框里的文字和原文**把空白归一后相等**（连续的空格、制表符、换行都换成一个空格、去首尾空白；单行输入框把 `\n` 换成一个空格、`\r\n` 换成两个，归一后都一样）才用原文 —— 分类、字数、交给动作都用它，多行的原文算一大段文字；不相等（改了一个字、粘在已有文字后面）就作废，控制器在文字变化时清掉它。读剪贴板只在按 ⌘V 那一下，不在打字路径上；右键菜单里的「粘贴」不记（少见，退回框里那一行）。
+**粘贴的原文**（2026-11-24 审后加，`Logic/LauncherPastedText.swift`）：输入框把换行压成空格，交给翻译、总结、存为片段时段落就没了。所以 `LauncherController.performEditShortcut` 在 ⌘V（`LauncherFieldHandle.perform(.paste)`）之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（第 9 步起单行的也记，叫 `placedText`，和输入一起保留 60 秒）。输入框每次变化时核对一次（见下面「核对放在哪」）：输入框里的文字和原文**把空白归一后相等**（连续的空格、制表符、换行都换成一个空格、去首尾空白；单行输入框把 `\n` 换成一个空格、`\r\n` 换成两个，归一后都一样）才用原文 —— 分类、字数、交给动作都用它，多行的原文算一大段文字；不相等（改了一个字、粘在已有文字后面）就作废，控制器在文字变化时清掉它。读剪贴板只在按 ⌘V 那一下，不在打字路径上；右键菜单里的「粘贴」不记（少见，退回框里那一行）。
+
+**放进来的按字面处理**（第 9 步验证后加，2026-11-25）：放进来的文字开头碰巧像来源前缀时会被拆成前缀 ——「A quick fix for the build」只搜 App、「> quoted reply line」只搜命令、「c is a language」只搜剪贴板、「F the rest」只搜文件，翻译、总结这些建议就不出了。规则：**不是打字打进来的内容，一律按字面处理、不拆前缀**。范围是「选中的 / 刚复制的」放进输入框（§8.4）、⌘V 粘贴、拖放的文字。做法是把上面的原文推广到单行：这三条路放进来的文字不管有没有换行都记下来（`LauncherPlacedText`，全是空白的不记），输入框里的文字在空白归一后还是它时，整段当查询词、不拆前缀（路径照样认，`/…`、`~/…` 放进来仍走路径行）。用户一改动（多打、删一个字）就作废，之后照常拆前缀 —— 手打的 `f readme` 不受影响，粘贴进来再改成别的也恢复正常规则。纯函数，单元测试覆盖上面四个例子放进来不拆、出兜底建议，手打照旧拆，末尾多打 / 删一个字恢复拆前缀。
+
+核对放在哪（第 9 步复查后改，2026-11-25）：起初是每次查询都在引擎里把原文和输入框各归一一遍再比，放进来的文字很大时压在主线程上（验证者实测 1 MB 单行每次查询从约 43 ms 涨到约 180 ms，5 MB 光拆前缀就约 520 ms）。现在：
+- 放进来那一刻（控制器的 `place`，`LauncherPlacement.begin`）把原文归一一次、存下（`LauncherPlacedText.normalized`），建议要用的原文（带换行的、去首尾空白）也一并算好（`suggestionText`）。
+- 控制器在输入框每次变化时核对一次（`adoptText`，`LauncherPlacedText.matches`）：先比长度 —— 归一不会让 UTF-8 变长，输入框比归一后的原文还短就一定不是它（删了一个字），不看内容；否则边走边归一输入框这一边、和存好的逐字比，第一处不同就停，不为输入框另建字符串。不是它就丢掉，之后再打字什么都不核对。判断规则按 `LauncherPastedText.matches`（留着当定义），但**只会更严**：那边说不等的这里一定不等（验证者穷举 873 万组，反方向 0 例）；同一个字的合成 / 分解两种编码（`é` 和 `e` + 组合重音）、空白后面紧跟组合字符这类文字，那边按规范等价算相等，这里逐字比、先比 UTF-8 长度会判不等。后果：这类文字放进来后按手打的规则处理（开头像前缀就拆、带换行的不用原文），不会反过来把手打的当成放进来的。单元测试在不含组合字符的两千组随机输入上拿两者对照。
+- 查询不再核对、不归一：控制器保证「`placedText` 有值 = 输入框此刻还是它」，引擎只交一个布尔值给 `LauncherQuery.parse(_:literal:)`，建议的 `LauncherSuggestionPolicy.plan(placed:)` 只读算好的 `suggestionText`。原来 `parse(_:placed:)` 里的双重核对去掉了。单元测试数调用次数、不靠计时（起初按「归一一次的耗时」比差值，机器忙时偶发失败，复查后改）：`LauncherPastedText.normalized` 在 DEBUG 编译里带一个调用计数，1 MB 原文放进来时各归一一次，之后核对输入框、拆前缀、出哪些建议一次都不调；核对返回读了输入框几个字（`LauncherPlacedText.check`），守住「短了一个字也不读」「开头不同读到第一个字就停」。实测（2026-11-25，M3，`swiftc -O` 探针，单行、词之间一个空格）：1 MB —— 每次查询里放进来的原文多花 0 ms（拆前缀 < 0.01 ms，出哪些建议有没有原文都是 18.9 ms；原来两边各归一一遍是 72 ms）；只在放进来时归一一次 44 ms、第一次改动核对一次 34 ms（输入框变短时比长度就知道，不看内容），之后不再有。5 MB：222 ms / 175 ms，每次查询同样 0 ms。
+- 不变式靠「改输入框的入口都经过那次核对」：打字（编辑器回调 → `textChanged` → `adoptText`）、Tab 补全和建议行改写成 `f <文字>`（`replaceText` 后 `textChanged`）。放进来的三条路 ——「选中的 / 刚复制的」、拖放（`replaceInput`）、⌘V（交给输入框粘贴）—— 都只经控制器的 `place(_:_:)`：记下原文（`LauncherPlacement.begin`，待定）→ 改输入框（有回调时 `adoptText` 当场核对，待定的优先）→ **无条件落定**（`settle`：不管改没改成、有没有回调，对着此刻的输入框核对，对不上就作废；输入框没变时先前那段照旧）。原文只在 `place` 里记，记完一定落定，绕不过去（复查找到的漏洞：输入框不在编辑时 ⌘V 什么都不做、也没有回调，原来只记不核对，手打的 `f readme` 下一次查询就被当成放进来的；`LauncherPlacement` 是纯逻辑，单元测试覆盖这条路和「贴同样的字」「粘贴没成时先前那段照旧」）。其余入口：贴进文件（`insertFile` 先丢掉、再 `replaceInput`）、挂上图片（`attach` 先丢掉再清空）、Esc 去掉图片连筛选词一起清（`adoptText("")`）、重新呼出（超过 60 秒连文字一起清空；60 秒内文字原样放回，还是核对过的那段）、收起时挂着图片（文字和原文一起清空）。
 
 **出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 8 行里的一个名额，其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。
 
@@ -464,7 +485,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 2. 有图片数据（PNG / TIFF / JPEG / HEIC / GIF / WebP / BMP；PDF 不算）：没有文字（或全是空白）→ **图片**；文字是这张图的地址（单行无空白的 `http(s)://`、`file://`、`data:image/`）或一个图片文件名（`IMG_1234.png`）→ 图片；同时有带格式的文字（RTF / HTML / webarchive：从文档、表格里复制了一段，表格软件会顺带放一张这段内容的截图）→ **文字**；文字很短（单行、不超过 20 个字符，多半是替代文字）→ 图片；其余 → 文字（文字是用户要的，图片是顺带的）。
 3. 有文字 → 文字；都没有 → 什么都没有（交给输入框）。
 
-原来 `notePaste()` 在 ⌘V 时自己读剪贴板文字；现在先归类，文字那一支再用同一次读出的文字记「带换行的原文」（§5.4），图片、文件两支不碰输入框的粘贴。图片字节按 PNG > JPEG > HEIC > GIF > WebP > TIFF 取第一种、原样不转码（同一张图有几种格式时取最省内存的：系统截图到剪贴板时 PNG 0.8 MB、TIFF 14 MB）；都没有、但能读成 `NSImage`（老格式）时转一份 TIFF。
+原来 `notePaste()` 在 ⌘V 时自己读剪贴板文字；现在先归类，文字那一支再用同一次读出的文字记放进来的原文（§5.4；第 9 步起经 `place` 记下并落定），图片、文件两支不碰输入框的粘贴。图片字节按 PNG > JPEG > HEIC > GIF > WebP > TIFF 取第一种、原样不转码（同一张图有几种格式时取最省内存的：系统截图到剪贴板时 PNG 0.8 MB、TIFF 14 MB）；都没有、但能读成 `NSImage`（老格式）时转一份 TIFF。
 
 **附件的生命周期与内存**（`LauncherController`；`LauncherAttachment` 在 `Providers/ImageSuggestionProvider.swift`）：
 
@@ -514,6 +535,54 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 9000 × 7000（6300 万像素）的图 | 缩略图 140–170 ms；整图缩到 7171 × 5577（4000 万像素）330–375 ms |
 
 内存：附件留的是编码字节（截图 0.80 MB）+ 缩略图（112 × 63，约 28 KB）；取字时解出的整图 14.1 MB，识别过程中进程占用峰值比平时高约 43 MB（Vision 自己的），完了回落。读不出来的字节、不存在的文件：缩略图 / 整图都是 nil（控制器去掉附件、回执一句）。
+
+### 5.6 空着时的情景建议（第 9 步，2026-11-25）
+
+呼出后还没打字时，正在专注就给「暂停专注」，会议快开始就给「入会」……（需求 §3.7）。各模块自己声明「此刻值得提一句的动作」，快速入口只收集和显示（框架不认识具体工具，同 §3.1）：
+
+```swift
+// Core/ToolModule.swift
+func launcherContextSuggestions() -> [LauncherCommand]   // 默认 []；只读内存、零磁盘 IO、不阻塞
+
+// Core/LauncherStateCommand.swift
+extension HotkeyDefinition {
+    @MainActor func launcherStateCommand(symbolName: String, priority: Int) -> LauncherCommand?
+}
+```
+
+- 每次呼出调一次（`LauncherContextProvider.prepare`，在 `show()` 里、面板显示之前）。id 为空、带参数的不收（这里只能无参数执行）。
+- 开关类快捷键动作直接交出去，不重写业务逻辑：`launcherStateCommand` = 此刻 `stateTitle` 有值（开关开着、正在录 / 专注）时变成一条同 id、同动作、标题就是那句的命令（「关闭防休眠」「停止录屏」「暂停专注」），没有就 nil。和命令表里那一条（§3.1「白送的部分」）是同一个 id。
+- 行：键 `commands/<id>`，和对应命令同一个键 —— 执行时 `recordUse` 记在它上面（§5.3）；声明方在 `suggestion.recordsUsage` 里说不记的不记（Claude Code 在等的会话，见下）。标题是命令标题；行首是命令自己的 `symbolName`（暂停 / 停止的图形，不是工具图标）；右侧小字是工具名。⏎ / ⌘⏎ / ⌘1–9 / 单击同命令：记使用、收起、等焦点回去再执行（§4「焦点」）；Tab 不做事。
+- 次序（2026-11-25 定）：**按紧急程度**，不按模块注册顺序 —— 会议快开始、有会话在等你才是最该看到的。各模块在交出的命令上带优先级 `suggestion.priority`（`LauncherSuggestionTraits` 现成的字段，原来只给文字 / 图片动作用；小的在前，不写是 50），`launcherStateCommand` 的 `priority` 参数就是它。快速入口收齐后按它稳定排序（`LauncherContextRules.situationalOrder`，纯函数，有单元测试：同一优先级保持收集时的先后 = 注册顺序、模块里写的顺序），再取前 4 条（`maxSituational`），多出的不出。档位写在各模块的扩展里（`launcherSuggestionPriority`），框架不认识具体工具：
+
+| 次序 | 模块 | 建议 |
+|---|---|---|
+| 10 | Meeting | 入会 / 开始会议记录 / 结束会议 |
+| 20 | ClaudeCode | 切到在等你的会话 |
+| 30 | Screenshot | 停止录屏 |
+| 40 | FocusHealth | 暂停（继续）专注 / 结束专注（同一档，暂停在前） |
+| 50 | Caffeinate | 关闭防休眠 |
+
+  五类都有、**会议和 Claude Code 各只给一条**时，出的是：会议、Claude Code、停止录屏、暂停专注（结束专注和防休眠被挤掉）。前提要写明：会议可能同时给「入会」「开始会议记录」两条（下一场有会议链接、又没在记任何会时），两个 Claude Code 会话同时在等也各占一条 —— 那时按次序往后挤，录屏、专注可能都出不来，四条全是会议和 Claude Code 也可能。
+
+各模块声明了什么（都写成扩展 `Modules/<模块>/…LauncherContext.swift`，不动各模块的 `…Tool.swift`）：
+
+| 情况 | 建议 | id | 状态从哪读（都在内存里） |
+|---|---|---|---|
+| 正在录屏 | 停止录屏 | `screenshot.record` | 「录屏」快捷键的 `stateTitle`（`RecordingController.isRecording`）；截图、取字没有 `stateTitle`，不出 |
+| 防休眠开着 | 关闭防休眠 | `caffeinate.toggle` | 「开关防休眠」的 `stateTitle`（`CaffeinateController.isActive`） |
+| 正在专注 / 专注暂停中 | 暂停专注（暂停中是「继续专注」）· 结束专注 | `focushealth.focus` / `focushealth.endFocus` | 「开始 / 暂停专注」的 `stateTitle`（`FocusHealthController.session`）；结束 = `endFocusEarly(countAsDone: true)`，同暂停卡片的「结束这一轮」、菜单「提前结束 ▸ 记为完成」（用户 2026-11-08 定的：结束算完成），没有对应的快捷键 |
+| 会议记录进行中（开始中 / 记录中 / 暂停） | 结束会议 | `meeting.startOnline` | 「开始 / 结束线上会议记录」的 `stateTitle`（`MeetingSessionController.phase`）；正在收尾时不出（按了也没用） |
+| 下一场会议 10 分钟内开始、或已经开始（`MeetingSchedule.next` 认开始不到 15 分钟的），而且没在记这一场 | 入会 · <标题>（有会议链接时）；开始会议记录 · <标题>（没在记任何会时） | `meeting.join` / `meeting.startOnline` | `MeetingCalendar.next()`（日历没在设置里打开 / 没授权时是 nil，就没有这两条）；⏎ = `MeetingActions.join` / `MeetingActions.record`（同提醒气泡的 [开始记录]：绑这一场，有链接按线上会议）。「还没入会」读不到 —— 会议 App 在不在开会只在会议检测里按进程查麦克风 —— 所以按「没在记这一场」算 |
+| 有 Claude Code 会话在等你确认 | 切到 <项目> · 在等你确认（每个在等的会话一条，新的在前） | `claudecode.waiting.<会话 id>` | `ClaudeLiveStatus.sessions` 里状态是 `waiting` 的（hooks 的 Notification 事件；没装 Claude Code / hooks 时是空的）；⏎ = `ClaudeTerminal.focusRunningSession`，同点「等你确认」的通知。项目名是 cwd 的最后一段，只做字符串处理（`CLISessionPaths.projectNameWithoutFileSystem`；会话自己的 `projectName` 走 `URL(fileURLWithPath:)`，会查一次文件系统） |
+| Codex 会话在等你回复 | **没做** | | Codex 助手没有现成的「等待中」状态（它的 notify 只报回合结束），按设计「有现成的才做」 |
+
+注意：
+
+- Claude Code 的「在等」在你回了那个提示之后、回合结束（Stop）之前不会变（hooks 只报 Stop / Notification / SessionStart / UserPromptSubmit），和菜单状态行「N 等待确认」一样。
+- Claude 的 id 带会话（两个会话同时在等时各一行，不会撞），没有对应的命令。这类行**不记使用记录**（`LauncherSuggestionTraits(recordsUsage: false)`，第 9 步验证后改）：按会话记的键会话一结束就再也用不上，每执行一次就多一条，还把会话 id 写进了使用记录文件。
+
+空着时的拼法（`Logic/LauncherContext.swift` 的 `LauncherContextRules.layout`，纯函数，有单元测试）：「选中的 / 刚复制的」最多 2 行（§8.4）→ 情景建议最多 4 条 → 最常用的（使用分 > 0，最多 8 行，同原来），**总共不超过 9 行**（`maxEmptyStateRows`）；同一个键只出一次，先出现的留着 —— 一条命令既是情景建议又在最常用里时留在情景建议里。引擎为此在空输入时多取 4 条最常用的（共 12 条），让出重复的再截。只打了前缀（`c `）时不出这两类，照旧最多 8 行；什么都没有时照旧一行提示。9 行比列表能完整显示的 8.5 行多，第 9 行露一半（§4 的高度规则不变）。
 
 ### 5.3 使用记录（`Logic/LauncherUsageStore.swift` 的 `LauncherUsageRecords`）
 
@@ -858,18 +927,47 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 展示：流式文本先按纯文本逐段追加；结束后整体按 Markdown 重排一次（标题、列表、代码块、行内代码）。`MeetingLibraryView.swift` 里已有一处 Markdown 展示，评估能不能下沉成 Core 的小部件共用；不够用就补一个只认这几种块的渲染器。代码块带复制按钮。
 - 页脚：走的是本机还是云端、哪个模型、耗时；云端出错退回本机时标一句（同划词助手）。
 
-### 8.4 上下文快照（`LauncherController`）
+### 8.4 上下文快照：「选中的 / 刚复制的」（第 9 步，2026-11-25 实现）
 
-呼出时、面板显示之前，在主线程同步取（都必须很快，取不到就没有）：
+> 原来这里写的是「挂在输入框下面的小标签，提问时带上」（需求 §3.5，二期）。第 9 步先做不涉及 AI 的一半：呼出时读到的两样东西，在空着的列表最前面各出一行，⏎ / Tab 放进输入框，之后的建议照常出（§5.4）。提问时带上下文仍在二期。代码在 `Providers/ContextProvider.swift`（`LauncherContextProvider`）和 `Logic/LauncherContext.swift`（规则、读选区的流程）。
 
-| 上下文 | 怎么取 | 限制 |
+| 上下文 | 什么时候、怎么取 | 限制 |
 |---|---|---|
-| 当前 App | `NSWorkspace.shared.frontmostApplication` | — |
-| 选中的文字 | `SelectionText.fetchViaAccessibility()`（只走辅助功能这一条） | **不用借剪贴板那条路**：它要合成 ⌘C，呼出快速入口不该有这种副作用。所以终端这类读不到的 App 里没有这个标签 |
-| 剪贴板最新一条 | `ClipboardStore.items.first`（经 `LauncherSearchable`） | 最新一条是 `isConcealed` 的（密码）就不挂这个标签，也不退到上一条 |
+| 当前 App | `LauncherFocus.capture()`（呼出、面板拿焦点之前），返回记下的 App 的 pid —— 只给 pid，不给 App 本身，目标仍然只在动作闭包里经 `actionContext` 读得到（§4「焦点」） | 是 Baobox 自己时为 nil，也就没有「选中的」 |
+| 选中的文字 | 同一刻 `beginSelectionRead(pid:)`：后台队列调 `Core/SelectedTextReader.read(pid:budget:)`，总时限 80 ms，读到了再补上那一行 | 只走辅助功能，**不用借剪贴板那条路**（它要合成 ⌘C，呼出快速入口不该有这种副作用）；终端这类读不到的 App 里没有这一行 |
+| 剪贴板最新一条 | `show()` 里取完各来源的条目后：`clipboard` 来源里 `date` 最新的那条（`LauncherEntryProvider.latestEntry`），5 分钟内复制的才算 | 不读系统剪贴板；`isConcealed` 的剪贴板来源本来就不交（§3.2），见下面「刚复制的」 |
 | 屏幕（三期，按需） | 用户输入 `@屏幕` 时才截当前窗口 → `TextRecognizer.recognize` 本机取字 | 需要屏幕录制权限；截的是呼出前的前台窗口 |
 
-`fetchViaAccessibility()` 的耗时待验证：它是同步 AX 调用，个别 App 响应慢。给一个 80 ms 的上限，超时就放弃这个标签，不拖慢呼出。把取词这一层从划词助手下沉到 `Core/`（它现在在 `Modules/SelectionTranslate/SelectionText.swift`），两边共用。
+**读选区**：
+
+- `Core/SelectedTextReader.swift`（从划词助手下沉）：焦点元素（`kAXFocusedUIElement`）→ 先读 `kAXSelectedText`，没有就用「全文 + 选区范围」切 —— 同划词助手原来的两步。带时限时这一步**先读选区范围、长度 > 0 才读全文**（第 9 步验证后改：很多文本视图没选中时 `kAXSelectedText` 回「成功 + 空串」，先读 `kAXValue` 会让光标停在大文件里时每次呼出都在后台把整篇正文拉过来，超过 80 ms 还把「没有」记成「超时」）；不带时限的（划词助手）保持先全文、后范围。读哪几个属性、按什么顺序在 `Core/Launcher/LauncherSelectedTextSteps.swift`（纯 Foundation，AX 调用注入，有单元测试）。带时限时，每次 AX 调用前把**这一个元素**的消息超时（`AXUIElementSetMessagingTimeout`）设成剩下的时间，几次调用加起来不超过预算；超时的那次返回 `cannotComplete`，算超时。**不对系统级元素设超时**（那会改掉本进程所有 AX 调用的默认超时）。不带时限的版本一次都不设：划词助手（`SelectionText.fetchViaAccessibility` / `currentSelection`）调它，行为同下沉前。没有辅助功能权限（`AXIsProcessTrusted()`，不弹窗）直接返回。AX 的客户端调用可以在任何线程上做。
+- `LauncherSelectionFetcher`（纯 Foundation，有单元测试）管流程：后台读，回主线程交结果，每次呼出只交一次。读完了就交 —— 读的时间超过 80 ms 的按超时、不要那段文字（硬上限）；80 ms + 40 ms 宽限到了还没回来（AX 卡住），主线程直接交「超时」，之后回来的丢掉。再次呼出作废上一次；收起（`endSession`）之后什么都不交。取词函数是注入的（单元测试、探针里换成假的；App 里默认是 `SelectedTextReader`）。
+- 面板不等它：`show()` 照常算行、显示。读到文字、面板还开着、输入框还空着（没挂图片）就后台刷新一次，最前面出「选中的」；选中按 §4「选中行」的统一规则（`refresh(background: true)`）：没手动选过 → 选中它；按过 ↑ ↓ / 悬停换过行 → 留在他选的那一行。
+- 结果四种：取到（日志只记字数）/ 没有（没选中、App 不暴露选区、全是空白）/ 超时 / 没权限。后三种都没有这一行，不提示、不弹窗。
+
+**刚复制的**：
+
+- `LauncherEntry` 加了可选的 `fullText`（懒取的闭包，只读内存，§3.2）：`searchText` 是截断过的，放进输入框要完整原文；剪贴板来源的文字条目交 `{ text }`。图片条目用已有的 `image`（字节在后台取）。
+- 不出这一行的情况：复制时间超过 5 分钟（`recentCopyWindow`；比现在晚 60 秒以内也算，系统时间被往回调过一点）；文字全是空白；和「选中的」是同一段 —— 空白归一后相等（连续的空白、换行算一个空格，去首尾，`LauncherPastedText.normalized`），相同时留「选中的」。图片不和文字比。
+- 敏感内容：原来这里写过「最新一条是 `isConcealed` 的（密码）就不挂，也不退到上一条」。实现做不到「不退」也不需要：出厂「记录敏感内容」是关的（`ClipboardStore.recordConcealed`），密码管理器复制的东西根本不进历史，历史里最新的一条本来就是它前面那条；打开了记录时，剪贴板来源也不把敏感条目交给快速入口（§3.2）。所以取的是「交给快速入口的条目里最新的那条」，敏感内容任何情况下都不会出现在这一行。真要做到「最新的是密码就不出」只能去读系统剪贴板，这一步不读。
+
+**显示**（`LauncherContextProvider.emptyState` 交给引擎；拼法见 §5.6）：只在输入框为空、没打前缀、没挂图片时，列表最前面各最多一行，「选中的」在前。
+
+| 行 | 行 id | 标题 | 右侧小字 | 行首 |
+|---|---|---|---|---|
+| 选中的 | `context/selection` | 内容开头，压成一行，最多 60 个字符（`LauncherSuggestionText.quote`，超出加「…」） | 「选中的文字 · N 字」（同字数统计 `LauncherTextStats`：一个汉字算一个，一个英文词算一个） | `character.cursor.ibeam` |
+| 刚复制的（文字） | `context/clipboard` | 同上 | 「刚复制 · N 分钟前」，不到 1 分钟「刚复制 · 1 分钟内」 | `doc.on.clipboard`（普通剪贴板条目是 `doc.text`） |
+| 刚复制的（图片） | `context/clipboard` | 「图片」 | 同上 | 缩略图（同 §5.5，后台取） |
+
+⏎、Tab、⌘⏎、⌘1–9、单击都是「放进输入框」（控制器的 `fill`）：文字去掉首尾空白，换行换成空格放进输入框，原文记成 `pastedText`（同 ⌘V，§5.4：按字面处理、不拆前缀，交给翻译、总结、存为片段的是原文），于是建议照常出；图片挂成附件（§5.5）。放进去后输入框不再为空，这两行就没了。不记使用记录（它们不是排序里的行）。「选中文字 → 呼出 → ⏎ → ⏎」是有意的两步，不做成一步直达。
+
+**开关**：`launcher.context.selection`、`launcher.context.clipboard`（`LauncherContextSettings`，默认开）；设置页「快速入口」各一行开关：「呼出时带上你选中的文字」「呼出时带上你刚复制的内容」。关了的那样不读。
+
+**隐私**：两样都只在内存里显示成一行，不发给任何模型、不联网、不写盘；收起面板就丢（`LauncherContextProvider.endSession`；放进输入框后就是输入框里的字，和打的字一样保留 60 秒，§4）。
+
+**日志**（category `launcher`，只记种类、字数、毫秒数）：`panel shown in … ms` 那条后面多了 `situational N in X ms; recent copy text|image|none|old|off; selection …`。选区还在读时这一条等读完再写：`selection got N characters | none | timed out | no accessibility permission in X ms (Y ms after the hotkey)`；读完之前收起了写 `selection cancelled (panel hidden)`；开关关着 `selection off`；前台是 Baobox 自己 `selection no app`。放进输入框时 `context row context/selection put into the field (N characters)` / `context row context/clipboard attached as an image`。怎么看见 §10 验证 5。
+
+**实测**（2026-11-25，M3，`swiftc -O` 探针，取词函数换成假的）：收情景建议 + 取刚复制的（4 个工具）0.03 ms；在 2000 条剪贴板条目里找最新的 0.05 ms；算空状态的行 0.004 ms，10 万字的选区 2.4 ms（只在选区读到时算一次）；取词函数卡住时 122 ms 交「超时」，呼出这一步不等它（1.0 ms）。真的 `SelectedTextReader` 在没有辅助功能权限的进程里：第一次 22 ms（`AXIsProcessTrusted` 冷启动，App 里在后台）、之后 < 0.01 ms，返回「没权限」。有权限时各 App 的耗时只能在真机上看（§10 验证 5）。
 
 ### 8.5 按意思找（三期）
 
@@ -920,7 +1018,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 2 | 本机模型理解命令的准确率 | 80 句样例（中英各半，含 15 句不该选任何命令的），跑 Qwen3-1.7B、Qwen3-4B、一个云端模型；指标：选对命令且参数对的比例、**选错命令**的比例 | 标准：选对 ≥ 90%、选错 ≤ 3%。1.7B 不达标就把建议模型改成 4B；本机都不达标就在设置里建议云端，并保留功能 |
 | 3 | llama-server 的 JSON 约束输出和前缀缓存在包内这一版上可用；热着时意图解析的耗时 | 直接对包内的 `llama-server` 发请求计时 | 不支持约束就只靠提示词 + 校验；没有缓存就把命令表粗筛到 30 条 |
 | 4 | 流式输出在本机、Claude、OpenAI 兼容三种后端上都通，取消请求后连接确实断开 | 探针里各打一次，中途取消 | 哪个后端不通，那个后端先退回整段返回 |
-| 5 | `SelectionText.fetchViaAccessibility()` 在常用 App 里的耗时分布 | 在浏览器、编辑器、终端、微信、Slack 各测 20 次 | 超时上限调小，或改成面板显示后再异步取、取到了再挂标签 |
+| 5 | 呼出时读选中的文字（`SelectedTextReader`，第 9 步起后台读、80 ms 上限，§8.4）在常用 App 里的耗时分布；呼出延迟没变差 | 装好的 Baobox 里（要辅助功能权限）在浏览器、编辑器、终端、微信、Slack 各选一段字呼出 20 次，看日志：`/usr/bin/log show --last 30m --style compact --predicate 'subsystem == "com.baobox.app" AND category == "launcher"' \| grep "selection "`。每条写着结果（`got N characters` / `none` / `timed out` / `no accessibility permission`）、读了多久、按快捷键后多久回来；同一条前面的 `panel shown in … ms` 和改动前（热的时候 30–45 ms）比，`situational … in … ms` 是收情景建议的耗时 | 某类 App 常超时：调上限还是认了（那类 App 没有这一行）再定；`panel shown in` 变差：看 `entries`、`situational` 两段是哪段长了 |
 | 6 | 系统设置页的链接在 macOS 14 和 macOS 27 上哪些有效；Spotlight 快捷键那一页的链接 | 写个脚本逐个 `open`，人工看 | 无效的从表里删；快捷键页打不开就打开「键盘」页并在按钮旁写一句路径 |
 | 7 | 关掉 Spotlight 快捷键后，`CopySymbolicHotKeys` 是否立刻反映（不用重启 App） | 探针每秒打印一次，手动去系统设置里关 | 不立刻反映就让用户点一下「我关好了」，再尝试注册并用一次按键确认 |
 | 8 | 欧洲央行汇率表的地址、格式、更新时间 | 取一次看 | 换别的公开来源，或汇率推到以后 |
@@ -939,6 +1037,8 @@ UserDefaults 前缀 `launcher.`：
 | `rates.enabled` | 汇率联网取数 | 看需求文档 §7 第 5 条 |
 | `webSearch.engines` | 网页搜索引擎列表（JSON） | Google、GitHub |
 | `files.extraRoots` | 文件搜索要自己扫的目录（字符串数组，`~` 开头的展开），和模块声明的（Claude Code 的临时目录）合并；设置界面以后做（PR 11，§6.4） | 空 |
+| `context.selection` | 呼出时带上选中的文字（空着时最前面一行，§8.4；设置页一行开关） | 开 |
+| `context.clipboard` | 呼出时带上刚复制的内容（剪贴板最新一条、5 分钟内，§8.4；设置页一行开关） | 开 |
 | `voice.key` | 语音输入按住的键 | 右 ⌥ |
 | `ai.feature.launcher.intent` / `ai.feature.launcher.ask` | 两个功能各用哪个模型（`AIFeatureSettings`） | 本机 |
 
@@ -960,11 +1060,11 @@ UserDefaults 前缀 `launcher.`：
 | 6 | 路径与文件（2026-11-24 加，用户试用时贴路径只得到「没有结果」）：输入是路径时直接读磁盘列出来、Tab 补全（§6.5）；按名字搜文件，Spotlight 查 + 自己过滤排序，后端放在 `LauncherFileSearching` 协议后面（§6.4） | 真机：贴路径、补全、`f ` 搜文件、日志里的查询耗时 |
 | 7 | 放进任何东西都有建议（2026-11-24 加，用户试用时说「我预期的是我放入任何东西，都能给我一些建议」）：输入分类；文字动作（`LauncherCommand.suggestion`，划词助手、剪贴板声明，划词助手加 `run(actionID:onText:)`）；对应建议（网址、邮箱、颜色、字数）与兜底建议（§5.4） | 真机：网址、邮箱、颜色、单词、长文本、随便什么字、算式各试一次；划词助手结果面板的位置、只给复制 |
 | 8 | 图片与文件（2026-11-24 加，用户问「现在是不是不能输入图片」）：图片动作（`.image` 参数，截图声明取字 / 钉在屏幕上 / 预览 / 保存成文件，划词助手的翻译也用在图里的文字上）；⌘V / 拖放先归类（文件 / 图片 / 文字）；输入里挂一张图片（缩略图标签、后台取一次字、识别结果 + 图片动作、打字筛选、⌫ / Esc 去掉）；贴进文件 = 路径，图片文件的路径行后接图片动作；剪贴板历史里的图片（`c ` 前缀、缩略图、Tab 挂成附件）（§5.5） | 真机：⌘V 贴截图 / 网页图片 / 表格一段 / 访达文件、拖进访达文件和浏览器图片、`c 图片`、各动作走一遍 |
-| 9 | 系统设置页、系统命令；各模块补带参数的命令；空输入建议 | 真机逐条点 |
+| 9 | 空着时给建议（2026-11-24 设计、11-25 实现，`STEP-9-CONTEXT.md`）：呼出时带上选中的文字和刚复制的内容，⏎ / Tab 放进输入框（§8.4）；各模块声明的情景建议（§5.6）；设置页两行开关。原来排在这一步的系统设置页、系统命令、各模块补带参数的命令不在这一步 | 真机：在浏览器、编辑器、终端、微信里选字呼出；复制文字 / 图片后呼出；专注、防休眠、录屏、会议记录中、下一场会议快开始、Claude Code 在等时呼出；日志里的选区耗时和呼出延迟（§10 验证 5） |
 | 10 | 设置页、⌘Space 引导与自动绑定、本地化、使用手册 `docs/manual/launcher.md` | 真机走一遍引导 |
 | 11 | 文件优先与更多文件来源（2026-11-24 加，用户输入 `add-approval-hook.py` 只得到剪贴板和建议、`f add-approval-hook.py` 是「没有结果」：「我如果输入一个文件，第一优先级应该是打开文件吧」）：输入像文件名时名字正好是它的文件固定排第一（⏎ 打开）；文件搜索合并四个来源 —— Spotlight、自己扫的目录（`ToolModule.launcherFileRoots()`，默认 Claude Code 的临时目录）、各模块已知的文件（`launcherKnownFiles()`，Claude Code 的最近文件）、剪贴板里出现过的路径；先回来的先出、按规范路径去重（§3.4、§6.4） | 真机：输入一个 Claude Code 临时目录里的文件名（带 / 不带 `f `）、复制过路径的文件名、Claude Code 写过的文件名、同名多份；日志里各来源的耗时 |
 
-> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 9、10（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」「图片与文件」后顺延），和用户一起做；验证 5 要辅助功能权限，只能在装好的 Baobox 里测，放到二期开工前。PR 1–3 是纯逻辑，不依赖这些结论。
+> 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 9、10（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」「图片与文件」后顺延），和用户一起做（2026-11-25：第 9 步改成了「空着时给建议」，系统设置页不在里面，验证 6 跟着它往后挪）；验证 5 要辅助功能权限，只能在装好的 Baobox 里测 —— 第 9 步起呼出时就读选区，日志里记着每次的结果和耗时，第 9 步装上后看真机日志（§10 验证 5）。PR 1–3 是纯逻辑，不依赖这些结论。
 
 二期开工前先做探针 2、3、4、5、8，按结果定「理解一句话命令」的建议模型，再拆 PR：AI 服务层（流式、多轮、JSON）→ 问 AI → 意图解析与预览卡片 → 一次性提醒 → 语音 → 其余来源 → 汇率。
 

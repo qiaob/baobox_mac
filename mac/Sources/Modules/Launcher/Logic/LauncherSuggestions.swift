@@ -49,12 +49,13 @@ enum LauncherSuggestionPolicy {
     /// - 一大段文字：出字数，兜底建议里总结、润色提前；但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算。
     /// - 英文单词 / 短语：没有对应建议，兜底建议里「学习」提前。
     /// - 兜底建议要输入不少于 2 个字符。
-    /// - `pasted`：按 ⌘V 时记下的带换行的原文。输入框里的文字还是它时（空白归一后相等，`LauncherPastedText`），
-    ///   按原文分类、算字数、交给动作 —— 多行的原文算一大段文字；一改动就作废，用输入框里的文字。
+    /// - `placed`：放进来的原文（⌘V、拖放、「选中的 / 刚复制的」），控制器已经核对过输入框里的文字还是它（空白归一后相等，
+    ///   `LauncherPlacedText.matches`；一改动就不再交进来）。带换行的按原文分类、算字数、交给动作 —— 多行的原文算一大段文字；
+    ///   单行的和输入框里的一样。这里只读它放进来时算好的 `suggestionText`，不再归一。
     static func plan(for query: LauncherQuery, hasCalculation: Bool, hasRecognition: Bool,
-                     pasted: String? = nil) -> LauncherSuggestionPlan {
+                     placed: LauncherPlacedText? = nil) -> LauncherSuggestionPlan {
         guard query.isUnscoped, !query.text.isEmpty else { return .none }
-        let source = LauncherPastedText.original(pasted, matching: query.text) ?? query.text
+        let source = placed?.suggestionText ?? query.text
         let input = LauncherInputClassifier.classify(source)
         guard !input.isPath, !input.kinds.isEmpty else { return .none }
         // 数到第 2 个字符就够了，几 MB 的粘贴也不用整段数。
