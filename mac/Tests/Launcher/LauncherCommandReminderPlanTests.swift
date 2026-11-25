@@ -75,6 +75,29 @@ final class LauncherCommandReminderPlanTests: XCTestCase {
         XCTAssertEqual(plan("> 明天下午三点开会", clock: clock), .none)
     }
 
+    /// 第 9 步起放进来的文字（⌘V、拖放、「选中的 / 刚复制的」）按字面处理、不拆前缀，单行的也记成原文
+    /// （`LauncherPlacedText`，控制器核对过输入框还是它才交给查询，同引擎：`parse(_:literal: true)`）：像命令、带时间的句子照常认 ——
+    /// 单行的分类读输入框里的文字（`suggestionText` 只给带换行的），带换行的读原文。
+    func testPlacedTextIsClassifiedLikeTypedText() {
+        func placed(_ text: String, original: String? = nil) -> LauncherSuggestionPlan {
+            let placedText = LauncherPlacedText(original ?? text)?.still(in: text)
+            XCTAssertNotNil(placedText, "输入框里的文字还是放进来的原文：\(text)")
+            return LauncherSuggestionPolicy.plan(for: LauncherQuery.parse(text, literal: placedText != nil), hasCalculation: false,
+                                                 hasRecognition: false, placed: placedText, clock: clock)
+        }
+        XCTAssertEqual(placed("git status").fallbackLeading, [.runInTerminal("git status")], "贴进一条命令")
+        XCTAssertEqual(placed("$ npm run build").fallbackLeading, [.runInTerminal("npm run build")])
+        XCTAssertEqual(placed("  kubectl get pods -n pv-workers  ").fallbackLeading,
+                       [.runInTerminal("kubectl get pods -n pv-workers")], "首尾空白去掉")
+        guard case .reminder(let draft)? = placed("20 分钟后提醒我取快递").top.first else { return XCTFail("放进来的句子没认出提醒") }
+        XCTAssertEqual(draft.text, "取快递")
+        XCTAssertEqual(placed("git status git push", original: "git status\ngit push").fallbackLeading, [],
+                       "带换行的原文不是一条命令")
+        XCTAssertTrue(placed("提醒").showsReminders)
+        // 像前缀开头的一句话放进来不拆前缀，照常有兜底建议（第 9 步的规则没被这一步改坏）。
+        XCTAssertNotNil(placed("c is a language").fallbackKinds)
+    }
+
     func testMultiLinePasteIsNotACommand() {
         let pasted = "git status\ngit push"
         XCTAssertEqual(plan("git status git push", pasted: pasted).fallbackLeading, [], "多行的原文不是一条命令")
