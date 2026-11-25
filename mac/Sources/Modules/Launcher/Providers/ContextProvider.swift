@@ -70,7 +70,11 @@ final class LauncherContextProvider {
         let situationalMilliseconds: Double
     }
 
+    /// 取词函数（后台线程调，参数是 pid 和时限）。
+    typealias SelectionReader = @Sendable (pid_t, TimeInterval) -> LauncherSelectionOutcome
+
     private weak var registry: ToolRegistry?
+    private let readSelection: SelectionReader
     private let fetcher = LauncherSelectionFetcher()
     /// 这次呼出读到的选中文字（收起即丢）。
     private var selection: String?
@@ -78,8 +82,23 @@ final class LauncherContextProvider {
     private var recentCopy: (copy: LauncherRecentCopy, image: LauncherEntryImage?, label: String)?
     private var situational: [LauncherItem] = []
 
-    init(registry: ToolRegistry?) {
+    /// `readSelection`：默认只走辅助功能（Core 的 `SelectedTextReader`）；探针里换成假的。
+    init(registry: ToolRegistry?,
+         readSelection: @escaping SelectionReader = { pid, budget in
+             LauncherContextProvider.readViaAccessibility(pid: pid, budget: budget)
+         }) {
         self.registry = registry
+        self.readSelection = readSelection
+    }
+
+    /// 只走辅助功能读 `pid` 焦点元素里选中的文字（不借剪贴板、不合成 ⌘C），总时限 `budget`。
+    nonisolated static func readViaAccessibility(pid: pid_t, budget: TimeInterval) -> LauncherSelectionOutcome {
+        switch SelectedTextReader.read(pid: pid, budget: budget) {
+        case .text(let text): return .text(text)
+        case .none: return .none
+        case .timedOut: return .timedOut
+        case .noPermission: return .noPermission
+        }
     }
 
     // MARK: - 选中的
@@ -93,14 +112,8 @@ final class LauncherContextProvider {
         selection = nil
         guard LauncherContextSettings.includesSelection else { return "off" }
         guard let pid else { return "no app" }
-        fetcher.start({ budget in
-            switch SelectedTextReader.read(pid: pid, budget: budget) {
-            case .text(let text): return .text(text)
-            case .none: return .none
-            case .timedOut: return .timedOut
-            case .noPermission: return .noPermission
-            }
-        }) { [weak self] read in
+        let readSelection = readSelection
+        fetcher.start({ budget in readSelection(pid, budget) }) { [weak self] read in
             guard let self else { return }
             if case .text(let text) = read.outcome { self.selection = text }
             onRead(read)
