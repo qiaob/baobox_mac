@@ -83,7 +83,9 @@ mac/Sources/Modules/Launcher/
   LauncherReminderCenter.swift             一次性提醒：`reminders.json` 读写、到最近一条的计时器、唤醒 / 改时间后对表、到点发 alert；
                                            「什么时候」的写法 LauncherReminderText（§5.4「一次性提醒」，第 10 步）
   LauncherAI.swift                         意图解析、问答、算式翻译的调用与提示词
-  LauncherSettingsView.swift               设置页
+  LauncherSettingsView.swift               设置页：说明 + 快捷键；功能开关（六个小节，每项一个开关，每节「全部打开 / 全部关闭」，§11「功能开关」，第 13 步）
+  LauncherFeatureCatalog.swift             设置页的功能清单：经注册表收各模块的来源和文字 / 图片 / 文件动作，加快速入口自己的功能
+                                           （名字、说明的本地化文案；§11「功能开关」，第 13 步）
   LauncherSpotlightHotkey.swift            ⌘Space 是否空出来的检测与自动绑定
   Providers/
     AppProvider.swift                      LauncherAppProvider：App 索引（后台建、目录变化时刷新）、图标、打开
@@ -105,7 +107,7 @@ mac/Sources/Modules/Launcher/
     PasteboardReader.swift                 LauncherPasteboardReader：⌘V / 放下时读剪贴板的快照与图片字节（§5.5）
     ThumbnailProvider.swift                LauncherThumbnailProvider：图片条目的缩略图，后台取、NSCache（§5.5）
     ContextProvider.swift                  LauncherContextProvider：空着时的「选中的 / 刚复制的」两行（后台读选区、取剪贴板最新一条）、
-                                           收各模块的情景建议；两个开关 LauncherContextSettings（§8.4、§5.6，第 9 步）
+                                           收各模块的情景建议（§8.4、§5.6，第 9 步）；三个开关看 `features`（第 13 步，§11「功能开关」）
     WindowProvider.swift                   窗口列表（二期）
     WebSearchProvider.swift                搜索引擎列表的设置（二期；「上网搜（Google）」PR 7 起是兜底建议的一行，在 SuggestionProvider 里）
   Logic/                                   纯 Foundation，全部进 BaoboxTests
@@ -139,6 +141,9 @@ mac/Sources/Modules/Launcher/
     LauncherReminders.swift                一次性提醒的模型、`reminders.json` 的格式与容错、到点 / 晚了多久 / 哪一天（§5.4「一次性提醒」，第 10 步）
     LauncherConfirm.swift                  二次确认：哪一行在等第二次 ⏎、标题里的对象怎么中间截断（§4「按两次回车」，第 10 步）
     LauncherPathActions.swift              路径行后面出哪几行动作（§6.5「路径行的动作」，第 10 步）
+    LauncherFeatures.swift                 功能开关（第 13 步，§11「功能开关」）：id 的拼法、快速入口自己的功能表 LauncherBuiltInFeature、
+                                           开关集合 LauncherFeatureSet、设置键的读写 LauncherFeatureSettings、设置页的分组与排序
+                                           LauncherFeatureLayout、建议全关的判断、读选区前看开关（LauncherSelectionFetcher.begin）
     Calculator/                            词法、语法、求值、单位、日期、时区、进制
     LauncherIntent.swift                   意图 JSON 的解析与校验、命令表的提示词排版
     LauncherUsageStore.swift               使用记录、别名、隐藏行的读写模型
@@ -465,7 +470,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 查询不再核对、不归一：控制器保证「`placedText` 有值 = 输入框此刻还是它」，引擎只交一个布尔值给 `LauncherQuery.parse(_:literal:)`，建议的 `LauncherSuggestionPolicy.plan(placed:)` 只读算好的 `suggestionText`。原来 `parse(_:placed:)` 里的双重核对去掉了。单元测试数调用次数、不靠计时（起初按「归一一次的耗时」比差值，机器忙时偶发失败，复查后改）：`LauncherPastedText.normalized` 在 DEBUG 编译里带一个调用计数，1 MB 原文放进来时各归一一次，之后核对输入框、拆前缀、出哪些建议一次都不调；核对返回读了输入框几个字（`LauncherPlacedText.check`），守住「短了一个字也不读」「开头不同读到第一个字就停」。实测（2026-11-25，M3，`swiftc -O` 探针，单行、词之间一个空格）：1 MB —— 每次查询里放进来的原文多花 0 ms（拆前缀 < 0.01 ms，出哪些建议有没有原文都是 18.9 ms；原来两边各归一一遍是 72 ms）；只在放进来时归一一次 44 ms、第一次改动核对一次 34 ms（输入框变短时比长度就知道，不看内容），之后不再有。5 MB：222 ms / 175 ms，每次查询同样 0 ms。
 - 不变式靠「改输入框的入口都经过那次核对」：打字（编辑器回调 → `textChanged` → `adoptText`）、Tab 补全和建议行改写成 `f <文字>`（`replaceText` 后 `textChanged`）。放进来的三条路 ——「选中的 / 刚复制的」、拖放（`replaceInput`）、⌘V（交给输入框粘贴）—— 都只经控制器的 `place(_:_:)`：记下原文（`LauncherPlacement.begin`，待定）→ 改输入框（有回调时 `adoptText` 当场核对，待定的优先）→ **无条件落定**（`settle`：不管改没改成、有没有回调，对着此刻的输入框核对，对不上就作废；输入框没变时先前那段照旧）。原文只在 `place` 里记，记完一定落定，绕不过去（复查找到的漏洞：输入框不在编辑时 ⌘V 什么都不做、也没有回调，原来只记不核对，手打的 `f readme` 下一次查询就被当成放进来的；`LauncherPlacement` 是纯逻辑，单元测试覆盖这条路和「贴同样的字」「粘贴没成时先前那段照旧」）。其余入口：贴进文件（`insertFile` 先丢掉、再 `replaceInput`）、挂上图片（`attach` 先丢掉再清空）、Esc 去掉图片连筛选词一起清（`adoptText("")`）、重新呼出（超过 60 秒连文字一起清空；60 秒内文字原样放回，还是核对过的那段）、收起时挂着图片（文字和原文一起清空）。
 
-**出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 12 行里的一个名额（第 10 步前是 8 行），其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。像命令 → 「在终端里运行」放在兜底建议最前面（同有歧义的网址，`fallbackLeading`，占一个名额）。带时间的句子 → 「到时提醒我」放在所有行的最前面（`plan.top`，计算结果那个位置，两者不会同时有）。输入是「提醒」/「reminders」/「reminder」→ `showsReminders`，还没到点的提醒每条一行，也在最前面。
+**出哪些**（`LauncherSuggestionPolicy.plan`）：只在没打来源前缀时出。设置里关掉的不出（第 13 步，`plan(…, features:)`，§11「功能开关」）。有计算结果 → 不出对应建议，兜底建议按「普通文字」照出。网址 / 邮箱 / 颜色 → 出对应的那一条（有文本识别结果时也出：URL 带参数时「打开」比参数表更像要做的事）。有歧义的网址 → 不出对应建议，「打开 <补好 scheme 的完整地址>」放在兜底建议最前面（`plan.fallbackLeading`，在翻译前面、不记使用），占兜底建议 12 行里的一个名额（第 10 步前是 8 行），其余按普通文字排。一大段文字 → 字数，但有文本识别结果时（长串 JSON、Base64、JWT）按普通文字算（不出字数，也不提前总结、润色）。英文单词即使被识别器认成了别的也照样提前「学习」。兜底建议要输入不少于 2 个字符。像命令 → 「在终端里运行」放在兜底建议最前面（同有歧义的网址，`fallbackLeading`，占一个名额）。带时间的句子 → 「到时提醒我」放在所有行的最前面（`plan.top`，计算结果那个位置，两者不会同时有）。输入是「提醒」/「reminders」/「reminder」→ `showsReminders`，还没到点的提醒每条一行，也在最前面。
 
 **对应建议**（固定排在最前，计算结果之后、识别结果之前）：
 
@@ -1037,7 +1042,7 @@ extension HotkeyDefinition {
 
 ⏎、Tab、⌘⏎、⌘1–9、单击都是「放进输入框」（控制器的 `fill`）：文字去掉首尾空白，换行换成空格放进输入框，原文记成 `pastedText`（同 ⌘V，§5.4：按字面处理、不拆前缀，交给翻译、总结、存为片段的是原文），于是建议照常出；图片挂成附件（§5.5）。放进去后输入框不再为空，这两行就没了。不记使用记录（它们不是排序里的行）。「选中文字 → 呼出 → ⏎ → ⏎」是有意的两步，不做成一步直达。
 
-**开关**：`launcher.context.selection`、`launcher.context.clipboard`（`LauncherContextSettings`，默认开）；设置页「快速入口」各一行开关：「呼出时带上你选中的文字」「呼出时带上你刚复制的内容」。关了的那样不读。
+**开关**：第 9 步是两个键 `launcher.context.selection`、`launcher.context.clipboard`（`LauncherContextSettings`）；第 13 步并进 `launcher.disabledFeatures`（id `context/selection`、`context/clipboard`，设置页「刚呼出、还没打字时」一节，§11「功能开关」），旧键和 `LauncherContextSettings` 删掉（第 9 步还没装到用户机器上，不迁移）。关了的那样不读：`context/selection` 关着时 `LauncherSelectionFetcher.begin` 不调取词函数（单元测试给取词函数计数）；`context/clipboard` 关着不取「刚复制的」。
 
 **隐私**：两样都只在内存里显示成一行，不发给任何模型、不联网、不写盘；收起面板就丢（`LauncherContextProvider.endSession`；放进输入框后就是输入框里的字，和打的字一样保留 60 秒，§4）。
 
@@ -1106,17 +1111,71 @@ UserDefaults 前缀 `launcher.`：
 
 | 键 | 含义 | 默认 |
 |---|---|---|
-| `sources.<来源 id>` | 这个来源开不开 | 开 |
+| `disabledFeatures` | 被关掉的功能 id（字符串数组；不在里面的都是开着的，不认识的原样留着）。取代原来计划的 `sources.<来源 id>` 和第 9 步的 `context.selection` / `context.clipboard`（第 13 步，见下面「功能开关」） | 空（全开） |
 | `prefix.<来源 id>` | 只搜一类的前缀 | `a` `c` `f` `s` `m` `w`；命令 `>`。来源上线了前缀才生效（PR 6 起 `a` `c` `f` `>`），设置页（PR 10）出来之前是出厂值、不读设置 |
 | `ai.attachContext` | 提问时带上选中的文字和剪贴板 | 开 |
 | `ai.prewarm` | 呼出时预热本机模型 | 关 |
 | `rates.enabled` | 汇率联网取数 | 看需求文档 §7 第 5 条 |
 | `webSearch.engines` | 网页搜索引擎列表（JSON） | Google、GitHub |
 | `files.extraRoots` | 文件搜索要自己扫的目录（字符串数组，`~` 开头的展开），和模块声明的（Claude Code 的临时目录）合并；设置界面以后做（PR 11，§6.4） | 空 |
-| `context.selection` | 呼出时带上选中的文字（空着时最前面一行，§8.4；设置页一行开关） | 开 |
-| `context.clipboard` | 呼出时带上刚复制的内容（剪贴板最新一条、5 分钟内，§8.4；设置页一行开关） | 开 |
 | `voice.key` | 语音输入按住的键 | 右 ⌥ |
 | `ai.feature.launcher.intent` / `ai.feature.launcher.ask` | 两个功能各用哪个模型（`AIFeatureSettings`） | 本机 |
+
+### 功能开关（第 13 步，2026-11-25，`STEP-13-SWITCHES.md`）
+
+需求 §3.10「功能开关」：设置页把快速入口能做的事全部列出来，每一项一个开关，关掉的不在快速入口里出现（工具本身不受影响）。
+
+**一项功能 = 一个 id**（`Logic/LauncherFeatures.swift`）：
+
+- 来源 `source/<来源 id>`（`LauncherFeatureID.source`）：`source/apps`、`source/commands`、`source/files`，以及各模块 `launcherSources()` 交来的 `source/clipboard`、`source/snippets`；路径不是一个来源，但同一组，id `source/path`。
+- 模块声明的文字 / 图片 / 文件动作 `action/<命令 id>`（`LauncherFeatureID.action`；三种动作都是 `LauncherCommand`，id 现成）。同一个模块的「发到手机」文字、图片、文件各是各的 id，各占一行。
+- 快速入口自己的功能：静态表 `LauncherBuiltInFeature`（id、组、组内次序、图标；名字和说明在 App 侧 `LauncherFeatureCatalog.swift` 的扩展里，`switch` 穷尽，漏了编不过）：
+
+| 组 | id | 名字 | 说明 |
+|---|---|---|---|
+| 搜索 | `source/apps` | App | |
+| | `source/commands` | Baobox 的命令 | 截图、防休眠、开始专注… |
+| | `source/<来源 id>` | 来源名（`launcherSourceName`），右侧所属工具名（和来源名一样时不写），图标用所属工具的 | |
+| | `source/files` | 文件 | 按文件名找 |
+| | `source/path` | 路径 | 输入或贴进一个路径时，打开它、列出文件夹里的内容 |
+| 直接给结果 | `instant/calculator` | 计算 | 12*(3+4)、5 km to mi、0xff |
+| | `instant/textFormat` | 识别文本格式 | JSON、JWT、时间戳、Base64… |
+| | `instant/url` | 网址 → 打开 | （含有歧义的网址排在兜底建议第一条的「打开」） |
+| | `instant/email` | 邮箱 → 写邮件 | |
+| | `instant/color` | 颜色值 → 预览和换算 | |
+| | `instant/wordCount` | 一大段文字 → 字数 | |
+| | `instant/reminder` | 带时间的句子 → 提醒 | 「20 分钟后提醒我取快递」（含输入「提醒」列出待响的） |
+| 文字的去处 | `suggest/runInTerminal` | 在终端里运行 | 输入像一条终端命令时，按两次回车运行 |
+| | `suggest/webSearch` | 上网搜 | |
+| | `suggest/fileName` | 搜文件名 | 改成只搜文件（「文件」也要开着） |
+| 图片的去处 | `image/recognition` | 识别图里的文字和二维码 | （挂着图片时最前面的识别结果几行） |
+| 文件和文件夹的去处 | `path/openInTerminal` | 在终端里打开 | 文件夹 |
+| | `path/copyPath` | 复制路径 | |
+| 刚呼出、还没打字时 | `context/selection` | 带上你选中的文字 | |
+| | `context/clipboard` | 带上你刚复制的内容 | 5 分钟内复制的 |
+| | `context/situational` | 按当前情况给建议 | 会议快开始、正在专注、正在录屏…（一个总开关，不按模块拆） |
+| | `context/frequent` | 最常用的 | |
+
+**存储**：`launcher.disabledFeatures`，字符串数组，存被关掉的 id（`LauncherFeatureSettings`）。键不存在、类型不对 = 全开；数组里不是字符串的、空串跳过；不认识的 id 原样留着、写回时不丢（工具暂时没声明那一项 —— 没装 Claude Code —— 时开关状态不丢）；全开时删掉这个键。写回排好序。
+
+**设置页**（`LauncherSettingsView` + `LauncherFeatureCatalog`）：出现时（`onAppear`，主线程、只读内存）经注册表收一次 —— 各模块的 `launcherSources()`（只读 id 和名字，不取条目）、一个不设开关的 `LauncherCommandProvider` 收全部文字 / 图片 / 文件动作（同面板呼出时的收法）、再加静态表。`LauncherFeatureLayout.sections` 分组排序：组按 `LauncherFeatureGroup` 的次序；组内按次序值，相同的保持传入的先后（模块的在前、快速入口自己的在后，所以同档时模块的动作排前面，同面板兜底建议）。次序值：「搜索」App 0、命令 10、模块的来源 20、文件 30、路径 40；「文字的去处」= 默认档位（在终端里运行 0、上网搜 30、搜文件名 40）；「图片的去处」识别 0、其余 = 档位；「文件和文件夹的去处」在终端里打开 −20、复制路径 −10、其余 = 档位；同一个 id 只留第一行，没有行的组不出。拨开关直接写设置（下次呼出生效）；小节标题右边的链接按钮：这一节有关着的是「全部打开」，否则「全部关闭」（`offersEnableAll`）。小节标题后面同一行一句小字说这一组管什么时候；「图片的去处」页脚一句：「翻译图里的文字」这类行跟着文字动作走。
+
+**过滤点**（每次呼出读一次设置 → `LauncherFeatureSet`，到收起为止不变；打字路径只查这个集合）：
+
+| 在哪 | 管哪几项 |
+|---|---|
+| `LauncherController.show()` | 读设置，交给引擎、`LauncherContextProvider`、`LauncherEntryProvider`、`LauncherCommandProvider`；`source/apps` 关着不装 App 条目；`source/files` 关着不调 `LauncherFileSources.panelShown`（不建已知文件 / 剪贴板路径的表、不重扫） |
+| `LauncherCommandProvider` | `source/commands` 关着 `items()` 为空；`textActions()` / `imageActions()` / `fileActions()` 去掉关着的 `action/…`（`LauncherFeatureSet.enabledActions`）—— 文字、图片、文件三处都从这里来，派生的「<命令名>图里的文字」从过滤后的文字动作里来，所以也不出 |
+| `LauncherEntryProvider` | 关着的模块来源：条目照样取（只读内存，「刚复制的」和文件搜索的剪贴板路径要用），但不交给引擎（`sessionItems`）、不算进 `sessionSourceIDs`、不建搜索键（retain 照旧，打开后不用重建） |
+| `LauncherEngine.load` | 前缀只留装进来、而且开着的来源的（`LauncherFeatureSet.prefixes`）：关掉文件后 `f readme` 整段当查询词 |
+| `LauncherEngine.search` | `source/path`（关着时不走路径那一支，按普通文字）；`instant/calculator`、`instant/textFormat`（`LauncherInstantPolicy.runs…(features:)`）；建议计划（下一行）；`source/files`（`LauncherFilePolicy.request(features:)` 为 nil）；`image/recognition`（`LauncherImageSuggestionProvider` 不出识别结果那几行，取字照样在后台跑，「图里的文字」要用）；`path/openInTerminal`、`path/copyPath`（`LauncherPathActionPlan.actions(features:)`）；`context/frequent`（空着时不接最常用的）；建议全关的小字 |
+| `LauncherSuggestionPolicy.plan(features:)` | `instant/url`（含有歧义网址的「打开」）、`instant/email`、`instant/color`、`instant/wordCount`：不出那一行，类别照旧（二维码照样提前、总结照样提前）；`instant/reminder`：分类时不给时钟（不认带时间的句子）、`showsReminders` 为 false；`suggest/runInTerminal`：不放进兜底组最前面（不占名额）；`source/path` 关着时分类不认路径（`classify(…, recognizesPaths: false)`）；兜底建议里快速入口自己的两条 `plan.fallbackBuiltIns`（`LauncherFeatureRules.fallbackBuiltIns`：上网搜；搜文件名要 `suggest/fileName` 和 `source/files` 都开着），关掉的不占名额，后面的补上 |
+| `LauncherContextProvider` | `context/selection`：`LauncherSelectionFetcher.begin` 不调取词函数（不做那次辅助功能调用，日志 `selection off`）；`context/clipboard`：不取「刚复制的」（`recent copy off`）；`context/situational`：不向模块收 |
+| `LauncherFileSources.activate()` | 启动后那次扫描时 `source/files` 关着就不扫（之后打开了，下次呼出时扫） |
+
+- 已经设好的提醒照常响（`LauncherReminderCenter` 不看开关）；使用记录不动（关掉再打开，排序还在）；二次确认、焦点、选中规则都不动。
+- **建议全关**（`LauncherFeatureRules.showsSuggestionsOff`）：没打前缀、输入不少于 2 个字符（够出兜底建议）、一行都没有、而且「文字的去处」一项都没开着（模块的文字动作过滤后为 0、快速入口自己的两条都出不来、在终端里运行关着）→ 引擎在结果里标 `suggestionsOff`，面板消息那一行写「建议都关掉了，可以在设置里打开」（`LauncherPanelContent.suggestionsOff`，同「没有结果」的位置和高度）。文件还在搜时照旧先是「正在查找…」，搜完也没有才换成这一句。空输入什么都没有时照旧是提示文字。
+- 单元测试 `LauncherFeaturesTests`：id 拼法、集合的开关、设置键的容错（不认识的 id、非字符串、类型不对）与写回不丢、分组与排序、来源关掉后前缀失效 / 不搜文件 / 不出搜文件名、动作关掉后三张表都没有它（派生的也没有）、对应建议 / 提醒 / 在终端里运行 / 计算 / 识别 / 路径 / 路径行动作各自的开关、建议全关的条件、关掉 `context/selection` 后取词函数调用次数为 0。
 
 本地化命名空间 `launcher.*`，en + zh-Hans，紧凑单行 JSON（约定 3）。单位名、城市名、设置页名这三张表量大，放进 `Localizable.xcstrings` 会很吵：做成代码里的静态表（每项自带 zh / en 两个名字和关键词），因为它们同时是**搜索词**，两种语言都要能搜到，不是单纯的显示文案。
 
@@ -1139,6 +1198,7 @@ UserDefaults 前缀 `launcher.`：
 | 9 | 空着时给建议（2026-11-24 设计、11-25 实现，`STEP-9-CONTEXT.md`）：呼出时带上选中的文字和刚复制的内容，⏎ / Tab 放进输入框（§8.4）；各模块声明的情景建议（§5.6）；设置页两行开关。原来排在这一步的系统设置页、系统命令、各模块补带参数的命令不在这一步 | 真机：在浏览器、编辑器、终端、微信里选字呼出；复制文字 / 图片后呼出；专注、防休眠、录屏、会议记录中、下一场会议快开始、Claude Code 在等时呼出；日志里的选区耗时和呼出延迟（§10 验证 5） |
 | 10 | 给放进来的东西多几个去处（2026-11-24 设计、11-25 实现，`STEP-10-ACTIONS.md`）：输入分类加「像命令」「带时间的句子」（§5.4）；文字动作的适用性判断（`appliesTo`、`leading`）；按两次回车（§4，`destructive` 从此生效）；在终端里运行、一次性提醒（存储、计时、列表里取消，§5.4）；朗读（划词助手）、交给 Claude Code / Codex、发到手机（文字 / 图片 / 文件）、会议链接的入会并开始会议记录；路径行的动作（复制路径、在终端里打开、发到手机，§6.5）。原来排在这一步的设置页、⌘Space 引导与自动绑定、本地化、使用手册不在这一步 | 真机：`git status` 按两次回车跑一次；「2 分钟后提醒我喝水」等它响、睡眠唤醒后补响；输入「提醒」取消一条；长报错交给 Claude Code（看目录和第一条消息）；连着 / 没连着手机各发一次文字、图片、文件；粘一个 Zoom / 腾讯会议链接入会；文件夹在终端里打开 |
 | 11 | 文件优先与更多文件来源（2026-11-24 加，用户输入 `add-approval-hook.py` 只得到剪贴板和建议、`f add-approval-hook.py` 是「没有结果」：「我如果输入一个文件，第一优先级应该是打开文件吧」）：输入像文件名时名字正好是它的文件固定排第一（⏎ 打开）；文件搜索合并四个来源 —— Spotlight、自己扫的目录（`ToolModule.launcherFileRoots()`，默认 Claude Code 的临时目录）、各模块已知的文件（`launcherKnownFiles()`，Claude Code 的最近文件）、剪贴板里出现过的路径；先回来的先出、按规范路径去重（§3.4、§6.4） | 真机：输入一个 Claude Code 临时目录里的文件名（带 / 不带 `f `）、复制过路径的文件名、Claude Code 写过的文件名、同名多份；日志里各来源的耗时 |
+| 13 | 功能开关（2026-11-25 设计并实现，`STEP-13-SWITCHES.md`；用户：「在快速入口的设置中，加一些设置项，是否开启某些功能……全部列出来」）：设置页六个小节列出全部功能、每项一个开关、每节「全部打开 / 全部关闭」；`launcher.disabledFeatures` 取代第 9 步的两个键；关掉的在收集和建议计划里过滤（§11「功能开关」） | 真机：设置页滚动、拨开关后下次呼出生效；关掉生成二维码、文件（`f readme`）、带上选中的文字（日志 `selection off`）、全部文字的去处（那行小字）各试一次 |
 
 > 探针的时机（2026-11-23）：验证 1（呼出延迟、全屏、输入法）在 PR 4 的真机验证里做，面板代码里用 `os.Logger` 记呼出耗时与慢查询（§4）；验证 6、7 要在系统设置里点，放到 PR 9、10（原来的 6、7，2026-11-24 插进了「路径与文件」「放进任何东西都有建议」「图片与文件」后顺延），和用户一起做（2026-11-25：第 9 步改成了「空着时给建议」，系统设置页不在里面，验证 6 跟着它往后挪）；验证 5 要辅助功能权限，只能在装好的 Baobox 里测 —— 第 9 步起呼出时就读选区，日志里记着每次的结果和耗时，第 9 步装上后看真机日志（§10 验证 5）。PR 1–3 是纯逻辑，不依赖这些结论。
 
