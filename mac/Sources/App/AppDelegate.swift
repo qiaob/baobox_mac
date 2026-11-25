@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClaudeCodeTool())
         registry.register(AIToolsTool())
         registry.register(NetCaptureTool())
+        registry.register(NetCheckTool())
         registry.register(KeyboardNavTool())
         // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），菜单、设置、快捷键都在会议里。
         // 会议经 MeetingEngine 协议驱动字幕与同传的引擎，两边只在下面的 `AppDelegate.meetingEngine` 接上。

@@ -193,6 +193,7 @@ targets:
       - path: Sources/Core/CLIVersion.swift
       - path: Sources/Core/Translation/OfflineServerPID.swift
       - path: Sources/Modules/NetCapture/Logic
+      - path: Sources/Modules/NetCheck/Logic
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baobox.app.tests

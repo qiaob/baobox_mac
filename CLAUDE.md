@@ -13,7 +13,7 @@
 
 - **本仓库在 Linux 开发环境，无法本地编译 macOS 部分**；macOS 构建工作流 `.github/workflows/build-macos.yml` 手动触发或推到 `main` / `claude/**` 时自动跑，产物可直接下载。改代码务必**保守**：只用项目里已出现的 API 与 Apple 稳定公开 API，不引入新框架、不用 Swift Charts / Observation 宏。
 - Mac 上构建：`brew install xcodegen && xcodegen generate && open Baobox.xcodeproj`（或 `xcodebuild -scheme Baobox build`）。
-- Mac 有单元测试 target `BaoboxTests`：纯逻辑测试，只编 `mac/Tests/` 与 `mac/project.yml` 里 `BaoboxTests.sources` 列出的纯逻辑源码（用量 `Core/CLIUsage/`、会话索引 `Core/CLISession/`、会议引擎接口 `Core/MeetingEngine/`、会议纯逻辑 `Modules/Meeting/Logic/`、通知模型与判断 `Core/Notify/Model/` 等），不链接、不启动 App；要测的代码只能依赖 Foundation 和这些目录。在 `mac/` 下 `xcodegen generate && xcodebuild -scheme Baobox test` 就能跑（或在 Xcode 里 ⌘U）；macOS 构建工作流每次也跑。
+- Mac 有单元测试 target `BaoboxTests`：纯逻辑测试，只编 `mac/Tests/` 与 `mac/project.yml` 里 `BaoboxTests.sources` 列出的纯逻辑源码（用量 `Core/CLIUsage/`、会话索引 `Core/CLISession/`、会议引擎接口 `Core/MeetingEngine/`、会议纯逻辑 `Modules/Meeting/Logic/`、通知模型与判断 `Core/Notify/Model/`、网络泄露检测的判定 `Modules/NetCheck/Logic/` 等），不链接、不启动 App；要测的代码只能依赖 Foundation 和这些目录。在 `mac/` 下 `xcodegen generate && xcodebuild -scheme Baobox test` 就能跑（或在 Xcode 里 ⌘U）；macOS 构建工作流每次也跑。
 - Windows / Linux（Rust）不在这个仓库：2026-11-22 拆到 [qiaob/baobox_windows](https://github.com/qiaob/baobox_windows)、[qiaob/baobox_linux](https://github.com/qiaob/baobox_linux)，两边共用的 Rust 库在 [qiaob/baobox_shared](https://github.com/qiaob/baobox_shared)（按标签作 Cargo git 依赖）。工具链、fmt / clippy 规则见各仓库的 CLAUDE.md。
 - 无法编译时的自查：① 只引用真实存在的类型/方法（先 grep 确认签名）；② 每个 `L()` / `Text()` 的 key 都已入 `Localizable.xcstrings`（可跑下方脚本校验）；③ 所有 `@Published` 只在主线程写；④ `Process` / `NWConnection` / `URLSession` 不在主线程同步等待。
 
@@ -58,6 +58,7 @@ BaoboxApp(@main, Settings scene)
 | MenuBarManager | `menubar` | **菜单栏管理**：设置里给每个菜单栏图标选显示 / 隐藏（看不见的占位项 + 模拟 ⌘ 拖，用户不碰分隔线），隐藏的与此刻被挤掉 / 被刘海挡住的放在 Baobox 主菜单最上面一行（`ToolModule.statusMenuHeaderItems`），点一下 = 让它回到屏上再点；Baobox 图标一键挪到最右，Baobox 自己的临时图标排在它右边（`StatusItemController.makeCompanionItem`）。默认关。`docs/menubar-manager/` |
 | ClaudeCode | `claudecode` | Claude Code CLI 助手：会话续接、**最近文件**（面板文件模式，会话写过的文件按类别用偏好 App 打开）、用量/额度（5h + **周窗口**）、报表、审计、hooks、配置可视化、statusline、MCP 面板。纯本地文件，`docs/claude-code-assistant/` |
 | AITools | `aitools` | **Codex 助手**（Cursor 已移除）：会话续接、用量/报表（5h+周）、中心窗口、配置可视化、完成通知、维护。`docs/codex-assistant/DESIGN.md` |
+| NetCheck | `netcheck` | **网络泄露检测**（2026-11）：开着代理 / VPN / Tailscale 出口节点时测出口 IP（归属、机房）、IPv6、DNS（bash.ws）、WebRTC（隐藏 1×1 `WKWebView` 跑 `RTCPeerConnection` 收集 ICE 候选，做法同手机互传）、时区五项，再收成两个问题的总结：运营商能不能看到你的流量、App 能不能看出你的真实位置。只在用户点「立即检测」时测，结果不落盘；「真实网络」= 用户声明的 ASN（窗口里一键记录本次出口）；ipapi.is 的 key 在钥匙串。判定规格与 baobox_shared 的 `netcheck` 相同（纯逻辑 `Logic/` 进 `BaoboxTests`，产出结构化原因，文案在 `NetCheckText`）。`docs/netcheck/DESIGN.md` |
 | KeyboardNav | `keyboardnav` | 键盘点击：给可点元素打字母标签、连续点击、键盘滚动（AX 权限）。`docs/manual/keyboard-nav.md` |
 | Meeting | `meeting` | **会议**（#42）：线上会议（麦克风 + 系统声音混成一路进一个识别器，按两路音量标「我 / 对方」）/ 线下会议（仅麦克风）/ 自由听译（= 实时翻译）；控制条（暂停、🔖 标记、速记、字幕、结束）、菜单栏录音指示 / 下一场倒计时、`meeting` 勿扰、本地纪要模板（默认 / 站会 / 1:1 / 面试）与行动项、会议库（`Application Support/Baobox/Meetings/`，旧实时翻译记录按引用迁入）。日历（EventKit，设置里打开才申请权限）、会前提醒、一键入会、会议检测（会议 App + 麦克风占用 / 日历会议已开始）、会议库窗口（搜索、行动项、会前简报、系列时间线、周报）、设备自检。引擎经 Core 的 `MeetingEngine` 协议驱动（实现 = 实时翻译 `LiveTranslateController` 包一层的 `LiveTranslateMeetingEngine`，#107）。`docs/meeting/` |
 | LiveTranslate | `livetranslate` | **实时翻译 / 字幕与同传**（独立入口已删，#106：不再注册成工具，菜单项「开始自由听译」、设置、`livetranslate.toggle` 快捷键都在「会议」里；这里是会议的引擎层）：麦克风 / 系统声音（SCK 只采音频）→ 识别（macOS 26 用 SpeechAnalyzer，否则 SFSpeechRecognizer 分段，自动回退）→ 翻译（macOS 15+ 系统翻译，否则 / 不支持的语言用离线模型 Hy-MT2）→ 屏幕底部字幕条。说话语言可选「自动（A / B）」：双识别器逐句判别语种；AI 纠正中文识别错字（本地 Qwen3-1.7B）；可朗读译文并送进会议（虚拟声卡 BlackHole）/ 外放。`docs/live-translate/DESIGN.md`、`docs/live-translate-voice/DESIGN.md` |
@@ -101,6 +102,7 @@ BaoboxApp(@main, Settings scene)
 - `docs/translation-engine/DESIGN.md` —— 翻译引擎共享层：系统翻译 / 离线模型（Hy-MT2-1.8B + 内置 llama-server）、文字语种检测、语音双识别器（自动识别说的是哪种语言）。
 - `docs/phone-transfer/` —— 手机互传 REQUIREMENTS + TECH_DESIGN：局域网 HTTP 接口、加密信令格式、三个公共信令后端、WebRTC 建连与 NAT 诊断、DataChannel 分块协议、WKWebView 宿主桥。
 - `docs/packet-capture/` —— 网络抓包 v2（2026-11）：REQUIREMENTS（五个一键场景、三栏窗口）+ TECH_DESIGN（内核换成包内的 mitmproxy、桥脚本的事件与指令、§1 探针与实测记录（含还没验证的几项）、§10 分步落地）；`TOOLS.md` = 第二批功能的方案（筛噪音、请求参数分栏、重发、Mock、Protobuf / gRPC 解码；引擎侧已实现，Swift 侧待做）；`WIREGUARD-DEVICES.md` = WireGuard 多台设备（一台一张码、迁移、设备栏按名字显示）；`STARTTLS.md` = XMPP STARTTLS 解密（用 Baobox 自己的证书接管，不要私钥）；`TLS-FINGERPRINT.md` = 握手失败自动放行按「设备 + 域名 + 客户端 TLS 指纹」记（浏览器和 App 互不影响）；`TECH_DESIGN_V1.md` 是自研内核的旧方案，留档。
+- `docs/netcheck/DESIGN.md` —— 网络泄露检测：五项检测（出口 / IPv6 / DNS / WebRTC / 时区）与两问总结的规则、请求顺序、WebRTC 探测（隐藏 WKWebView）、隐私边界；规格与 baobox_shared 的 `netcheck` 同一套。
 - `docs/scrolling-capture/DESIGN.md` —— 长截屏（滚动拼接）与「别的 App 菜单被截没了」的修复（issue #6）。
 - `docs/screenshot-ocr/DESIGN.md` —— 屏幕取字（Vision 本地 OCR + 二维码识别），嵌在截图模块内、不单独立 `ToolModule`；识别器下沉为 `mac/Sources/Core/TextRecognizer.swift`。
 - `docs/clipboard-text-tools/` —— 剪贴板文本工具（格式识别 + 转换动作 + 二维码）REQUIREMENTS + TECH_DESIGN。独立的 QRCode 模块已随此特性移除，生成器下沉为 `mac/Sources/Core/QRCodeGenerator.swift`（NetCapture 也在用）。
