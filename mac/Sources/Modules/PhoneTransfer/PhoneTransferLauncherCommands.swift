@@ -45,15 +45,16 @@ enum PhoneTransferLauncherActions {
     /// 清空临时图片：启动时（会话还没开，没有在发的）在后台清，退出时（会话已经停了）同步清。
     nonisolated static func clearTemporaryImages(inBackground: Bool) {
         let directory = temporaryDirectory
-        let clear = {
-            guard FileManager.default.fileExists(atPath: directory.path) else { return }
-            try? FileManager.default.removeItem(at: directory)
+        guard inBackground else {
+            removeDirectory(directory)
+            return
         }
-        if inBackground {
-            DispatchQueue.global(qos: .utility).async(execute: clear)
-        } else {
-            clear()
-        }
+        DispatchQueue.global(qos: .utility).async { removeDirectory(directory) }
+    }
+
+    nonisolated private static func removeDirectory(_ directory: URL) {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try? FileManager.default.removeItem(at: directory)
     }
 
     static func send(text: String) {
