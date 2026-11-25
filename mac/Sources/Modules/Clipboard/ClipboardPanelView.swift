@@ -316,8 +316,7 @@ struct ClipboardPanelView: View {
 
     private func row(item: ClipboardItem, selected: Bool) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: item.isConcealed ? "lock.fill" : iconName(item.type))
-                .font(.system(size: 12))
+            typeIcon(item)
                 .frame(width: 26, height: 26)
                 .background(selected ? Color.white.opacity(0.22) : Color.primary.opacity(0.08),
                             in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -634,12 +633,19 @@ struct ClipboardPanelView: View {
 
     // MARK: 辅助
 
-    private func iconName(_ type: ClipboardItemType) -> String {
-        switch type {
-        case .text: return "textformat"
-        case .link: return "link"
-        case .image: return "photo"
-        case .file: return "doc"
+    /// 行首的类型图标。文本画一个「T」：系统符号 `textformat` 随系统语言变，
+    /// 中文下是「格式」两个字。
+    @ViewBuilder
+    private func typeIcon(_ item: ClipboardItem) -> some View {
+        if item.isConcealed {
+            Image(systemName: "lock.fill").font(.system(size: 12))
+        } else {
+            switch item.type {
+            case .text: Text(verbatim: "T").font(.system(size: 13, weight: .medium))
+            case .link: Image(systemName: "link").font(.system(size: 12))
+            case .image: Image(systemName: "photo").font(.system(size: 12))
+            case .file: Image(systemName: "doc").font(.system(size: 12))
+            }
         }
     }
 
