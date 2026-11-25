@@ -9,7 +9,7 @@ import AppKit
 //   和选中的是同一段（空白归一后）时只出「选中的」。
 // - 情景建议：各模块 `launcherContextSuggestions()` 此刻值得提一句的动作（只读内存），每次呼出收一次，按紧急程度
 //   （`suggestion.priority`，小的在前）排好再取前 4 条；行 id / 使用记录的键
-//   是 `commands/<id>`，和对应的命令同一个键。
+//   是 `commands/<id>`，和对应的命令同一个键；声明方说不记的（`suggestion.recordsUsage == false`）执行时不记。
 // 两样上下文只在内存里显示成一行：不发给模型、不联网、不写盘，收起面板就丢。两个开关：`launcher.context.selection`、
 // `launcher.context.clipboard`（默认开）。
 
@@ -207,7 +207,10 @@ final class LauncherContextProvider {
             let (command, toolName) = collected[index]
             let candidate = LauncherCandidate(sourceID: LauncherCommandProvider.sourceID, entryID: command.id, searchKeys: [])
             let row = LauncherRow(id: candidate.key, title: command.title, source: toolName, icon: .symbol(command.symbolName))
-            return LauncherItem(candidate: candidate, row: row, run: { command.run([:]) })
+            var item = LauncherItem(candidate: candidate, row: row, run: { command.run([:]) })
+            // 声明方说不记的（Claude Code 在等的会话：id 带会话，以后用不上）执行时不记使用记录。
+            item.recordsUsage = command.suggestion.recordsUsage
+            return item
         }
     }
 }

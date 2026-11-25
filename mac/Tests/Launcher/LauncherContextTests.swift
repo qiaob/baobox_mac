@@ -177,6 +177,18 @@ final class LauncherContextTests: XCTestCase {
                        ["commands/screenshot.record", "commands/other.thing", "commands/caffeinate.toggle"])
     }
 
+    func testSituationalSuggestionsRecordUsageUnlessTheDeclarerSaysNot() {
+        XCTAssertTrue(LauncherSuggestionTraits().recordsUsage, "默认记（和对应的命令同一个键）")
+        let focus = LauncherCommand(id: "focushealth.endFocus", title: "End Focus", symbolName: "stop.circle",
+                                    suggestion: LauncherSuggestionTraits(priority: 40)) { _ in }
+        XCTAssertTrue(focus.suggestion.recordsUsage)
+        // Claude Code 在等的会话：id 带会话，以后用不上，不记（也不把会话 id 写进使用记录文件）。
+        let waiting = LauncherCommand(id: "claudecode.waiting.0f3c", title: "Switch", symbolName: "terminal",
+                                      suggestion: LauncherSuggestionTraits(priority: 20, recordsUsage: false)) { _ in }
+        XCTAssertFalse(waiting.suggestion.recordsUsage)
+        XCTAssertEqual(waiting.suggestion.priority, 20, "不记使用不影响次序")
+    }
+
     func testNothingAtAllIsAnEmptyLayout() {
         XCTAssertEqual(LauncherContextRules.layout(context: [], situational: [], mostUsed: []).all, [],
                        "什么都没有：面板照旧显示那一行提示")

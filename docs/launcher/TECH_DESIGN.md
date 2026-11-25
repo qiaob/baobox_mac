@@ -546,7 +546,7 @@ extension HotkeyDefinition {
 
 - 每次呼出调一次（`LauncherContextProvider.prepare`，在 `show()` 里、面板显示之前）。id 为空、带参数的不收（这里只能无参数执行）。
 - 开关类快捷键动作直接交出去，不重写业务逻辑：`launcherStateCommand` = 此刻 `stateTitle` 有值（开关开着、正在录 / 专注）时变成一条同 id、同动作、标题就是那句的命令（「关闭防休眠」「停止录屏」「暂停专注」），没有就 nil。和命令表里那一条（§3.1「白送的部分」）是同一个 id。
-- 行：键 `commands/<id>`，和对应命令同一个键 —— 执行时 `recordUse` 记在它上面（§5.3）。标题是命令标题；行首是命令自己的 `symbolName`（暂停 / 停止的图形，不是工具图标）；右侧小字是工具名。⏎ / ⌘⏎ / ⌘1–9 / 单击同命令：记使用、收起、等焦点回去再执行（§4「焦点」）；Tab 不做事。
+- 行：键 `commands/<id>`，和对应命令同一个键 —— 执行时 `recordUse` 记在它上面（§5.3）；声明方在 `suggestion.recordsUsage` 里说不记的不记（Claude Code 在等的会话，见下）。标题是命令标题；行首是命令自己的 `symbolName`（暂停 / 停止的图形，不是工具图标）；右侧小字是工具名。⏎ / ⌘⏎ / ⌘1–9 / 单击同命令：记使用、收起、等焦点回去再执行（§4「焦点」）；Tab 不做事。
 - 次序（2026-11-25 定）：**按紧急程度**，不按模块注册顺序 —— 会议快开始、有会话在等你才是最该看到的。各模块在交出的命令上带优先级 `suggestion.priority`（`LauncherSuggestionTraits` 现成的字段，原来只给文字 / 图片动作用；小的在前，不写是 50），`launcherStateCommand` 的 `priority` 参数就是它。快速入口收齐后按它稳定排序（`LauncherContextRules.situationalOrder`，纯函数，有单元测试：同一优先级保持收集时的先后 = 注册顺序、模块里写的顺序），再取前 4 条（`maxSituational`），多出的不出。档位写在各模块的扩展里（`launcherSuggestionPriority`），框架不认识具体工具：
 
 | 次序 | 模块 | 建议 |
@@ -574,7 +574,7 @@ extension HotkeyDefinition {
 注意：
 
 - Claude Code 的「在等」在你回了那个提示之后、回合结束（Stop）之前不会变（hooks 只报 Stop / Notification / SessionStart / UserPromptSubmit），和菜单状态行「N 等待确认」一样。
-- Claude 的 id 带会话（两个会话同时在等时各一行），没有对应的命令，使用记录按会话记；使用记录有 2000 条上限、删最久没用的（§5.3），不会一直长。
+- Claude 的 id 带会话（两个会话同时在等时各一行，不会撞），没有对应的命令。这类行**不记使用记录**（`LauncherSuggestionTraits(recordsUsage: false)`，第 9 步验证后改）：按会话记的键会话一结束就再也用不上，每执行一次就多一条，还把会话 id 写进了使用记录文件。
 
 空着时的拼法（`Logic/LauncherContext.swift` 的 `LauncherContextRules.layout`，纯函数，有单元测试）：「选中的 / 刚复制的」最多 2 行（§8.4）→ 情景建议最多 4 条 → 最常用的（使用分 > 0，最多 8 行，同原来），**总共不超过 9 行**（`maxEmptyStateRows`）；同一个键只出一次，先出现的留着 —— 一条命令既是情景建议又在最常用里时留在情景建议里。引擎为此在空输入时多取 4 条最常用的（共 12 条），让出重复的再截。只打了前缀（`c `）时不出这两类，照旧最多 8 行；什么都没有时照旧一行提示。9 行比列表能完整显示的 8.5 行多，第 9 行露一半（§4 的高度规则不变）。
 

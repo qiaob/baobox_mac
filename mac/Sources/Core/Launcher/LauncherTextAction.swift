@@ -37,13 +37,18 @@ struct LauncherSuggestionTraits: Equatable, Sendable {
     /// 和图片动作排在一起，值是那时的档位（同图片动作的 `priority`）；执行时先本机取字、再把认出的文字交给它
     /// （docs/launcher/TECH_DESIGN.md §5.5）。nil（默认）= 不出。图片动作不看它。
     var imageTextPriority: Int?
+    /// 只对情景建议有用（`ToolModule.launcherContextSuggestions()`，docs/launcher/TECH_DESIGN.md §5.6）：执行时记不记使用记录。
+    /// 默认记（和对应的命令同一个键）；每一行都只出现一次、以后用不上的（Claude Code 在等的会话，id 带会话）设 false ——
+    /// 不然每执行一次就多一个永远用不上的键，还把会话 id 写进使用记录文件。文字 / 图片动作不看它。
+    var recordsUsage: Bool
 
     init(kinds: Set<LauncherTextKind> = Set(LauncherTextKind.allCases), priority: Int = 50,
-         boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil) {
+         boostedKinds: Set<LauncherTextKind> = [], imageTextPriority: Int? = nil, recordsUsage: Bool = true) {
         self.kinds = kinds
         self.priority = priority
         self.boostedKinds = boostedKinds
         self.imageTextPriority = imageTextPriority
+        self.recordsUsage = recordsUsage
     }
 }
 
