@@ -315,6 +315,8 @@ Codex 助手没有现成的文件清单，不交。用户自己加目录：设�
 - 点外面收起（PR 8 改）：右键照旧立刻收；左键等松开再决定 —— 在别的 App 里按住拖东西过来时那一下按下也是「点外面」，松开时鼠标在面板上就不收（每 30 ms 看一次 `NSEvent.pressedMouseButtons`）。普通单击只是晚了按住的那一下。
 
 - 按两次回车（第 10 步，2026-11-25；`Logic/LauncherConfirm.swift` + 面板模型 + 控制器）：有破坏性的行 —— 模块声明的 `LauncherCommand.destructive` 命令（从第 1 步就有这个字段，一直没人实现）、「在终端里运行」、取消一条提醒（§5.4）—— 带一个 `LauncherConfirmation`（做什么 + 对象，挂在 `LauncherItem` / `LauncherSuggestion` 上）。第一次 ⏎ 不执行：选中那一行、算手动选过（`LauncherSelectionState.choose`，后台结果回来时选中留在它上面），标题换成「再按一次回车<做什么>：<对象>」（`launcher.confirm.action %@ %@`；没有「做什么」的模块命令是「再按一次回车：<命令名>」），对象压成一行、超过 48 个宽度单位（ASCII 算 1、其余算 2）时中间截断成「开头…结尾」，开头多半、结尾少半（`LauncherConfirmText.object`）。再按 ⏎ 才执行。复位：选中移开（↑ ↓、悬停换行、后台刷新后选中的不是它）、输入改了（含挂上 / 去掉图片）、面板收起。⌘1–⌘9、单击这样的行同样只算第一次（会把选中挪到那一行）；⌘⏎ 落到 ⏎ 的也一样。行高、图标、右侧小字都不变，只换标题；状态在面板模型里（`confirmPress(at:title:)`、`disarm()`），一批新行进来时还选着它就把新的那一行也换上。
+  - 验证后定（2026-11-25）：⏎ 和 ⌘1–⌘9 的自动重复事件（`NSEvent.isARepeat`）一律忽略，对所有行都这样（按住 ⏎ 不会连续执行）。鼠标点一下上膛；上膛后 `NSEvent.doubleClickInterval` 之内的再一次点击什么都不做（双击不会一口气确认）；键盘的两次分开的按键不设间隔。这一下算「执行 / 上膛 / 不算」由纯逻辑判断（`LauncherConfirmState.press`，传入上膛时刻、现在、来源），有单元测试。
+  - **完整显示**（只给「在终端里运行」）：确认时显示的必须是将要执行的全部内容。上膛后那一行变高，第一行是「再按一次回车运行：」，下面用等宽字把整条命令按每行固定宽度（`LauncherConfirmText.commandColumns`，ASCII 算 1、其余算 2，视图用同一个常量）硬换行、完整显示，最多 6 行（`maxCommandLines`）；放不下 6 行的命令不出「在终端里运行」那一行。别的要按两次的行（取消提醒）仍是一行、中间截断。行高随行数变（`LauncherRowStyle.confirmCommand`），面板高度、选中行滚到可见、第 9 行露一半都照每行的实际高度算。
 
 面板里的按钮、菜单自己画（`.borderless` 非当前 App 的窗口里，系统控件会按「非活动窗口」发灰，划词助手 #95 踩过，沿用 `SelectionButtons.swift` 的做法或把它下沉到 Core）。PR 4 的选中高亮（强调色底、白字）、命令图标底都由 SwiftUI 自己画。
 
@@ -421,7 +423,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 | 划词助手 | `selectiontranslate.text.polish` | 润色 | 普通文字、一大段文字 | 60 | 一大段文字 | 同上 |
 | 快速入口 | `launcher.webSearch` | 上网搜 | 全部 | 30 | — | 默认浏览器打开 Google 搜索（`LauncherWebSearch`，引擎是一张表，以后设置里增删） |
 | 快速入口 | `launcher.findFiles` | 搜文件名含「…」的文件 | 全部 | 40 | — | 把输入框换成 `f <文字>`，面板不收，接着就是只搜文件（§6.4） |
-| 手机互传（第 10 步） | `phonetransfer.text.send` | 发到手机 | 全部 | 50 | — | 有手机连着（`PhoneTransferSession.canSend`）直接 `send(text:)`、回执「已发到手机」；没有就打开手机互传的窗口、回执「连上手机后再发一次」（现有代码没有「连上后自动发」） |
+| 手机互传（第 10 步） | `phonetransfer.text.send` | 发到手机 | 全部 | 50 | — | 有手机连着（`PhoneTransferSession.canSend`）直接 `send(text:)`、回执「已发到手机」；没有就打开手机互传的窗口、回执「连上手机后再发一次」（现有代码没有「连上后自动发」）。挂着的图片是字节时先写成 `$TMPDIR/Baobox-PhoneTransfer/` 下的临时文件再发；模块 `activate()` 时在后台、`willTerminate()` 时清空这个目录（验证后加） |
 | Claude Code（第 10 步） | `claudecode.text.handOff` | 交给 Claude Code（<项目名>） | 全部（`appliesTo`：不超过 20 万字节） | 55 | 一大段文字 | 在偏好终端里 `'<claude>' '<文字>'`（`LauncherShellHandoff.promptLine`），目录是最近一次会话的项目目录（`ClaudeSessionIndex.shared.sessions.first`，内存缓存），拿不到用主目录、标题不写项目；没装不声明 |
 | Codex 助手（第 10 步） | `aitools.text.handOff` | 交给 Codex（<项目名>） | 同上 | 56 | — | 同上，`'<codex>' '<文字>'`，目录取 `CodexSessionIndex`；不提前（两个都提前的话一大段文字的兜底里存为片段就挤出去了） |
 | 会议（第 10 步） | `meeting.text.joinAndRecord` | 入会并开始会议记录 | 网址（`appliesTo`：`MeetingLinkParser` 认得），`leading` | 10 | — | `MeetingActions.joinAndRecord(link:)`：链接正是日历上眼下这一场 / 下一场的 → 现有的 `joinAndRecord(event)`（绑上那一场）；否则打开链接 + `start(type: .online)`，已经在记就只入会 |
@@ -446,7 +448,9 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 再加两个标记（第 10 步，`LauncherTextKind.command` / `.reminder`，和基本类别同时成立；路径 > 网址 > 邮箱 > 颜色仍然优先，是这几类时不看这两个标记；有计算结果时这两类都不出）：
 
 - **像命令**（`Logic/LauncherShellCommand.swift`）：单行、不超过 2000 字节。`$ ` 开头的都算（去掉 `$ `，后面只有一个词也算）；否则第一个词在常见命令表里（git、npm、npx、pnpm、yarn、brew、cd、ls、cat、curl、wget、ssh、scp、docker、kubectl、make、python、python3、pip、node、swift、xcodebuild、open、sudo、rm、mv、cp、mkdir、chmod、grep、find、tail、ps、kill、export；大小写要一致）、后面还有参数，而且后面至少有一个词形如选项（`-x`、`--xx`，连字符后面紧跟字母数字）、路径（含 `/`，或 `~`、`.`、`..`，或含一个后面还跟着字的 `.`；句末标点和纯数字不算）、赋值（`a=b`），或是这个命令的常见子命令（git、npm / pnpm / yarn、docker、kubectl、brew 各一小组）；`sudo` 看它后面那条命令。单独一个词不算。像命令时基本类别按**普通文字**算 —— `git status` 不当成英文短语（不提前「学习」）、长命令不出字数。放进来的文字（⌘V、拖放、「选中的 / 刚复制的」放进输入框，第 9 步起按字面处理、不拆前缀）照常认：贴进一条命令同样出「在终端里运行」；带换行的原文不是一条命令（单行才算）。
+  验证后加（2026-11-25）：文字里有控制字符（去首尾空白后剩下的 C0 控制符、NUL、DEL、C1）、双向控制符（U+202A–202E、U+2066–2069、U+061C）、零宽字符（U+200B–200F、U+FEFF）的不认成命令 —— 确认时看到的就是要跑的。`$ ` 后面第一个词要像命令名（以字母、`_`、`.`、`/`、`~` 开头，只含字母数字和 `_ . + - / ~`），「$ 5 off your first order」不算。以 `.` 结尾的词不算路径证据（`U.S.`、`e.g.`、`i.e.`；`.`、`..` 本身照算）。没有任何选项形状的词时，只要有一个不在引号里的词（含 `/` 的拆开看）是英文虚词（the、a、an、and、or、is、are、was、be、to、of、on、in、for、with、my、your、you、i、it、this、that、me、we、not、sure）就不算命令；子命令位置上、是该命令列出的子命令的那个词不查（`npm i lodash` 仍算，`npm i love you` 不算）。`make` 加一组常见目标（build、install、test、clean、all、run、dev、lint）；`ssh` / `scp` 后面有含 `@` 的词算证据。`echo hello`、`ssh host` 仍不认。完整显示放不下 6 行的命令不出「在终端里运行」（§4「按两次回车」）。
 - **带时间的句子**（`Logic/LauncherReminderParser.swift`）：不超过 120 个字符、单行；能解析出一个将来的时间点和一段事由。句子开头是时间（前面可以有「提醒我」「remind me (to)」「在」），后面是事由；英文还认事由在前、`in 20 minutes` 在最后。相对：`N 分钟后 / N 小时后 / N 个半小时后 / 半小时后 / 一刻钟后 / 三刻钟后 / 过 N 分钟`、`in 20 minutes / in an hour / in half an hour`；绝对：`[今天|明天|后天|大后天|今晚|明早|明晚|周五|下周五|星期五|tomorrow|tonight|friday|next friday…] [凌晨|早上|上午|中午|下午|傍晚|晚上] [at] 钟点`，钟点 `三点 / 三点半 / 三点一刻 / 三点十五(分) / 3点05 / 15:30 / 3pm / 3:30 pm`，`at` 后面单独一个数也算。没写上午下午时 1–6 点当下午、7–11 点先当上午（已经过了再当晚上）、写成 `15:30` 的不猜；没写「下 / 本」的星期几已经过去就是下一周的。中文数字 0–99（一二两三…十、零五）。已经过去的、认不出时间的、没有事由的不算；事由以「的」开头的也不算（「12点的会议纪要」「10:30 的航班」是在说一样东西，而这一行排在最前，误认了 ⏎ 就错了）。结果是一个 `Date`（「现在」、日历、时区由调用方传入：App 里跟系统，测试里写死 2026-11-23 10:00 上海）和去掉了时间、「提醒我」、首尾标点的事由。放进来的一句话同样认。
+  验证后加（2026-11-25）：钟点是「中文数字 + 点」、而且句子里没有别的时间信号时**不算提醒**（「一点也不好玩」「两点之间直线最短」）。别的时间信号：日子词（今天、明天、后天、今晚、周几…）、时段词（上午、下午、晚上、凌晨、中午、早上、夜里…）、「提醒 / 叫我」、点后面紧跟「钟 / 半 / 一刻 / 三刻 / N 分 / 整」。阿拉伯数字的钟点（`3点开会`、`15:30`、`3pm`）不受限制。取舍：「三点开会」不再认（写「下午三点开会」或「3点开会」）—— 这一行排第一且默认选中，误判比漏判糟。「N 点多」（三点多、3点多）不算。「晚上 / 今晚 / 夜里 + 1–5 点」是那一晚之后的凌晨：所指那天的次日那个钟点（「明天晚上一点」= 后天 01:00）；没有日子词或写的是今天 / 今晚、而且现在还没到今天的那个钟点（00:30 说「晚上1点」）→ 今天那个钟点；同「晚上12点 = 次日 0 点」。时间后面紧跟「前 / 之前 / 以前」→ 照那个时刻，事由去掉这个词（「下午3点前交报告」→ 15:00「交报告」）。时间段（「3点到5点」「3点-5点」「3点至5点」「15:00~17:00」）→ 按开始时刻，事由去掉后一个时刻和连接词。「明天6点起床」按 18:00（1–6 点没写时段当下午）不改：行上写着具体时刻。
 
 **粘贴的原文**（2026-11-24 审后加，`Logic/LauncherPastedText.swift`）：输入框把换行压成空格，交给翻译、总结、存为片段时段落就没了。所以 `LauncherController.performEditShortcut` 在 ⌘V（`LauncherFieldHandle.perform(.paste)`）之前读一次剪贴板的文字，带换行的记成「这次输入的原文」（第 9 步起单行的也记，叫 `placedText`，和输入一起保留 60 秒）。输入框每次变化时核对一次（见下面「核对放在哪」）：输入框里的文字和原文**把空白归一后相等**（连续的空格、制表符、换行都换成一个空格、去首尾空白；单行输入框把 `\n` 换成一个空格、`\r\n` 换成两个，归一后都一样）才用原文 —— 分类、字数、交给动作都用它，多行的原文算一大段文字；不相等（改了一个字、粘在已有文字后面）就作废，控制器在文字变化时清掉它。读剪贴板只在按 ⌘V 那一下，不在打字路径上；右键菜单里的「粘贴」不记（少见，退回框里那一行）。
 
@@ -495,10 +499,11 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 
 **交给终端的那一行**（第 10 步，`Core/Launcher/LauncherShellHandoff.swift`）：都经 `TerminalLauncher.run`（偏好终端、一次性 `.command` 脚本），文字一律经 `Shell.quote`（单引号包裹，`'` 写成 `'\''`，`$`、反引号、`\`、换行原样）再拼进命令：
 
-- 在终端里运行：`eval '<命令>'`。命令就是贴进来、按了两次回车确认过的那一行，原样交给 shell（和自己在终端里敲一样）；包一层引号的好处是脚本里永远只有这一行，命令里的引号没配对也只是这一行报错。目录不设（终端默认的主目录）。
-- 交给 Claude Code / Codex：`'<可执行文件>' '<文字>'`，文字是一个参数（新会话的第一条消息，换行保住）；以 `-` 开头时前面加 `--`（免得被当成选项）。超过 20 万字节不出（macOS 一条命令的参数加环境变量合计 1 MB）。
+- 在终端里运行：`eval '<命令>'`。命令就是贴进来、按了两次回车确认过的那一行，原样交给 shell（和自己在终端里敲一样）；包一层引号的好处是脚本里永远只有这一行，命令里的引号没配对也只是这一行报错。目录显式传主目录（验证后定）。
+- 交给 Claude Code / Codex：`'<可执行文件>' '<文字>'`，文字是一个参数（新会话的第一条消息，换行保住）；以 `-` 开头时前面加 `--`（免得被当成选项）。超过 20 万字节不出（macOS 一条命令的参数加环境变量合计 1 MB）。验证后加（2026-11-25）：文字去首尾空白后是单个 ASCII 词（只有字母、数字、`-`、`_`：`update`、`logout`）时不出这两行 —— commander 在 `--` 之后的第一个词仍可能被当成子命令，不靠 `--`；文字里的 NUL 去掉。项目目录不存在时落到主目录再跑：命令写成 `cd '<目录>' 2>/dev/null || cd ~; '<可执行文件>' '<文字>'`（不在主线程查盘，`LauncherShellHandoff.inDirectory`）。
 - 在终端里打开文件夹（§6.5）：在那个目录里 `exec "${SHELL:-/bin/zsh}" -l`，停在交互的登录 shell 里（光 `cd` 的话脚本跑完就退出了）。
 - 单元测试（`LauncherShellHandoffTests`）真的交给 `/bin/zsh -f -c` 跑：单引号、反斜杠、换行、`$()`、反引号、`$变量`、`!`、`*`、以 `-` 开头、中文、emoji 的文字原样作为一个参数到达；`runLine(命令)` 的输出和直接跑那条命令一样。
+- 已知限制（`TerminalLauncher` 的老问题，这一步不改）：脚本是 `#!/bin/zsh` 的非交互 shell，不读 `.zshrc`，用户在那里加的 PATH、别名、nvm / pyenv 这类环境不生效；从访达 / 启动台起的 Baobox 自己的 PATH 也很短。所以「在终端里运行」跑 `npm`、`kubectl` 这类装在自定义目录里的命令可能找不到；交给 Claude Code 用的是探测到的完整路径，不受影响。
 
 **一次性提醒**（第 10 步，2026-11-25；需求 §3.4、§3.11；纯模型 `Logic/LauncherReminders.swift`，App 侧 `LauncherReminderCenter.swift`）：
 
@@ -506,7 +511,7 @@ App 侧（PR 4，`LauncherEngine`）：呼出时各来源交出 `LauncherItem`�
 - 到点：`NotifyCenter.shared.post` 一条 `alert`（sticky：宠物开着是宠物气泡，否则系统通知），标题「提醒：取快递」；晚了一分钟以上（关机、睡眠中、App 没开着）补响时正文写「晚了 12 分钟（原定 14:35）」（不到一小时按分钟、不到一天按小时、再久按天）。`dedupeKey` = `launcher.reminder.<id>`，来源 `launcher`。
 - 存储：`~/Library/Application Support/Baobox/Launcher/reminders.json`，`{"version":1,"reminders":[{"id","date","text","created"}]}`，时间写 1970 年起的秒数。`activate()` 时在后台串行队列读；读完之前设的、取消的先记着，读完按顺序补到读出来的表上（不会被盘上的盖掉，也不会用空表盖盘）；读完马上补响过了点的。每次改动（设、取消、响掉）在同一个后台队列原子写一次，不防抖；`willTerminate` 时等还在写的那次写完。解码全程容错（顶层不对 → 空表；单条缺字段、类型不对、事由是空的、id 重复 → 跳过那一条），不是合法 JSON 时改名成 `reminders.json.bad` 留底。写盘失败 `StorageWriteFailure.report(L("storage.what.launcherReminders"), …)`。最多 200 条（再多删最晚的），事由最多 200 个字符。
 - 计时：一个到最近一条为止的 `Timer`（`.common` 模式，容差 1 秒），到点时响掉所有到点了的、再定下一条。系统睡眠时计时器不走，所以监听 `NSWorkspace.didWakeNotification` 和 `NSSystemClockDidChange`：醒来、改了系统时间就补响过了点的、重排计时器。
-- 管理：输入「提醒」/「reminders」/「reminder」（不分大小写）时，每条还没到点的一行（「14:35 取快递」，右侧「提醒」，行 id `reminder/<id>`），⏎ = 取消，**按两次**（§4），第一次标题「再按一次回车取消提醒：14:35 取快递」；回执「已取消提醒：取快递」。不做新窗口。打字时只读内存里的 `pending`。
+- 管理：输入「提醒」/「reminders」/「reminder」（不分大小写）时，每条还没到点的一行（「14:35 取快递」，右侧「提醒」，行 id `reminder/<id>`），⏎ = 取消，**按两次**（§4），第一次标题「再按一次回车取消提醒：14:35 取快递」；回执「已取消提醒：取快递」。不做新窗口。打字时只读内存里的 `pending`。取消时那一条已经响过了（列表是呼出时的样子）：回执「这条提醒已经响过了」（验证后加）。
 - 日志（category `launcher`）只记条数、秒数、布尔：`reminder set, due in … s`、`reminders loaded: … on disk`、`reminder fired (late)`、`reminders recheck (wake / clock changed)`，不记事由。
 
 **实测**（2026-11-24，M3，`swiftc -O` 探针，137 个 App + 400 条剪贴板 + 假的命令表）：带建议的一次查询中位数 0.1–0.5 ms（最慢的一次 2.4 ms）；建议这一块对 125 个字的一段话 0.15 ms。粘进 18.75 万字时整次查询 18.7 ms，其中建议约 2.5 ms（字数统计要整段数一遍），其余是原来的匹配（和建议无关，PR 4 起就是这样）。
