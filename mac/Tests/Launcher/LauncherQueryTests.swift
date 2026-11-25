@@ -12,6 +12,12 @@ final class LauncherQueryTests: XCTestCase {
         LauncherQuery(sourceID: sourceID, text: text)
     }
 
+    /// 放进来 `placed` 后输入框里是 `input`：控制器核对（`LauncherPlacedText`）+ 查询（`parse(_:literal:)`）。
+    private func parse(_ input: String, placed: String?) -> LauncherQuery {
+        let verified = placed.flatMap(LauncherPlacedText.init)?.still(in: input)
+        return LauncherQuery.parse(input, literal: verified != nil)
+    }
+
     // MARK: - 没有前缀
 
     func testNoPrefixKeepsWholeInputTrimmed() {
@@ -168,9 +174,10 @@ final class LauncherQueryTests: XCTestCase {
 
     func testPlacedTextIsTakenLiterallyAndGetsFallbackSuggestions() {
         for text in Self.placedExamples {
-            let placed = LauncherQuery.parse(text, placed: text)
+            let placed = parse(text, placed: text)
             XCTAssertEqual(placed, query(nil, text), "\(text)：放进来的不拆前缀")
-            let plan = LauncherSuggestionPolicy.plan(for: placed, hasCalculation: false, hasRecognition: false, pasted: text)
+            let plan = LauncherSuggestionPolicy.plan(for: placed, hasCalculation: false, hasRecognition: false,
+                                                     placed: LauncherPlacedText(text))
             XCTAssertNotNil(plan.fallbackKinds, "\(text)：兜底建议照常出（翻译、总结……）")
             XCTAssertEqual(plan.text, text)
         }
@@ -189,18 +196,18 @@ final class LauncherQueryTests: XCTestCase {
 
     func testEditingThePlacedTextBringsPrefixesBack() {
         for text in Self.placedExamples {
-            XCTAssertNotNil(LauncherQuery.parse(text + "s", placed: text).sourceID, "\(text)：末尾多打一个字就照常拆前缀")
-            XCTAssertNotNil(LauncherQuery.parse(String(text.dropLast()), placed: text).sourceID, "\(text)：删一个字也是")
+            XCTAssertNotNil(parse(text + "s", placed: text).sourceID, "\(text)：末尾多打一个字就照常拆前缀")
+            XCTAssertNotNil(parse(String(text.dropLast()), placed: text).sourceID, "\(text)：删一个字也是")
         }
-        XCTAssertEqual(LauncherQuery.parse("f readme", placed: "c is a language"), query("files", "readme"),
+        XCTAssertEqual(parse("f readme", placed: "c is a language"), query("files", "readme"),
                        "框里已经不是放进来的那段：照常")
-        XCTAssertEqual(LauncherQuery.parse("f readme", placed: nil), query("files", "readme"))
+        XCTAssertEqual(parse("f readme", placed: nil), query("files", "readme"))
     }
 
     func testPlacedTextMatchesAfterWhitespaceIsFolded() {
         // 带换行的原文放进单行输入框：换行变空格、首尾空白去掉，仍算同一段。
-        XCTAssertEqual(LauncherQuery.parse("c first line second line", placed: "  c first line\nsecond line\n"),
+        XCTAssertEqual(parse("c first line second line", placed: "  c first line\nsecond line\n"),
                        query(nil, "c first line second line"))
-        XCTAssertEqual(LauncherQuery.parse("a  b", placed: "a b"), query(nil, "a  b"), "空白多少不算改动")
+        XCTAssertEqual(parse("a  b", placed: "a b"), query(nil, "a  b"), "空白多少不算改动")
     }
 }

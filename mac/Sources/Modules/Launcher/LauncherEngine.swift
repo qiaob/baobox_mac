@@ -116,9 +116,9 @@ final class LauncherEngine {
     var textActions: [LauncherCatalogCommand] = []
     /// 这次输入的建议行（动作类），按行 id。每次查询换一批。
     private var suggestionsByKey: [String: LauncherSuggestion] = [:]
-    /// 放进来的原文（⌘V、拖放、「选中的 / 刚复制的」放进输入框；控制器每次查询前设）：输入框里的文字还是它时
-    /// 按字面处理、不拆前缀（`LauncherQuery.parse(placed:)`），带换行的建议行用原文（§5.4）。
-    var pastedText: String?
+    /// 放进来的原文（⌘V、拖放、「选中的 / 刚复制的」放进输入框；控制器每次查询前设）。控制器保证：有值 = 输入框此刻还是它
+    /// （每次输入框变化时核对过）。于是按字面处理、不拆前缀，带换行的建议行用原文（§5.4）。引擎不再核对、不归一。
+    var placedText: LauncherPlacedText?
     /// 各模块声明的图片动作（§5.5）：呼出时装进来，只在挂着图片 / 输入是图片文件的路径时出现。
     var imageActions: [LauncherCatalogCommand] = []
     /// 输入里挂着的图片（控制器每次查询前设）；nil = 没挂。
@@ -176,7 +176,7 @@ final class LauncherEngine {
         lastFileRequest = nil
         textActions = []
         suggestionsByKey = [:]
-        pastedText = nil
+        placedText = nil
         imageActions = []
         attachment = nil
         emptyState = LauncherEmptyState()
@@ -249,7 +249,7 @@ final class LauncherEngine {
         }
 
         // 放进来的文字（不是打字打进来的）按字面处理、不拆前缀；改动过就照常拆（§5.4）。
-        let query = LauncherQuery.parse(input, prefixBySource: prefixBySource, placed: pastedText)
+        let query = LauncherQuery.parse(input, prefixBySource: prefixBySource, literal: placedText != nil)
 
         // 输入是路径：只出路径的行，不混 App、命令、剪贴板（剪贴板里恰好有这段路径文字的条目只会是噪音）。
         if query.isUnscoped, let path = LauncherPathInput.parse(query.text, home: home) {
@@ -287,7 +287,7 @@ final class LauncherEngine {
         // 建议（§5.4）：对应建议排在计算结果之后、识别结果之前，兜底建议排在最后。
         let suggestions = LauncherSuggestionProvider.suggestions(
             for: query, textActions: textActions, hasCalculation: calculationCount > 0,
-            hasRecognition: instants.count > calculationCount, pasted: pastedText, records: records, now: now)
+            hasRecognition: instants.count > calculationCount, placed: placedText, records: records, now: now)
         instantsByKey = Dictionary((instants + suggestions.instants).map { ($0.row.id, $0) },
                                    uniquingKeysWith: { first, _ in first })
         suggestionsByKey = Dictionary(suggestions.actions.map { ($0.row.id, $0) }, uniquingKeysWith: { first, _ in first })

@@ -80,7 +80,7 @@ final class LauncherSuggestionsTests: XCTestCase {
         let original = "第一段：快速入口\n第二段：放进任何东西\n第三段"
         let field = "第一段：快速入口 第二段：放进任何东西 第三段"
         let result = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse(field), hasCalculation: false,
-                                                   hasRecognition: false, pasted: original)
+                                                   hasRecognition: false, placed: LauncherPlacedText(original)?.still(in: field))
         XCTAssertEqual(result.text, original, "交给动作的是带换行的原文")
         XCTAssertEqual(result.fallbackKinds, [.longText], "多行的原文算一大段文字（虽然不到 80 个字）")
         XCTAssertEqual(result.leading, [.wordCount(LauncherTextStats.count(original))])
@@ -88,7 +88,8 @@ final class LauncherSuggestionsTests: XCTestCase {
         XCTAssertEqual(stats.characters, original.count, "字符数按原文算，换行也算")
 
         let edited = LauncherSuggestionPolicy.plan(for: LauncherQuery.parse(field + "了"), hasCalculation: false,
-                                                   hasRecognition: false, pasted: original)
+                                                   hasRecognition: false,
+                                                   placed: LauncherPlacedText(original)?.still(in: field + "了"))
         XCTAssertEqual(edited.text, field + "了", "改动过就用输入框里的文字")
         XCTAssertEqual(edited.fallbackKinds, [.plainText])
         XCTAssertEqual(edited.leading, [])
@@ -96,10 +97,11 @@ final class LauncherSuggestionsTests: XCTestCase {
 
     func testPastedTextDoesNotChangeOtherKindsOfInput() {
         XCTAssertEqual(LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("hello"), hasCalculation: false,
-                                                     hasRecognition: false, pasted: "hello\n"),
+                                                     hasRecognition: false,
+                                                     placed: LauncherPlacedText("hello\n")?.still(in: "hello")),
                        plan("hello"), "原文去掉首尾空白后只有一行：和直接打的一样")
         XCTAssertEqual(LauncherSuggestionPolicy.plan(for: LauncherQuery.parse("a b"), hasCalculation: false,
-                                                     hasRecognition: false, pasted: nil),
+                                                     hasRecognition: false, placed: nil),
                        plan("a b"))
     }
 
