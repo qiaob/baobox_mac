@@ -1,31 +1,21 @@
 import Foundation
 
-/// 网络泄露检测的状态：跑一次检测、上次结果。只在用户点了才测（docs/netcheck/DESIGN.md §2），结果只在内存里。
+/// IP 检测的状态：跑一次检测、上次结果（一张表）。只在用户点了才测（docs/netcheck/DESIGN.md §2），结果只在内存里。
 @MainActor
 final class NetCheckSession: ObservableObject {
     static let shared = NetCheckSession()
 
     struct Outcome {
         let at: Date
-        let summary: [NetCheckSummary]
-        let findings: [NetCheckFinding]
-        /// bash.ws 自己的结论文字
-        let dnsConclusion: String?
-        /// 本次出口的 ASN 与运营方：用来「记为真实网络」
-        let exitASN: Int?
-        let exitNetwork: String
-        /// 检测时有没有声明真实网络
-        let realDeclared: Bool
-
-        var overall: NetCheckVerdict {
-            NetCheckLogic.overall(findings.map(\.verdict))
-        }
+        let table: NetCheckTable
     }
 
     @Published private(set) var running = false
     @Published private(set) var outcome: Outcome?
     /// WebRTC 探测用的隐藏 WebView。检测窗口把它挂进视图层级（不挂会被 WebKit 挂起）。
     @Published private(set) var webrtc: NetCheckWebRTC?
+    /// 检测中关了窗口：跑完再放掉 WebView。
+    private var releaseWhenDone = false
 
     private init() {}
 
@@ -37,52 +27,48 @@ final class NetCheckSession: ObservableObject {
         webrtc = probe
         let engine = NetCheckEngine(apiKey: NetCheckKeychain.load() ?? "", dnsProbes: NetCheckSettings.dnsProbes)
         let stun = NetCheckSettings.stunServer
-        let realText = NetCheckSettings.realNetworks
 
         Task { @MainActor in
             async let ipv4 = engine.lookup()
             async let ipv6 = engine.ipv6Exit()
             async let dns = engine.dnsLeak()
             let rtc = await probe.gather(stun: stun)
-            let observations = NetCheckObservations(ipv4: await ipv4, ipv6: await ipv6, dns: await dns,
-                                                    systemTimezone: NetCheckEngine.systemTimezone, webrtc: rtc)
-            let real = NetCheckRealNetworks(parsing: realText)
-            let findings = NetCheckLogic.evaluate(observations, real: real)
-            var exitASN: Int?
-            var exitNetwork = ""
-            if case .success(let info) = observations.ipv4 {
-                exitASN = info.asn
-                exitNetwork = info.network.isEmpty ? info.company : info.network
+            let v4 = await ipv4
+            var ipv4Measured = false
+            if case .success = v4 { ipv4Measured = true }
+            let v6 = NetCheckLogic.resolveIPv6(await ipv6, ipv4Measured: ipv4Measured)
+            // 网页拿到的地址和 IPv4 / IPv6 那一行都不同时，另查归属（最多 3 个；查不到就只显示地址）
+            var lookups: [String: NetCheckIPInfo] = [:]
+            for address in NetCheckCompare.addressesToLookUp(rtc, ipv4: v4, ipv6: v6) {
+                if case .success(let info) = await engine.lookup(address) { lookups[address] = info }
             }
-            var conclusion: String?
-            if case .success(let result) = observations.dns { conclusion = result.conclusion }
-            self.outcome = Outcome(at: Date(),
-                                   summary: NetCheckLogic.summarize(observations, findings: findings),
-                                   findings: findings,
-                                   dnsConclusion: conclusion,
-                                   exitASN: exitASN,
-                                   exitNetwork: exitNetwork,
-                                   realDeclared: !real.isEmpty)
+            let observations = NetCheckObservations(ipv4: v4, ipv6: v6, dns: await dns,
+                                                    systemTimezone: NetCheckEngine.systemTimezone, webrtc: rtc,
+                                                    webrtcLookups: lookups)
+            self.outcome = Outcome(at: Date(), table: NetCheckCompare.table(observations))
             self.running = false
+            if self.releaseWhenDone {
+                self.releaseWhenDone = false
+                self.releaseWebView()
+            }
         }
     }
 
-    /// 把本次出口记为真实网络（用户关着 VPN 测的那次）。
-    func declareExitAsReal() {
-        guard let asn = outcome?.exitASN else { return }
-        NetCheckSettings.addRealNetwork(asn)
-        objectWillChange.send()
-    }
-
-    /// 本次出口是不是已经记过。
-    var exitAlreadyDeclared: Bool {
-        guard let asn = outcome?.exitASN else { return false }
-        return NetCheckRealNetworks(parsing: NetCheckSettings.realNetworks).contains(asn)
-    }
-
-    /// 窗口关了：没在跑就把 WebView 放掉。
+    /// 窗口关了：没在跑就把 WebView 放掉；正在跑就等跑完再放。
     func windowClosed() {
-        guard !running else { return }
+        guard !running else {
+            releaseWhenDone = true
+            return
+        }
+        releaseWebView()
+    }
+
+    /// 窗口又打开了：检测中关窗口时记下的「跑完再放」作废。
+    func windowOpened() {
+        releaseWhenDone = false
+    }
+
+    private func releaseWebView() {
         webrtc?.stop()
         webrtc = nil
     }

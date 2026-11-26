@@ -1,9 +1,7 @@
 import Foundation
 
-// 网络泄露检测的纯逻辑：解析检测服务的回包、判定五项、收成两个问题的总结。
-// 只依赖 Foundation，进 BaoboxTests。规格与 baobox_shared 的 baobox-core/src/netcheck.rs 相同，
-// 改判定时两边一起改；这里产出结构化的原因（NetCheckReason），文案在 NetCheckText。
-// 见 docs/netcheck/DESIGN.md。
+// IP 检测的纯逻辑：解析检测服务的回包、ICE 候选、地址分类、「同一家云厂商」的判断。比对与表格在 NetCheckCompare.swift。
+// 只依赖 Foundation，进 BaoboxTests。见 docs/netcheck/COMPARE.md（呈现）、docs/netcheck/DESIGN.md（请求）。
 
 // MARK: - IP 归属
 
@@ -18,6 +16,8 @@ struct NetCheckIPInfo: Equatable {
     var company: String = ""
     var city: String = ""
     var country: String = ""
+    /// 回包给的两位国家代码（带 key 的 ipapi.is 才有）；没有是空串
+    var countryCode: String = ""
     /// IANA 时区名
     var timezone: String = ""
     /// 以下四个判定带 key 的回包才有；没有就是 nil
@@ -26,183 +26,46 @@ struct NetCheckIPInfo: Equatable {
     var proxy: Bool?
     var tor: Bool?
 
-    /// 「城市, 国家」，两样都没有时 nil。
-    var place: String? {
-        let parts = [city, country].filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: ", ")
-    }
-
-    /// 给人看的一行：`34.3.107.77 · Google LLC · AS15169 · The Dalles, United States`。
-    var describe: String {
-        var parts = [ip]
-        let owner = network.isEmpty ? company : network
-        if !owner.isEmpty { parts.append(owner) }
-        if let asn { parts.append("AS\(asn)") }
-        if let place { parts.append(place) }
-        return parts.joined(separator: " · ")
-    }
-
-    /// 是不是机房 IP。返回 `.some(名字)`：名字为 nil 表示服务判定是机房但不知道是谁家。
-    /// 服务给了「不是机房」就信它；没给判定就查内置的云厂商表。
-    var hosting: String?? {
-        if datacenter == false { return nil }
-        if let asn, let name = NetCheckLogic.knownHosting(asn) { return .some(name) }
-        if datacenter == true {
-            let owner = network.isEmpty ? company : network
-            return .some(owner.isEmpty ? nil : owner)
+    /// 归属后面的灰色小标签。机房：服务给了「不是机房」就信它；给了「是」或没给判定但 ASN 在内置的云厂商表里，就是机房。
+    var flags: [NetCheckExitFlag] {
+        var flags: [NetCheckExitFlag] = []
+        if datacenter == true || (datacenter == nil && asn.flatMap(NetCheckLogic.knownHosting) != nil) {
+            flags.append(.hosting)
         }
-        return nil
+        if vpn == true { flags.append(.vpn) }
+        if proxy == true { flags.append(.proxy) }
+        if tor == true { flags.append(.tor) }
+        return flags
     }
 }
 
-/// 一台 DNS 服务器（或 bash.ws 看到的客户端）。
+/// 一台 DNS 服务器。
 struct NetCheckResolver: Equatable {
     var ip: String
     var asn: Int?
     var network: String = ""
-    var city: String = ""
     var country: String = ""
-
-    var describe: String {
-        var parts = [ip]
-        if !network.isEmpty { parts.append(network) }
-        if let asn { parts.append("AS\(asn)") }
-        if !country.isEmpty { parts.append(country) }
-        return parts.joined(separator: " · ")
-    }
+    /// bash.ws 给的两位国家代码（小写，如 `us`）；没有是空串
+    var countryCode: String = ""
 }
 
-/// bash.ws 的 DNS 泄露检测结果。
+/// bash.ws 的 DNS 检测结果。
 struct NetCheckDNSResult: Equatable {
-    var clients: [NetCheckResolver] = []
     var resolvers: [NetCheckResolver] = []
-    /// bash.ws 自己的结论文字
-    var conclusion: String?
     /// 服务端报的错（「No DNS servers found. Try again...」）
     var error: String?
 }
 
-/// 用户声明的「真实网络」：不开 VPN 时出口所在的 ASN。
-struct NetCheckRealNetworks: Equatable {
-    private(set) var asns: [Int] = []
-
-    /// 逗号 / 空白分隔，`AS4657` 与 `4657` 都认，认不出的跳过。
-    init(parsing text: String) {
-        let separators = CharacterSet(charactersIn: ",，").union(.whitespacesAndNewlines)
-        asns = text.components(separatedBy: separators).compactMap { part in
-            var digits = part.trimmingCharacters(in: .whitespaces)
-            if digits.hasPrefix("AS") || digits.hasPrefix("as") { digits.removeFirst(2) }
-            guard !digits.isEmpty, digits.allSatisfy(\.isASCII) else { return nil }
-            return Int(digits)
-        }
-    }
-
-    init() {}
-
-    var isEmpty: Bool { asns.isEmpty }
-
-    func contains(_ asn: Int?) -> Bool {
-        guard let asn else { return false }
-        return asns.contains(asn)
-    }
-}
-
-// MARK: - 结论
-
-enum NetCheckVerdict: Equatable {
-    case ok
-    /// 不算泄露，但值得知道
-    case notice
-    case leak
-    /// 测不出
-    case unknown
-}
-
-/// 五项检测，顺序即展示顺序。
-enum NetCheckItem: String, CaseIterable, Equatable {
-    case exit, ipv6, dns, webrtc, timezone
-}
-
-/// 出口那一项的标记。
+/// 归属后面的灰色小标签：只是信息，不参加比较。
 enum NetCheckExitFlag: Equatable {
-    /// 机房 IP；名字 nil = 不知道是谁家
-    case hosting(String?)
-    case vpn, proxy, tor
+    case hosting, vpn, proxy, tor
+    /// 公共 DNS（`NetCheckLogic.publicDNS`）：它的国家不参加比较
+    case publicDNS
 }
 
-/// 每一项结论的原因（展示层据此出文案）。
-enum NetCheckReason: Equatable {
-    /// 没测出来，带原因
-    case failed(String)
-
-    case exitIsReal(String)
-    case exitFlagged(String, [NetCheckExitFlag])
-    case exitClean(String)
-
-    case noIPv6
-    case ipv6IsReal(String)
-    case ipv6Differs(String)
-    /// 有 IPv6 出口，但 IPv4 出口没测出来或有一边认不出 ASN：比不了
-    case ipv6CannotCompare(String)
-    case ipv6Matches(String)
-
-    case dnsServiceError(String)
-    case dnsNoResolvers
-    case dnsLeak([String])
-    /// 没声明真实网络：判不出
-    case dnsUndeclared(count: Int, owners: [String])
-    case dnsClean(count: Int, owners: [String])
-
-    case webrtcCannotCompare([String])
-    case webrtcLeak([String])
-    case webrtcLocal([String])
-    case webrtcNothing
-    case webrtcMatches
-
-    case timezoneUnavailable
-    case exitTimezoneUnknown
-    case timezoneMatch(String)
-    case timezoneMismatch(system: String, exit: String)
-}
-
-struct NetCheckFinding: Equatable {
-    let item: NetCheckItem
-    let verdict: NetCheckVerdict
-    let reason: NetCheckReason
-}
-
-/// 总结的两个问题。
-enum NetCheckGoal: Equatable {
-    /// 运营商能看到你的流量吗
-    case carrier
-    /// App 能看出你的真实位置吗
-    case location
-}
-
-/// 「看得出在用代理」的几条线索。
-enum NetCheckProxyHint: Equatable {
-    case hostingExit, timezoneMismatch, dnsCarrier
-}
-
-enum NetCheckSummaryReason: Equatable {
-    /// 隧道没生效
-    case tunnelOff
-    /// 这几项没走隧道
-    case partialLeak([NetCheckItem])
-    /// 这几项没测出来
-    case undetermined([NetCheckItem])
-    /// 都进了隧道
-    case carrierClean
-    /// 这几项暴露了真实 IP
-    case ipLeak([NetCheckItem])
-    /// 看不出位置；`place` = App 看到的位置，`hints` 非空时是提示
-    case locationHidden(place: String?, hints: [NetCheckProxyHint])
-}
-
-struct NetCheckSummary: Equatable {
-    let goal: NetCheckGoal
-    let verdict: NetCheckVerdict
-    let reason: NetCheckSummaryReason
+/// 表里的五行，顺序即展示顺序。
+enum NetCheckItem: String, CaseIterable, Equatable {
+    case ipv4, ipv6, dns, webrtc, timezone
 }
 
 /// 一次检测拿到的全部原料。哪一项没拿到就是 `.failure`。
@@ -212,8 +75,10 @@ struct NetCheckObservations {
     var ipv6: Result<NetCheckIPInfo?, NetCheckFailure>
     var dns: Result<NetCheckDNSResult, NetCheckFailure>
     var systemTimezone: String?
-    /// ICE 候选原文。nil = 没测（WebView 起不来之外的原因，比如被跳过）
+    /// ICE 候选原文。nil = 没测
     var webrtc: Result<[String], NetCheckFailure>?
+    /// WebRTC 拿到的、和 IPv4 / IPv6 那一行都不同的地址另查的归属（地址 → 归属；查不到的不在里面）
+    var webrtcLookups: [String: NetCheckIPInfo] = [:]
 }
 
 /// 一项没测出来的原因（已经是给人看的文字）。
@@ -232,12 +97,11 @@ struct NetCheckCandidate: Equatable {
     let kind: NetCheckCandidateKind
     /// IP，或浏览器混淆过的 `xxxx.local`
     let address: String
-    let transport: String
 
     var isMDNS: Bool { address.lowercased().hasSuffix(".local") }
 }
 
-// MARK: - 解析与判定
+// MARK: - 解析
 
 enum NetCheckLogic {
 
@@ -257,6 +121,23 @@ enum NetCheckLogic {
         case 132203: return "Tencent Cloud"
         case 9009: return "M247"
         case 60068: return "CDN77 / Datacamp"
+        default: return nil
+        }
+    }
+
+    /// 全球任播的公共 DNS（解析器**出口**的 ASN → 名字）。它们的服务器在地址库里登记的是运营方的国家，不是服务器真实所在，
+    /// 直连、没有任何代理时也会被标成别的国家，所以这些 DNS 服务器的国家不参加比较（docs/netcheck/COMPARE.md §2）。
+    /// 认的是出口 ASN：bash.ws 报的是解析器向外查询的地址，不是 8.8.8.8 这种服务地址。2026-11-25 实测（对各家服务地址发
+    /// `o-o.myaddr.l.google.com` TXT 拿出口地址，再查起源 ASN）：Google 15169、Cloudflare 13335、OpenDNS 36692，
+    /// Quad9 出口在 PCH 的 AS42 / AS715（19281 是它的服务地址）。
+    /// 不收 NextDNS、AdGuard、Control D：出口在通用机房（AS57695 / 23961、AS60068、AS212238），很多 VPN 也用，靠 ASN 认不出。
+    /// 运营商自己的 DNS、云厂商的 DNS 也不收（「DNS 由国内运营商在答」正是要标出来的）。
+    static func publicDNS(_ asn: Int) -> String? {
+        switch asn {
+        case 15169: return "Google Public DNS"
+        case 13335: return "Cloudflare"
+        case 36692: return "OpenDNS / Cisco"
+        case 19281, 42, 715: return "Quad9"
         default: return nil
         }
     }
@@ -322,27 +203,26 @@ enum NetCheckLogic {
         let place = root["location"] as? [String: Any] ?? root
         info.city = string(place["city"])
         info.country = string(place["country"])
+        info.countryCode = string(place["country_code"])
         info.timezone = string(place["timezone"])
         return info
     }
 
-    /// 解析 `https://bash.ws/dnsleak/test/<id>?json=2`：一个数组，每条带 `type`（ip / dns / conclusion / error）。
+    /// 解析 `https://bash.ws/dnsleak/test/<id>?json=2`：一个数组，每条带 `type`。只收 `dns`（服务器）与 `error`；
+    /// `ip`（bash.ws 看到的客户端）和 `conclusion`（它自己的结论）不用。每条有 `country`（小写两位代码）与
+    /// `country_name`（`USA` 这种写法，2026-11-25 实测）。
     static func parseBashWS(_ text: String) -> NetCheckDNSResult? {
         guard let records = object(text) as? [Any] else { return nil }
         var result = NetCheckDNSResult()
         for case let record as [String: Any] in records {
             switch string(record["type"]) {
-            case let kind where kind == "ip" || kind == "dns":
+            case "dns":
                 let (asn, fromASN) = splitASN(string(record["asn"]))
                 let org = string(record["org"])
-                let entry = NetCheckResolver(ip: string(record["ip"]), asn: asn,
-                                             network: org.isEmpty ? fromASN : org,
-                                             city: string(record["city_name"]),
-                                             country: string(record["country_name"]))
-                if kind == "ip" { result.clients.append(entry) } else { result.resolvers.append(entry) }
-            case "conclusion":
-                let words = string(record["ip"]).isEmpty ? string(record["text"]) : string(record["ip"])
-                if !words.isEmpty { result.conclusion = words }
+                result.resolvers.append(NetCheckResolver(ip: string(record["ip"]), asn: asn,
+                                                         network: org.isEmpty ? fromASN : org,
+                                                         country: string(record["country_name"]),
+                                                         countryCode: string(record["country"])))
             case "error":
                 let words = string(record["text"])
                 result.error = words.isEmpty ? "bash.ws error" : words
@@ -371,7 +251,7 @@ enum NetCheckLogic {
         }
         var address = String(fields[4])
         address = address.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        return NetCheckCandidate(kind: kind, address: address, transport: fields[2].lowercased())
+        return NetCheckCandidate(kind: kind, address: address)
     }
 
     // MARK: 地址
@@ -429,218 +309,148 @@ enum NetCheckLogic {
         return a.caseInsensitiveCompare(b) == .orderedSame
     }
 
-    // MARK: 五项判定
-
-    static func judgeExit(_ ipv4: Result<NetCheckIPInfo, NetCheckFailure>,
-                          real: NetCheckRealNetworks) -> NetCheckFinding {
-        let info: NetCheckIPInfo
-        switch ipv4 {
-        case .failure(let why): return NetCheckFinding(item: .exit, verdict: .unknown, reason: .failed(why.message))
-        case .success(let value): info = value
-        }
-        if real.contains(info.asn) {
-            return NetCheckFinding(item: .exit, verdict: .leak, reason: .exitIsReal(info.describe))
-        }
-        var flags: [NetCheckExitFlag] = []
-        if let name = info.hosting { flags.append(.hosting(name)) }
-        if info.vpn == true { flags.append(.vpn) }
-        if info.proxy == true { flags.append(.proxy) }
-        if info.tor == true { flags.append(.tor) }
-        if flags.isEmpty {
-            return NetCheckFinding(item: .exit, verdict: .ok, reason: .exitClean(info.describe))
-        }
-        return NetCheckFinding(item: .exit, verdict: .notice, reason: .exitFlagged(info.describe, flags))
-    }
-
-    /// 两个 ASN 是不是同一家：号码相同，或者在云厂商表里是同一家
-    /// （Google 的 15169 / 396982、AWS 的 16509 / 14618 常常一个出 IPv4、一个出 IPv6）。
-    static func sameNetwork(_ a: Int, _ b: Int) -> Bool {
-        if a == b { return true }
-        guard let x = knownHosting(a), let y = knownHosting(b) else { return false }
-        return x == y
-    }
-
-    static func judgeIPv6(_ ipv6: Result<NetCheckIPInfo?, NetCheckFailure>,
-                          ipv4: Result<NetCheckIPInfo, NetCheckFailure>,
-                          real: NetCheckRealNetworks) -> NetCheckFinding {
-        let info: NetCheckIPInfo
-        switch ipv6 {
-        case .failure(let why): return NetCheckFinding(item: .ipv6, verdict: .unknown, reason: .failed(why.message))
-        case .success(nil): return NetCheckFinding(item: .ipv6, verdict: .ok, reason: .noIPv6)
-        case .success(let value?): info = value
-        }
-        if real.contains(info.asn) {
-            return NetCheckFinding(item: .ipv6, verdict: .leak, reason: .ipv6IsReal(info.describe))
-        }
-        guard case .success(let v4) = ipv4, let a = info.asn, let b = v4.asn else {
-            return NetCheckFinding(item: .ipv6, verdict: .unknown, reason: .ipv6CannotCompare(info.describe))
-        }
-        if !sameNetwork(a, b) {
-            return NetCheckFinding(item: .ipv6, verdict: .leak, reason: .ipv6Differs(info.describe))
-        }
-        return NetCheckFinding(item: .ipv6, verdict: .ok, reason: .ipv6Matches(info.describe))
-    }
-
-    static func judgeDNS(_ dns: Result<NetCheckDNSResult, NetCheckFailure>,
-                         real: NetCheckRealNetworks) -> NetCheckFinding {
-        let result: NetCheckDNSResult
-        switch dns {
-        case .failure(let why): return NetCheckFinding(item: .dns, verdict: .unknown, reason: .failed(why.message))
-        case .success(let value): result = value
-        }
-        if let error = result.error {
-            return NetCheckFinding(item: .dns, verdict: .unknown, reason: .dnsServiceError(error))
-        }
-        if result.resolvers.isEmpty {
-            return NetCheckFinding(item: .dns, verdict: .unknown, reason: .dnsNoResolvers)
-        }
-        let leaked = result.resolvers.filter { real.contains($0.asn) }.map(\.describe)
-        if !leaked.isEmpty {
-            return NetCheckFinding(item: .dns, verdict: .leak, reason: .dnsLeak(leaked))
-        }
-        // 按运营方归并：一屏几十台 Google 服务器没有意义
-        var owners: [String] = []
-        for resolver in result.resolvers {
-            let name = resolver.network.isEmpty ? resolver.ip : resolver.network
-            if !owners.contains(name) { owners.append(name) }
-        }
-        let count = result.resolvers.count
-        if real.isEmpty {
-            return NetCheckFinding(item: .dns, verdict: .unknown, reason: .dnsUndeclared(count: count, owners: owners))
-        }
-        return NetCheckFinding(item: .dns, verdict: .ok, reason: .dnsClean(count: count, owners: owners))
-    }
-
-    /// 网页经 STUN 拿到的公网地址应当就是出口 IP（或出口的 IPv6）。不是 = UDP 绕过了隧道。
-    static func judgeWebRTC(_ webrtc: Result<[String], NetCheckFailure>,
-                            ipv4: Result<NetCheckIPInfo, NetCheckFailure>,
-                            ipv6: Result<NetCheckIPInfo?, NetCheckFailure>) -> NetCheckFinding {
-        let lines: [String]
-        switch webrtc {
-        case .failure(let why): return NetCheckFinding(item: .webrtc, verdict: .unknown, reason: .failed(why.message))
-        case .success(let value): lines = value
-        }
-        var exits: [String] = []
-        if case .success(let v4) = ipv4 { exits.append(v4.ip) }
-        if case .success(let v6?) = ipv6 { exits.append(v6.ip) }
-
-        var publicAddresses: [String] = []
-        var localAddresses: [String] = []
-        for candidate in lines.compactMap(parseCandidate) {
-            if candidate.kind == .relay || candidate.isMDNS { continue }
-            let address = candidate.address
-            if isPublic(address) {
-                if !publicAddresses.contains(where: { sameAddress($0, address) }) { publicAddresses.append(address) }
-            } else if !localAddresses.contains(where: { sameAddress($0, address) }) {
-                localAddresses.append(address)
+    /// IPv6 探测失败时是「没有 IPv6」还是「没测出来」：连接立刻失败（没有 IPv6 路由、找不到 / 连不上这个只有 AAAA 记录的服务）
+    /// 算没有；超时、TLS 出错、服务回错这些算没测出来。没有 IPv6 的 Mac 上 URLSession 0.02 秒就报 -1009
+    /// （notConnectedToInternet，2026-11-25 实测），所以它也算「没有」。走系统代理时代理 CONNECT 失败
+    /// （`kCFErrorDomainCFNetwork` 310，直接给或者包在 `NSUnderlyingErrorKey` 里）也算没有：开着 Clash / Surge 且关了
+    /// IPv6 时会一直落在这里，对这些用户「这条路上没有 IPv6」就是实情。
+    static func meansNoIPv6(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+                return true
+            default:
+                break
             }
         }
-
-        if exits.isEmpty && !publicAddresses.isEmpty {
-            return NetCheckFinding(item: .webrtc, verdict: .unknown, reason: .webrtcCannotCompare(publicAddresses))
-        }
-        let stray = publicAddresses.filter { address in !exits.contains { sameAddress($0, address) } }
-        // 同一族的出口没测出来（比如 IPv6 地址的归属没查到）：这个地址可能正是那个出口，比不了，不算泄露
-        var ipv4Failed = false
-        if case .failure = ipv4 { ipv4Failed = true }
-        var ipv6Failed = false
-        if case .failure = ipv6 { ipv6Failed = true }
-        func familyUnknown(_ address: String) -> Bool {
-            if ipv4Bytes(address) != nil { return ipv4Failed }
-            if ipv6Bytes(address) != nil { return ipv6Failed }
-            return false
-        }
-        if !stray.isEmpty && stray.allSatisfy(familyUnknown) {
-            return NetCheckFinding(item: .webrtc, verdict: .unknown, reason: .webrtcCannotCompare(stray))
-        }
-        let leaked = stray.filter { !familyUnknown($0) }
-        if !leaked.isEmpty {
-            return NetCheckFinding(item: .webrtc, verdict: .leak, reason: .webrtcLeak(leaked))
-        }
-        if !localAddresses.isEmpty {
-            return NetCheckFinding(item: .webrtc, verdict: .notice, reason: .webrtcLocal(localAddresses))
-        }
-        return NetCheckFinding(item: .webrtc, verdict: .ok,
-                               reason: publicAddresses.isEmpty ? .webrtcNothing : .webrtcMatches)
+        return isProxyConnectFailure(error as NSError)
     }
 
-    static func judgeTimezone(_ system: String?, ipv4: Result<NetCheckIPInfo, NetCheckFailure>) -> NetCheckFinding {
-        guard let system, !system.isEmpty else {
-            return NetCheckFinding(item: .timezone, verdict: .unknown, reason: .timezoneUnavailable)
-        }
-        guard case .success(let info) = ipv4, !info.timezone.isEmpty else {
-            return NetCheckFinding(item: .timezone, verdict: .unknown, reason: .exitTimezoneUnknown)
-        }
-        if system == info.timezone {
-            return NetCheckFinding(item: .timezone, verdict: .ok, reason: .timezoneMatch(system))
-        }
-        return NetCheckFinding(item: .timezone, verdict: .notice,
-                               reason: .timezoneMismatch(system: system, exit: info.timezone))
+    /// `kCFErrorDomainCFNetwork` 310（kCFErrorHTTPSProxyConnectionFailure），本身或往下几层的 underlying error。
+    private static func isProxyConnectFailure(_ error: NSError, depth: Int = 0) -> Bool {
+        if error.domain == "kCFErrorDomainCFNetwork", error.code == 310 { return true }
+        guard depth < 4, let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+        return isProxyConnectFailure(underlying, depth: depth + 1)
     }
 
-    /// 各项结论，顺序固定：出口、IPv6、DNS、WebRTC（测了才有）、时区。
-    static func evaluate(_ o: NetCheckObservations, real: NetCheckRealNetworks) -> [NetCheckFinding] {
-        var findings = [
-            judgeExit(o.ipv4, real: real),
-            judgeIPv6(o.ipv6, ipv4: o.ipv4, real: real),
-            judgeDNS(o.dns, real: real),
-        ]
-        if let webrtc = o.webrtc {
-            findings.append(judgeWebRTC(webrtc, ipv4: o.ipv4, ipv6: o.ipv6))
+    /// IPv6 那一行的结果：`probe` 是引擎的探测，`ipv4Measured` 是 IPv4 那一行测出来了没有。
+    /// IPv4 自己都没测出来（整机断网、DNS 全坏）时，IPv6 的失败一律算「没测出来」，不写「没有」。
+    static func resolveIPv6(_ probe: NetCheckIPv6Probe, ipv4Measured: Bool) -> Result<NetCheckIPInfo?, NetCheckFailure> {
+        switch probe {
+        case .found(let info): return .success(info)
+        case .failed(let why): return .failure(why)
+        case .absent(let why): return ipv4Measured ? .success(nil) : .failure(why)
         }
-        findings.append(judgeTimezone(o.systemTimezone, ipv4: o.ipv4))
-        return findings
     }
 
-    /// 整体结论：有泄露就是泄露；否则有测不出的就是测不出；否则有提示就是提示。
-    static func overall(_ verdicts: [NetCheckVerdict]) -> NetCheckVerdict {
-        if verdicts.contains(.leak) { return .leak }
-        if verdicts.contains(.unknown) { return .unknown }
-        if verdicts.contains(.notice) { return .notice }
-        return .ok
+}
+
+// MARK: - IPv6 探测
+
+/// 引擎对 IPv6 的探测结果，最终是「有 / 没有 / 没测出来」要看 IPv4 那一行（`NetCheckLogic.resolveIPv6`）。
+enum NetCheckIPv6Probe {
+    case found(NetCheckIPInfo)
+    /// 连接立刻失败（`meansNoIPv6`）；带上万一要写成「没测出来」时的原因
+    case absent(NetCheckFailure)
+    case failed(NetCheckFailure)
+}
+
+// MARK: - 并发、有总期限
+
+/// 一批会阻塞的活（系统解析器）在专用队列上并发跑（最多 8 个同时跑，不往全局队列上堆），整批最多等 `deadline` 秒：
+/// 都做完或到点就返回，没做完的留在后台自己结束、不等。期限定时器在自己的串行队列上，全局线程池被占满时也排得上。
+/// 上一批还有没返回的时候不再发新的（`.busy`）：DNS 卡住时连点两次「立即检测」，不至于把线程越堆越多。不在主线程等。
+enum NetCheckParallel {
+    enum Outcome: Equatable {
+        /// 按时做完了几个
+        case finished(Int)
+        /// 上一批还有没返回的，这一批没发
+        case busy
     }
 
-    // MARK: 总结
+    static let maxConcurrent = 8
 
-    /// 把各项结论收成两个问题的回答（与 Rust 版 `summarize` 同一套规则）。
-    static func summarize(_ o: NetCheckObservations, findings: [NetCheckFinding]) -> [NetCheckSummary] {
-        func verdict(_ item: NetCheckItem) -> NetCheckVerdict? {
-            findings.first { $0.item == item }?.verdict
-        }
-        func items(_ list: [NetCheckItem], _ v: NetCheckVerdict) -> [NetCheckItem] {
-            list.filter { verdict($0) == v }
+    private static let workQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.baobox.netcheck.probes"
+        queue.maxConcurrentOperationCount = maxConcurrent
+        queue.qualityOfService = .utility
+        return queue
+    }()
+
+    private static let timerQueue = DispatchQueue(label: "com.baobox.netcheck.probes.deadline")
+
+    private static let lock = NSLock()
+    private static var outstanding = 0
+
+    /// 上一批还有没返回的活。
+    static var isBusy: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return outstanding > 0
+    }
+
+    private final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Outcome, Never>?
+        private var done = 0
+        private let total: Int
+
+        init(_ continuation: CheckedContinuation<Outcome, Never>, total: Int) {
+            self.continuation = continuation
+            self.total = total
         }
 
-        let tunnelItems: [NetCheckItem] = [.exit, .ipv6, .dns, .webrtc]
-        let carrier: NetCheckSummary
-        if verdict(.exit) == .leak {
-            carrier = NetCheckSummary(goal: .carrier, verdict: .leak, reason: .tunnelOff)
-        } else if !items(tunnelItems, .leak).isEmpty {
-            carrier = NetCheckSummary(goal: .carrier, verdict: .leak, reason: .partialLeak(items(tunnelItems, .leak)))
-        } else if !items(tunnelItems, .unknown).isEmpty {
-            carrier = NetCheckSummary(goal: .carrier, verdict: .unknown,
-                                      reason: .undetermined(items(tunnelItems, .unknown)))
-        } else {
-            carrier = NetCheckSummary(goal: .carrier, verdict: .ok, reason: .carrierClean)
+        func finishedOne() {
+            lock.lock()
+            done += 1
+            let resume = done >= total ? continuation : nil
+            if resume != nil { continuation = nil }
+            let count = done
+            lock.unlock()
+            resume?.resume(returning: .finished(count))
         }
 
-        let ipItems: [NetCheckItem] = [.exit, .ipv6, .webrtc]
-        var hints: [NetCheckProxyHint] = []
-        if verdict(.exit) == .notice { hints.append(.hostingExit) }
-        if verdict(.timezone) == .notice { hints.append(.timezoneMismatch) }
-        if verdict(.dns) == .leak { hints.append(.dnsCarrier) }
-        let place: String?
-        if case .success(let info) = o.ipv4 { place = info.place } else { place = nil }
-        let location: NetCheckSummary
-        if !items(ipItems, .leak).isEmpty {
-            location = NetCheckSummary(goal: .location, verdict: .leak, reason: .ipLeak(items(ipItems, .leak)))
-        } else if !items(ipItems, .unknown).isEmpty {
-            location = NetCheckSummary(goal: .location, verdict: .unknown,
-                                       reason: .undetermined(items(ipItems, .unknown)))
-        } else {
-            location = NetCheckSummary(goal: .location, verdict: hints.isEmpty ? .ok : .notice,
-                                       reason: .locationHidden(place: place, hints: hints))
+        func deadlinePassed() {
+            lock.lock()
+            let resume = continuation
+            continuation = nil
+            let count = done
+            lock.unlock()
+            resume?.resume(returning: .finished(count))
         }
-        return [carrier, location]
+    }
+
+    /// 占位：上一批都返回了才占得到（不在 async 函数里直接拿锁）。
+    private static func reserve(_ count: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard outstanding == 0 else { return false }
+        outstanding = count
+        return true
+    }
+
+    private static func release() {
+        lock.lock()
+        outstanding -= 1
+        lock.unlock()
+    }
+
+    static func run(_ jobs: [@Sendable () -> Void], deadline: TimeInterval) async -> Outcome {
+        guard !jobs.isEmpty else { return .finished(0) }
+        guard reserve(jobs.count) else { return .busy }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
+            let state = State(continuation, total: jobs.count)
+            for job in jobs {
+                workQueue.addOperation {
+                    job()
+                    release()
+                    state.finishedOne()
+                }
+            }
+            timerQueue.asyncAfter(deadline: .now() + max(0, deadline)) {
+                state.deadlinePassed()
+            }
+        }
     }
 }

@@ -3,7 +3,21 @@ import SwiftUI
 
 // MARK: - 窗口控制器
 
-/// 网络泄露检测窗口：结果 + 总结，也承载 WebRTC 探测用的隐藏 WebView。见 docs/netcheck/DESIGN.md §4.3。
+/// 窗口里的两页（顶部分段切换）。见 docs/netcheck/SPEED.md。
+enum NetCheckPage: Hashable {
+    case ip, speed
+}
+
+/// 窗口此刻在哪一页：菜单 / 快速入口打开窗口时可以指定。
+@MainActor
+final class NetCheckWindowState: ObservableObject {
+    static let shared = NetCheckWindowState()
+    @Published var page: NetCheckPage = .ip
+    private init() {}
+}
+
+/// 网络检测窗口：IP 检测（一张表，也承载 WebRTC 探测用的隐藏 WebView）与测速两页。
+/// 见 docs/netcheck/COMPARE.md §1、docs/netcheck/SPEED.md §1.3。
 @MainActor
 final class NetCheckWindowController: NSObject, NSWindowDelegate {
     static let shared = NetCheckWindowController()
@@ -13,48 +27,102 @@ final class NetCheckWindowController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    /// 显示窗口；`run` 为 true 时顺手开始一次检测。
-    func show(run: Bool = false) {
+    /// 显示窗口。`page` 为 nil 时停在上次那一页；`start` 为 true 时顺手开始那一页的检测 / 测速
+    /// （另一样正在跑时不开始：两者不并行）。
+    func show(page: NetCheckPage? = nil, start: Bool = false) {
         if window == nil {
             let hosting = NSHostingController(rootView: NetCheckRootView())
             // 要拿焦点的普通窗口：在桌面空间建（见 mac/CLAUDE.md「普通窗口与全屏空间」）。
             let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("netcheck.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            created.setContentSize(NSSize(width: 620, height: 600))
+            created.setContentSize(NSSize(width: 680, height: 600))
             created.minSize = NSSize(width: 520, height: 460)
             created.isReleasedWhenClosed = false
             created.delegate = self
             created.center()
             window = created
         }
+        if let page { NetCheckWindowState.shared.page = page }
+        NetCheckSession.shared.windowOpened()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        if run { NetCheckSession.shared.run() }
+        guard start else { return }
+        switch NetCheckWindowState.shared.page {
+        case .ip:
+            if !NetSpeedTestSession.shared.running { NetCheckSession.shared.run() }
+        case .speed:
+            NetSpeedTestSession.shared.start()
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
         NetCheckSession.shared.windowClosed()
+        // 测速随窗口停（IP 检测照旧：关窗口不打断）
+        NetSpeedTestSession.shared.stop()
     }
 }
 
 // MARK: - 根视图
 
 struct NetCheckRootView: View {
+    @ObservedObject private var state = NetCheckWindowState.shared
     @ObservedObject private var session = NetCheckSession.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker(selection: $state.page) {
+                Text("netcheck.page.ip").tag(NetCheckPage.ip)
+                Text("netcheck.page.speed").tag(NetCheckPage.speed)
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .frame(maxWidth: .infinity)
+
+            switch state.page {
+            case .ip: NetCheckIPView()
+            case .speed: NetSpeedPageView()
+            }
+        }
+        .padding(18)
+        .overlay(alignment: .bottomLeading) {
+            // WebRTC 探测的 WebView：1×1 挂进视图层级，避免被 WebKit 当作不可见而挂起。放在两页外面：切到测速页也还挂着。
+            NetCheckWebViewHolder(probe: session.webrtc)
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - IP 检测页
+
+/// IP 检测页（docs/netcheck/COMPARE.md §1）：一行结论（一致 / 不一致）+ 一张表（IPv4、IPv6、DNS、WebRTC、时区 ×
+/// IP、国家 / 地区、归属），对不上的格子里的字标红。没有哪一行是「正确值」。
+struct NetCheckIPView: View {
+    @ObservedObject private var session = NetCheckSession.shared
+    @ObservedObject private var speed = NetSpeedTestSession.shared
     @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if let outcome = session.outcome {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        summaryCards(outcome)
-                        itemList(outcome)
-                        footnotes(outcome)
+                // 外面给多宽，表就按比例分多宽（量的是外面的空间，不是表自己，不会越量越宽）
+                GeometryReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            table(outcome.table, width: proxy.size.width)
+                            Divider()
+                            Text("netcheck.note.gps")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(width: proxy.size.width, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
                 Spacer()
@@ -66,32 +134,25 @@ struct NetCheckRootView: View {
                 Spacer()
             }
         }
-        .padding(18)
-        .overlay(alignment: .bottomLeading) {
-            // WebRTC 探测的 WebView：1×1 挂进视图层级，避免被 WebKit 当作不可见而挂起。
-            NetCheckWebViewHolder(probe: session.webrtc)
-                .frame(width: 1, height: 1)
-                .allowsHitTesting(false)
-        }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            if let outcome = session.outcome, !session.running {
-                Image(systemName: NetCheckText.symbol(outcome.overall))
-                    .font(.title)
-                    .foregroundStyle(Self.color(outcome.overall))
+            if session.running {
+                ProgressView().controlSize(.small)
+                Text("netcheck.window.running").font(.title3)
+            } else if let outcome = session.outcome {
+                let conclusion = outcome.table.conclusion
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(NetCheckText.headline(outcome.overall)).font(.title3.bold())
-                    Text(L("netcheck.window.checkedAt \(outcome.at.formatted(date: .omitted, time: .standard))"))
+                    Text(verbatim: NetCheckText.conclusion(conclusion))
+                        .font(.title3.bold())
+                        .foregroundStyle(Self.isInconsistent(conclusion) ? Color.red : Color.primary)
+                    Text(verbatim: subtitle(outcome))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else if session.running {
-                ProgressView().controlSize(.small)
-                Text("netcheck.window.running").font(.title3)
             } else {
-                Text("netcheck.window.title").font(.title3.bold())
+                Text("netcheck.menu.never").font(.title3.bold())
             }
             Spacer()
             if let outcome = session.outcome {
@@ -107,89 +168,326 @@ struct NetCheckRootView: View {
             }
             Button("netcheck.window.run") { session.run() }
                 .buttonStyle(.borderedProminent)
-                .disabled(session.running)
+                // 测速正在跑时也不能开始（两者不并行）
+                .disabled(session.running || speed.running)
         }
     }
 
-    private func summaryCards(_ outcome: NetCheckSession.Outcome) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(outcome.summary.enumerated()), id: \.offset) { _, summary in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: NetCheckText.symbol(summary.verdict))
-                        .font(.title2)
-                        .foregroundStyle(Self.color(summary.verdict))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(NetCheckText.title(summary.goal)).font(.headline)
-                        Text(NetCheckText.detail(summary.reason))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Self.color(summary.verdict).opacity(0.10)))
+    /// 「检测于 15:32:10 · 对不上的：国家、归属」
+    private func subtitle(_ outcome: NetCheckSession.Outcome) -> String {
+        let at = L("netcheck.window.checkedAt \(outcome.at.formatted(date: .omitted, time: .standard))")
+        guard let mismatches = NetCheckText.mismatches(outcome.table.conclusion) else { return at }
+        return at + " · " + mismatches
+    }
+
+    static func isInconsistent(_ conclusion: NetCheckConclusion) -> Bool {
+        if case .inconsistent = conclusion { return true }
+        return false
+    }
+
+    // MARK: 表
+
+    private static let labelWidth: CGFloat = 100
+    private static let spacing: CGFloat = 10
+
+    /// 三列的宽：IP 30%、国家 / 地区 28%、归属 42%。
+    private static func columnWidths(_ width: CGFloat) -> (address: CGFloat, country: CGFloat, owner: CGFloat) {
+        let rest = max(240, width - labelWidth - spacing * 3)
+        return (floor(rest * 0.30), floor(rest * 0.28), floor(rest * 0.42))
+    }
+
+    private func table(_ table: NetCheckTable, width: CGFloat) -> some View {
+        let widths = Self.columnWidths(width)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
+                Color.clear.frame(width: Self.labelWidth, height: 1)
+                Text("netcheck.column.ip").frame(width: widths.address, alignment: .leading)
+                Text("netcheck.column.country").frame(width: widths.country, alignment: .leading)
+                Text("netcheck.column.owner").frame(width: widths.owner, alignment: .leading)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 6)
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                Divider()
+                rowView(row, widths: widths)
+                    .padding(.vertical, 8)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func itemList(_ outcome: NetCheckSession.Outcome) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("netcheck.window.items").font(.headline)
-            ForEach(Array(outcome.findings.enumerated()), id: \.offset) { _, finding in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: NetCheckText.symbol(finding.verdict))
-                        .foregroundStyle(Self.color(finding.verdict))
-                    Text(NetCheckText.title(finding.item))
-                        .fontWeight(.medium)
-                        .frame(width: 70, alignment: .leading)
-                    Text(NetCheckText.detail(finding.reason))
+    private func rowView(_ row: NetCheckRow, widths: (address: CGFloat, country: CGFloat, owner: CGFloat)) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let failure = row.failure {
+                HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
+                    label(row, isFirst: true)
+                    Text(verbatim: NetCheckText.failure(failure))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
-                    Spacer(minLength: 0)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.callout)
+            }
+            ForEach(Array(row.lines.enumerated()), id: \.offset) { index, line in
+                HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
+                    label(row, isFirst: index == 0)
+                    cell(line.address, monospaced: true).frame(width: widths.address, alignment: .leading)
+                    cell(line.country).frame(width: widths.country, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 4) {
+                        cell(line.owner)
+                        if !line.flags.isEmpty {
+                            HStack(spacing: 4) {
+                                ForEach(Array(line.flags.enumerated()), id: \.offset) { _, flag in
+                                    Text(verbatim: NetCheckText.flag(flag))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: widths.owner, alignment: .leading)
+                }
             }
         }
     }
 
+    /// 行首：小圆点（这一行有红字是红色，没有是灰色；没测出来是灰色问号）+ 行名。只在一行的第一条显示。
     @ViewBuilder
-    private func footnotes(_ outcome: NetCheckSession.Outcome) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-            if let words = outcome.dnsConclusion {
-                Text(L("netcheck.report.bashws \(words)"))
-                    .font(.caption)
+    private func label(_ row: NetCheckRow, isFirst: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if isFirst {
+                if row.failure != nil {
+                    Image(systemName: "questionmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Circle()
+                        .fill(row.hasMismatch ? Color.red : Color.secondary.opacity(0.5))
+                        .frame(width: 7, height: 7)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                }
+                Text(verbatim: NetCheckText.title(row))
+                    .font(.callout.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(width: Self.labelWidth, alignment: .leading)
+    }
+
+    /// 一格：标红的字是红色；「没有」「没查到」这类说明和不参加比较的是灰色。地址用等宽字体，都可以选中复制。
+    private func cell(_ cell: NetCheckCell, monospaced: Bool = false) -> some View {
+        let isData: Bool
+        var isAddress = false
+        switch cell.value {
+        case .text: isData = true; isAddress = monospaced
+        case .place, .servers, .systemZone, .ipZone: isData = true
+        default: isData = false
+        }
+        let base: Font = .callout
+        // 不参加比较的（公共 DNS 的国家）是灰色、不会红
+        let plain = isData && !cell.muted ? Color.primary : Color.secondary
+        return Text(verbatim: NetCheckText.value(cell.value))
+            .font(isAddress ? base.monospaced() : base)
+            .foregroundStyle(cell.mismatch ? Color.red : plain)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+}
+
+// MARK: - 测速页
+
+/// 测速页（docs/netcheck/SPEED.md §1.3）：未开始 → 一句说明；进行中 → 阶段名、这一刻的大号数字、进度条，按钮变「停止」；
+/// 结束 → 三个数并排、「经 … · 出口 …」、用了多少流量，按钮「再测一次」「复制结果」。
+struct NetSpeedPageView: View {
+    @ObservedObject private var speed = NetSpeedTestSession.shared
+    @ObservedObject private var ipCheck = NetCheckSession.shared
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            if speed.running {
+                Spacer()
+                running
+                Spacer()
+            } else if let result = speed.result {
+                results(result)
+                Spacer()
+            } else {
+                Spacer()
+                Text("netcheck.speed.intro")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 480)
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            if speed.running {
+                ProgressView().controlSize(.small)
+                Text("netcheck.speed.running").font(.title3)
+            } else if let result = speed.result {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("netcheck.speed.title").font(.title3.bold())
+                    Text(L("netcheck.speed.testedAt \(result.at.formatted(date: .omitted, time: .standard))"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("netcheck.speed.title").font(.title3.bold())
+            }
+            Spacer()
+            if speed.running {
+                Button("netcheck.speed.stop") { speed.stop() }
+            } else {
+                if let result = speed.result {
+                    Button(copied ? "netcheck.window.copied" : "netcheck.speed.copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(NetCheckText.speedReport(result), forType: .string)
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            MainActor.assumeIsolated { copied = false }
+                        }
+                    }
+                }
+                Button(speed.result == nil ? "netcheck.speed.start" : "netcheck.speed.again") { speed.start() }
+                    .buttonStyle(.borderedProminent)
+                    // IP 检测正在跑时不能开始（两者不并行）
+                    .disabled(ipCheck.running)
+            }
+        }
+    }
+
+    // MARK: 进行中
+
+    private var running: some View {
+        let phase = speed.phase ?? .latency
+        let reading = Self.reading(phase, speed.liveValue)
+        return VStack(spacing: 10) {
+            Text(NetCheckText.title(phase))
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(verbatim: reading.number)
+                    .font(.system(size: 56, weight: .semibold).monospacedDigit())
+                Text(verbatim: reading.unit)
+                    .font(.title2)
                     .foregroundStyle(.secondary)
             }
-            if !outcome.realDeclared {
-                Text("netcheck.note.declare")
+            Text(verbatim: reading.detail ?? " ")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+            ProgressView(value: speed.overallFraction)
+                .frame(maxWidth: 360)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// 大号数字、单位、下面那行小字。还没有数时是「—」。
+    static func reading(_ phase: NetSpeedPhase, _ value: Double?) -> (number: String, unit: String, detail: String?) {
+        switch phase {
+        case .latency:
+            return (value.map { NetSpeedFormat.milliseconds($0) } ?? "—", "ms", nil)
+        case .download, .upload:
+            return (value.map { NetSpeedFormat.mbps($0) } ?? "—", "Mbps", value.map { NetSpeedFormat.rate($0) })
+        }
+    }
+
+    // MARK: 结果
+
+    private func results(_ result: NetSpeedResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // 三张一样高：卡片撑满这一行，这一行按最高的那张定高
+            HStack(alignment: .top, spacing: 10) {
+                card(.download, result)
+                card(.upload, result)
+                card(.latency, result)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                if let via = NetCheckText.via(result.server) {
+                    Text(verbatim: via)
+                        .textSelection(.enabled)
+                }
+                Text(verbatim: NetCheckText.used(result))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private static func symbol(_ phase: NetSpeedPhase) -> String {
+        switch phase {
+        case .download: return "arrow.down.circle.fill"
+        case .upload: return "arrow.up.circle.fill"
+        case .latency: return "stopwatch.fill"
+        }
+    }
+
+    /// 一项结果：标题、大号数字与单位、下面一行小字（MB/s 或抖动）；没测出来时写「没测出来」和原因。
+    private func card(_ phase: NetSpeedPhase, _ result: NetSpeedResult) -> some View {
+        let value: (number: String, unit: String, detail: String?)?
+        let failure: String?
+        switch phase {
+        case .latency:
+            switch result.latency {
+            case .success(let latency):
+                value = (NetSpeedFormat.milliseconds(latency.median), "ms", NetCheckText.jitter(latency))
+                failure = nil
+            case .failure(let why):
+                value = nil
+                failure = why.message
+            }
+        case .download, .upload:
+            switch phase == .download ? result.download : result.upload {
+            case .success(let rate):
+                value = (NetSpeedFormat.mbps(rate), "Mbps", NetSpeedFormat.rate(rate))
+                failure = nil
+            case .failure(let why):
+                value = nil
+                failure = why.message
+            }
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Label(NetCheckText.title(phase), systemImage: Self.symbol(phase))
+                .font(.headline)
+                .foregroundStyle(value == nil ? Color.secondary : Color.accentColor)
+            if let value {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(verbatim: value.number)
+                        .font(.system(size: 32, weight: .semibold).monospacedDigit())
+                    Text(verbatim: value.unit)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Text(verbatim: value.detail ?? " ")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("netcheck.speed.failed")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(verbatim: failure ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
-            if let asn = outcome.exitASN, !session.exitAlreadyDeclared {
-                Button(L("netcheck.window.declare \(asn) \(outcome.exitNetwork)")) {
-                    session.declareExitAsReal()
-                }
-                .controlSize(.small)
-                .help("netcheck.window.declareHelp")
-            }
-            Text("netcheck.note.gps")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    static func color(_ verdict: NetCheckVerdict) -> Color {
-        switch verdict {
-        case .ok: return .green
-        case .notice: return .orange
-        case .leak: return .red
-        case .unknown: return .secondary
-        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill((value == nil ? Color.secondary : Color.accentColor).opacity(0.10)))
     }
 }
 

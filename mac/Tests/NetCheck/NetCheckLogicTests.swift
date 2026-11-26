@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-/// 网络泄露检测的纯逻辑（docs/netcheck/DESIGN.md）。回包样本与 baobox_shared 的 Rust 测试同一批。
+/// IP 检测的解析与地址分类（docs/netcheck/DESIGN.md）。回包样本与 baobox_shared 的 Rust 测试同一批。比对与表格在 NetCheckCompareTests。
 final class NetCheckLogicTests: XCTestCase {
 
     /// 不带 key 的回包（ipapi.is 2026-11 实测，gcp-us 出口节点）
@@ -14,8 +14,6 @@ final class NetCheckLogicTests: XCTestCase {
     private let bashNone = #"[{"ip":"203.0.113.9","country_name":"USA","asn":"AS396982 Google LLC","org":"Google LLC","type":"ip"},{"type":"error","text":"No DNS servers found. Try again..."}]"#
 
     private let hostMDNS = "candidate:1840965416 1 udp 2113937151 5f0b4c1e-9a2d-4d8e-b0c1-1a2b3c4d5e6f.local 54321 typ host generation 0"
-    private let hostLAN = "candidate:3 1 udp 2122260223 192.168.0.23 50000 typ host generation 0"
-    private let srflxExit = "candidate:842163049 1 udp 1677729535 34.3.107.77 61234 typ srflx raddr 0.0.0.0 rport 0"
     private let srflxHome = "a=candidate:842163050 1 udp 1677729535 82.66.115.249 61235 typ srflx raddr 192.168.0.23 rport 50000"
 
     private func info(_ text: String) -> NetCheckIPInfo {
@@ -30,16 +28,6 @@ final class NetCheckLogicTests: XCTestCase {
         NetCheckLogic.parseBashWS(text) ?? NetCheckDNSResult()
     }
 
-    private func observations(_ exit: NetCheckIPInfo, webrtc: [String]? = nil,
-                              timezone: String = "Asia/Singapore") -> NetCheckObservations {
-        NetCheckObservations(ipv4: .success(exit), ipv6: .success(nil), dns: .success(dns(bashOK)),
-                             systemTimezone: timezone, webrtc: webrtc.map { .success($0) })
-    }
-
-    private func finding(_ findings: [NetCheckFinding], _ item: NetCheckItem) -> NetCheckFinding? {
-        findings.first { $0.item == item }
-    }
-
     // MARK: 回包
 
     func testAnonymousIPAPIShape() {
@@ -47,7 +35,8 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertEqual(parsed.asn, 15169)
         XCTAssertEqual(parsed.network, "Google LLC")
         XCTAssertEqual(parsed.timezone, "America/Los_Angeles")
-        XCTAssertEqual(parsed.place, "The Dalles, United States")
+        XCTAssertEqual(parsed.city, "The Dalles")
+        XCTAssertEqual(parsed.country, "United States")
         XCTAssertNil(parsed.datacenter)
     }
 
@@ -57,6 +46,9 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertEqual(parsed.network, "HostPapa")
         XCTAssertEqual(parsed.company, "VPS ACE")
         XCTAssertEqual(parsed.city, "Buffalo")
+        XCTAssertEqual(parsed.countryCode, "")
+        let withCode = info(#"{"ip":"1.2.3.4","location":{"country":"Singapore","country_code":"SG","city":"Singapore"}}"#)
+        XCTAssertEqual(withCode.countryCode, "SG")
         XCTAssertEqual(parsed.datacenter, true)
         XCTAssertEqual(parsed.tor, true)
         XCTAssertEqual(parsed.vpn, false)
@@ -68,36 +60,39 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertNil(NetCheckLogic.parseIPAPI(#"{"ip":"10.0.0.1","is_bogon":true,"asn":null}"#))
     }
 
-    func testHostingFallsBackToTheCloudTable() {
-        XCTAssertEqual(info(anonGCP).hosting, .some("Google Cloud"))
-        XCTAssertNil(info(anonHome).hosting)
-        XCTAssertEqual(info(keyed).hosting, .some("HostPapa"))
+    func testFlagsFallBackToTheCloudTable() {
+        // 没有机房判定（不带 key）：ASN 在云厂商表里就是机房
+        XCTAssertEqual(info(anonGCP).flags, [.hosting])
+        XCTAssertEqual(info(anonHome).flags, [])
+        // 带 key：照服务的判定
+        XCTAssertEqual(info(keyed).flags, [.hosting, .tor])
         var notDC = info(anonGCP)
         notDC.datacenter = false
-        XCTAssertNil(notDC.hosting)
+        XCTAssertEqual(notDC.flags, [], "服务说不是机房就信它")
+        var everything = NetCheckIPInfo(ip: "1.2.3.4")
+        everything.datacenter = true
+        everything.vpn = true
+        everything.proxy = true
+        everything.tor = true
+        XCTAssertEqual(everything.flags, [.hosting, .vpn, .proxy, .tor])
     }
 
     func testBashWSRecordsAndErrors() {
         let ok = dns(bashOK)
-        XCTAssertEqual(ok.clients.count, 1)
-        XCTAssertEqual(ok.resolvers.count, 2)
+        XCTAssertEqual(ok.resolvers.count, 2, "只收 dns 记录（ip / conclusion 不用）")
         XCTAssertEqual(ok.resolvers[0].asn, 15169)
-        XCTAssertEqual(ok.conclusion, "DNS is not leaking.")
+        XCTAssertEqual(ok.resolvers[0].network, "Google LLC")
+        XCTAssertEqual(ok.resolvers[0].country, "Singapore")
+        XCTAssertEqual(ok.resolvers[0].countryCode, "")
+        // 2026-11-25 实测：每条有小写的两位代码 country 与 country_name
+        let coded = dns(#"[{"ip":"8.8.8.8","country":"us","country_name":"USA","asn":"AS15169 Google LLC","org":"Google LLC","region_name":"California","city_name":"Mountain View","type":"dns"}]"#)
+        XCTAssertEqual(coded.resolvers.first?.countryCode, "us")
+        XCTAssertEqual(coded.resolvers.first?.country, "USA")
+        XCTAssertNil(ok.error)
         let none = dns(bashNone)
         XCTAssertEqual(none.error, "No DNS servers found. Try again...")
-        XCTAssertEqual(NetCheckLogic.judgeDNS(.success(none), real: NetCheckRealNetworks(parsing: "4657")).verdict,
-                       .unknown)
+        XCTAssertTrue(none.resolvers.isEmpty)
         XCTAssertNil(NetCheckLogic.parseBashWS(#"{"error":"x"}"#))
-    }
-
-    func testRealNetworksParsing() {
-        let real = NetCheckRealNetworks(parsing: "AS4657, 9506，as12322  foo")
-        XCTAssertTrue(real.contains(4657))
-        XCTAssertTrue(real.contains(9506))
-        XCTAssertTrue(real.contains(12322))
-        XCTAssertFalse(real.contains(15169))
-        XCTAssertFalse(real.contains(nil))
-        XCTAssertTrue(NetCheckRealNetworks(parsing: "  ").isEmpty)
     }
 
     // MARK: ICE 与地址
@@ -106,7 +101,6 @@ final class NetCheckLogicTests: XCTestCase {
         let c = NetCheckLogic.parseCandidate(srflxHome)
         XCTAssertEqual(c?.kind, .serverReflexive)
         XCTAssertEqual(c?.address, "82.66.115.249")
-        XCTAssertEqual(c?.transport, "udp")
         XCTAssertEqual(NetCheckLogic.parseCandidate(hostMDNS)?.isMDNS, true)
         XCTAssertNil(NetCheckLogic.parseCandidate("candidate:1 1 udp 1 1.2.3.4 5 typ weird"))
         XCTAssertNil(NetCheckLogic.parseCandidate("not a candidate"))
@@ -126,144 +120,123 @@ final class NetCheckLogicTests: XCTestCase {
         XCTAssertFalse(NetCheckLogic.sameAddress("1.2.3.4", "1.2.3.5"))
     }
 
-    // MARK: 判定
+    // MARK: IPv6：没有 / 没测出来
 
-    func testExitOnTheRealNetworkIsALeak() {
-        let findings = NetCheckLogic.evaluate(observations(info(anonHome)), real: NetCheckRealNetworks(parsing: "AS12322"))
-        XCTAssertEqual(findings[0].verdict, .leak)
-        XCTAssertEqual(NetCheckLogic.overall(findings.map(\.verdict)), .leak)
+    func testIPv6ImmediateFailureMeansNoIPv6() {
+        // 没有 IPv6 的 Mac 上 URLSession 立刻报 -1009（2026-11-25 实测）；找不到、连不上同理
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(URLError(.notConnectedToInternet)))
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(URLError(.cannotFindHost)))
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(URLError(.cannotConnectToHost)))
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(URLError(.dnsLookupFailed)))
+        // NSError 形式（URLSession 的回调给的）也认
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost)))
     }
 
-    func testCloudExitIsANotice() {
-        let findings = NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks(parsing: "4657"))
-        XCTAssertEqual(findings[0].verdict, .notice)
-        XCTAssertEqual(findings[0].reason, .exitFlagged(info(anonGCP).describe, [.hosting("Google Cloud")]))
+    func testIPv6TimeoutsAndServiceErrorsAreNotMeasured() {
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(URLError(.timedOut)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(URLError(.secureConnectionFailed)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(URLError(.badServerResponse)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(URLError(.networkConnectionLost)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NetCheckFailure("HTTP 503")))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "other", code: -1009)))
     }
 
-    func testResolverOnTheRealNetworkIsADNSLeak() {
-        var o = observations(info(anonGCP))
-        var result = dns(bashOK)
-        result.resolvers.append(NetCheckResolver(ip: "203.116.1.78", asn: 4657, network: "StarHub"))
-        o.dns = .success(result)
-        let findings = NetCheckLogic.evaluate(o, real: NetCheckRealNetworks(parsing: "4657"))
-        XCTAssertEqual(finding(findings, .dns)?.verdict, .leak)
+    // MARK: IPv6：代理 CONNECT 失败、IPv4 也没测出来
+
+    func testIPv6ProxyConnectFailureMeansNoIPv6() {
+        // 开着 Clash / Surge 且关了 IPv6：代理 CONNECT 失败（kCFErrorDomainCFNetwork 310），直接给或包在 underlying 里
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(NSError(domain: "kCFErrorDomainCFNetwork", code: 310)))
+        let wrapped = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown,
+                              userInfo: [NSUnderlyingErrorKey: NSError(domain: "kCFErrorDomainCFNetwork", code: 310)])
+        XCTAssertTrue(NetCheckLogic.meansNoIPv6(wrapped))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "kCFErrorDomainCFNetwork", code: 311)))
+        XCTAssertFalse(NetCheckLogic.meansNoIPv6(NSError(domain: "other", code: 310)))
     }
 
-    func testDNSOwnersAreGrouped() {
-        let found = finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks(parsing: "4657")), .dns)
-        XCTAssertEqual(found?.reason, .dnsClean(count: 2, owners: ["Google LLC", "Cloudflare, Inc."]))
-        let undeclared = finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks()), .dns)
-        XCTAssertEqual(undeclared?.verdict, .unknown)
+    func testIPv6ResolutionDependsOnIPv4() {
+        let reason = NetCheckFailure("连不上 api6.ipify.org")
+        // IPv4 测出来了：立刻失败 = 没有
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.absent(reason), ipv4Measured: true), .success(nil))
+        // IPv4 自己都没测出来（整机断网、DNS 全坏）：一律没测出来
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.absent(reason), ipv4Measured: false), .failure(reason))
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.failed(reason), ipv4Measured: true), .failure(reason))
+        let info = NetCheckIPInfo(ip: "2406:da18::7", asn: 45102)
+        XCTAssertEqual(NetCheckLogic.resolveIPv6(.found(info), ipv4Measured: false), .success(info))
     }
 
-    func testIPv6FromAnotherNetworkIsALeak() {
-        var o = observations(info(anonGCP))
-        o.ipv6 = .success(NetCheckIPInfo(ip: "2406:3003::1", asn: 4657, network: "StarHub"))
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .ipv6)?.verdict, .leak)
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks()), .ipv6)?.reason,
-                       .noIPv6)
-    }
+    // MARK: 并发、有总期限
 
-    func testIPv6FromTheSameCloudUnderAnotherASNIsNotALeak() {
-        var o = observations(info(anonGCP))
-        o.ipv6 = .success(NetCheckIPInfo(ip: "2600:1900:4000::1", asn: 396982, network: "Google LLC"))
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .ipv6)?.verdict, .ok)
-    }
-
-    func testIPv6ThatCannotBeComparedIsUnknown() {
-        var o = observations(info(anonGCP))
-        o.ipv4 = .failure(NetCheckFailure("down"))
-        o.ipv6 = .success(NetCheckIPInfo(ip: "2406:3003::1", asn: 4657))
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .ipv6)?.verdict, .unknown)
-    }
-
-    func testWebRTCAddressWhoseExitLookupFailedIsUnknown() {
-        var o = observations(info(anonGCP), webrtc: ["candidate:9 1 udp 1 2406:3003::1 5 typ srflx raddr :: rport 0"])
-        o.ipv6 = .failure(NetCheckFailure("x"))
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .webrtc)?.verdict, .unknown)
-        // 没有 IPv6 出口（不是没测出来）时网页却拿到了 IPv6：照样是泄露
-        o.ipv6 = .success(nil)
-        XCTAssertEqual(finding(NetCheckLogic.evaluate(o, real: NetCheckRealNetworks()), .webrtc)?.verdict, .leak)
-    }
-
-    func testTimezone() {
-        let mismatch = finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: NetCheckRealNetworks()), .timezone)
-        XCTAssertEqual(mismatch?.reason, .timezoneMismatch(system: "Asia/Singapore", exit: "America/Los_Angeles"))
-        let match = finding(NetCheckLogic.evaluate(observations(info(anonGCP), timezone: "America/Los_Angeles"),
-                                                   real: NetCheckRealNetworks()), .timezone)
-        XCTAssertEqual(match?.verdict, .ok)
-    }
-
-    func testFailuresAreUnknown() {
-        let o = NetCheckObservations(ipv4: .failure(NetCheckFailure("down")), ipv6: .failure(NetCheckFailure("x")),
-                                     dns: .failure(NetCheckFailure("y")), systemTimezone: nil,
-                                     webrtc: .failure(NetCheckFailure("z")))
-        let findings = NetCheckLogic.evaluate(o, real: NetCheckRealNetworks())
-        XCTAssertTrue(findings.allSatisfy { $0.verdict == .unknown })
-        XCTAssertEqual(findings[0].reason, .failed("down"))
-    }
-
-    func testWebRTC() {
-        let real = NetCheckRealNetworks(parsing: "4657")
-        func webrtc(_ lines: [String]) -> NetCheckFinding? {
-            finding(NetCheckLogic.evaluate(observations(info(anonGCP), webrtc: lines), real: real), .webrtc)
+    /// 等上一批卡住的活都返回（测试之间不串）。
+    private func waitUntilIdle(file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(5)
+        while NetCheckParallel.isBusy, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertEqual(webrtc([hostMDNS, srflxHome])?.reason, .webrtcLeak(["82.66.115.249"]))
-        XCTAssertEqual(webrtc([hostMDNS, srflxExit])?.reason, .webrtcMatches)
-        XCTAssertEqual(webrtc([hostLAN, srflxExit])?.reason, .webrtcLocal(["192.168.0.23"]))
-        XCTAssertEqual(webrtc([])?.reason, .webrtcNothing)
-        XCTAssertNil(finding(NetCheckLogic.evaluate(observations(info(anonGCP)), real: real), .webrtc),
-                     "没测 WebRTC 就没有这一项")
-        let order = NetCheckLogic.evaluate(observations(info(anonGCP), webrtc: [srflxExit]), real: real).map(\.item)
-        XCTAssertEqual(order, [.exit, .ipv6, .dns, .webrtc, .timezone])
+        XCTAssertFalse(NetCheckParallel.isBusy, "上一批的活没返回", file: file, line: line)
     }
 
-    func testOverallPriority() {
-        XCTAssertEqual(NetCheckLogic.overall([.ok, .notice]), .notice)
-        XCTAssertEqual(NetCheckLogic.overall([.notice, .unknown]), .unknown)
-        XCTAssertEqual(NetCheckLogic.overall([.unknown, .leak]), .leak)
-        XCTAssertEqual(NetCheckLogic.overall([.ok]), .ok)
+    func testParallelWaitsForAllWhenTheyAreQuick() async {
+        await waitUntilIdle()
+        let started = Date()
+        let outcome = await NetCheckParallel.run((0..<10).map { _ in { Thread.sleep(forTimeInterval: 0.05) } }, deadline: 5)
+        XCTAssertEqual(outcome, .finished(10))
+        // 并发（8 个一批）：十个 0.05 秒的活远不到 0.5 秒
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.45)
+        XCTAssertFalse(NetCheckParallel.isBusy)
     }
 
-    // MARK: 总结
-
-    private func summary(_ o: NetCheckObservations, _ real: String) -> [NetCheckSummary] {
-        let findings = NetCheckLogic.evaluate(o, real: NetCheckRealNetworks(parsing: real))
-        return NetCheckLogic.summarize(o, findings: findings)
+    func testParallelStopsWaitingAtTheDeadlineAndRefusesWhileStuck() async {
+        await waitUntilIdle()
+        let gate = DispatchSemaphore(value: 0)
+        let jobs: [@Sendable () -> Void] = [
+            { Thread.sleep(forTimeInterval: 0.01) },
+            { Thread.sleep(forTimeInterval: 0.01) },
+            { gate.wait() },
+            { gate.wait() },
+        ]
+        let started = Date()
+        let outcome = await NetCheckParallel.run(jobs, deadline: 0.3)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(outcome, .finished(2), "到点只算已经回来的")
+        XCTAssertGreaterThanOrEqual(elapsed, 0.29)
+        XCTAssertLessThan(elapsed, 2, "没回来的不等")
+        // 上一批还卡着：这一批不发
+        XCTAssertTrue(NetCheckParallel.isBusy)
+        let refused = await NetCheckParallel.run([{ }], deadline: 1)
+        XCTAssertEqual(refused, .busy)
+        // 卡住的返回之后又能发了
+        gate.signal()
+        gate.signal()
+        await waitUntilIdle()
+        let again = await NetCheckParallel.run([{ }], deadline: 1)
+        XCTAssertEqual(again, .finished(1))
     }
 
-    func testCleanTunnel() {
-        let s = summary(observations(info(anonGCP), webrtc: [hostMDNS, srflxExit], timezone: "America/Los_Angeles"), "4657")
-        XCTAssertEqual(s[0], NetCheckSummary(goal: .carrier, verdict: .ok, reason: .carrierClean))
-        XCTAssertEqual(s[1], NetCheckSummary(goal: .location, verdict: .notice,
-                                             reason: .locationHidden(place: "The Dalles, United States", hints: [.hostingExit])))
+    func testParallelRunsAtMostEightAtATime() async {
+        await waitUntilIdle()
+        final class Counter: @unchecked Sendable {
+            let lock = NSLock()
+            var running = 0
+            var peak = 0
+            func enter() { lock.lock(); running += 1; peak = max(peak, running); lock.unlock() }
+            func leave() { lock.lock(); running -= 1; lock.unlock() }
+        }
+        let counter = Counter()
+        let jobs: [@Sendable () -> Void] = (0..<24).map { _ in
+            {
+                counter.enter()
+                Thread.sleep(forTimeInterval: 0.03)
+                counter.leave()
+            }
+        }
+        let outcome = await NetCheckParallel.run(jobs, deadline: 5)
+        XCTAssertEqual(outcome, .finished(24))
+        XCTAssertLessThanOrEqual(counter.peak, NetCheckParallel.maxConcurrent)
+        XCTAssertGreaterThan(counter.peak, 1, "确实是并发的")
     }
 
-    func testWebRTCLeakAnswersYesToBoth() {
-        let s = summary(observations(info(anonGCP), webrtc: [srflxHome]), "4657")
-        XCTAssertEqual(s[0].reason, .partialLeak([.webrtc]))
-        XCTAssertEqual(s[1].reason, .ipLeak([.webrtc]))
-    }
-
-    func testDNSLeakShowsTheCarrierNotTheLocation() {
-        var o = observations(info(anonGCP), webrtc: [srflxExit], timezone: "America/Los_Angeles")
-        var result = dns(bashOK)
-        result.resolvers[0].asn = 4657
-        o.dns = .success(result)
-        let s = summary(o, "4657")
-        XCTAssertEqual(s[0].verdict, .leak)
-        XCTAssertEqual(s[1].verdict, .notice)
-        XCTAssertEqual(s[1].reason, .locationHidden(place: "The Dalles, United States", hints: [.hostingExit, .dnsCarrier]))
-    }
-
-    func testTunnelOff() {
-        let s = summary(observations(info(anonHome)), "12322")
-        XCTAssertEqual(s[0].reason, .tunnelOff)
-        XCTAssertEqual(s[1].reason, .ipLeak([.exit]))
-    }
-
-    func testUndeclaredRealNetworksLeaveTheCarrierOpen() {
-        let s = summary(observations(info(anonGCP), webrtc: [srflxExit]), "")
-        XCTAssertEqual(s[0].reason, .undetermined([.dns]))
+    func testParallelWithNothingToDo() async {
+        let outcome = await NetCheckParallel.run([], deadline: 10)
+        XCTAssertEqual(outcome, .finished(0))
     }
 }

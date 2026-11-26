@@ -1,14 +1,15 @@
 import Foundation
 import Security
 
-/// 网络泄露检测的设置。ipapi.is 的 key 在钥匙串，其余在 UserDefaults。见 docs/netcheck/DESIGN.md §4.3。
+/// 网络检测的设置。ipapi.is 的 key 在钥匙串，其余在 UserDefaults。见 docs/netcheck/DESIGN.md §4.3、SPEED.md §2.3。
 enum NetCheckSettings {
-    static let realNetworksKey = "netcheck.realNetworks"
     static let dnsProbesKey = "netcheck.dnsProbes"
     static let stunServerKey = "netcheck.stunServer"
 
     static let defaultDNSProbes = 10
     static let dnsProbesRange = 1...50
+    /// DNS 探测（并发解析）整段最多等这么久，到点用已经回来的继续。
+    static let dnsProbeDeadline: TimeInterval = 10
     static let defaultSTUNServer = "stun:stun.l.google.com:19302"
 
     /// 检测服务的地址（与 baobox_shared 的默认值相同；Mac 版不开放修改）。
@@ -16,11 +17,6 @@ enum NetCheckSettings {
     static let ipv6Endpoint = "https://api6.ipify.org"
     static let dnsEndpoint = "https://bash.ws"
     static let dnsHost = "bash.ws"
-
-    static var realNetworks: String {
-        get { UserDefaults.standard.string(forKey: realNetworksKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: realNetworksKey) }
-    }
 
     static var dnsProbes: Int {
         let value = UserDefaults.standard.object(forKey: dnsProbesKey) as? Int ?? defaultDNSProbes
@@ -32,11 +28,20 @@ enum NetCheckSettings {
         return value.isEmpty ? defaultSTUNServer : value
     }
 
-    /// 把一个 ASN 加进真实网络（已经有就不加）。
-    static func addRealNetwork(_ asn: Int) {
-        guard !NetCheckRealNetworks(parsing: realNetworks).contains(asn) else { return }
-        let current = realNetworks.trimmingCharacters(in: .whitespacesAndNewlines)
-        realNetworks = current.isEmpty ? "AS\(asn)" : "\(current), AS\(asn)"
+    // MARK: 菜单栏实时网速（docs/netcheck/SPEED.md §2.3）
+
+    static let liveSpeedEnabledKey = "netcheck.liveSpeed.enabled"
+    static let liveSpeedModeKey = "netcheck.liveSpeed.mode"
+
+    /// 默认关：菜单栏的位置紧张，更新后不该给所有人多出一个状态项。
+    static var liveSpeedEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: liveSpeedEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: liveSpeedEnabledKey) }
+    }
+
+    static var liveSpeedMode: NetSpeedDisplayMode {
+        get { NetSpeedDisplayMode(rawValue: UserDefaults.standard.string(forKey: liveSpeedModeKey) ?? "") ?? .down }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: liveSpeedModeKey) }
     }
 }
 

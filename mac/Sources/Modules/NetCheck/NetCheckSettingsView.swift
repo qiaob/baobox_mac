@@ -1,11 +1,15 @@
 import SwiftUI
 
-/// 网络泄露检测的设置：真实网络、ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
+/// 网络检测的设置：菜单栏网速（开关、显示方式）、测速的说明；IP 检测用的 ipapi.is 的 key（钥匙串）、DNS 探测个数、STUN 服务器。
 struct NetCheckSettingsView: View {
-    @AppStorage(NetCheckSettings.realNetworksKey) private var realNetworks = ""
     @AppStorage(NetCheckSettings.dnsProbesKey) private var dnsProbes = NetCheckSettings.defaultDNSProbes
     @AppStorage(NetCheckSettings.stunServerKey) private var stunServer = ""
-    @State private var apiKey = NetCheckKeychain.load() ?? ""
+    @AppStorage(NetCheckSettings.liveSpeedEnabledKey) private var liveSpeedEnabled = false
+    @AppStorage(NetCheckSettings.liveSpeedModeKey) private var liveSpeedMode = NetSpeedDisplayMode.down.rawValue
+    /// 钥匙串在 `onAppear` 里读一次（不放在 @State 初值里：视图结构体每次重建都会再读一遍）。
+    @State private var apiKey = ""
+    /// 读到的 key；nil = 还没读过，这时不写钥匙串
+    @State private var storedKey: String?
     @State private var keySaveFailed = false
 
     var body: some View {
@@ -18,10 +22,23 @@ struct NetCheckSettingsView: View {
                 Button("netcheck.settings.open") { NetCheckWindowController.shared.show() }
             }
 
-            Section("netcheck.settings.realSection") {
-                TextField("netcheck.settings.real", text: $realNetworks,
-                          prompt: Text(verbatim: "AS4657, AS9506"))
-                Text("netcheck.settings.realHelp")
+            Section("netcheck.settings.liveSection") {
+                Toggle("netcheck.settings.liveToggle", isOn: $liveSpeedEnabled)
+                    .onChange(of: liveSpeedEnabled) { _, _ in NetSpeedStatusItem.shared.apply() }
+                Picker("netcheck.settings.liveMode", selection: $liveSpeedMode) {
+                    Text("netcheck.settings.liveMode.down").tag(NetSpeedDisplayMode.down.rawValue)
+                    Text("netcheck.settings.liveMode.both").tag(NetSpeedDisplayMode.both.rawValue)
+                }
+                .disabled(!liveSpeedEnabled)
+                .onChange(of: liveSpeedMode) { _, _ in NetSpeedStatusItem.shared.apply() }
+                Text("netcheck.settings.liveHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("netcheck.settings.speedSection") {
+                Text("netcheck.settings.speedHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -58,12 +75,20 @@ struct NetCheckSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            guard storedKey == nil else { return }
+            let key = NetCheckKeychain.load() ?? ""
+            storedKey = key
+            apiKey = key
+        }
         // 回车或离开设置页时才写钥匙串，不是每敲一个字写一次
         .onDisappear { saveKey() }
     }
 
     private func saveKey() {
-        guard apiKey != (NetCheckKeychain.load() ?? "") else { return }
-        keySaveFailed = !NetCheckKeychain.save(apiKey)
+        guard let storedKey, apiKey != storedKey else { return }
+        let saved = NetCheckKeychain.save(apiKey)
+        keySaveFailed = !saved
+        if saved { self.storedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 }
