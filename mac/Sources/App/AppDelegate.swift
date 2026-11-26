@@ -24,16 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 快速入口是总入口，排第一（菜单顺序 = 注册顺序）；它的命令表从注册表里收，所以把注册表交给它。
         registry.register(LauncherTool(registry: registry))
         registry.register(ScreenshotTool())
-        registry.register(ScreenDrawTool())
         registry.register(ClipboardTool())
         registry.register(CaffeinateTool())
         registry.register(FocusHealthTool())
         registry.register(WindowManagerTool())
         registry.register(MenuBarManagerTool())
-        registry.register(ClaudeCodeTool())
-        registry.register(AIToolsTool())
-        registry.register(NetCaptureTool())
-        registry.register(NetCheckTool())
+        registry.register(CodingAssistantsTool())
+        registry.register(NetworkToolsModule())
         registry.register(KeyboardNavTool())
         // 会议也是字幕与同传的入口：实时翻译的独立入口已删（#106），菜单、设置、快捷键都在会议里。
         // 会议经 MeetingEngine 协议驱动字幕与同传的引擎，两边只在下面的 `AppDelegate.meetingEngine` 接上。
