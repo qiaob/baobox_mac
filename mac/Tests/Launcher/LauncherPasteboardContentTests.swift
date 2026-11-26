@@ -107,12 +107,13 @@ final class LauncherPasteboardContentTests: XCTestCase {
     // MARK: - 贴进文件时的路径
 
     func testFileFieldTextUsesTildeUnderHome() {
+        // 显式 isDirectory：不写的话 URL(fileURLWithPath:) 会查磁盘，路径在跑测试的机器上是目录就带上结尾的 /
         let home = "/Users/me"
-        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/Users/me/Desktop/a b.png"), home: home),
+        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/Users/me/Desktop/a b.png", isDirectory: false), home: home),
                        "~/Desktop/a b.png")
-        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/Applications/Safari.app"), home: home),
-                       "/Applications/Safari.app")
-        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/Users/me"), home: home), "~")
+        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/opt/tools/report.pdf", isDirectory: false), home: home),
+                       "/opt/tools/report.pdf")
+        XCTAssertEqual(LauncherPastedFile.fieldText(for: URL(fileURLWithPath: "/Users/me", isDirectory: false), home: home), "~")
     }
 
     func testFolderFieldTextEndsWithSlash() {

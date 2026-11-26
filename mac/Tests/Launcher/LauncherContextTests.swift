@@ -270,7 +270,8 @@ final class LauncherContextTests: XCTestCase {
 
     @MainActor
     func testANewReadSupersedesTheOldOne() {
-        let fetcher = LauncherSelectionFetcher(budget: 0.08, grace: 0.04, queue: DispatchQueue(label: "test.fetch"))
+        // 时限放宽：串行队列上第二次要排在第一次后面，CI 机器慢时 0.08 秒不够，第二次会被判超时。这里只测「新的顶掉旧的」。
+        let fetcher = LauncherSelectionFetcher(budget: 1, grace: 0.5, queue: DispatchQueue(label: "test.fetch"))
         var outcomes: [LauncherSelectionOutcome] = []
         let done = expectation(description: "second delivered")
         fetcher.start({ _ in
