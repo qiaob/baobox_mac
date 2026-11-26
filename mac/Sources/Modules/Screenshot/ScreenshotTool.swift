@@ -26,7 +26,12 @@ final class ScreenshotTool: ToolModule {
         let ocr = ClosureMenuItem(title: L("screenshot.menu.ocr"), hotkeyID: "screenshot.ocr") { [weak self] in
             self?.captureController.beginTextRecognition()
         }
-        var items: [NSMenuItem] = [start, record, ocr]
+        let drawTitle = ScreenDrawController.shared.isRunning
+            ? L("screendraw.menu.stop") : L("screendraw.menu.begin")
+        let draw = ClosureMenuItem(title: drawTitle, hotkeyID: ScreenDrawTool.hotkeyID) {
+            ScreenDrawController.shared.toggle()
+        }
+        var items: [NSMenuItem] = [start, record, ocr, draw]
         // 长截屏进行中：控制条可能被用户拖到别处或挡住，菜单里留一个出口。
         if ScrollingCaptureController.shared.isRunning {
             items.append(ClosureMenuItem(title: L("screenshot.menu.finishLongCapture")) {
@@ -72,7 +77,16 @@ final class ScreenshotTool: ToolModule {
                 action: { [weak self] in self?.toggleRecording() },
                 // 同一个动作录制中 = 停止：环形菜单这时写「停止录屏」。
                 stateTitle: { RecordingController.shared.isRecording ? L("screenshot.menu.stopRecord") : nil }
-            )
+            ),
+            HotkeyDefinition(
+                id: ScreenDrawTool.hotkeyID,
+                title: L("screendraw.hotkey.title"),
+                subtitle: L("screendraw.hotkey.subtitle"),
+                defaultCombo: nil,
+                action: { ScreenDrawController.shared.toggle() },
+                // 穿透态下宠物点得到：环形菜单开着时写「关闭画笔」。
+                stateTitle: { ScreenDrawController.shared.isRunning ? L("screendraw.action.stop") : nil }
+            ),
         ]
     }
 
