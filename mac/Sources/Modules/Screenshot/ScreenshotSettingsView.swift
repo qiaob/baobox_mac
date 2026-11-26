@@ -13,6 +13,9 @@ struct ScreenshotSettingsView: View {
     @AppStorage(ScreenshotSettings.recordMixAudioKey) private var recordMixAudio = true
     @AppStorage(ScreenshotSettings.ocrLanguageKey) private var ocrLanguage = TextRecognizer.LanguageOption.chineseEnglish.rawValue
     @AppStorage(ScreenshotSettings.ocrAutoCopyOnlyKey) private var ocrAutoCopyOnly = false
+    @AppStorage(ScreenshotSettings.drawScreenScopeKey)
+    private var drawScope = ScreenshotSettings.DrawScreenScope.current.rawValue
+    @AppStorage(ScreenshotSettings.drawSavePreviewKey) private var drawSavePreview = false
 
     var body: some View {
         Form {
@@ -70,6 +73,22 @@ struct ScreenshotSettingsView: View {
                 }
                 Toggle("screenshot.settings.ocrAutoCopy", isOn: $ocrAutoCopyOnly)
                 Text("screenshot.settings.ocrHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("screendraw.name") {
+                ModuleHotkeyRows(ids: [ScreenDrawTool.hotkeyID])
+                Picker("screenshot.settings.drawScope", selection: $drawScope) {
+                    ForEach(ScreenshotSettings.DrawScreenScope.allCases) { scope in
+                        Text(scope.displayName).tag(scope.rawValue)
+                    }
+                }
+                Toggle("screenshot.settings.drawSavePreview", isOn: $drawSavePreview)
+                Text("screenshot.settings.drawScopeHelp")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("screenshot.settings.drawSavePreviewHelp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
