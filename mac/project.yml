@@ -195,6 +195,7 @@ targets:
       - path: Sources/Core/CLIVersion.swift
       - path: Sources/Core/Translation/OfflineServerPID.swift
       - path: Sources/Modules/NetCapture/Logic
+      - path: Sources/Modules/NetCheck/Logic
       - path: Sources/Core/Launcher
       - path: Sources/Modules/Launcher/Logic
       - path: Sources/Modules/SelectionTranslate/SelectionPanelPlacement.swift
