@@ -13,9 +13,34 @@ enum NetSpeedDisplayMode: String, CaseIterable {
     case both
 }
 
+// MARK: - 菜单栏的宽度
+
+/// 菜单栏网速的宽度（SPEED.md §2.2）：变宽立刻跟上，变窄要等 `hold` 秒 —— 用的是最近 `hold` 秒里最宽的那次。
+/// 这样平时不留空白，数字每秒跳来跳去时状态项也不会每秒伸缩。时间用单调时钟（开机以来的秒数）。
+struct NetSpeedWidthHold {
+    let hold: TimeInterval
+    private var samples: [(time: TimeInterval, width: Double)] = []
+
+    init(hold: TimeInterval = 10) {
+        self.hold = hold
+    }
+
+    /// 记下这一秒要的宽度，返回该用的宽度。时钟倒退时旧记录作废。
+    mutating func width(needed: Double, at now: TimeInterval) -> Double {
+        samples.removeAll { $0.time > now || now - $0.time >= hold }
+        samples.append((now, needed))
+        return samples.reduce(needed) { max($0, $1.width) }
+    }
+
+    /// 换显示方式、关掉时清空。
+    mutating func reset() {
+        samples.removeAll()
+    }
+}
+
 // MARK: - 速率与流量的写法
 
-/// 按字节算，1 M = 1024 K = 1024×1024 字节（SPEED.md §2.2）。数字一律用 `.`，不跟地区设置走（菜单栏要定宽）。
+/// 按字节算，1 M = 1024 K = 1024×1024 字节（SPEED.md §2.2）。数字一律用 `.`，不跟地区设置走。
 enum NetSpeedFormat {
     static let base: Double = 1024
 
@@ -50,34 +75,6 @@ enum NetSpeedFormat {
         case .down: return "↓" + compact(down) + "/s"
         case .both: return "↓" + compact(down) + " ↑" + compact(up)
         }
-    }
-
-    /// 一个数在每种单位下最宽的样子（数字是等宽的，所以 8 代表任何数字）：`888K`、`8.8M`、`888M`、`8.8G`、`888G`。
-    static let widestNumbers = ["888K", "8.8M", "888M", "8.8G", "888G"]
-
-    /// 这种显示方式下所有可能的最宽形状（定宽的候选）。
-    static func widthCandidates(mode: NetSpeedDisplayMode) -> [String] {
-        switch mode {
-        case .down:
-            return widestNumbers.map { "↓" + $0 + "/s" }
-        case .both:
-            return widestNumbers.flatMap { down in widestNumbers.map { up in "↓" + down + " ↑" + up } }
-        }
-    }
-
-    /// 定宽用的字符串：候选里量出来最宽的那个（`width` 由界面层用真实字体量）。
-    static func widestText(mode: NetSpeedDisplayMode, width: (String) -> Double) -> String {
-        let candidates = widthCandidates(mode: mode)
-        var best = candidates[0]
-        var bestWidth = width(best)
-        for candidate in candidates.dropFirst() {
-            let w = width(candidate)
-            if w > bestWidth {
-                best = candidate
-                bestWidth = w
-            }
-        }
-        return best
     }
 
     /// 详情里的速率：`1.2 MB/s`、`356 KB/s`、`0 KB/s`。
