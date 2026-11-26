@@ -23,6 +23,8 @@ enum NetCheckValue: Equatable {
     case notFound
     /// 「网页没拿到公网地址」
     case noPublicAddress
+    /// DNS 解析命中 Fake-IP（198.18.0.0/15），延后到建立连接时解析
+    case fakeIP
     /// 「N 台」（DNS 的一组）
     case servers(Int)
     /// 「系统 X」；nil = 系统时区没读到
@@ -173,9 +175,53 @@ enum NetCheckCompare {
         return nil
     }
 
-    private static func zoneKey(_ zone: String?) -> String? {
-        let key = (zone ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return key.isEmpty ? nil : key
+    /// 已知 IANA 时区的小写索引（大小写写法不同时兜底）。
+    private static let knownTimeZonesByLowercase: [String: String] = {
+        var map: [String: String] = [:]
+        for id in TimeZone.knownTimeZoneIdentifiers {
+            map[id.lowercased()] = id
+        }
+        return map
+    }()
+
+    /// 把 IANA 时区名解析成 `TimeZone`（同时兼容历史别名与大小写差异）。
+    static func resolveTimeZone(_ identifier: String?) -> TimeZone? {
+        let trimmed = (identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let tz = TimeZone(identifier: trimmed) { return tz }
+        if let canonical = knownTimeZonesByLowercase[trimmed.lowercased()] {
+            return TimeZone(identifier: canonical)
+        }
+        return nil
+    }
+
+    /// 格式化当前时刻的 UTC 偏移，如 `UTC`、`UTC+8`、`UTC-5`、`UTC+5:30`。认不出时 nil。
+    static func utcOffsetLabel(for identifier: String?, at date: Date = Date()) -> String? {
+        guard let tz = resolveTimeZone(identifier) else { return nil }
+        let seconds = tz.secondsFromGMT(for: date)
+        if seconds == 0 { return "UTC" }
+        let sign = seconds > 0 ? "+" : "-"
+        let absSeconds = abs(seconds)
+        let hours = absSeconds / 3600
+        let minutes = (absSeconds % 3600) / 60
+        if minutes == 0 { return "UTC\(sign)\(hours)" }
+        return String(format: "UTC%@%d:%02d", sign, hours, minutes)
+    }
+
+    /// 时区比对键：按指定时刻的 UTC 偏移（秒）比，同偏移（如 `Asia/Shanghai` 与 `Asia/Singapore`、或 IANA 历史别名）算一致；
+    /// 认不出的名字退回小写字符串比。
+    static func zoneKey(_ zone: String?, at date: Date = Date()) -> String? {
+        let trimmed = (zone ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let tz = resolveTimeZone(trimmed) {
+            return "utc:\(tz.secondsFromGMT(for: date))"
+        }
+        return "name:\(trimmed.lowercased())"
+    }
+
+    private static func cleanZoneName(_ zone: String?) -> String? {
+        let trimmed = (zone ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: 建表
@@ -192,7 +238,7 @@ enum NetCheckCompare {
         let column: Column
     }
 
-    static func table(_ o: NetCheckObservations) -> NetCheckTable {
+    static func table(_ o: NetCheckObservations, at date: Date = Date()) -> NetCheckTable {
         var rows: [NetCheckRow] = []
         var votes: [Vote] = []
 
@@ -276,13 +322,13 @@ enum NetCheckCompare {
             }
         }
 
-        // 时区：系统的、IP 所在的（取 IPv4 的，没有就取 IPv6 的）
+        // 时区：系统的、IP 所在的（取 IPv4 的，没有就取 IPv6 的）；按指定时刻的 UTC 偏移比，显示保留原名
         var ipZone: String?
-        if case .success(let v4) = o.ipv4 { ipZone = zoneKey(v4.timezone) }
-        if ipZone == nil, case .success(let v6?) = o.ipv6 { ipZone = zoneKey(v6.timezone) }
-        let systemZone = zoneKey(o.systemTimezone)
-        vote(.timezone, systemZone, line: 0, .address)
-        vote(.timezone, ipZone, line: 0, .country)
+        if case .success(let v4) = o.ipv4 { ipZone = cleanZoneName(v4.timezone) }
+        if ipZone == nil, case .success(let v6?) = o.ipv6 { ipZone = cleanZoneName(v6.timezone) }
+        let systemZone = cleanZoneName(o.systemTimezone)
+        vote(.timezone, zoneKey(systemZone, at: date), line: 0, .address)
+        vote(.timezone, zoneKey(ipZone, at: date), line: 0, .country)
         rows.append(NetCheckRow(item: .timezone, lines: [NetCheckLine(address: NetCheckCell(.systemZone(systemZone)),
                                                                        country: NetCheckCell(.ipZone(ipZone)),
                                                                        owner: NetCheckCell(.empty))]))
@@ -338,6 +384,11 @@ enum NetCheckCompare {
         switch dns {
         case .failure(let why): return NetCheckRow(item: .dns, failure: .failed(why.message))
         case .success(let value): result = value
+        }
+        if result.resolvers.isEmpty, result.fakeIPDetected {
+            return NetCheckRow(item: .dns, lines: [NetCheckLine(address: NetCheckCell(.fakeIP),
+                                                                country: NetCheckCell(.empty),
+                                                                owner: NetCheckCell(.empty))])
         }
         if let error = result.error { return NetCheckRow(item: .dns, failure: .dnsServiceError(error)) }
         if result.resolvers.isEmpty { return NetCheckRow(item: .dns, failure: .dnsNoResolvers) }

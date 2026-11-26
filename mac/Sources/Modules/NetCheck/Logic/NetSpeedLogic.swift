@@ -156,6 +156,11 @@ enum NetSpeedPlan {
     static let liveWindow: TimeInterval = 1
     /// 起速段之后至少要有这么长的数据，才用「后 4.5 秒」的算法；不到（流量上限先到）就用全程平均。
     static let minimumWindow: TimeInterval = 0.5
+    /// 负载延迟（Bufferbloat）：进入下载 / 上传后稍等带宽起速再串行探 `bytes=0`，最多探这么多次。
+    static let loadedPingDelay: TimeInterval = 0.5
+    static let loadedPingSpacing: TimeInterval = 0.25
+    static let loadedPingMaxCount = 8
+    static let loadedPingTimeout: TimeInterval = 3
 }
 
 // MARK: - 测速窗口计算
@@ -301,9 +306,13 @@ struct NetSpeedFailure: Error, Equatable {
 }
 
 struct NetSpeedLatencyResult: Equatable {
-    /// 秒
+    /// 空载延迟中位数（秒）
     let median: TimeInterval
     let jitter: TimeInterval?
+    /// 下载期间的负载延迟中位数（秒）；未测到时 nil
+    var downloadLoaded: TimeInterval? = nil
+    /// 上传期间的负载延迟中位数（秒）；未测到时 nil
+    var uploadLoaded: TimeInterval? = nil
 }
 
 /// 测速服务器与出口：`/meta` 给的。

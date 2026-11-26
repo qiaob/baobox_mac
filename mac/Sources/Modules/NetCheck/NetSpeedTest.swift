@@ -19,6 +19,8 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         case meta
         /// 0 = 热连接（不计）
         case ping(Int)
+        /// 下载 / 上传期间的负载延迟探测（Bufferbloat）
+        case loadedPing(NetSpeedPhase)
         case stream(Int)
     }
 
@@ -74,6 +76,10 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     private var aliveStreams = 0
     private var phaseFailure: NetSpeedFailure?
     private var uploadBody: Data?
+    private var loadedPings: [TimeInterval] = []
+    private var loadedPingSent = 0
+    private var downloadLoadedLatency: TimeInterval?
+    private var uploadLoadedLatency: TimeInterval?
     private var download: Result<Double, NetSpeedFailure>?
     private var upload: Result<Double, NetSpeedFailure>?
 
@@ -238,20 +244,50 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
 
     private func startBandwidth(_ next: NetSpeedPhase) {
         generation += 1
+        let currentGen = generation
         phase = next
         let cap = next == .download ? NetSpeedPlan.downloadCap : NetSpeedPlan.uploadCap
         meter = NetSpeedMeter(start: Self.now(), cap: cap)
         phaseFailure = nil
+        loadedPings = []
+        loadedPingSent = 0
         if next == .upload, uploadBody == nil { uploadBody = Self.makeUploadBody() }
         emit(.phase(next))
         aliveStreams = streamSessions.count
         for index in streamSessions.indices { startStream(index) }
+
+        // 稍等起速后在独立的 latencySession 上串行探负载延迟（Bufferbloat），不额外占带宽
+        queue.asyncAfter(deadline: .now() + NetSpeedPlan.loadedPingDelay) { [weak self] in
+            self?.sendLoadedPing(for: next, generation: currentGen)
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + NetSpeedPlan.tick, repeating: NetSpeedPlan.tick, leeway: .milliseconds(20))
         timer.setEventHandler { [weak self] in self?.tick() }
         ticker = timer
         timer.resume()
+    }
+
+    private func sendLoadedPing(for targetPhase: NetSpeedPhase, generation expectedGen: Int) {
+        guard !done, !cancelled, generation == expectedGen, phase == targetPhase else { return }
+        guard loadedPingSent < NetSpeedPlan.loadedPingMaxCount else { return }
+        guard let session = latencySession,
+              let request = request(NetSpeedPlan.downloadURL(bytes: 0), timeout: NetSpeedPlan.loadedPingTimeout) else { return }
+        loadedPingSent += 1
+        track(session.dataTask(with: request), .loadedPing(targetPhase))
+    }
+
+    private func loadedPingCompleted(_ info: TaskInfo, phase targetPhase: NetSpeedPhase, error: Error?) {
+        guard info.generation == generation, phase == targetPhase else { return }
+        if error == nil, info.status == 200 {
+            let measured = info.measured ?? ((info.responded ?? Self.now()) - info.started)
+            loadedPings.append(NetSpeedLatency.sample(measured: measured, serverTiming: info.serverTiming))
+        }
+        guard loadedPingSent < NetSpeedPlan.loadedPingMaxCount else { return }
+        let currentGen = generation
+        queue.asyncAfter(deadline: .now() + NetSpeedPlan.loadedPingSpacing) { [weak self] in
+            self?.sendLoadedPing(for: targetPhase, generation: currentGen)
+        }
     }
 
     /// 1 MB 随机字节（不要全零：代理可能压缩）重复 25 次。
@@ -314,26 +350,46 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         } else {
             outcome = .failure(phaseFailure ?? NetSpeedFailure(L("netcheck.speed.error.noData")))
         }
-        // 这一段的请求都停掉；它们迟到的回调按 generation 丢掉
+        let loadedMedian: TimeInterval?
+        if case .success = outcome {
+            loadedMedian = NetSpeedLatency.median(loadedPings)
+        } else {
+            loadedMedian = nil
+        }
+        // 这一段的请求（含负载延迟探测）都停掉；它们迟到的回调按 generation 丢掉
         let ended = generation
         generation += 1
         for (id, info) in tasks where info.generation == ended {
-            if case .stream = info.kind { live[id]?.cancel() }
+            switch info.kind {
+            case .stream, .loadedPing: live[id]?.cancel()
+            default: break
+            }
         }
         meter = nil
+        loadedPings = []
         if phase == .download {
             download = outcome
+            downloadLoadedLatency = loadedMedian
             startBandwidth(.upload)
         } else {
             upload = outcome
+            uploadLoadedLatency = loadedMedian
             uploadBody = nil
             finish()
         }
     }
 
     private func finish() {
+        let finalLatency: Result<NetSpeedLatencyResult, NetSpeedFailure>
+        if case .success(var lat) = latency {
+            lat.downloadLoaded = downloadLoadedLatency
+            lat.uploadLoaded = uploadLoadedLatency
+            finalLatency = .success(lat)
+        } else {
+            finalLatency = latency ?? .failure(NetSpeedFailure(L("netcheck.speed.error.noData")))
+        }
         let result = NetSpeedResult(at: Date(),
-                                    latency: latency ?? .failure(NetSpeedFailure(L("netcheck.speed.error.noData"))),
+                                    latency: finalLatency,
                                     download: download ?? .failure(NetSpeedFailure(L("netcheck.speed.error.noData"))),
                                     upload: upload ?? .failure(NetSpeedFailure(L("netcheck.speed.error.noData"))),
                                     server: server,
@@ -383,7 +439,7 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
             meter?.add(Int64(data.count))
             bytesUsed += Int64(data.count)
             if meter?.reachedCap == true { finishBandwidth() }
-        case .ping:
+        case .ping, .loadedPing:
             break
         }
     }
@@ -398,7 +454,11 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
-        guard !done, let info = tasks[ObjectIdentifier(task)], case .ping = info.kind else { return }
+        guard !done, let info = tasks[ObjectIdentifier(task)] else { return }
+        switch info.kind {
+        case .ping, .loadedPing: break
+        default: return
+        }
         if let transaction = metrics.transactionMetrics.last(where: { $0.requestStartDate != nil && $0.responseStartDate != nil }),
            let sent = transaction.requestStartDate, let received = transaction.responseStartDate {
             let measured = received.timeIntervalSince(sent)
@@ -418,6 +478,8 @@ final class NetSpeedTest: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         case .ping(let index):
             guard phase == .latency else { return }
             pingCompleted(info, index: index, error: error)
+        case .loadedPing(let targetPhase):
+            loadedPingCompleted(info, phase: targetPhase, error: error)
         case .stream(let index):
             guard info.generation == generation, phase != .latency else { return }
             streamCompleted(info, index: index, error: error)

@@ -113,10 +113,13 @@ struct NetCheckEngine {
                 return .failure(NetCheckFailure(L("netcheck.error.badID")))
             }
             let hosts = (1...dnsProbes).map { "\($0).\(id).\(NetCheckSettings.dnsHost)" }
-            guard await Self.resolve(hosts) else { return .failure(NetCheckFailure(L("netcheck.error.dnsBusy"))) }
+            guard let probe = await Self.resolve(hosts) else { return .failure(NetCheckFailure(L("netcheck.error.dnsBusy"))) }
             let body = try await get("\(NetCheckSettings.dnsEndpoint)/dnsleak/test/\(id)?json=2")
-            guard let result = NetCheckLogic.parseBashWS(body) else {
+            guard var result = NetCheckLogic.parseBashWS(body) else {
                 return .failure(NetCheckFailure(L("netcheck.error.bashwsUnreadable")))
+            }
+            if result.resolvers.isEmpty, probe.sawFakeIP {
+                result.fakeIPDetected = true
             }
             return .success(result)
         } catch let failure as NetCheckFailure {
@@ -126,18 +129,52 @@ struct NetCheckEngine {
         }
     }
 
+    private final class AtomicFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        func set() {
+            lock.lock()
+            value = true
+            lock.unlock()
+        }
+
+        func get() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
     /// 用系统解析器（getaddrinfo → mDNSResponder）并发解析（最多 8 个同时），整段最多等 10 秒：到点就去取结果，没回来的不等
-    /// （它们在后台自己结束）。结果不要紧，要的是查询发出去了。上一次的还没返回完时不发，返回 false。
-    private static func resolve(_ hosts: [String]) async -> Bool {
+    /// （它们在后台自己结束）。顺手检查返回的地址是否落在 Fake-IP（198.18.0.0/15）网段。上一次的还没返回完时不发，返回 nil。
+    private static func resolve(_ hosts: [String]) async -> (sawFakeIP: Bool, completed: Int)? {
+        let sawFakeIP = AtomicFlag()
         let jobs: [@Sendable () -> Void] = hosts.map { host in
             {
                 var result: UnsafeMutablePointer<addrinfo>?
-                if getaddrinfo(host, nil, nil, &result) == 0, let result {
-                    freeaddrinfo(result)
+                if getaddrinfo(host, nil, nil, &result) == 0, let first = result {
+                    defer { freeaddrinfo(first) }
+                    var cursor: UnsafeMutablePointer<addrinfo>? = first
+                    while let entry = cursor {
+                        cursor = entry.pointee.ai_next
+                        guard let addr = entry.pointee.ai_addr else { continue }
+                        let family = Int32(addr.pointee.sa_family)
+                        guard family == AF_INET || family == AF_INET6 else { continue }
+                        var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                        if getnameinfo(addr, entry.pointee.ai_addrlen, &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0,
+                           NetCheckLogic.isFakeIP(String(cString: buf)) {
+                            sawFakeIP.set()
+                            break
+                        }
+                    }
                 }
             }
         }
-        return await NetCheckParallel.run(jobs, deadline: NetCheckSettings.dnsProbeDeadline) != .busy
+        guard case .finished(let count) = await NetCheckParallel.run(jobs, deadline: NetCheckSettings.dnsProbeDeadline) else {
+            return nil
+        }
+        return (sawFakeIP: sawFakeIP.get(), completed: count)
     }
 
     static var systemTimezone: String? {

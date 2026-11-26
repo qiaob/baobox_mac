@@ -383,6 +383,19 @@ final class NetSpeedLogicTests: XCTestCase {
         XCTAssertEqual(NetSpeedLatency.sample(measured: 0.020, serverTiming: nil), 0.020)
     }
 
+    func testLoadedLatencyFieldsAndPlan() {
+        let idleOnly = NetSpeedLatencyResult(median: 0.012, jitter: 0.001)
+        XCTAssertNil(idleOnly.downloadLoaded)
+        XCTAssertNil(idleOnly.uploadLoaded)
+        let withLoaded = NetSpeedLatencyResult(median: 0.012, jitter: 0.001, downloadLoaded: 0.028, uploadLoaded: 0.045)
+        XCTAssertEqual(withLoaded.downloadLoaded, 0.028)
+        XCTAssertEqual(withLoaded.uploadLoaded, 0.045)
+        XCTAssertGreaterThan(NetSpeedPlan.loadedPingDelay, 0)
+        XCTAssertLessThan(NetSpeedPlan.loadedPingDelay, NetSpeedPlan.phaseDuration)
+        XCTAssertGreaterThan(NetSpeedPlan.loadedPingMaxCount, 0)
+        XCTAssertGreaterThan(NetSpeedPlan.loadedPingTimeout, 0)
+    }
+
     // MARK: - /meta
 
     /// 2026-11-25 实测的回包形状（值换成了文档用的假数据：IP、ASN、运营商、位置）

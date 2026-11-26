@@ -8,16 +8,32 @@ final class NetCheckSession: ObservableObject {
     struct Outcome {
         let at: Date
         let table: NetCheckTable
+        /// 检测那一刻的本机网络环境快照（纯本地只读）
+        let environment: NetCheckEnvironment?
     }
 
     @Published private(set) var running = false
     @Published private(set) var outcome: Outcome?
+    /// 当前本机网络环境（代理 / 隧道 / 系统 DNS / 局域网 IP），纯本地只读，不发网络请求。
+    @Published private(set) var environment: NetCheckEnvironment?
     /// WebRTC 探测用的隐藏 WebView。检测窗口把它挂进视图层级（不挂会被 WebKit 挂起）。
     @Published private(set) var webrtc: NetCheckWebRTC?
     /// 检测中关了窗口：跑完再放掉 WebView。
     private var releaseWhenDone = false
 
     private init() {}
+
+    /// 刷新本机网络环境（纯本地只读，在后台队列读完回主线程更新）。
+    func refreshEnvironment() {
+        DispatchQueue.global(qos: .utility).async {
+            let snapshot = NetCheckEnvironmentReader.read()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    NetCheckSession.shared.environment = snapshot
+                }
+            }
+        }
+    }
 
     /// 起一次检测。已经在跑就不重复起。调用方应当先把检测窗口显示出来（WebView 要在视图层级里）。
     func run() {
@@ -29,6 +45,7 @@ final class NetCheckSession: ObservableObject {
         let stun = NetCheckSettings.stunServer
 
         Task { @MainActor in
+            let envTask = Task.detached(priority: .utility) { NetCheckEnvironmentReader.read() }
             async let ipv4 = engine.lookup()
             async let ipv6 = engine.ipv6Exit()
             async let dns = engine.dnsLeak()
@@ -42,10 +59,13 @@ final class NetCheckSession: ObservableObject {
             for address in NetCheckCompare.addressesToLookUp(rtc, ipv4: v4, ipv6: v6) {
                 if case .success(let info) = await engine.lookup(address) { lookups[address] = info }
             }
+            let env = await envTask.value
             let observations = NetCheckObservations(ipv4: v4, ipv6: v6, dns: await dns,
                                                     systemTimezone: NetCheckEngine.systemTimezone, webrtc: rtc,
                                                     webrtcLookups: lookups)
-            self.outcome = Outcome(at: Date(), table: NetCheckCompare.table(observations))
+            let now = Date()
+            self.environment = env
+            self.outcome = Outcome(at: now, table: NetCheckCompare.table(observations, at: now), environment: env)
             self.running = false
             if self.releaseWhenDone {
                 self.releaseWhenDone = false
@@ -63,9 +83,10 @@ final class NetCheckSession: ObservableObject {
         releaseWebView()
     }
 
-    /// 窗口又打开了：检测中关窗口时记下的「跑完再放」作废。
+    /// 窗口又打开了：检测中关窗口时记下的「跑完再放」作废，顺手刷新一次本机环境（不联网）。
     func windowOpened() {
         releaseWhenDone = false
+        refreshEnvironment()
     }
 
     private func releaseWebView() {

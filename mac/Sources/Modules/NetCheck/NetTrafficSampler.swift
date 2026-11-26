@@ -9,6 +9,8 @@ final class NetTrafficSampler {
 
     /// 最近一次的速度与累计（只在主线程读写）。
     private(set) var latest: NetTrafficRate?
+    /// 最近一次读到的主局域网网卡与 IPv4（后台每 5 秒刷新，菜单构建只读内存）。
+    private(set) var latestLAN: NetCheckLAN?
     /// 每次有新的速度时调（主线程）。
     var onUpdate: ((NetTrafficRate) -> Void)?
 
@@ -25,13 +27,16 @@ final class NetTrafficSampler {
         let source = DispatchSource.makeTimerSource(queue: queue)
         source.schedule(deadline: .now(), repeating: .seconds(1), leeway: .milliseconds(100))
         source.setEventHandler {
-            guard let rate = state.sample() else { return }
+            let (rate, lan) = state.sample()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     // 关掉之后还在路上的那一次不要了
                     guard NetTrafficSampler.shared.timer != nil else { return }
-                    NetTrafficSampler.shared.latest = rate
-                    NetTrafficSampler.shared.onUpdate?(rate)
+                    NetTrafficSampler.shared.latestLAN = lan
+                    if let rate {
+                        NetTrafficSampler.shared.latest = rate
+                        NetTrafficSampler.shared.onUpdate?(rate)
+                    }
                 }
             }
         }
@@ -43,6 +48,7 @@ final class NetTrafficSampler {
         timer?.cancel()
         timer = nil
         latest = nil
+        latestLAN = nil
         let state = state
         queue.async { state.reset() }
     }
@@ -51,17 +57,25 @@ final class NetTrafficSampler {
 /// 采样器在后台队列上的状态（上一次读数）。只在采样器的队列上用。
 final class NetTrafficSamplerState: @unchecked Sendable {
     private var previous: NetTrafficSnapshot?
+    private var lanTick = 0
+    private var cachedLAN: NetCheckLAN?
 
     func reset() {
         previous = nil
+        lanTick = 0
+        cachedLAN = nil
     }
 
-    /// 读一次，和上一次相减。第一次、读不到、间隔不对（睡眠醒来）时 nil。
-    func sample() -> NetTrafficRate? {
-        guard let current = NetTrafficReader.read() else { return nil }
+    /// 读一次，和上一次相减；顺手每 5 秒刷一次主局域网 IP。第一次、读不到、间隔不对（睡眠醒来）时速率为 nil。
+    func sample() -> (NetTrafficRate?, NetCheckLAN?) {
+        if lanTick % 5 == 0 {
+            cachedLAN = NetCheckEnvironmentReader.primaryLAN()
+        }
+        lanTick &+= 1
+        guard let current = NetTrafficReader.read() else { return (nil, cachedLAN) }
         defer { previous = current }
-        guard let previous else { return nil }
-        return NetTrafficMath.rate(from: previous, to: current)
+        guard let previous else { return (nil, cachedLAN) }
+        return (NetTrafficMath.rate(from: previous, to: current), cachedLAN)
     }
 }
 
