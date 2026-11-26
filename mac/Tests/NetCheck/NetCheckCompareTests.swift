@@ -226,7 +226,8 @@ final class NetCheckCompareTests: XCTestCase {
 
     func testTimezone() {
         var o = clean()
-        o.systemTimezone = "Asia/Shanghai"
+        // UTC+9（东京）与 UTC+8（新加坡）偏移不同：不一致
+        o.systemTimezone = "Asia/Tokyo"
         var table = NetCheckCompare.table(o)
         XCTAssertEqual(table.conclusion, .inconsistent([.timezone]))
         let zone = row(table, .timezone)?.lines.first
@@ -237,6 +238,42 @@ final class NetCheckCompareTests: XCTestCase {
         table = NetCheckCompare.table(o)
         XCTAssertEqual(table.conclusion, .consistent)
         XCTAssertEqual(row(table, .timezone)?.lines.first?.address.value, .systemZone(nil))
+    }
+
+    func testTimezoneSameUTCOffsetAndAliasesAreConsistent() {
+        // 固定日期避免夏令时边界抖动（2026-06-15 12:00 UTC）
+        let date = Date(timeIntervalSince1970: 1_781_524_800)
+        // Asia/Shanghai 与 Asia/Singapore 同属 UTC+8：一致
+        var o = clean()
+        o.systemTimezone = "Asia/Shanghai"
+        let table = NetCheckCompare.table(o, at: date)
+        XCTAssertEqual(table.conclusion, .consistent)
+        XCTAssertEqual(row(table, .timezone)?.lines.first?.address.value, .systemZone("Asia/Shanghai"))
+        XCTAssertEqual(row(table, .timezone)?.lines.first?.country.value, .ipZone("Asia/Singapore"))
+        // IANA 历史别名（Asia/Calcutta vs Asia/Kolkata，同为 UTC+5:30）
+        XCTAssertEqual(NetCheckCompare.zoneKey("Asia/Calcutta", at: date),
+                       NetCheckCompare.zoneKey("Asia/Kolkata", at: date))
+        // US/Pacific vs America/Los_Angeles
+        XCTAssertEqual(NetCheckCompare.zoneKey("US/Pacific", at: date),
+                       NetCheckCompare.zoneKey("America/Los_Angeles", at: date))
+        // 大小写不同也能认
+        XCTAssertEqual(NetCheckCompare.zoneKey("asia/singapore", at: date),
+                       NetCheckCompare.zoneKey("Asia/Singapore", at: date))
+        // 认不出的名字退回小写字符串比
+        XCTAssertEqual(NetCheckCompare.zoneKey("Mars/Olympus", at: date),
+                       NetCheckCompare.zoneKey("mars/olympus", at: date))
+        XCTAssertNotEqual(NetCheckCompare.zoneKey("Mars/Olympus", at: date),
+                          NetCheckCompare.zoneKey("Mars/Jezero", at: date))
+    }
+
+    func testTimezoneUTCOffsetLabels() {
+        let winter = Date(timeIntervalSince1970: 1_768_478_400) // 2026-01-15 12:00 UTC
+        XCTAssertEqual(NetCheckCompare.utcOffsetLabel(for: "UTC", at: winter), "UTC")
+        XCTAssertEqual(NetCheckCompare.utcOffsetLabel(for: "Asia/Shanghai", at: winter), "UTC+8")
+        XCTAssertEqual(NetCheckCompare.utcOffsetLabel(for: "Asia/Kolkata", at: winter), "UTC+5:30")
+        XCTAssertEqual(NetCheckCompare.utcOffsetLabel(for: "America/Los_Angeles", at: winter), "UTC-8")
+        XCTAssertNil(NetCheckCompare.utcOffsetLabel(for: "Mars/Olympus", at: winter))
+        XCTAssertNil(NetCheckCompare.utcOffsetLabel(for: nil, at: winter))
     }
 
     func testTimezoneFallsBackToIPv6() {
@@ -339,6 +376,22 @@ final class NetCheckCompareTests: XCTestCase {
         XCTAssertEqual(row(NetCheckCompare.table(o), .dns)?.failure, .failed("timeout"))
     }
 
+    func testDNSFakeIPRow() {
+        // Fake-IP 模式下 bash.ws 没看到上游解析器并报 error：显示 fakeIP 行、不报错、不标红
+        var o = clean()
+        o.dns = .success(NetCheckDNSResult(resolvers: [], error: "No DNS servers found. Try again...", fakeIPDetected: true))
+        let table = NetCheckCompare.table(o)
+        XCTAssertEqual(table.conclusion, .consistent)
+        let dns = row(table, .dns)
+        XCTAssertNil(dns?.failure)
+        XCTAssertEqual(dns?.lines.count, 1)
+        XCTAssertEqual(dns?.lines.first?.address.value, .fakeIP)
+        XCTAssertFalse(dns?.hasMismatch ?? true)
+        // 如果实际上还是看到了上游解析器：照常显示解析器
+        o.dns = .success(NetCheckDNSResult(resolvers: [resolver("172.253.2.1")], fakeIPDetected: true))
+        XCTAssertEqual(row(NetCheckCompare.table(o), .dns)?.lines.first?.address.value, .servers(1))
+    }
+
     // MARK: - WebRTC
 
     func testWebRTCKeepsOnlyPublicAddresses() {
@@ -346,10 +399,11 @@ final class NetCheckCompareTests: XCTestCase {
             "candidate:1 1 udp 2113937151 5f0b4c1e-9a2d-4d8e-b0c1-1a2b3c4d5e6f.local 54321 typ host generation 0",
             "candidate:3 1 udp 2122260223 192.168.0.23 50000 typ host generation 0",
             "candidate:4 1 udp 2122260223 100.101.102.103 50000 typ host generation 0",
+            "candidate:6 1 udp 2122260223 198.18.0.5 50000 typ host generation 0",
             "candidate:5 1 udp 1 34.3.107.99 3478 typ relay raddr 0.0.0.0 rport 0",
             srflx(v4Other), srflx(v4), srflx(v6), srflx(v4Other),
         ]
-        XCTAssertEqual(NetCheckCompare.publicAddresses(lines), [v4Other, v4, v6], "内网、mDNS、relay 不算；去重")
+        XCTAssertEqual(NetCheckCompare.publicAddresses(lines), [v4Other, v4, v6], "内网、Fake-IP、mDNS、relay 不算；去重")
         // 和 IPv4 / IPv6 那一行相同的不另查
         XCTAssertEqual(NetCheckCompare.addressesToLookUp(.success(lines), ipv4: .success(info(v4)),
                                                          ipv6: .success(info(v6))), [v4Other])
@@ -414,6 +468,7 @@ final class NetCheckCompareTests: XCTestCase {
                 case .noIPv6: return "none"
                 case .notFound: return "?"
                 case .noPublicAddress: return "no public"
+                case .fakeIP: return "fake-ip"
                 case .servers(let count): return "\(count)x"
                 case .systemZone(let zone): return "sys " + (zone ?? "?")
                 case .ipZone(let zone): return "ip " + (zone ?? "?")

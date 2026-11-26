@@ -3,9 +3,9 @@ import SwiftUI
 
 // MARK: - 窗口控制器
 
-/// 窗口里的两页（顶部分段切换）。见 docs/netcheck/SPEED.md。
+/// 窗口里的四页（顶部分段切换）：IP 检测、测速、诊断、端口。
 enum NetCheckPage: Hashable {
-    case ip, speed
+    case ip, speed, diag, ports
 }
 
 /// 窗口此刻在哪一页：菜单 / 快速入口打开窗口时可以指定。
@@ -16,7 +16,7 @@ final class NetCheckWindowState: ObservableObject {
     private init() {}
 }
 
-/// 网络检测窗口：IP 检测（一张表，也承载 WebRTC 探测用的隐藏 WebView）与测速两页。
+/// 网络检测窗口：IP 检测（一张表，也承载 WebRTC 探测用的隐藏 WebView）、测速、诊断与本机端口四页。
 /// 见 docs/netcheck/COMPARE.md §1、docs/netcheck/SPEED.md §1.3。
 @MainActor
 final class NetCheckWindowController: NSObject, NSWindowDelegate {
@@ -27,8 +27,7 @@ final class NetCheckWindowController: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    /// 显示窗口。`page` 为 nil 时停在上次那一页；`start` 为 true 时顺手开始那一页的检测 / 测速
-    /// （另一样正在跑时不开始：两者不并行）。
+    /// 显示窗口。`page` 为 nil 时停在上次那一页；`start` 为 true 时顺手开始那一页的检测 / 测速 / 刷新。
     func show(page: NetCheckPage? = nil, start: Bool = false) {
         if window == nil {
             let hosting = NSHostingController(rootView: NetCheckRootView())
@@ -36,8 +35,8 @@ final class NetCheckWindowController: NSObject, NSWindowDelegate {
             let created = DesktopSpaceWindow.make { NSWindow(contentViewController: hosting) }
             created.title = L("netcheck.window.title")
             created.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            created.setContentSize(NSSize(width: 680, height: 600))
-            created.minSize = NSSize(width: 520, height: 460)
+            created.setContentSize(NSSize(width: 720, height: 600))
+            created.minSize = NSSize(width: 540, height: 460)
             created.isReleasedWhenClosed = false
             created.delegate = self
             created.center()
@@ -53,13 +52,30 @@ final class NetCheckWindowController: NSObject, NSWindowDelegate {
             if !NetSpeedTestSession.shared.running { NetCheckSession.shared.run() }
         case .speed:
             NetSpeedTestSession.shared.start()
+        case .diag:
+            NetDiagSession.shared.runServiceChecks()
+        case .ports:
+            NetPortSession.shared.refresh()
         }
+    }
+
+    /// 打开诊断页并针对给定目标立即执行全链路诊断（供快速入口文字动作调用）。
+    func showDiagnostic(target: String) {
+        show(page: .diag, start: false)
+        NetDiagSession.shared.runDiagnostic(raw: target)
+    }
+
+    /// 打开本机端口页并按搜索词过滤刷新（供快速入口 `:3000` 等调用）。
+    func showPorts(filter: String? = nil) {
+        if let filter { NetPortSession.shared.searchText = filter }
+        show(page: .ports, start: true)
     }
 
     func windowWillClose(_ notification: Notification) {
         NetCheckSession.shared.windowClosed()
-        // 测速随窗口停（IP 检测照旧：关窗口不打断）
+        // 测速与诊断随窗口停（IP 检测照旧：关窗口不打断）
         NetSpeedTestSession.shared.stop()
+        NetDiagSession.shared.stopAll()
     }
 }
 
@@ -74,6 +90,8 @@ struct NetCheckRootView: View {
             Picker(selection: $state.page) {
                 Text("netcheck.page.ip").tag(NetCheckPage.ip)
                 Text("netcheck.page.speed").tag(NetCheckPage.speed)
+                Text("netcheck.page.diag").tag(NetCheckPage.diag)
+                Text("netcheck.page.ports").tag(NetCheckPage.ports)
             } label: {
                 EmptyView()
             }
@@ -85,11 +103,13 @@ struct NetCheckRootView: View {
             switch state.page {
             case .ip: NetCheckIPView()
             case .speed: NetSpeedPageView()
+            case .diag: NetCheckDiagView()
+            case .ports: NetCheckPortView()
             }
         }
         .padding(18)
         .overlay(alignment: .bottomLeading) {
-            // WebRTC 探测的 WebView：1×1 挂进视图层级，避免被 WebKit 当作不可见而挂起。放在两页外面：切到测速页也还挂着。
+            // WebRTC 探测的 WebView：1×1 挂进视图层级，避免被 WebKit 当作不可见而挂起。放在各页外面：切页也还挂着。
             NetCheckWebViewHolder(probe: session.webrtc)
                 .frame(width: 1, height: 1)
                 .allowsHitTesting(false)
@@ -109,12 +129,15 @@ struct NetCheckIPView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            if let env = session.environment ?? session.outcome?.environment {
+                environmentCard(env)
+            }
             if let outcome = session.outcome {
                 // 外面给多宽，表就按比例分多宽（量的是外面的空间，不是表自己，不会越量越宽）
                 GeometryReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            table(outcome.table, width: proxy.size.width)
+                            table(outcome.table, at: outcome.at, width: proxy.size.width)
                             Divider()
                             Text("netcheck.note.gps")
                                 .font(.caption)
@@ -134,6 +157,39 @@ struct NetCheckIPView: View {
                 Spacer()
             }
         }
+    }
+
+    /// 本机网络环境摘要（纯本地只读）：局域网接口、系统 DNS、系统代理、活跃隧道。
+    private func environmentCard(_ env: NetCheckEnvironment) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                envItem(label: "netcheck.env.lan", value: NetCheckText.envLAN(env), active: env.lan != nil, monospaced: true)
+                envItem(label: "netcheck.env.dns", value: NetCheckText.envDNS(env), active: !env.dnsServers.isEmpty, monospaced: true)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                envItem(label: "netcheck.env.proxy", value: NetCheckText.envProxy(env), active: !env.proxy.isEmpty, monospaced: true)
+                envItem(label: "netcheck.env.tunnel", value: NetCheckText.envTunnels(env), active: !env.tunnels.isEmpty, monospaced: true)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+    }
+
+    private func envItem(label: LocalizedStringKey, value: String, active: Bool, monospaced: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(verbatim: value)
+                .font(monospaced && active ? .caption.monospaced() : .caption)
+                .foregroundStyle(active ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
@@ -196,7 +252,7 @@ struct NetCheckIPView: View {
         return (floor(rest * 0.30), floor(rest * 0.28), floor(rest * 0.42))
     }
 
-    private func table(_ table: NetCheckTable, width: CGFloat) -> some View {
+    private func table(_ table: NetCheckTable, at date: Date, width: CGFloat) -> some View {
         let widths = Self.columnWidths(width)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
@@ -210,14 +266,14 @@ struct NetCheckIPView: View {
             .padding(.bottom, 6)
             ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
                 Divider()
-                rowView(row, widths: widths)
+                rowView(row, at: date, widths: widths)
                     .padding(.vertical, 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func rowView(_ row: NetCheckRow, widths: (address: CGFloat, country: CGFloat, owner: CGFloat)) -> some View {
+    private func rowView(_ row: NetCheckRow, at date: Date, widths: (address: CGFloat, country: CGFloat, owner: CGFloat)) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let failure = row.failure {
                 HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
@@ -233,10 +289,10 @@ struct NetCheckIPView: View {
             ForEach(Array(row.lines.enumerated()), id: \.offset) { index, line in
                 HStack(alignment: .firstTextBaseline, spacing: Self.spacing) {
                     label(row, isFirst: index == 0)
-                    cell(line.address, monospaced: true).frame(width: widths.address, alignment: .leading)
-                    cell(line.country).frame(width: widths.country, alignment: .leading)
+                    cell(line.address, monospaced: true, at: date).frame(width: widths.address, alignment: .leading)
+                    cell(line.country, at: date).frame(width: widths.country, alignment: .leading)
                     VStack(alignment: .leading, spacing: 4) {
-                        cell(line.owner)
+                        cell(line.owner, at: date)
                         if !line.flags.isEmpty {
                             HStack(spacing: 4) {
                                 ForEach(Array(line.flags.enumerated()), id: \.offset) { _, flag in
@@ -280,7 +336,7 @@ struct NetCheckIPView: View {
     }
 
     /// 一格：标红的字是红色；「没有」「没查到」这类说明和不参加比较的是灰色。地址用等宽字体，都可以选中复制。
-    private func cell(_ cell: NetCheckCell, monospaced: Bool = false) -> some View {
+    private func cell(_ cell: NetCheckCell, monospaced: Bool = false, at date: Date) -> some View {
         let isData: Bool
         var isAddress = false
         switch cell.value {
@@ -291,7 +347,7 @@ struct NetCheckIPView: View {
         let base: Font = .callout
         // 不参加比较的（公共 DNS 的国家）是灰色、不会红
         let plain = isData && !cell.muted ? Color.primary : Color.secondary
-        return Text(verbatim: NetCheckText.value(cell.value))
+        return Text(verbatim: NetCheckText.value(cell.value, at: date))
             .font(isAddress ? base.monospaced() : base)
             .foregroundStyle(cell.mismatch ? Color.red : plain)
             .fixedSize(horizontal: false, vertical: true)
@@ -434,15 +490,16 @@ struct NetSpeedPageView: View {
         }
     }
 
-    /// 一项结果：标题、大号数字与单位、下面一行小字（MB/s 或抖动）；没测出来时写「没测出来」和原因。
+    /// 一项结果：标题、大号数字与单位、下面小字（MB/s，或抖动与负载延迟）；没测出来时写「没测出来」和原因。
     private func card(_ phase: NetSpeedPhase, _ result: NetSpeedResult) -> some View {
-        let value: (number: String, unit: String, detail: String?)?
+        let value: (number: String, unit: String, details: [String])?
         let failure: String?
         switch phase {
         case .latency:
             switch result.latency {
             case .success(let latency):
-                value = (NetSpeedFormat.milliseconds(latency.median), "ms", NetCheckText.jitter(latency))
+                let details = [NetCheckText.jitter(latency), NetCheckText.loadedLatency(latency)].compactMap { $0 }
+                value = (NetSpeedFormat.milliseconds(latency.median), "ms", details)
                 failure = nil
             case .failure(let why):
                 value = nil
@@ -451,7 +508,7 @@ struct NetSpeedPageView: View {
         case .download, .upload:
             switch phase == .download ? result.download : result.upload {
             case .success(let rate):
-                value = (NetSpeedFormat.mbps(rate), "Mbps", NetSpeedFormat.rate(rate))
+                value = (NetSpeedFormat.mbps(rate), "Mbps", [NetSpeedFormat.rate(rate)])
                 failure = nil
             case .failure(let why):
                 value = nil
@@ -470,9 +527,20 @@ struct NetSpeedPageView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                Text(verbatim: value.detail ?? " ")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                if value.details.isEmpty {
+                    Text(verbatim: " ")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(value.details.enumerated()), id: \.offset) { _, line in
+                            Text(verbatim: line)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
             } else {
                 Text("netcheck.speed.failed")
                     .font(.title3.weight(.semibold))

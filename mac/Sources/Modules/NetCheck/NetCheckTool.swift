@@ -34,6 +34,13 @@ final class NetCheckTool: ToolModule {
         })
 
         items.append(.separator())
+        items.append(ClosureMenuItem(title: L("netcheck.menu.diag")) {
+            NetCheckWindowController.shared.show(page: .diag)
+        })
+        items.append(ClosureMenuItem(title: L("netcheck.menu.ports")) {
+            NetCheckWindowController.shared.showPorts()
+        })
+        items.append(.separator())
         if let result = NetSpeedTestSession.shared.result {
             items.append(NSMenuItem(title: NetCheckText.menuLine(result), action: nil, keyEquivalent: ""))
         }
@@ -62,7 +69,7 @@ final class NetCheckTool: ToolModule {
 
     func hotkeys() -> [HotkeyDefinition] { [] }
 
-    /// 快速入口：测速、IP 检测（打开窗口到那一页并开始）、菜单栏网速的开关。不加快捷键（约定 6）。
+    /// 快速入口：测速、IP 检测、网络诊断、本机端口、菜单栏网速开关，以及针对 URL 和 `:端口` 的文字动作。不加快捷键（约定 6）。
     func launcherCommands() -> [LauncherCommand] {
         let liveOn = NetCheckSettings.liveSpeedEnabled
         return [
@@ -74,9 +81,38 @@ final class NetCheckTool: ToolModule {
                             keywords: ["ip", "出口", "泄露", "leak", "vpn", "dns"], symbolName: "shield.lefthalf.filled") { _ in
                 NetCheckWindowController.shared.show(page: .ip, start: true)
             },
+            LauncherCommand(id: "netcheck.diag", title: L("netcheck.menu.diag"),
+                            keywords: ["diag", "ping", "dns", "tls", "http", "诊断", "连通性"], symbolName: "stethoscope") { _ in
+                NetCheckWindowController.shared.show(page: .diag, start: true)
+            },
+            LauncherCommand(id: "netcheck.ports", title: L("netcheck.menu.ports"),
+                            keywords: ["port", "ports", "lsof", "kill", "端口", "监听", "占用"], symbolName: "door.left.hand.open") { _ in
+                NetCheckWindowController.shared.showPorts()
+            },
             LauncherCommand(id: "netcheck.liveSpeed", title: liveOn ? L("netcheck.live.hide") : L("netcheck.menu.liveSpeed"),
                             keywords: ["网速", "菜单栏", "menu bar", "network speed"], symbolName: "arrow.up.arrow.down") { _ in
                 NetSpeedStatusItem.shared.setEnabled(!NetCheckSettings.liveSpeedEnabled)
+            },
+            LauncherCommand.textAction(
+                id: "netcheck.diagTarget",
+                title: L("netcheck.launcher.diagTarget"),
+                symbolName: "stethoscope",
+                suggestion: LauncherSuggestionTraits(kinds: [.url], priority: 45),
+                hint: "要诊断的域名、网址或 host:port",
+                appliesTo: { NetDiagLogic.parseTarget($0) != nil }
+            ) { text in
+                NetCheckWindowController.shared.showDiagnostic(target: text)
+            },
+            LauncherCommand.textAction(
+                id: "netcheck.findPort",
+                title: L("netcheck.launcher.findPort"),
+                symbolName: "door.left.hand.open",
+                suggestion: LauncherSuggestionTraits(kinds: Set(LauncherTextKind.allCases), priority: 25, leading: true),
+                hint: "端口号（如 :3000 或 port 3000）",
+                appliesTo: { NetPortLogic.extractPortQuery($0) != nil }
+            ) { text in
+                let query = NetPortLogic.extractPortQuery(text) ?? text
+                NetCheckWindowController.shared.showPorts(filter: query)
             },
         ]
     }
@@ -96,6 +132,7 @@ final class NetCheckTool: ToolModule {
 
     func willTerminate() {
         NetSpeedTestSession.shared.stop()
+        NetDiagSession.shared.stopAll()
         NetSpeedStatusItem.shared.shutdown()
     }
 }

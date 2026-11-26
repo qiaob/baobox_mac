@@ -124,6 +124,12 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
         } else {
             items.append(NSMenuItem(title: L("netcheck.live.waiting"), action: nil, keyEquivalent: ""))
         }
+        if let lan = NetTrafficSampler.shared.latestLAN {
+            items.append(ClosureMenuItem(title: L("netcheck.live.lan \(lan.ip) \(lan.interface)")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(lan.ip, forType: .string)
+            })
+        }
         items.append(.separator())
         items.append(NetCheckTool.speedTestMenuItem())
         items.append(ClosureMenuItem(title: L("netcheck.live.open")) {

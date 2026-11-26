@@ -54,6 +54,8 @@ struct NetCheckDNSResult: Equatable {
     var resolvers: [NetCheckResolver] = []
     /// 服务端报的错（「No DNS servers found. Try again...」）
     var error: String?
+    /// 系统解析器返回了 Fake-IP（198.18.0.0/15），且没有看到真实上游解析器
+    var fakeIPDetected: Bool = false
 }
 
 /// 归属后面的灰色小标签：只是信息，不参加比较。
@@ -278,26 +280,61 @@ enum NetCheckLogic {
         return withUnsafeBytes(of: &address) { Array($0) }
     }
 
+    /// 是否是代理常用的 Fake-IP 网段（RFC 2544 基准测试段 `198.18.0.0/15`，Clash / Surge / sing-box 默认用它）。
+    /// 也认 IPv4-mapped IPv6（`::ffff:198.18.x.x`）。
+    static func isFakeIP(_ text: String) -> Bool {
+        if let b = ipv4Bytes(text) {
+            return b[0] == 198 && (b[1] == 18 || b[1] == 19)
+        }
+        if let b = ipv6Bytes(text), let mapped = ipv4MappedBytes(b) {
+            return mapped[0] == 198 && (mapped[1] == 18 || mapped[1] == 19)
+        }
+        return false
+    }
+
+    /// `::ffff:0:0/96`（IPv4 映射的 IPv6 地址）抽出后 4 字节。
+    private static func ipv4MappedBytes(_ b: [UInt8]) -> [UInt8]? {
+        guard b.count == 16,
+              b[0..<10].allSatisfy({ $0 == 0 }),
+              b[10] == 0xff, b[11] == 0xff else { return nil }
+        return Array(b[12..<16])
+    }
+
+    private static func isPublicIPv4(_ b: [UInt8]) -> Bool {
+        let isPrivate = b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
+        let isLoopback = b[0] == 127
+        let isLinkLocal = b[0] == 169 && b[1] == 254
+        // 0.0.0.0/8：本网络 / 未指定
+        let isThisNetwork = b[0] == 0
+        let isDocumentation = (b[0] == 192 && b[1] == 0 && b[2] == 2)
+            || (b[0] == 198 && b[1] == 51 && b[2] == 100)
+            || (b[0] == 203 && b[1] == 0 && b[2] == 113)
+        // 100.64.0.0/10：运营商级 NAT，Tailscale 的地址也在这里
+        let isShared = b[0] == 100 && (64...127).contains(b[1])
+        // 198.18.0.0/15：RFC 2544 基准测试段，代理 Fake-IP 默认用它
+        let isBenchmark = b[0] == 198 && (b[1] == 18 || b[1] == 19)
+        // 224.0.0.0/4 多播 + 240.0.0.0/4 保留与广播
+        let isMulticastOrReserved = b[0] >= 224
+        return !(isPrivate || isLoopback || isLinkLocal || isThisNetwork || isDocumentation
+                 || isShared || isBenchmark || isMulticastOrReserved)
+    }
+
     /// 是不是公网地址。认不出的（mDNS 名字、乱码）不算。
     static func isPublic(_ text: String) -> Bool {
         if let b = ipv4Bytes(text) {
-            let isPrivate = b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
-            let isLoopback = b[0] == 127
-            let isLinkLocal = b[0] == 169 && b[1] == 254
-            let isUnspecified = b == [0, 0, 0, 0]
-            let isDocumentation = (b[0] == 192 && b[1] == 0 && b[2] == 2)
-                || (b[0] == 198 && b[1] == 51 && b[2] == 100)
-                || (b[0] == 203 && b[1] == 0 && b[2] == 113)
-            // 100.64.0.0/10：运营商级 NAT，Tailscale 的地址也在这里
-            let isShared = b[0] == 100 && (64...127).contains(b[1])
-            return !(isPrivate || isLoopback || isLinkLocal || isUnspecified || isDocumentation || isShared)
+            return isPublicIPv4(b)
         }
         if let b = ipv6Bytes(text) {
+            if let mapped = ipv4MappedBytes(b) {
+                return isPublicIPv4(mapped)
+            }
             let isUnspecified = b.allSatisfy { $0 == 0 }
             let isLoopback = b.dropLast().allSatisfy { $0 == 0 } && b[15] == 1
             let isUniqueLocal = (b[0] & 0xfe) == 0xfc
             let isLinkLocal = b[0] == 0xfe && (b[1] & 0xc0) == 0x80
-            return !(isUnspecified || isLoopback || isUniqueLocal || isLinkLocal)
+            let isMulticast = b[0] == 0xff
+            let isDocumentation = b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8
+            return !(isUnspecified || isLoopback || isUniqueLocal || isLinkLocal || isMulticast || isDocumentation)
         }
         return false
     }

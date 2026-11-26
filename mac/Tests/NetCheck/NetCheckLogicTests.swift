@@ -110,14 +110,36 @@ final class NetCheckLogicTests: XCTestCase {
     func testAddressClassification() {
         XCTAssertTrue(NetCheckLogic.isPublic("34.3.107.77"))
         XCTAssertTrue(NetCheckLogic.isPublic("2406:3003::1"))
+        XCTAssertTrue(NetCheckLogic.isPublic("::ffff:8.8.8.8"), "映射到公网 IPv4 的地址仍算公网")
         XCTAssertFalse(NetCheckLogic.isPublic("192.168.0.23"))
+        XCTAssertFalse(NetCheckLogic.isPublic("0.1.2.3"), "0.0.0.0/8 不算公网")
         XCTAssertFalse(NetCheckLogic.isPublic("100.101.102.103"), "Tailscale / 运营商级 NAT 不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("198.18.0.1"), "Fake-IP (198.18.0.0/15) 不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("198.19.255.254"))
+        XCTAssertFalse(NetCheckLogic.isPublic("224.0.0.1"), "多播不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("240.0.0.1"), "保留段不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("255.255.255.255"))
         XCTAssertFalse(NetCheckLogic.isPublic("fd7a:115c:a1e0::1"))
         XCTAssertFalse(NetCheckLogic.isPublic("fe80::1"))
+        XCTAssertFalse(NetCheckLogic.isPublic("ff02::1"), "IPv6 多播不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("2001:db8::1"), "IPv6 文档段不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("::ffff:192.168.1.1"), "映射到内网 IPv4 不算公网")
+        XCTAssertFalse(NetCheckLogic.isPublic("::ffff:198.18.0.2"), "映射到 Fake-IP 不算公网")
         XCTAssertFalse(NetCheckLogic.isPublic("abc.local"))
         XCTAssertFalse(NetCheckLogic.isPublic("256.1.1.1"))
         XCTAssertTrue(NetCheckLogic.sameAddress("2001:db8::1", "2001:0db8:0:0::1"))
         XCTAssertFalse(NetCheckLogic.sameAddress("1.2.3.4", "1.2.3.5"))
+    }
+
+    func testFakeIPClassification() {
+        XCTAssertTrue(NetCheckLogic.isFakeIP("198.18.0.1"))
+        XCTAssertTrue(NetCheckLogic.isFakeIP("198.19.128.42"))
+        XCTAssertTrue(NetCheckLogic.isFakeIP("::ffff:198.18.0.1"))
+        XCTAssertFalse(NetCheckLogic.isFakeIP("198.17.255.255"))
+        XCTAssertFalse(NetCheckLogic.isFakeIP("198.20.0.1"))
+        XCTAssertFalse(NetCheckLogic.isFakeIP("8.8.8.8"))
+        XCTAssertFalse(NetCheckLogic.isFakeIP("2406:3003::1"))
+        XCTAssertFalse(NetCheckLogic.isFakeIP("not-an-ip"))
     }
 
     // MARK: IPv6：没有 / 没测出来

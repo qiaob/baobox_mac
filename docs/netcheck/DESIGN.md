@@ -41,22 +41,31 @@ ipapi.is 的 key（可选）存钥匙串。
 
 ```
 Modules/NetCheck/
-├── Logic/NetCheckLogic.swift   纯 Foundation（进 BaoboxTests）：回包解析、ICE 候选、地址分类、同一家云厂商
-├── Logic/NetCheckCompare.swift 纯 Foundation（进 BaoboxTests）：建表、四样各自比、按多数标红、结论、纯文本报告的行
-├── NetCheckEngine.swift        URLSession 请求、系统解析器探测、系统时区
+├── Logic/NetCheckLogic.swift   纯 Foundation（进 BaoboxTests）：回包解析、ICE 候选、地址分类（含 Fake-IP 198.18.0.0/15）、同一家云厂商
+├── Logic/NetCheckCompare.swift 纯 Foundation（进 BaoboxTests）：建表、四样各自比（时区按 UTC 偏移）、按多数标红、结论、纯文本报告的行
+├── Logic/NetCheckEnvironmentLogic.swift 纯 Foundation（进 BaoboxTests）：本机代理、系统 DNS、活跃隧道与主局域网网卡筛选
+├── NetCheckEnvironment.swift   SystemConfiguration + getifaddrs：纯本地只读采集本机网络环境快照
+├── NetCheckEngine.swift        URLSession 请求、系统解析器探测（含 Fake-IP 识别）、系统时区
 ├── NetCheckWebRTC.swift        隐藏的 1×1 WKWebView 跑 RTCPeerConnection，收集 ICE 候选
-├── NetCheckSession.swift       @MainActor 状态：跑一次检测（含 WebRTC 地址的另查）、上次结果（一张表）
+├── NetCheckSession.swift       @MainActor 状态：跑一次检测（含 WebRTC 地址的另查与本机环境快照）、上次结果（一张表）
 ├── NetCheckWindow.swift        窗口（DesktopSpaceWindow）：分段切换、IP 检测页、测速页，也承载那个 WebView
 ├── NetCheckText.swift          表里的值 → 文案、纯文本报告（测速的文案也在这里）
 ├── NetCheckSettings.swift      设置键 + 钥匙串
 ├── NetCheckSettingsView.swift  设置页
 ├── NetCheckTool.swift          ToolModule 壳（二级菜单、快速入口命令）
 │   —— 测速与菜单栏实时网速（SPEED.md §3）——
-├── Logic/NetSpeedLogic.swift   纯 Foundation（进 BaoboxTests）：速率格式化、定宽候选、测速窗口、延迟、网卡筛选、计数差值、/meta
-├── NetSpeedTest.swift          测速：URLSession 的三个阶段、取消、进度回调
+├── Logic/NetSpeedLogic.swift   纯 Foundation（进 BaoboxTests）：速率格式化、定宽候选、测速窗口、延迟（含负载延迟）、网卡筛选、计数差值、/meta
+├── NetSpeedTest.swift          测速：URLSession 的三个阶段（含下载/上传期间的负载延迟）、取消、进度回调
 ├── NetSpeedTestSession.swift   @MainActor 状态：进行中的阶段与速度、上次结果
-├── NetTrafficSampler.swift     每秒读网卡计数（后台），发布速度
-└── NetSpeedStatusItem.swift    菜单栏状态项（定宽模板图）与它的小菜单
+├── NetTrafficSampler.swift     每秒读网卡计数（后台，并每 5 秒缓存主局域网 IP），发布速度
+├── NetSpeedStatusItem.swift    菜单栏状态项（定宽模板图）与它的小菜单（含一键复制局域网 IP）
+│   —— 诊断（单目标全链路 + 常用服务连通性）与本机端口 ——
+├── Logic/NetDiagLogic.swift    纯 Foundation（进 BaoboxTests）：目标解析、TLS/证书提取、服务连通性判定与内置目标表
+├── NetDiagEngine.swift         DNS（getaddrinfo）/ TCP（NWConnection）/ TLS+HTTP（URLSession+SecTrust）探测引擎与状态
+├── NetCheckDiagView.swift      「诊断」页：单目标四段拆解 + 常用服务一键连通性（纯只读，不改系统配置）
+├── Logic/NetPortLogic.swift    纯 Foundation（进 BaoboxTests）：lsof -F / ps 解析、搜索过滤、`:端口` 查询提取
+├── NetPortScanner.swift        后台 lsof / ps 扫描与安全 SIGTERM / SIGKILL 结束进程
+└── NetCheckPortView.swift      「端口」页：监听端口列表、过滤、复制地址/命令、停止与强杀
 ```
 
 ### 4.1 请求顺序（`NetCheckEngine`、`NetCheckSession.run`）
@@ -70,11 +79,11 @@ Modules/NetCheck/
    IPv6 的失败一律算没测出来（`NetCheckLogic.resolveIPv6`）。
    连上了再 `?q=<v6>` 查归属
 3. DNS：`GET https://bash.ws/id` 拿 id（只收字母数字）→ `getaddrinfo("<i>.<id>.bash.ws")` × N 在后台**并发**发出
-   （走系统解析器，正是要测的那条路），专用队列最多 8 个同时，整段最多等 10 秒，到点用已经回来的继续、没回来的不等
+   （走系统解析器，正是要测的那条路；顺手检查返回的 IP 是否落在 Fake-IP `198.18.0.0/15`），专用队列最多 8 个同时，整段最多等 10 秒，到点用已经回来的继续、没回来的不等
    （`NetCheckParallel`；期限定时器在自己的串行队列上）。上一次检测的探测还有没返回的时，这一次不发新的，DNS 那一行写
    「没测出来：上一次的 DNS 探测还没返回」——DNS 卡住时连点几次「立即检测」不会把线程越堆越多
    → `GET https://bash.ws/dnsleak/test/<id>?json=2`，只收 `dns` 与 `error` 记录。
-   回 `error`（一台解析器都没来）那一行写「没测出来」
+   若未看到任何上游解析器且本地解析命中了 Fake-IP，则显示「Fake-IP（延迟解析）」而非报错；否则回 `error`（一台解析器都没来）那一行写「没测出来」
 4. WebRTC（见 4.2）；拿到的公网地址和 IPv4 / IPv6 那一行都不同时，`?q=<地址>` 另查归属，最多 3 个，查不到就只显示地址
 5. `TimeZone.current.identifier`
 
