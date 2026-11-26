@@ -2,8 +2,8 @@ import AppKit
 
 /// 菜单栏实时网速（docs/netcheck/SPEED.md §2.2）：紧挨 Baobox 主图标的一个状态项，文字照 `↓1.2M/s`，每秒一变。
 ///
-/// **宽度固定**：文字画进一张定宽的模板图（右对齐、等宽数字），图宽 = 这种显示方式下最宽的那个字符串，
-/// 所以数字变了状态项也不变宽，右边的图标不跟着抖。模板图跟着菜单栏明暗自动着色。
+/// **宽度跟着文字走**：文字画进一张模板图（右对齐、等宽数字），变宽立刻跟上，变窄要等 10 秒（`NetSpeedWidthHold`），
+/// 平时不留空白，数字每秒跳也不会每秒伸缩。模板图跟着菜单栏明暗自动着色。
 /// 开关关着时状态项和采样定时器都不存在。点它出一个只读内存的小菜单。
 @MainActor
 final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
@@ -13,6 +13,8 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private var mode: NetSpeedDisplayMode = .down
     private var shownText: String?
+    private var shownWidth: CGFloat = 0
+    private var widthHold = NetSpeedWidthHold()
 
     private override init() {
         super.init()
@@ -30,12 +32,14 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
             if let item { NSStatusBar.system.removeStatusItem(item) }
             item = nil
             shownText = nil
+            widthHold.reset()
             return
         }
         let newMode = NetCheckSettings.liveSpeedMode
         if newMode != mode {
             mode = newMode
             shownText = nil
+            widthHold.reset()
         }
         if item == nil {
             // 排在 Baobox 主图标右边（专注倒计时 1、会议录音指示 2 之后）。
@@ -69,9 +73,13 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
 
     private func show(_ rate: NetTrafficRate?) {
         let text = NetSpeedFormat.menuBarText(down: rate?.down ?? 0, up: rate?.up ?? 0, mode: mode)
-        guard text != shownText, let button = item?.button else { return }
+        let string = NSAttributedString(string: text, attributes: Self.attributes())
+        let needed = Double(ceil(string.size().width))
+        let width = CGFloat(widthHold.width(needed: needed, at: ProcessInfo.processInfo.systemUptime))
+        guard text != shownText || width != shownWidth, let button = item?.button else { return }
         shownText = text
-        button.image = Self.image(text: text, mode: mode)
+        shownWidth = width
+        button.image = Self.image(string, width: width)
         button.imagePosition = .imageOnly
         button.title = ""
         button.setAccessibilityLabel(text)
@@ -89,32 +97,15 @@ final class NetSpeedStatusItem: NSObject, NSMenuDelegate {
         return [.font: font, .foregroundColor: NSColor.black, .paragraphStyle: paragraph]
     }
 
-    private static var widths: [NetSpeedDisplayMode: CGFloat] = [:]
-
-    /// 这种显示方式的定宽：候选里用真实字体量出来最宽的那个，向上取整（量一次记住）。
-    static func width(for mode: NetSpeedDisplayMode) -> CGFloat {
-        if let known = widths[mode] { return known }
-        let attributes = attributes()
-        let widest = NetSpeedFormat.widestText(mode: mode) { text in
-            Double(NSAttributedString(string: text, attributes: attributes).size().width)
-        }
-        let width = ceil(NSAttributedString(string: widest, attributes: attributes).size().width)
-        widths[mode] = width
-        return width
-    }
-
-    /// 定宽、右对齐的模板图（每次画都按当前屏幕的倍率重画，不糊）。
-    static func image(text: String, mode: NetSpeedDisplayMode) -> NSImage {
-        let attributes = attributes()
-        let string = NSAttributedString(string: text, attributes: attributes)
-        let lineHeight = ceil(string.size().height)
-        let size = NSSize(width: width(for: mode), height: lineHeight)
+    /// 给定宽度、右对齐的模板图（每次画都按当前屏幕的倍率重画，不糊）。
+    static func image(_ string: NSAttributedString, width: CGFloat) -> NSImage {
+        let size = NSSize(width: width, height: ceil(string.size().height))
         let image = NSImage(size: size, flipped: false) { rect in
             string.draw(with: rect, options: [.usesLineFragmentOrigin])
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = text
+        image.accessibilityDescription = string.string
         return image
     }
 

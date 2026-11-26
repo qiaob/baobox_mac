@@ -54,54 +54,39 @@ final class NetSpeedLogicTests: XCTestCase {
         XCTAssertEqual(NetSpeedFormat.menuBarText(down: 0, up: 0, mode: .both), "↓0K ↑0K")
     }
 
-    // MARK: - 定宽
+    // MARK: - 菜单栏的宽度
 
-    func testWidthCandidates() {
-        XCTAssertEqual(NetSpeedFormat.widthCandidates(mode: .down),
-                       ["↓888K/s", "↓8.8M/s", "↓888M/s", "↓8.8G/s", "↓888G/s"])
-        let both = NetSpeedFormat.widthCandidates(mode: .both)
-        XCTAssertEqual(both.count, 25)
-        XCTAssertTrue(both.contains("↓888M ↑888G"))
-        XCTAssertTrue(both.allSatisfy { $0.hasPrefix("↓") && $0.contains(" ↑") && !$0.hasSuffix("/s") })
+    func testWidthGrowsAtOnce() {
+        var hold = NetSpeedWidthHold(hold: 10)
+        XCTAssertEqual(hold.width(needed: 40, at: 100), 40)
+        XCTAssertEqual(hold.width(needed: 60, at: 101), 60, "变宽立刻跟上")
     }
 
-    /// 每种真实的写法都能在候选里找到一个同样形状（数字换成 8）的。
-    func testEveryRealShapeIsACandidate() {
-        let values: [Double] = [0, 500, k, 356 * k, 999 * k, 999.5 * k, 1.2 * m, 9.94 * m, 9.95 * m, 120 * m, 999 * m,
-                                1023 * m, 1.2 * g, 12 * g, 999 * g]
-        let digits = CharacterSet.decimalDigits
-        func shape(_ text: String) -> String {
-            String(text.unicodeScalars.map { digits.contains($0) ? "8" : Character($0) })
+    func testWidthShrinksOnlyAfterHold() {
+        var hold = NetSpeedWidthHold(hold: 10)
+        XCTAssertEqual(hold.width(needed: 60, at: 100), 60)
+        for t in 101...109 {
+            XCTAssertEqual(hold.width(needed: 40, at: TimeInterval(t)), 60, "第 \(t) 秒还没满 10 秒，不收")
         }
-        let downShapes = Set(NetSpeedFormat.widthCandidates(mode: .down))
-        for value in values {
-            let text = shape(NetSpeedFormat.menuBarText(down: value, up: 0, mode: .down))
-            // 位数少的（356K、0K）比候选窄，不必一样；但单位和小数点的位置必须是候选里出现过的
-            let padded = text.replacingOccurrences(of: "↓", with: "")
-            XCTAssertTrue(downShapes.contains { $0.hasSuffix(padded) }, "\(text) 没有对应的候选")
-        }
+        XCTAssertEqual(hold.width(needed: 40, at: 110), 40, "宽的那次过了 10 秒，收回")
     }
 
-    func testWidestTextPicksTheWidest() {
-        // 假字体：数字 8、点 3、K 7、M 10、G 9、其余 5
-        func width(_ text: String) -> Double {
-            text.reduce(0) { sum, c in
-                switch c {
-                case "8": return sum + 8
-                case ".": return sum + 3
-                case "K": return sum + 7
-                case "M": return sum + 10
-                case "G": return sum + 9
-                default: return sum + 5
-                }
-            }
-        }
-        XCTAssertEqual(NetSpeedFormat.widestText(mode: .down, width: width), "↓888M/s")
-        XCTAssertEqual(NetSpeedFormat.widestText(mode: .both, width: width), "↓888M ↑888M")
-        // 换一种字体：G 最宽
-        XCTAssertEqual(NetSpeedFormat.widestText(mode: .down, width: { $0.contains("888G") ? 100 : 50 }), "↓888G/s")
-        // 一样宽时取第一个
-        XCTAssertEqual(NetSpeedFormat.widestText(mode: .down, width: { _ in 1 }), "↓888K/s")
+    func testWidthShrinksStepByStep() {
+        var hold = NetSpeedWidthHold(hold: 10)
+        _ = hold.width(needed: 80, at: 0)
+        _ = hold.width(needed: 60, at: 5)
+        XCTAssertEqual(hold.width(needed: 40, at: 9), 80)
+        XCTAssertEqual(hold.width(needed: 40, at: 10), 60, "最宽的过期了，用剩下里最宽的")
+        XCTAssertEqual(hold.width(needed: 40, at: 15), 40)
+    }
+
+    func testWidthClockBackwardsAndReset() {
+        var hold = NetSpeedWidthHold(hold: 10)
+        _ = hold.width(needed: 80, at: 100)
+        XCTAssertEqual(hold.width(needed: 40, at: 50), 40, "时钟倒退：旧记录作废")
+        _ = hold.width(needed: 90, at: 51)
+        hold.reset()
+        XCTAssertEqual(hold.width(needed: 30, at: 52), 30, "清空后只看这一次")
     }
 
     // MARK: - 详情的写法
